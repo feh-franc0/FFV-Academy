@@ -7,7 +7,7 @@ import {
   InlineCode,
   ComparisonTable,
   DecisionBox,
-  ArchDiagram,
+  StackFlow,
   QAItem,
   ExamDomainBadge,
   KeyValue,
@@ -122,18 +122,15 @@ function Content() {
           DAX é um cache in-memory write-through compatível com a API do DynamoDB. A aplicação troca o endpoint e ganha
           latência μs (microssegundos). Roda em cluster de nodes na VPC.
         </p>
-        <ArchDiagram title="DAX como item cache + query cache" accent={ACCENT}>
-{`     App (DynamoDB SDK)
-          │
-          ▼
-     ┌─────────┐
-     │   DAX   │──── Item Cache (GetItem / BatchGetItem)
-     │ cluster │──── Query Cache  (Query / Scan)
-     └────┬────┘
-          │ miss
-          ▼
-     DynamoDB  ← write-through: DAX propaga PUT/UPDATE/DELETE`}
-        </ArchDiagram>
+        <StackFlow
+          title="DAX como item cache + query cache"
+          accent={ACCENT}
+          items={[
+            { icon: '📱', label: 'App', sub: 'DynamoDB SDK', detail: 'Mesma API do DynamoDB — apenas troca o endpoint para o cluster DAX.' },
+            { icon: '⚡', label: 'DAX Cluster', sub: 'μs latency', detail: 'Item Cache (GetItem/BatchGetItem) + Query Cache (Query/Scan).' },
+            { icon: '🗄️', label: 'DynamoDB', sub: 'cache miss OR write', detail: 'Write-through: PUT/UPDATE/DELETE vai para o DDB e DAX atualiza a entrada correspondente.' },
+          ]}
+        />
         <KeyValue
           accent={ACCENT}
           items={[

@@ -20,6 +20,19 @@ export interface Trail {
   modules: Module[];
 }
 
+export interface Hub {
+  id: string;
+  slug: string;
+  name: string;
+  shortName: string;
+  href: string;
+  color: string;
+  icon: string;
+  tagline: string;
+  desc: string;
+  trailIds: string[];
+}
+
 export const CURRICULUM: Trail[] = [
   {
     id: 'trail1',
@@ -616,6 +629,223 @@ export const CURRICULUM: Trail[] = [
       },
     ],
   },
+  {
+    id: 'trail6',
+    name: 'Como Aprender',
+    color: '#3fb950',
+    icon: '🧠',
+    desc: 'Psicologia do aprendizado: as técnicas com maior evidência científica para fixar conhecimento de verdade.',
+    modules: [
+      {
+        slug: 'revisao-espacada',
+        title: 'Revisão Espaçada: a técnica mais eficaz do mundo',
+        icon: '🔁',
+        xp: 50,
+        readTime: 9,
+        desc: 'Por que revisar 5 min hoje vale mais que estudar 2h amanhã — e como o algoritmo SM-2 do seu Hub aplica isso automaticamente.',
+        seoDesc: 'Revisão espaçada SM-2 e FSRS: a técnica com maior evidência científica para retenção de longo prazo. Forgetting curve, Ebbinghaus, Anki.',
+        keywords: 'revisao espacada, spaced repetition, sm-2, anki, curva do esquecimento, ebbinghaus, aprendizado cientifico',
+      },
+      {
+        slug: 'recall-ativo',
+        title: 'Recall Ativo: por que reler é quase inútil',
+        icon: '🎯',
+        xp: 45,
+        readTime: 8,
+        desc: 'A diferença entre reconhecer e lembrar. Por que o quiz é mais poderoso que o grifo, e como praticar recall ativo todos os dias.',
+        seoDesc: 'Recall ativo vs reler: a ciência por trás dos quizzes e flashcards. Testing effect, Roediger & Karpicke, retrieval practice.',
+        keywords: 'recall ativo, active recall, testing effect, flashcards, retrieval practice, como estudar melhor',
+      },
+      {
+        slug: 'tecnica-feynman',
+        title: 'Técnica Feynman: se não explica, não entendeu',
+        icon: '🧑\u200d🏫',
+        xp: 40,
+        readTime: 7,
+        desc: 'Como Richard Feynman aprendia qualquer coisa: ensinar para um iniciante imaginário expõe todas as lacunas.',
+        seoDesc: 'Técnica Feynman: aprenda qualquer conceito ensinando em linguagem simples. Metacognição, protégé effect, gaps de conhecimento.',
+        keywords: 'tecnica feynman, feynman technique, como aprender qualquer coisa, metacognicao, protege effect',
+      },
+      {
+        slug: 'interleaving',
+        title: 'Interleaving: por que misturar tópicos é melhor',
+        icon: '🎲',
+        xp: 45,
+        readTime: 8,
+        desc: 'Estudar A-A-A-B-B-B é intuitivo mas inferior a A-B-A-B-A-B. A ciência da variabilidade no aprendizado.',
+        seoDesc: 'Interleaving: estudar tópicos intercalados supera blocos. Desirable difficulty, Rohrer, Bjork, prática variada e discriminativa.',
+        keywords: 'interleaving, pratica intercalada, desirable difficulty, rohrer, bjork, como estudar multiplos topicos',
+      },
+      {
+        slug: 'deep-work-pomodoro',
+        title: 'Deep Work e Pomodoro: o combo da concentração',
+        icon: '⏱️',
+        xp: 40,
+        readTime: 7,
+        desc: 'Cal Newport + Cirillo: como criar blocos de foco profundo que realmente produzem conhecimento, sem queimar.',
+        seoDesc: 'Deep work Cal Newport + Pomodoro Francesco Cirillo: técnicas de concentração profunda, bloqueio de distrações, foco intenso.',
+        keywords: 'deep work cal newport, pomodoro francesco cirillo, como focar, bloco de estudo, foco profundo',
+      },
+      {
+        slug: 'habito-estudo-diario',
+        title: 'Hábito diário: como estudar sem depender de motivação',
+        icon: '🪜',
+        xp: 50,
+        readTime: 9,
+        desc: 'Atomic Habits aplicado ao aprendizado: sistema > motivação. Streak, fricção zero, identidade e o poder dos 5 minutos diários.',
+        seoDesc: 'Como criar hábito diário de estudo: Atomic Habits James Clear aplicado ao aprendizado. Streak, identidade, fricção, regra dos 2 minutos.',
+        keywords: 'habito estudo diario, atomic habits, james clear, streak estudos, identidade aprendizado, regra dois minutos',
+      },
+    ],
+  },
+  {
+    id: 'trail7',
+    name: 'DevOps & Containers',
+    color: '#2496ed',
+    icon: '📦',
+    desc: 'Docker e Kubernetes do zero ao avançado — os dois pilares de toda infra moderna, explicados para durar.',
+    modules: [
+      {
+        slug: 'docker-completo',
+        title: 'Docker Completo: do zero ao production-ready',
+        icon: '🐳',
+        xp: 100,
+        readTime: 22,
+        desc: 'Imagens, containers, Dockerfile, Compose, volumes, redes, multi-stage builds, segurança e otimização — tudo que um dev precisa saber sobre Docker em um só lugar.',
+        seoDesc: 'Docker tutorial completo em português: imagens, containers, Dockerfile, volumes, redes, Docker Compose, multi-stage, segurança e boas práticas.',
+        keywords: 'docker tutorial completo, docker para iniciantes, dockerfile boas praticas, docker compose, multi-stage build, volumes docker, redes docker, containers vs vm',
+      },
+      {
+        slug: 'kubernetes-completo',
+        title: 'Kubernetes Completo: do Pod ao cluster de produção',
+        icon: '☸️',
+        xp: 120,
+        readTime: 28,
+        desc: 'Arquitetura do control plane, Pods, Deployments, Services, Ingress, ConfigMaps/Secrets, Storage, RBAC, autoscaling, Helm e troubleshooting — o guia definitivo do K8s.',
+        seoDesc: 'Kubernetes tutorial completo em português: arquitetura, Pods, Deployments, Services, Ingress, ConfigMaps, Secrets, RBAC, HPA, Helm e kubectl essencial.',
+        keywords: 'kubernetes tutorial completo, k8s para iniciantes, arquitetura kubernetes, pod deployment service, ingress kubernetes, rbac k8s, helm charts, hpa kubernetes, kubectl cheat sheet',
+      },
+      {
+        slug: 'github-actions-cicd',
+        title: 'GitHub Actions: CI/CD profissional do zero',
+        icon: '🐙',
+        xp: 90,
+        readTime: 20,
+        desc: 'Workflows, jobs, matrix, reusable workflows, secrets, OIDC para cloud, cache inteligente, release automatizado e deploy em Kubernetes — GH Actions como plataforma de CI/CD séria.',
+        seoDesc: 'GitHub Actions tutorial completo PT-BR: workflows YAML, jobs, matrix, secrets, OIDC AWS/Azure, cache, reusable workflows, release e deploy em K8s.',
+        keywords: 'github actions tutorial completo, ci cd github actions, workflow yaml, github actions oidc aws, reusable workflows, matrix build, deploy kubernetes github actions',
+      },
+      {
+        slug: 'jenkins-pipelines',
+        title: 'Jenkins Pipelines: o CI/CD da era enterprise',
+        icon: '🏛️',
+        xp: 85,
+        readTime: 19,
+        desc: 'Jenkinsfile declarativo, agents dinâmicos, shared libraries, Blue Ocean, credentials, integração com K8s e o porquê do Jenkins ainda ser o padrão em grandes empresas.',
+        seoDesc: 'Jenkins tutorial completo PT-BR: pipeline declarativo, Jenkinsfile, agents Kubernetes, shared libraries, credentials, webhooks, Blue Ocean e migração de freestyle.',
+        keywords: 'jenkins tutorial, jenkinsfile declarative pipeline, jenkins kubernetes agent, shared libraries jenkins, jenkins blue ocean, ci cd jenkins enterprise',
+      },
+      {
+        slug: 'azure-devops-pipelines',
+        title: 'Azure DevOps Pipelines: CI/CD na Microsoft Cloud',
+        icon: '🔷',
+        xp: 80,
+        readTime: 18,
+        desc: 'Azure Pipelines em YAML, stages, approvals, environments, service connections, templates, variable groups e deploy em AKS + App Service com gate de aprovação.',
+        seoDesc: 'Azure DevOps Pipelines tutorial PT-BR: azure-pipelines.yml, stages, environments, approvals, service connections, templates, deploy em AKS.',
+        keywords: 'azure devops pipelines, azure-pipelines yml, azure pipelines stages, service connection azure, variable groups, deploy aks azure devops',
+      },
+      {
+        slug: 'rancher-multicluster',
+        title: 'Rancher: gerenciando múltiplos clusters K8s sem sofrer',
+        icon: '🐄',
+        xp: 75,
+        readTime: 16,
+        desc: 'Rancher Manager, RKE2, importar clusters, Fleet para GitOps multi-cluster, RBAC unificado, projetos, monitoring e quando Rancher vale (ou não) a pena.',
+        seoDesc: 'Rancher tutorial PT-BR: Rancher Manager, RKE2, multi-cluster, Fleet GitOps, RBAC, Projects, monitoring — como gerenciar dezenas de clusters Kubernetes.',
+        keywords: 'rancher kubernetes, rancher manager, rke2, fleet gitops, multi cluster kubernetes, rancher vs argo cd, rancher rbac',
+      },
+    ],
+  },
+  {
+    id: 'trail8',
+    name: 'Engenharia de Software Moderna',
+    color: '#e3b341',
+    icon: '🏗️',
+    desc: 'SDD, gerenciamento e criação de agents, testes profissionais, segurança real e arquitetura — deixar de ser coder e virar engenheiro de software de verdade.',
+    modules: [
+      {
+        slug: 'engenheiro-vs-coder',
+        title: 'Engenheiro vs Coder: o que mudou na era dos agents',
+        icon: '🧭',
+        xp: 60,
+        readTime: 14,
+        desc: 'Por que 80% do que você faz vai ser automatizado — e o que sobra como skill real: decompor problema, ler sistema, escrever spec, revisar PR de agent, tomar decisão de arquitetura.',
+        seoDesc: 'Diferença entre coder e engenheiro de software em 2026: skills que importam, como parar de depender do prompt e virar profissional que entrega sistema de verdade.',
+        keywords: 'engenheiro de software 2026, programador vs engenheiro, skills engenharia software ia, carreira developer ia, software engineer vs coder',
+      },
+      {
+        slug: 'spec-driven-development',
+        title: 'Spec-Driven Development (SDD): a nova espinha dorsal',
+        icon: '📜',
+        xp: 85,
+        readTime: 18,
+        desc: 'SDD não é documento morto: é spec executável que vira teste, código e PR. Anatomia de uma spec, workflow com agent, templates reais, controle de qualidade.',
+        seoDesc: 'Spec-Driven Development em PT-BR: como escrever specs que agents transformam em código e testes, templates, workflow, boas práticas.',
+        keywords: 'spec driven development, sdd, spec to code, specification agent coding, product requirements doc tech, prd para agent ia',
+      },
+      {
+        slug: 'gerenciando-agents-ia',
+        title: 'Gerenciando Agents: orquestração, contexto e custo',
+        icon: '🎛️',
+        xp: 80,
+        readTime: 17,
+        desc: 'Agent não é mágica — é processo com contexto, memória, ferramentas, orçamento e política. Como orquestrar múltiplos agents, controlar token, definir limites e auditar resultado.',
+        seoDesc: 'Como gerenciar agents de IA em times profissionais: orquestração, contexto, custo, limites, políticas e auditoria. Guia real em PT-BR.',
+        keywords: 'gerenciar agents ia, orquestracao agents, contexto agent ia, custo token llm, auditoria agent, multi agent workflow',
+      },
+      {
+        slug: 'criando-agents-customizados',
+        title: 'Criando Agents Customizados: do subagent ao MCP',
+        icon: '🛠️',
+        xp: 90,
+        readTime: 19,
+        desc: 'Como criar agents de verdade: subagents com system prompt curto, integração com tools via MCP (Model Context Protocol), sandbox, permissões, ciclos de vida.',
+        seoDesc: 'Criando agents customizados com Claude Code e MCP: subagents, system prompt, tools, MCP server, sandbox, permissões — passo a passo em PT-BR.',
+        keywords: 'criar agent customizado, mcp server tutorial, subagent claude, system prompt agent, agent coding protocol, claude agent sdk',
+      },
+      {
+        slug: 'testes-profissionais',
+        title: 'Testes Profissionais: pirâmide, propriedades, contrato e fuzz',
+        icon: '🧪',
+        xp: 85,
+        readTime: 18,
+        desc: 'Unit, integração, contrato, E2E, property-based, snapshot, mutation, fuzz, chaos. Qual usar, onde usar e por que cobertura sozinha mente.',
+        seoDesc: 'Tipos de testes profissionais em 2026: pirâmide, contrato, property-based, fuzz, mutation, snapshot, E2E e cobertura inteligente. Guia em PT-BR.',
+        keywords: 'tipos de testes software, piramide de testes, contract testing, property based testing, mutation testing, fuzz testing, cobertura de testes',
+      },
+      {
+        slug: 'seguranca-software-real',
+        title: 'Segurança de Software de Verdade: threat model ao SBOM',
+        icon: '🛡️',
+        xp: 90,
+        readTime: 19,
+        desc: 'Threat modeling (STRIDE), OWASP Top 10 de verdade, secrets, supply chain (SBOM, SLSA, SHA pinning), shift-left vs shift-right, DAST/SAST/IAST.',
+        seoDesc: 'Segurança de software profissional em 2026: threat modeling STRIDE, OWASP Top 10, SBOM, SLSA, SAST/DAST, supply chain — guia real em PT-BR.',
+        keywords: 'seguranca software, threat modeling stride, owasp top 10, sbom slsa, supply chain security, sast dast, shift left security',
+      },
+      {
+        slug: 'arquitetura-software-moderna',
+        title: 'Arquitetura Moderna: trade-offs, ADRs, C4 e evolução',
+        icon: '🏛️',
+        xp: 95,
+        readTime: 20,
+        desc: 'Monolito modular vs microserviços, DDD pragmático, ADRs (Architecture Decision Records), modelo C4, evolução sem big-rewrite, fitness functions.',
+        seoDesc: 'Arquitetura de software moderna em 2026: monolito modular vs microserviços, DDD, ADR, modelo C4, fitness functions, evolução — tudo em PT-BR.',
+        keywords: 'arquitetura software moderna, monolito modular, microservicos, ddd, adr architecture decision record, modelo c4, fitness functions',
+      },
+    ],
+  },
 ];
 
 export const LEVELS = [
@@ -647,6 +877,9 @@ export const BADGES_DEF: BadgeDef[] = [
   { id: 'trail3_done',    name: 'Engenheiro de Agentes',icon: '💻', desc: 'Completou a Trilha 3 completa',        xpBonus: 175 },
   { id: 'trail4_done',    name: 'Cloud Practitioner',   icon: '☁️', desc: 'Completou a trilha AWS Cloud Practitioner (CLF-C02)', xpBonus: 200 },
   { id: 'trail5_done',    name: 'Solutions Architect',  icon: '🏛️', desc: 'Completou a trilha AWS Solutions Architect Associate (SAA-C03)', xpBonus: 300 },
+  { id: 'trail6_done',    name: 'Meta-Aprendiz',        icon: '🧠', desc: 'Dominou as técnicas de psicologia do aprendizado', xpBonus: 150 },
+  { id: 'trail7_done',    name: 'Container Engineer',   icon: '📦', desc: 'Dominou Docker e Kubernetes',          xpBonus: 250 },
+  { id: 'trail8_done',    name: 'Engenheiro Sênior',     icon: '🏗️', desc: 'Completou a trilha de Engenharia de Software Moderna', xpBonus: 300 },
   { id: 'all_done',       name: 'Mestre Completo',      icon: '👑', desc: 'Completou TODAS as trilhas',           xpBonus: 500 },
   { id: 'speed_run',      name: 'Speed Run',            icon: '⚡', desc: 'Completou 3 módulos no mesmo dia',     xpBonus: 50  },
   { id: 'curious',        name: 'Muito Curioso',        icon: '🔍', desc: 'Revisitou um módulo já concluído',     xpBonus: 5   },
@@ -659,4 +892,89 @@ export function getLevelInfo(xp: number) {
 export function getTrailProgress(trailModules: Module[], completedModules: string[]) {
   const done = trailModules.filter(m => completedModules.includes(m.slug)).length;
   return { done, total: trailModules.length, pct: Math.round((done / trailModules.length) * 100) };
+}
+
+/* ──────────────────────────────────────────────
+   HUBS — temáticas editoriais que agrupam trilhas
+──────────────────────────────────────────────── */
+
+export const HUBS: Hub[] = [
+  {
+    id: 'hub-ia',
+    slug: 'ia',
+    name: 'Inteligência Artificial',
+    shortName: 'IA',
+    href: '/ia',
+    color: '#58a6ff',
+    icon: '🧠',
+    tagline: 'Do conceito ao agent — sem hype, com profundidade.',
+    desc: 'Três trilhas que cobrem a IA moderna por dentro: fundamentos matemáticos, arquiteturas além do LLM (KV cache, MoE, tool calling) e as ferramentas de código que reorganizaram o mercado dev.',
+    trailIds: ['trail1', 'trail2', 'trail3'],
+  },
+  {
+    id: 'hub-aws',
+    slug: 'aws',
+    name: 'AWS Cloud',
+    shortName: 'AWS',
+    href: '/aws',
+    color: '#ff9900',
+    icon: '☁️',
+    tagline: 'Dois caminhos oficiais — CLF-C02 e SAA-C03 — com profundidade real.',
+    desc: 'Certificação profissional da AWS: o Practitioner nivela os 4 domínios do CLF-C02, e o Solutions Architect Associate leva à arquitetura de verdade — resiliente, segura, performática e com custo otimizado.',
+    trailIds: ['trail4', 'trail5'],
+  },
+  {
+    id: 'hub-engenharia',
+    slug: 'engenharia',
+    name: 'Engenharia de Software',
+    shortName: 'Engenharia',
+    href: '/engenharia',
+    color: '#e3b341',
+    icon: '🏗️',
+    tagline: 'DevOps + engenharia moderna — sair do coder, virar engenheiro.',
+    desc: 'Duas trilhas para profissionalizar a stack: Docker + Kubernetes + CI/CD profissional, e engenharia de software na era dos agents — SDD, testes profissionais, segurança real e arquitetura.',
+    trailIds: ['trail7', 'trail8'],
+  },
+  {
+    id: 'hub-como-aprender',
+    slug: 'como-aprender',
+    name: 'Como Aprender',
+    shortName: 'Como Aprender',
+    href: '/como-aprender',
+    color: '#3fb950',
+    icon: '📚',
+    tagline: 'Meta-aprendizado — as técnicas com maior evidência científica.',
+    desc: 'Trilha transversal que ensina como o cérebro aprende: revisão espaçada, recall ativo, Feynman, interleaving, deep work e hábito diário. Complementa o mecanismo SRS do próprio Hub.',
+    trailIds: ['trail6'],
+  },
+];
+
+export function getHubBySlug(slug: string): Hub | undefined {
+  return HUBS.find(h => h.slug === slug);
+}
+
+export function getHubForTrail(trailId: string): Hub | undefined {
+  return HUBS.find(h => h.trailIds.includes(trailId));
+}
+
+export function getHubTrails(hub: Hub): Trail[] {
+  return hub.trailIds
+    .map(id => CURRICULUM.find(t => t.id === id))
+    .filter((t): t is Trail => !!t);
+}
+
+export function getHubStats(hub: Hub, completedSlugs: string[] = []) {
+  const trails = getHubTrails(hub);
+  const modules = trails.flatMap(t => t.modules);
+  const totalXp = modules.reduce((acc, m) => acc + m.xp, 0);
+  const done = modules.filter(m => completedSlugs.includes(m.slug)).length;
+  const minutes = modules.reduce((acc, m) => acc + m.readTime, 0);
+  return {
+    trailCount: trails.length,
+    moduleCount: modules.length,
+    totalXp,
+    minutes,
+    done,
+    pct: modules.length === 0 ? 0 : Math.round((done / modules.length) * 100),
+  };
 }

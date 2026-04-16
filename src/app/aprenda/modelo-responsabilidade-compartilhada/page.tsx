@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, ArchDiagram, QAItem, ExamDomainBadge } from '@/components/article/primitives';
+import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, LayerStack, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
 export const metadata: Metadata = {
   title: 'Modelo de Responsabilidade Compartilhada — FFV Academy',
@@ -80,32 +80,22 @@ function Content() {
       </Section>
 
       <Section title="A grande divisão: of vs. in" accent={ACCENT}>
-        <ArchDiagram title="Shared Responsibility Model" accent={ACCENT}>{`
-┌──────────────────────────────────────────────────────────────┐
-│                    RESPONSABILIDADE DO CLIENTE               │
-│                    "SECURITY IN THE CLOUD"                   │
-│                                                              │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  Dados do cliente                                    │   │
-│  │  Plataforma, aplicações, IAM                         │   │
-│  │  Configuração SO, rede e firewall                    │   │
-│  │  Criptografia client-side & integridade dos dados    │   │
-│  │  Criptografia server-side (cliente habilita/config)  │   │
-│  │  Tráfego de rede (proteção, firewall)                │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                                                              │
-├──────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  Software: compute, storage, database, networking    │   │
-│  │  Hardware / AWS global infrastructure                │   │
-│  │  Regiões, AZs, Edge Locations                        │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                                                              │
-│                    RESPONSABILIDADE DA AWS                   │
-│                    "SECURITY OF THE CLOUD"                   │
-└──────────────────────────────────────────────────────────────┘
-`}</ArchDiagram>
+        <LayerStack
+          title="Shared Responsibility Model"
+          accent={ACCENT}
+          separatorLabel="Linha divisória"
+          layers={[
+            { label: 'CLIENTE', content: 'Dados do cliente', note: 'security IN the cloud', tone: 'writable' },
+            { label: 'CLIENTE', content: 'Plataforma · Aplicações · IAM', tone: 'writable' },
+            { label: 'CLIENTE', content: 'Config de SO · Rede · Firewall · Security Groups', tone: 'writable' },
+            { label: 'CLIENTE', content: 'Criptografia client-side + integridade dos dados', tone: 'writable' },
+            { label: 'CLIENTE', content: 'Criptografia server-side (cliente habilita/configura)', tone: 'writable' },
+            { label: 'CLIENTE', content: 'Tráfego de rede (proteção, firewall de app)', tone: 'writable', separatorAfter: true },
+            { label: 'AWS', content: 'Software: compute · storage · database · networking', note: 'security OF the cloud', tone: 'base' },
+            { label: 'AWS', content: 'Hardware · Global Infrastructure (servidores, discos, racks)', tone: 'base' },
+            { label: 'AWS', content: 'Regiões · AZs · Edge Locations · Physical Security', tone: 'base' },
+          ]}
+        />
         <p>
           A mnemônica do exame: <strong>AWS protege a cloud; você protege o que está DENTRO da cloud</strong>.
         </p>

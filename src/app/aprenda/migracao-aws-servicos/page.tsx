@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, QAItem, ExamDomainBadge, ArchDiagram } from '@/components/article/primitives';
+import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, QAItem, ExamDomainBadge, StackFlow } from '@/components/article/primitives';
 
 export const metadata: Metadata = {
   title: 'Migração AWS: Migration Hub, DMS, MGN e DataSync — FFV Academy',
@@ -78,17 +78,39 @@ function Content() {
       <ExamDomainBadge domain="Cloud Concepts" weight="~24% do CLF-C02" color={ACCENT} />
 
       <Section title="O fluxo de migração em 4 fases" accent={ACCENT}>
-        <ArchDiagram title="Ciclo de migração AWS" accent={ACCENT}>{`
-  ┌─────────────┐   ┌──────────────┐   ┌──────────────┐   ┌────────────┐
-  │  DISCOVER   │→ │    PLAN      │→ │   MIGRATE    │→ │  VALIDATE   │
-  │ Application │   │ Migration    │   │ MGN · DMS    │   │ Logs, Cost  │
-  │ Discovery   │   │ Hub          │   │ DataSync     │   │ CloudWatch  │
-  └─────────────┘   └──────────────┘   └──────────────┘   └────────────┘
-                         ▲                     ▲
-                         │                     │
-                    visibilidade         7 Rs decididos
-                       central              por app
-        `}</ArchDiagram>
+        <StackFlow
+          title="Ciclo de migração AWS"
+          accent={ACCENT}
+          items={[
+            {
+              icon: '🔍',
+              label: 'DISCOVER',
+              sub: 'Application Discovery',
+              detail: 'Coleta inventário, utilização de CPU/RAM/disco e dependências de rede do on-prem. Agentless (VMware) ou agent-based (Linux/Windows).',
+              connector: 'dados para',
+            },
+            {
+              icon: '🗺️',
+              label: 'PLAN',
+              sub: 'Migration Hub',
+              detail: 'Painel central com visibilidade. Orchestrator automatiza sequências. Decide 7 Rs (rehost, replatform, refactor, etc.) por aplicação.',
+              connector: '7 Rs decididos',
+            },
+            {
+              icon: '🚚',
+              label: 'MIGRATE',
+              sub: 'MGN · DMS · DataSync',
+              detail: 'MGN replica servidores, DMS migra bancos (com SCT se heterogêneo), DataSync transfere arquivos via rede. Snow Family para offline.',
+              connector: 'validação',
+            },
+            {
+              icon: '✅',
+              label: 'VALIDATE',
+              sub: 'CloudWatch · Cost',
+              detail: 'Logs, métricas e custo no CloudWatch. Verifica performance, integridade, compliance antes do cutover final.',
+            },
+          ]}
+        />
         <p>
           Cada etapa tem serviços específicos. O <strong>Migration Hub</strong> é o painel que amarra tudo: você vê progresso de dezenas de servidores
           sendo migrados por MGN, bancos por DMS e dados por DataSync em uma tela só.
@@ -127,17 +149,46 @@ function Content() {
           Substituto oficial do antigo Server Migration Service (SMS). É o serviço de <strong>rehost (lift-and-shift)</strong> padrão da AWS — replica
           servidores on-prem inteiros para EC2 com downtime mínimo.
         </p>
-        <ArchDiagram title="Como o MGN funciona" accent={ACCENT}>{`
-  On-prem Server (VM, físico, Hyper-V, VMware)
-     │
-     ├── MGN Replication Agent instalado
-     │     └── Replica blocos de disco continuamente → EBS snapshots na AWS
-     │
-     ├── Launch Template pré-configurado (instance type, VPC, SG)
-     │
-     └── Test Launch → Cutover → EC2 em produção
-              RTO ≈ minutos · RPO ≈ segundos
-        `}</ArchDiagram>
+        <StackFlow
+          title="Como o MGN funciona"
+          accent={ACCENT}
+          items={[
+            {
+              icon: '🖥️',
+              label: 'On-prem Server',
+              sub: 'VM · físico · VMware · Hyper-V',
+              detail: 'Servidor ativo on-premises (Windows, Linux, legacy). Continua servindo produção enquanto é replicado.',
+              connector: 'agent instalado',
+            },
+            {
+              icon: '🔄',
+              label: 'MGN Replication Agent',
+              sub: 'block replication',
+              detail: 'Replica blocos de disco continuamente para EBS snapshots na AWS. Baixa latência, compressão, criptografia em trânsito.',
+              connector: 'snapshot pronto',
+            },
+            {
+              icon: '📋',
+              label: 'Launch Template',
+              sub: 'config EC2',
+              detail: 'Instance type, VPC, Security Group e IAM role pré-configurados. Determina a shape do EC2 alvo.',
+              connector: 'test launch',
+            },
+            {
+              icon: '🧪',
+              label: 'Test Launch',
+              sub: 'ensaio',
+              detail: 'Sobe EC2 de teste a partir do último snapshot. Valida conectividade, apps, certificates — sem impactar produção on-prem.',
+              connector: 'cutover',
+            },
+            {
+              icon: '🚀',
+              label: 'Cutover',
+              sub: 'RTO min · RPO seg',
+              detail: 'Corta tráfego on-prem e promove EC2 para produção. Downtime em minutos; perda de dados em segundos (última replicação).',
+            },
+          ]}
+        />
         <Callout tone="success">
           MGN é <strong>gratuito por 90 dias</strong> após a primeira replicação — você só paga EBS + EC2 do destino. Serve também como DR econômico (mantém
           réplicas em standby).

@@ -7,7 +7,7 @@ import {
   InlineCode,
   ComparisonTable,
   DecisionBox,
-  ArchDiagram,
+  NodeGraph,
   QAItem,
   ExamDomainBadge,
   KeyValue,
@@ -87,17 +87,37 @@ function Content() {
       </div>
 
       <Section title="Mapa mental: qual serviço para qual problema?" accent={ACCENT}>
-        <ArchDiagram title="Decisão rápida de messaging" accent={ACCENT}>
-{`    "Preciso entregar mensagem para..."
-                │
-  ┌─────────────┼──────────────────┬──────────────────┐
-  │             │                  │                  │
-1 consumer   N consumers       Com filtros      Stream contínuo
-  │             │              e roteamento      (analytics)
-  ▼             ▼                  ▼                  ▼
- SQS         SNS → SQS        EventBridge         Kinesis
-(fila)       (fanout)         (event bus)       (data stream)`}
-        </ArchDiagram>
+        <NodeGraph
+          title="Decisão rápida de messaging"
+          accent={ACCENT}
+          legend='"Preciso entregar mensagem para..."'
+          columns={[
+            {
+              label: '1 consumer',
+              nodes: [
+                { icon: '📬', label: 'SQS', sub: 'fila point-to-point', tone: 'emphasis' },
+              ],
+            },
+            {
+              label: 'N consumers',
+              nodes: [
+                { icon: '📡', label: 'SNS → SQS', sub: 'fanout pub/sub', tone: 'emphasis' },
+              ],
+            },
+            {
+              label: 'Filtros + roteamento',
+              nodes: [
+                { icon: '🎯', label: 'EventBridge', sub: 'event bus + rules', tone: 'emphasis' },
+              ],
+            },
+            {
+              label: 'Stream contínuo',
+              nodes: [
+                { icon: '🌊', label: 'Kinesis', sub: 'data stream · analytics', tone: 'emphasis' },
+              ],
+            },
+          ]}
+        />
       </Section>
 
       <Section title="SQS — filas para desacoplar producer de consumer" accent={ACCENT}>
@@ -144,22 +164,33 @@ aws sqs receive-message --queue-url ... \\
           SNS é tópico: publisher publica uma mensagem, N subscribers recebem. Subscribers podem ser SQS, Lambda, HTTP/S,
           Email, SMS, Mobile Push, Kinesis Firehose.
         </p>
-        <ArchDiagram title="Fanout pattern: SNS → múltiplas SQS" accent={ACCENT}>
-{`     Publisher (app)
-          │ PublishMessage
-          ▼
-    ┌─────────────┐
-    │  SNS Topic  │
-    │   orders    │
-    └──┬──┬──┬────┘
-       │  │  │
-   ┌───┘  │  └────────┐
-   ▼      ▼           ▼
- SQS    SQS        Lambda
-notif  fulfillm.   audit
- │      │            │
- EC2   ECS         CloudWatch`}
-        </ArchDiagram>
+        <NodeGraph
+          title="Fanout pattern: SNS → múltiplas subscriptions"
+          accent={ACCENT}
+          legend="Publisher publica 1 mensagem → SNS broadcast → N targets independentes"
+          columns={[
+            {
+              label: 'Publisher',
+              nodes: [
+                { icon: '📤', label: 'App (order-service)', sub: 'PublishMessage', tone: 'emphasis' },
+              ],
+            },
+            {
+              label: 'SNS Topic',
+              nodes: [
+                { icon: '📡', label: 'orders', sub: 'broadcast fanout', tone: 'emphasis' },
+              ],
+            },
+            {
+              label: 'Subscribers',
+              nodes: [
+                { icon: '📬', label: 'SQS notif', sub: 'EC2 consumer' },
+                { icon: '📬', label: 'SQS fulfillment', sub: 'ECS consumer' },
+                { icon: '⚡', label: 'Lambda audit', sub: 'CloudWatch Logs' },
+              ],
+            },
+          ]}
+        />
         <KeyValue
           accent={ACCENT}
           items={[

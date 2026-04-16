@@ -7,7 +7,7 @@ import {
   InlineCode,
   ComparisonTable,
   DecisionBox,
-  ArchDiagram,
+  NodeGraph,
   QAItem,
   ExamDomainBadge,
   KeyValue,
@@ -116,24 +116,29 @@ function Content() {
           secundários que aceitam tráfego de leitura via cluster endpoint. Cobre HA e um pouco de escalabilidade de
           leitura ao mesmo tempo. Mas ainda assim, para 10 réplicas, use Read Replicas.
         </Callout>
-        <ArchDiagram title="Multi-AZ Standard vs Multi-AZ Cluster" accent={ACCENT}>
-{`Multi-AZ Standard (1 primário + 1 standby)
-   AZ-a             AZ-b
-   ┌─────┐   sync   ┌─────┐
-   │ P1  │◀────────▶│ S1  │  S1 NÃO aceita reads
-   └──┬──┘          └─────┘
-      │ endpoint
-   App (1 reader possível só na primary)
-
-Multi-AZ Cluster (1 writer + 2 readers)
-   AZ-a       AZ-b       AZ-c
-   ┌─────┐  ┌─────┐  ┌─────┐
-   │ W   │──│ R1  │──│ R2  │  R1 e R2 aceitam reads
-   └─────┘  └─────┘  └─────┘
-      │        │        │
-      └──writer-endpoint──┐
-             reader-endpoint`}
-        </ArchDiagram>
+        <NodeGraph
+          title="Multi-AZ Standard vs Multi-AZ Cluster"
+          accent={ACCENT}
+          columns={[
+            {
+              label: 'Multi-AZ Standard',
+              nodes: [
+                { icon: '🅿️', label: 'P1 (AZ-a)', sub: 'Primary — aceita reads e writes' },
+                { icon: '🅢', label: 'S1 (AZ-b)', sub: 'Standby sync — NÃO aceita reads, só failover' },
+                { icon: '🔗', label: 'Endpoint', sub: 'Um único endpoint aponta sempre para o primary atual' },
+              ],
+            },
+            {
+              label: 'Multi-AZ Cluster',
+              nodes: [
+                { icon: '✍️', label: 'W (AZ-a)', sub: 'Writer — aceita writes', tone: 'emphasis' },
+                { icon: '👁️', label: 'R1 (AZ-b)', sub: 'Reader ativo — aceita reads', tone: 'emphasis' },
+                { icon: '👁️', label: 'R2 (AZ-c)', sub: 'Reader ativo — aceita reads', tone: 'emphasis' },
+                { icon: '🔗', label: 'Endpoints', sub: 'writer-endpoint + reader-endpoint (balanceia entre R1/R2)', tone: 'emphasis' },
+              ],
+            },
+          ]}
+        />
       </Section>
 
       <Section title="Aurora — o banco AWS reinventado" accent={ACCENT}>

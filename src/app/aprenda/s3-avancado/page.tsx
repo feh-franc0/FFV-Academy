@@ -7,7 +7,7 @@ import {
   InlineCode,
   ComparisonTable,
   DecisionBox,
-  ArchDiagram,
+  StackFlow,
   QAItem,
   ExamDomainBadge,
   KeyValue,
@@ -186,20 +186,16 @@ function Content() {
             ['Uso típico', 'Qualquer bucket com dados importantes', 'SEC 17a-4, HIPAA, logs imutáveis'],
           ]}
         />
-        <ArchDiagram title="Fluxo de delete com Versioning ligado" accent={ACCENT}>
-{`Estado inicial:
-  foto.jpg  version=v1  (current)
-
-Após DELETE foto.jpg (sem version-id):
-  foto.jpg  version=null  isLatest=true   type=DeleteMarker
-  foto.jpg  version=v1    isLatest=false  type=Object
-  → GET foto.jpg retorna 404
-  → GET foto.jpg?versionId=v1 retorna o arquivo original
-
-Recuperar:
-  DELETE foto.jpg?versionId=<delete-marker-id>
-  → v1 volta a ser current`}
-        </ArchDiagram>
+        <StackFlow
+          title="Fluxo de delete com Versioning ligado"
+          accent={ACCENT}
+          items={[
+            { icon: '📄', label: 'Estado inicial', sub: 'foto.jpg v=v1', detail: 'Única versão, marcada como current.' },
+            { icon: '🗑️', label: 'DELETE foto.jpg', sub: 'sem version-id', detail: 'Cria DeleteMarker (v=null, isLatest=true). v1 preservada (isLatest=false).' },
+            { icon: '🚫', label: 'GET foto.jpg', sub: '→ 404', detail: 'GET foto.jpg?versionId=v1 ainda retorna o arquivo original.' },
+            { icon: '♻️', label: 'Recuperar', sub: 'DELETE do DeleteMarker', detail: 'Remove o marker; v1 volta a ser current automaticamente.' },
+          ]}
+        />
       </Section>
 
       <Section title="Replication — CRR e SRR em profundidade" accent={ACCENT}>
@@ -268,35 +264,17 @@ aws s3 cp relatorio.pdf s3://meu-bucket/ \\
       </Section>
 
       <Section title="Controle de acesso — as 4 camadas que somam (não substituem)" accent={ACCENT}>
-        <ArchDiagram title="Ordem de avaliação de acesso a objeto S3" accent={ACCENT}>
-{`Request PUT/GET s3://bucket/key
-         │
-         ▼
-  ┌──────────────────┐   NÃO   ┌──────────┐
-  │ Block Public     │────────▶│ Bloqueia │
-  │ Access ativo?    │         │ se for   │
-  └────────┬─────────┘         │ público  │
-           │ OK                 └──────────┘
-           ▼
-  ┌──────────────────┐
-  │ IAM Policy da    │── Deny explicit  → NEGA
-  │ identidade chama │
-  └────────┬─────────┘
-           │
-           ▼
-  ┌──────────────────┐
-  │ Bucket Policy    │── Deny explicit  → NEGA
-  │ (resource-based) │── Allow          → continua
-  └────────┬─────────┘
-           │
-           ▼
-  ┌──────────────────┐
-  │ ACL (legado)     │── Allow (não recomendado hoje)
-  └────────┬─────────┘
-           │
-           ▼
-      PERMITE se ao menos um Allow e nenhum Deny`}
-        </ArchDiagram>
+        <StackFlow
+          title="Ordem de avaliação: request PUT/GET s3://bucket/key"
+          accent={ACCENT}
+          items={[
+            { icon: '🛡️', label: 'Block Public Access', sub: 'Conta + Bucket', detail: 'Se ligado e request é público → NEGA imediatamente, antes de qualquer policy.' },
+            { icon: '👤', label: 'IAM Policy', sub: 'identity-based', detail: 'Deny explícito no principal → NEGA. Allow → segue para próxima camada.' },
+            { icon: '📜', label: 'Bucket Policy', sub: 'resource-based (JSON)', detail: 'Deny explícito → NEGA. Allow → continua. Base para cross-account e "force HTTPS".' },
+            { icon: '📋', label: 'ACL (legado)', sub: 'Object Ownership', detail: 'Allow legado ainda contribui em casos específicos (delivery logs). AWS recomenda desativar.' },
+            { icon: '✅', label: 'Decisão final', sub: 'pelo menos 1 Allow, 0 Deny', detail: 'Qualquer Deny explícito em qualquer camada vence. Sem Deny e ≥ 1 Allow → PERMITE.' },
+          ]}
+        />
         <KeyValue
           accent={ACCENT}
           items={[

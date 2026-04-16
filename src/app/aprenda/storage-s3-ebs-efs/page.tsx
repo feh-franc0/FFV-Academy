@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, ArchDiagram, QAItem, ExamDomainBadge } from '@/components/article/primitives';
+import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, NodeGraph, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
 export const metadata: Metadata = {
   title: 'Storage AWS: S3, EBS, EFS e Glacier — FFV Academy',
@@ -80,28 +80,39 @@ function Content() {
       </Section>
 
       <Section title="As 3 famílias de storage" accent={ACCENT}>
-        <ArchDiagram title="Object vs Block vs File" accent={ACCENT}>{`
-┌────────────────┬────────────────┬────────────────┐
-│    OBJECT      │    BLOCK       │    FILE        │
-├────────────────┼────────────────┼────────────────┤
-│ "arquivos +    │ "disco"        │ "share NFS/    │
-│  metadata via  │                │  SMB"          │
-│  API HTTP"     │                │                │
-├────────────────┼────────────────┼────────────────┤
-│  Exemplo:      │  Exemplo:      │  Exemplo:      │
-│  S3            │  EBS           │  EFS (Linux),  │
-│                │                │  FSx (Win/Lustre)│
-├────────────────┼────────────────┼────────────────┤
-│  Ilimitado     │  Até 64 TiB    │  Até PB        │
-├────────────────┼────────────────┼────────────────┤
-│  Acesso API    │  1 EC2 por vez │  N clientes    │
-│  (HTTPS)       │  (Multi-Attach │  simultâneos   │
-│                │   raro)        │                │
-├────────────────┼────────────────┼────────────────┤
-│  Paga por GB   │  Paga por GB   │  Paga por GB   │
-│  + reqs        │  provisionado  │  usado         │
-└────────────────┴────────────────┴────────────────┘
-`}</ArchDiagram>
+        <NodeGraph
+          title="Object vs Block vs File"
+          accent={ACCENT}
+          columns={[
+            {
+              label: 'OBJECT',
+              nodes: [
+                { icon: '🪣', label: 'S3', sub: 'Arquivos + metadata via API HTTP(S)', tone: 'emphasis' },
+                { icon: '♾️', label: 'Capacidade', sub: 'Ilimitado', tone: 'emphasis' },
+                { icon: '🌐', label: 'Acesso', sub: 'API HTTPS — qualquer cliente, qualquer região', tone: 'emphasis' },
+                { icon: '💰', label: 'Custo', sub: 'Paga por GB armazenado + requests', tone: 'emphasis' },
+              ],
+            },
+            {
+              label: 'BLOCK',
+              nodes: [
+                { icon: '💽', label: 'EBS', sub: '"Disco" — volume de baixa latência atachado a uma EC2' },
+                { icon: '📏', label: 'Capacidade', sub: 'Até 64 TiB por volume' },
+                { icon: '🔌', label: 'Acesso', sub: '1 EC2 por vez (Multi-Attach é caso raro)' },
+                { icon: '💰', label: 'Custo', sub: 'Paga por GB provisionado (mesmo que não use)' },
+              ],
+            },
+            {
+              label: 'FILE',
+              nodes: [
+                { icon: '📁', label: 'EFS / FSx', sub: '"Share NFS/SMB" — EFS para Linux, FSx para Windows/Lustre' },
+                { icon: '📏', label: 'Capacidade', sub: 'Até PB, elástico' },
+                { icon: '👥', label: 'Acesso', sub: 'N clientes simultâneos (mounts concorrentes)' },
+                { icon: '💰', label: 'Custo', sub: 'Paga por GB efetivamente usado' },
+              ],
+            },
+          ]}
+        />
       </Section>
 
       <Section title="Amazon S3 (Simple Storage Service)" accent={ACCENT}>

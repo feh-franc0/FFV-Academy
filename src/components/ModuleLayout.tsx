@@ -6,6 +6,7 @@ import { useGameState } from '@/hooks/useGameState';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { BADGES_DEF } from '@/lib/curriculum';
+import { ArticleToc } from '@/components/article/ArticleToc';
 
 export interface QuizQuestion {
   question: string;
@@ -45,7 +46,7 @@ export function ModuleLayout({
   const [quizStarted, setQuizStarted] = useState(false);
   const [answers, setAnswers] = useState<(number | null)[]>(quiz.map(() => null));
   const [submitted, setSubmitted] = useState(false);
-  const [result, setResult] = useState<{ xpGained: number; newBadges: string[]; leveledUp: boolean; newLevel: number } | null>(null);
+  const [result, setResult] = useState<{ xpGained: number; newBadges: string[]; leveledUp: boolean; newLevel: number; cardsAdded: number } | null>(null);
 
   const isCompleted = state?.completedModules.includes(slug) ?? false;
   const quizScore = state?.quizScores[slug];
@@ -58,7 +59,7 @@ export function ModuleLayout({
   function handleSubmit() {
     const score = answers.filter((a, i) => a === quiz[i].correct).length;
     submitQuiz(slug, score, quiz.length);
-    const r = markComplete(slug);
+    const r = markComplete({ slug, title, trailColor, readTime, quiz });
     setResult(r);
     setSubmitted(true);
   }
@@ -68,7 +69,7 @@ export function ModuleLayout({
   const perfect = submitted && score === quiz.length;
 
   return (
-    <article className="max-w-2xl mx-auto px-6 pb-20">
+    <article className="max-w-2xl mx-auto px-6 pb-20" data-article-root>
       {/* Breadcrumb */}
       <nav className="flex items-center gap-2 text-xs pt-8 mb-8" style={{ color: 'var(--ffv-muted)' }}>
         <Link href="/" className="hover:text-white transition-colors">FFV Academy</Link>
@@ -102,8 +103,23 @@ export function ModuleLayout({
         <div className="h-px" style={{ background: 'var(--ffv-border)' }} />
       </header>
 
+      {/* Floating TOC on wide screens */}
+      <aside
+        aria-hidden={false}
+        className="hidden xl:block"
+        style={{
+          position: 'fixed',
+          top: 80,
+          right: 'max(24px, calc((100vw - 672px) / 2 - 260px))',
+          width: 220,
+          zIndex: 10,
+        }}
+      >
+        <ArticleToc containerSelector="[data-article-content]" accent={trailColor} />
+      </aside>
+
       {/* Content */}
-      <div className="prose-ffv">{children}</div>
+      <div className="prose-ffv" data-article-content>{children}</div>
 
       {/* Quiz section */}
       <section className="mt-14">
@@ -197,6 +213,12 @@ export function ModuleLayout({
                       ) : null;
                     })}
                   </div>
+                )}
+                {result.cardsAdded > 0 && (
+                  <p className="mt-3 text-xs" style={{ color: 'var(--ffv-muted)' }}>
+                    🧠 {result.cardsAdded} {result.cardsAdded === 1 ? 'card adicionado' : 'cards adicionados'} à sua fila de revisão espaçada —
+                    <Link href="/revisar" className="ml-1 underline" style={{ color: trailColor }}>revisar agora</Link>
+                  </p>
                 )}
               </div>
             )}

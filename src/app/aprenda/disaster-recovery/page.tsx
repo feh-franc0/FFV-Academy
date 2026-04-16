@@ -6,7 +6,8 @@ import {
   InlineCode,
   ComparisonTable,
   DecisionBox,
-  ArchDiagram,
+  Timeline,
+  NodeGraph,
   QAItem,
   ExamDomainBadge,
   KeyValue,
@@ -100,16 +101,15 @@ function Content() {
             { k: 'MTBF / MTTR', v: 'Mean Time Between Failures / Mean Time To Recover — métricas operacionais.' },
           ]}
         />
-        <ArchDiagram title="Linha do tempo do desastre" accent={ACCENT}>
-{`  t = -RPO     t = 0 (desastre)        t = +RTO
-     │             │                       │
-     ▼             ▼                       ▼
-  Último       Sistema               Sistema
-  backup       cai                   restaurado
-  válido
-    │←─── dados perdidos ────→│←── tempo parado ──→│
-        (max aceitável = RPO)   (max aceitável = RTO)`}
-        </ArchDiagram>
+        <Timeline
+          title="Linha do tempo do desastre"
+          accent={ACCENT}
+          events={[
+            { when: 't = -RPO', label: 'Último backup válido', detail: 'Dados replicados/backupeados até esse momento. Tudo depois será perdido se o desastre ocorrer agora.' },
+            { when: 't = 0', label: 'Desastre', detail: 'Sistema cai. Janela de dados perdidos = RPO. Começa a contagem do RTO.', highlight: true },
+            { when: 't = +RTO', label: 'Sistema restaurado', detail: 'Operação volta. Janela entre desastre e restore = RTO. Tempo máximo aceitável pelo negócio.' },
+          ]}
+        />
       </Section>
 
       <Section title="As 4 estratégias de DR" accent={ACCENT}>
@@ -123,19 +123,41 @@ function Content() {
             ['Multi-Site Active-Active', '~zero', 'segundos', '$$$$', 'Duas (ou mais) regiões rodando plena capacidade, balanceando tráfego.'],
           ]}
         />
-        <ArchDiagram title="Comparação visual: infraestrutura rodando na secondary" accent={ACCENT}>
-{`Backup & Restore:   Secondary região = vazia. Só tem snapshots.
-                    └── "construir tudo do zero"
-
-Pilot Light:        Secondary = DB replicando + AMIs prontas
-                    └── "fogo piloto aceso; acender resto rápido"
-
-Warm Standby:       Secondary = aplicação rodando em tamanho 20%
-                    └── "pronto mas aquecido; só scale up"
-
-Multi-Site:         Secondary = capacidade total, recebendo tráfego
-                    └── "nenhum 'secondary' — duas primárias"`}
-        </ArchDiagram>
+        <NodeGraph
+          title="Infraestrutura rodando na região secundária"
+          accent={ACCENT}
+          legend="Quanto mais à direita, mais rápida (e mais cara) a recuperação"
+          columns={[
+            {
+              label: 'Backup & Restore',
+              nodes: [
+                { icon: '📦', label: 'Só snapshots', sub: 'Secondary vazia', tone: 'muted' },
+                { icon: '⏳', label: 'Construir do zero', sub: 'RTO: horas', tone: 'muted' },
+              ],
+            },
+            {
+              label: 'Pilot Light',
+              nodes: [
+                { icon: '🔥', label: 'DB replicando', sub: 'AMIs prontas' },
+                { icon: '⚡', label: 'Acender resto', sub: 'RTO: 10-30 min' },
+              ],
+            },
+            {
+              label: 'Warm Standby',
+              nodes: [
+                { icon: '♨️', label: 'App rodando ~20%', sub: 'Capacidade reduzida', tone: 'emphasis' },
+                { icon: '📈', label: 'Só scale up', sub: 'RTO: minutos', tone: 'emphasis' },
+              ],
+            },
+            {
+              label: 'Multi-Site Active',
+              nodes: [
+                { icon: '🚀', label: '100% ativa', sub: 'Recebendo tráfego', tone: 'success' },
+                { icon: '⚡', label: 'Zero downtime', sub: 'RTO: segundos', tone: 'success' },
+              ],
+            },
+          ]}
+        />
       </Section>
 
       <Section title="Backup & Restore — simples e barato" accent={ACCENT}>

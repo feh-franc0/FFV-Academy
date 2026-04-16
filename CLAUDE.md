@@ -62,7 +62,7 @@ cp -r "$OUT/_next" "$DEST/"
 cp "$OUT/favicon.ico" "$DEST/" 2>/dev/null || true
 cp "$OUT/index.html" "$DEST/index.html"
 cp "$OUT/404.html" "$DEST/404.html"
-for route in fundamentos-da-ia ia-alem-do-llm ferramentas-ia-codigo aws-cloud-practitioner aws-saa-c03; do
+for route in ia aws engenharia progresso fundamentos-da-ia ia-alem-do-llm ferramentas-ia-codigo aws-cloud-practitioner aws-saa-c03 como-aprender devops-containers engenharia-software revisar; do
   mkdir -p "$DEST/$route"
   cp "$OUT/$route.html" "$DEST/$route/index.html"
 done
@@ -117,25 +117,58 @@ public_html/
 ├── index.html                  ← home
 ├── 404.html
 ├── _next/                      ← CSS/JS (não mexer)
+├── ia/index.html                ← hub de IA
+├── aws/index.html               ← hub AWS
+├── engenharia/index.html        ← hub de Engenharia de Software
+├── progresso/index.html         ← dashboard do usuário
 ├── fundamentos-da-ia/index.html
 ├── ia-alem-do-llm/index.html
 ├── ferramentas-ia-codigo/index.html
 ├── aws-cloud-practitioner/index.html
 ├── aws-saa-c03/index.html
+├── como-aprender/index.html
+├── devops-containers/index.html
+├── engenharia-software/index.html
+├── revisar/index.html          ← fila de revisão espaçada (SRS)
 └── aprenda/<slug>/index.html   ← um por módulo
 ```
+
+---
+
+## Hubs temáticos
+
+Além das 8 trilhas, o currículo expõe **4 hubs** — agrupadores editoriais definidos em [src/lib/curriculum.ts](src/lib/curriculum.ts) (constante `HUBS`). Cada hub tem sua própria página estática renderizada por [src/components/HubPageClient.tsx](src/components/HubPageClient.tsx).
+
+| Hub | Rota | Cor | Trilhas |
+|-----|------|-----|---------|
+| Inteligência Artificial | `/ia` | `#58a6ff` | trail1, trail2, trail3 |
+| AWS Cloud | `/aws` | `#ff9900` | trail4, trail5 |
+| Engenharia de Software | `/engenharia` | `#e3b341` | trail7, trail8 |
+| Como Aprender | `/como-aprender` | `#3fb950` | trail6 |
+
+Os hubs são **aditivos**, não substituem as rotas de trilha — todas as URLs históricas seguem funcionando. O nav do [GameHUD](src/components/GameHUD.tsx) mostra **hubs + Progresso** (não trilhas individuais). O [CommandPalette](src/components/CommandPalette.tsx) (Cmd/Ctrl+K) permite navegar por tudo a qualquer momento.
+
+Helpers disponíveis no `curriculum.ts`: `getHubBySlug(slug)`, `getHubForTrail(trailId)`, `getHubTrails(hub)`, `getHubStats(hub, completedSlugs)`.
 
 ---
 
 ## Arquitetura de Páginas
 
 ```
-/                        → Home (Hero → Featured → Trails → Todos os Artigos → Gamification → Author → CTA)
+/                        → Home (Hero → Habit → Featured → Hubs → Trails → Posts → Game → Author → CTA)
+/ia                      → Hub de IA (trilhas 1-3)
+/aws                     → Hub AWS (trilhas 4-5)
+/engenharia              → Hub Engenharia (trilhas 7-8)
+/progresso               → Dashboard do usuário (XP, streak, badges, por hub, por trilha)
 /fundamentos-da-ia       → Trilha 1 — listagem
 /ia-alem-do-llm          → Trilha 2 — listagem
 /ferramentas-ia-codigo   → Trilha 3 — listagem
 /aws-cloud-practitioner  → Trilha 4 — listagem
 /aws-saa-c03             → Trilha 5 — listagem
+/como-aprender           → Trilha 6 — listagem (psicologia do aprendizado; funciona como hub também)
+/devops-containers       → Trilha 7 — listagem (Docker + Kubernetes + CI/CD)
+/engenharia-software     → Trilha 8 — listagem (engenharia moderna, agents, testes, segurança, arquitetura)
+/revisar                 → Fila de revisão espaçada (SRS) com SM-2 simplificado
 /aprenda/[slug]          → Artigo + quiz + XP
 ```
 
@@ -173,19 +206,43 @@ interface GameState {
   badges: string[]
   totalStudyTime: number
   startedAt: string | null
+  // ─── hábito + SRS (Fase "Como Aprender") ───
+  reviewCards: ReviewCard[]            // cards SM-2 injetados no fim de cada quiz
+  studyDays: StudyDay[]                // last 365 days window p/ heatmap
+  freezes: number                      // streak freeze (ganha 1 a cada 7d, máx 2)
+  dailyGoal: number                    // meta diária em cards (default 3, clamp 1-20)
+  lastReviewDate: string | null
 }
 ```
+
+### SRS (Spaced Repetition System)
+
+- **`src/lib/srs.ts`** — SM-2 simplificado puro (sem deps de localStorage). Exporta `createCard`, `reviewCard`, `getDueCards`, `getUpcomingCards`, `todayISO`, `daysBetween`.
+- **Card id format:** `${slug}_q${questionIndex}` — dedupe automático em múltiplas submissões do mesmo quiz.
+- **Quality map:** `again: 0 · hard: 3 · good: 4 · easy: 5`. Em `again` o card volta em 1 dia e `repetition = 0`.
+- **XP por review:** `again: 0 · hard: 1 · good: 2 · easy: 4`. Streak toca em toda review confirmada.
+- **Freeze:** ganhado em `streak % 7 === 0` (máx 2). Consumido automaticamente no `checkStreak` antes de quebrar o streak.
+- **`/revisar`** (ReviewClient) — 4 fases: `empty-no-cards` / `empty-zero-due` / `answering` / `revealed` / `finished`. "Again" re-insere 2 posições deep no queue local (não re-busca do hook pra evitar flicker).
+- **`HabitDashboard`** na home — só renderiza se `completedModules.length > 0 || reviewCards.length > 0`. 4 StatCards (streak, freezes, XP today, meta) + heatmap 12w × 7d com `color-mix` em `--ffv-green` sobre `--ffv-bg3`.
 
 ### Arquivos-chave
 - `src/lib/curriculum.ts` — currículo completo (trilhas, módulos, XP, slugs)
 - `src/lib/engine.ts` — funções de XP, badges, streak, localStorage
 - `src/hooks/useGameState.ts` — hook React para qualquer componente
 - `src/hooks/useTheme.ts` — hook do toggle dark/light
-- `src/components/GameHUD.tsx` — HUD fixo (logo, nav, XP, streak, badges, toggle de tema)
+- `src/lib/srs.ts` — algoritmo SM-2 simplificado (puro, sem localStorage)
+- `src/components/GameHUD.tsx` — HUD fixo (logo, nav, XP, streak, badges, toggle de tema, contador de cards devidos)
+- `src/components/HabitDashboard.tsx` — dashboard de hábito (streak, freezes, XP today, meta, heatmap 12w)
+- `src/components/ReviewClient.tsx` — fila SRS card-by-card (pergunta → reveal → rate again/hard/good/easy)
 - `src/components/ThemeToggle.tsx` — botão sol/lua
-- `src/components/ModuleLayout.tsx` — template de artigo com quiz
+- `src/components/ModuleLayout.tsx` — template de artigo com quiz (+ TOC flutuante via ArticleToc em xl+)
+- `src/components/article/ArticleToc.tsx` — TOC auto-gerado a partir das `<Section>` do primitivo, com scroll spy
+- `src/components/article/primitives.tsx` — Section, Callout, CodeBlock, ComparisonTable, DecisionBox (auto-ID)
 - `src/components/TrailBlogClient.tsx` — listagem de artigos por trilha
+- `src/components/HubPageClient.tsx` — página de hub (hero, stats, trilhas, cross-sell)
 - `src/components/HomeClient.tsx` — home completa (editorial)
+- `src/components/ProgressoClient.tsx` — dashboard `/progresso` (nível, XP, streak, badges, por hub, por trilha)
+- `src/components/CommandPalette.tsx` — palette global Cmd/Ctrl+K (busca fuzzy por hub/trilha/artigo/página)
 
 ### Níveis de evolução
 1. 🌱 Curioso (0–100 XP)
@@ -302,6 +359,46 @@ Arquitetura de soluções alinhada aos 4 domínios (Secure 30% · Resilient 26% 
 | `rede-hibrida-saa` | Rede Híbrida: Direct Connect, VPN, PrivateLink e VPC Endpoints | 85 |
 | `ml-ia-arquiteto-saa` | ML/IA para Arquiteto: SageMaker, Bedrock e Pipelines | 60 |
 | `simulado-saa-c03` | Simulado SAA-C03 Comentado (25 questões) | 100 |
+
+### Trilha 6 — Como Aprender (`#3fb950`) — `/como-aprender`
+
+Trilha de meta-aprendizado: técnicas com maior evidência científica para fixar conhecimento. Complementa o mecanismo de SRS do Hub.
+
+| Slug | Título | XP |
+|------|--------|----|
+| `revisao-espacada` | Revisão Espaçada: a técnica mais eficaz do mundo | 50 |
+| `recall-ativo` | Recall Ativo: por que reler é quase inútil | 45 |
+| `tecnica-feynman` | Técnica Feynman: se não explica, não entendeu | 40 |
+| `interleaving` | Interleaving: por que misturar tópicos é melhor | 45 |
+| `deep-work-pomodoro` | Deep Work + Pomodoro: foco real em mundo distraído | 40 |
+| `habito-estudo-diario` | Hábito de Estudo Diário: o jogo longo | 50 |
+
+### Trilha 7 — DevOps & Containers (`#2496ed`) — `/devops-containers`
+
+Docker, Kubernetes e as plataformas profissionais de CI/CD — os pilares de toda infra moderna, explicados para durar.
+
+| Slug | Título | XP |
+|------|--------|----|
+| `docker-completo` | Docker Completo: do zero ao production-ready | 100 |
+| `kubernetes-completo` | Kubernetes Completo: do Pod ao cluster de produção | 120 |
+| `github-actions-cicd` | GitHub Actions: CI/CD profissional do zero | 90 |
+| `jenkins-pipelines` | Jenkins Pipelines: o CI/CD da era enterprise | 85 |
+| `azure-devops-pipelines` | Azure DevOps Pipelines: CI/CD na Microsoft Cloud | 80 |
+| `rancher-multicluster` | Rancher: gerenciando múltiplos clusters K8s sem sofrer | 75 |
+
+### Trilha 8 — Engenharia de Software Moderna (`#e3b341`) — `/engenharia-software`
+
+Deixar de ser coder e virar engenheiro de software de verdade — SDD, agents, testes profissionais, segurança real e arquitetura.
+
+| Slug | Título | XP |
+|------|--------|----|
+| `engenheiro-vs-coder` | Engenheiro vs Coder: o que mudou na era dos agents | 60 |
+| `spec-driven-development` | Spec-Driven Development (SDD): a nova espinha dorsal | 85 |
+| `gerenciando-agents-ia` | Gerenciando Agents: orquestração, contexto e custo | 80 |
+| `criando-agents-customizados` | Criando Agents Customizados: do subagent ao MCP | 90 |
+| `testes-profissionais` | Testes Profissionais: pirâmide, propriedades, contrato e fuzz | 85 |
+| `seguranca-software-real` | Segurança de Software de Verdade: threat model ao SBOM | 90 |
+| `arquitetura-software-moderna` | Arquitetura Moderna: trade-offs, ADRs, C4 e evolução | 95 |
 
 ### Regra de slugs
 **Slugs são IDs permanentes no localStorage** — nunca renomear um slug sem migração de dados do usuário.

@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, ArchDiagram, QAItem, ExamDomainBadge } from '@/components/article/primitives';
+import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, StackFlow, LayerStack, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
 export const metadata: Metadata = {
   title: 'IAM Avançado: Policies JSON, STS e Organizations — FFV Academy',
@@ -132,39 +132,17 @@ function Content() {
       </Section>
 
       <Section title="Ordem de avaliação — a árvore de decisão IAM" accent={ACCENT}>
-        <ArchDiagram title="Como a AWS decide se uma ação é permitida" accent={ACCENT}>{`
-  Requisição recebida
-         │
-         ▼
-  ┌───────────────────┐
-  │ Há Deny explícito │───── Sim ──► ❌ NEGADO
-  │ em QUALQUER       │
-  │ policy aplicável? │
-  └─────────┬─────────┘
-            │ Não
-            ▼
-  ┌───────────────────┐
-  │ SCP da conta      │───── Nega ──► ❌ NEGADO
-  │ permite a ação?   │
-  └─────────┬─────────┘
-            │ Permite
-            ▼
-  ┌───────────────────┐
-  │ Há Allow em       │───── Não ───► ❌ NEGADO (implicit deny)
-  │ identity OU       │
-  │ resource policy?  │
-  └─────────┬─────────┘
-            │ Sim
-            ▼
-  ┌───────────────────┐
-  │ Permission        │───── Nega ──► ❌ NEGADO
-  │ boundary permite? │
-  │ (se houver)       │
-  └─────────┬─────────┘
-            │ Permite
-            ▼
-       ✅ PERMITIDO
-`}</ArchDiagram>
+        <StackFlow
+          title="Árvore de decisão IAM: a requisição é permitida?"
+          accent={ACCENT}
+          items={[
+            { icon: '🛑', label: 'Deny explícito?', sub: 'qualquer policy aplicável', detail: 'Se qualquer Deny explícito bater → NEGA imediatamente. Deny sempre vence.' },
+            { icon: '🏛️', label: 'SCP (Org)', sub: 'guardrail da Organization', detail: 'Se SCP da conta não permitir a ação → NEGA, mesmo com Allow em IAM.' },
+            { icon: '👤', label: 'Allow em identity OU resource?', sub: 'policy union', detail: 'Precisa existir Allow em pelo menos uma policy aplicável. Sem Allow → implicit deny.' },
+            { icon: '🧱', label: 'Permission boundary', sub: 'se houver', detail: 'Boundary define o TETO da identidade. Boundary deve permitir — senão NEGA.' },
+            { icon: '✅', label: 'PERMITIDO', sub: 'todas as camadas passaram', detail: 'Sem Deny, SCP permitindo, Allow presente, boundary permitindo → ação executa.' },
+          ]}
+        />
       </Section>
 
       <Section title="STS — Security Token Service" accent={ACCENT}>
@@ -189,21 +167,16 @@ function Content() {
       </Section>
 
       <Section title="Cross-Account Access — o pattern mais cobrado" accent={ACCENT}>
-        <ArchDiagram title="Cross-account via AssumeRole" accent={ACCENT}>{`
-   Conta A (Producer)              Conta B (Owner)
-   ─────────────────              ───────────────
-                                  ┌─────────────────┐
-   ┌──────────────┐               │ Role: DataAccess │
-   │ Lambda       │               │ Trust Policy:    │
-   │ Function     │──sts:Assume──►│  Principal: A    │
-   └──────────────┘               │ Perm Policy:     │
-         ▲                        │  s3:GetObject    │
-         │                        │  em bucket-B     │
-   Credenciais                    └─────────────────┘
-   temporárias                              │
-         │                                  ▼
-         └──── usa token para ──────► S3 Bucket (B)
-`}</ArchDiagram>
+        <StackFlow
+          title="Cross-account via AssumeRole"
+          accent={ACCENT}
+          items={[
+            { icon: '👷', label: 'Conta A: Lambda', sub: 'precisa ler bucket de B', detail: 'Role de execução de Lambda tem sts:AssumeRole para a Role de B.' },
+            { icon: '🔄', label: 'sts:AssumeRole', sub: 'A → B', detail: 'STS valida Trust Policy da Role B (Principal = A). Se bate, emite credenciais temporárias (15min–12h).' },
+            { icon: '🎫', label: 'Credenciais temporárias', sub: 'AccessKey + Secret + SessionToken', detail: 'Lambda recebe o token e o usa como qualquer credencial AWS.' },
+            { icon: '🪣', label: 'S3 bucket de B', sub: 's3:GetObject', detail: 'Permission policy da Role B autoriza a ação. Lambda opera em bucket de outra conta.' },
+          ]}
+        />
         <p><strong>Passos:</strong></p>
         <ol className="flex flex-col gap-1 text-xs pl-6 list-decimal">
           <li>Na conta B: crie uma IAM Role &ldquo;DataAccess&rdquo; com permission policy (ex: S3 GetObject).</li>
@@ -229,18 +202,15 @@ function Content() {
       </Section>
 
       <Section title="AWS Organizations" accent={ACCENT}>
-        <ArchDiagram title="Estrutura de Organizations" accent={ACCENT}>{`
-         Management Account (billing, root da Org)
-                     │
-        ┌────────────┼────────────┐
-        │            │            │
-        ▼            ▼            ▼
-     [ OU: Prod ] [ OU: Dev ] [ OU: Security ]
-        │            │            │
-      ┌─┴─┐        ┌─┴─┐        ┌─┴──┐
-   Acc1 Acc2    Acc3 Acc4    LogArchive
-                                AuditAccount
-`}</ArchDiagram>
+        <LayerStack
+          title="Estrutura de AWS Organizations"
+          accent={ACCENT}
+          layers={[
+            { label: 'ROOT', content: 'Management Account', note: 'Billing consolidado · dona da Org', tone: 'base' },
+            { label: 'OU', content: 'Prod · Dev · Security', note: 'Organizational Units agrupam contas por função', tone: 'default' },
+            { label: 'ACCOUNTS', content: 'Prod: Acc1 · Acc2  |  Dev: Acc3 · Acc4  |  Security: LogArchive · AuditAccount', note: 'SCPs herdam da OU para as contas-filhas', tone: 'writable' },
+          ]}
+        />
         <p><strong>Componentes:</strong></p>
         <ul className="flex flex-col gap-1 text-xs pl-4">
           <li>• <strong>Management Account</strong> — dona da Organization, paga a fatura consolidada</li>

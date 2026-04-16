@@ -2,8 +2,9 @@
 
 import Link from 'next/link';
 import type { CSSProperties } from 'react';
-import { CURRICULUM, type Module, type Trail } from '@/lib/curriculum';
+import { CURRICULUM, HUBS, getHubStats, getHubTrails, type Hub, type Module, type Trail } from '@/lib/curriculum';
 import { useGameState } from '@/hooks/useGameState';
+import { HabitDashboard } from '@/components/HabitDashboard';
 
 /** A flat, sortable view of every post with its trail context. */
 type PostWithTrail = Module & { trail: Trail; index: number };
@@ -30,7 +31,9 @@ export function HomeClient() {
   return (
     <div style={{ background: 'var(--ffv-bg)', color: 'var(--foreground)' }}>
       <Hero totalArticles={totalArticles} />
+      <HabitDashboard />
       <FeaturedArticle post={featured} />
+      <HubsSection completedSlugs={state?.completedModules ?? []} />
       <TrailsSection completedSlugs={state?.completedModules ?? []} />
       <AllPostsSection posts={ALL_POSTS} featuredSlug={featured.slug} />
       <LearnGameSection />
@@ -482,6 +485,229 @@ function PostCard({ post }: { post: PostWithTrail }) {
 }
 
 /* ─────────────────────────────────────────────
+   HUBS — thematic top-level cards
+───────────────────────────────────────────── */
+function HubsSection({ completedSlugs }: { completedSlugs: string[] }) {
+  return (
+    <section
+      className="px-6 py-20"
+      style={{ borderTop: '1px solid var(--ffv-border)' }}
+    >
+      <div className="max-w-5xl mx-auto">
+        <div className="mb-10 max-w-2xl">
+          <SectionLabel color="var(--ffv-blue)">HUBS TEMÁTICOS</SectionLabel>
+          <h2
+            style={{
+              fontSize: 'clamp(1.6rem, 3vw, 2rem)',
+              fontWeight: 800,
+              letterSpacing: '-0.02em',
+              marginTop: 8,
+              lineHeight: 1.2,
+            }}
+          >
+            Escolha o tema. Cada hub agrupa trilhas completas.
+          </h2>
+          <p
+            style={{ fontSize: 14, color: 'var(--ffv-muted)', marginTop: 10, lineHeight: 1.7 }}
+          >
+            Quatro áreas editoriais, cada uma com uma ou mais trilhas do começo ao avançado.
+            Pressione <KbdInline>⌘K</KbdInline> para buscar qualquer artigo, trilha ou hub em
+            qualquer página.
+          </p>
+        </div>
+
+        <div className="grid gap-5" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
+          {HUBS.map(hub => (
+            <HubCard key={hub.id} hub={hub} completedSlugs={completedSlugs} />
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function HubCard({ hub, completedSlugs }: { hub: Hub; completedSlugs: string[] }) {
+  const stats = getHubStats(hub, completedSlugs);
+  const trails = getHubTrails(hub);
+  return (
+    <Link href={hub.href} className="block group" style={{ textDecoration: 'none', color: 'inherit' }}>
+      <article
+        className="h-full flex flex-col relative overflow-hidden"
+        style={{
+          background: 'var(--ffv-bg2)',
+          border: `1px solid color-mix(in srgb, ${hub.color} 22%, transparent)`,
+          borderRadius: 20,
+          padding: '24px 22px',
+          transition: 'all 0.2s ease',
+        }}
+        onMouseOver={e => {
+          e.currentTarget.style.borderColor = `color-mix(in srgb, ${hub.color} 60%, transparent)`;
+          e.currentTarget.style.transform = 'translateY(-2px)';
+          e.currentTarget.style.boxShadow = 'var(--ffv-shadow-lift)';
+        }}
+        onMouseOut={e => {
+          e.currentTarget.style.borderColor = `color-mix(in srgb, ${hub.color} 22%, transparent)`;
+          e.currentTarget.style.transform = 'translateY(0)';
+          e.currentTarget.style.boxShadow = 'none';
+        }}
+      >
+        <div
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 2,
+            background: `linear-gradient(90deg, transparent, ${hub.color}, transparent)`,
+          }}
+        />
+
+        <div className="flex items-start justify-between mb-4">
+          <div
+            className="flex items-center justify-center"
+            style={{
+              width: 48,
+              height: 48,
+              borderRadius: 14,
+              background: `color-mix(in srgb, ${hub.color} 14%, transparent)`,
+              border: `1px solid color-mix(in srgb, ${hub.color} 32%, transparent)`,
+              fontSize: 22,
+            }}
+          >
+            {hub.icon}
+          </div>
+          <span
+            className="font-mono"
+            style={{
+              fontSize: 10,
+              color: hub.color,
+              letterSpacing: '0.12em',
+              fontWeight: 700,
+              padding: '4px 8px',
+              borderRadius: 6,
+              background: `color-mix(in srgb, ${hub.color} 12%, transparent)`,
+            }}
+          >
+            HUB
+          </span>
+        </div>
+
+        <h3
+          style={{
+            fontSize: '1.2rem',
+            fontWeight: 800,
+            letterSpacing: '-0.01em',
+            lineHeight: 1.25,
+            marginBottom: 8,
+            color: 'var(--foreground)',
+          }}
+        >
+          {hub.name}
+        </h3>
+        <p style={{ fontSize: 13, color: 'var(--ffv-muted)', lineHeight: 1.6, marginBottom: 16 }}>
+          {hub.tagline}
+        </p>
+
+        <ul className="flex flex-col gap-1.5 mb-5 flex-1">
+          {trails.map(t => (
+            <li key={t.id} className="flex items-center gap-2">
+              <span
+                className="flex-shrink-0"
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: t.color,
+                  opacity: 0.85,
+                }}
+              />
+              <span style={{ fontSize: 12.5, color: 'var(--foreground)', lineHeight: 1.5 }}>
+                {t.name}
+              </span>
+            </li>
+          ))}
+        </ul>
+
+        {stats.done > 0 && (
+          <div className="mb-4">
+            <div className="flex items-center justify-between mb-1.5">
+              <span
+                className="font-mono"
+                style={{ fontSize: 10, color: 'var(--ffv-muted)', letterSpacing: '0.05em' }}
+              >
+                PROGRESSO
+              </span>
+              <span
+                className="font-mono"
+                style={{ fontSize: 10, color: hub.color, fontWeight: 700 }}
+              >
+                {stats.done}/{stats.moduleCount} · {stats.pct}%
+              </span>
+            </div>
+            <div style={{ height: 3, background: 'var(--ffv-bg3)', borderRadius: 999, overflow: 'hidden' }}>
+              <div
+                style={{
+                  width: `${stats.pct}%`,
+                  height: '100%',
+                  background: hub.color,
+                  transition: 'width 0.3s ease',
+                }}
+              />
+            </div>
+          </div>
+        )}
+
+        <div
+          className="flex items-center justify-between pt-4"
+          style={{ borderTop: '1px solid var(--ffv-border)' }}
+        >
+          <span
+            className="font-mono"
+            style={{ fontSize: 11, color: 'var(--ffv-muted)', letterSpacing: '0.03em' }}
+          >
+            {stats.trailCount} TRILHA{stats.trailCount > 1 ? 'S' : ''} · {stats.moduleCount} POSTS
+          </span>
+          <span
+            style={{
+              fontSize: 13,
+              fontWeight: 700,
+              color: hub.color,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+            }}
+          >
+            Abrir hub
+            <span className="group-hover:translate-x-1 inline-block" style={{ transition: 'transform 0.2s ease' }}>
+              →
+            </span>
+          </span>
+        </div>
+      </article>
+    </Link>
+  );
+}
+
+function KbdInline({ children }: { children: React.ReactNode }) {
+  return (
+    <kbd
+      className="font-mono"
+      style={{
+        fontSize: 10,
+        padding: '1px 5px',
+        borderRadius: 3,
+        border: '1px solid var(--ffv-border)',
+        background: 'var(--ffv-bg3)',
+        color: 'var(--ffv-muted)',
+        lineHeight: 1,
+      }}
+    >
+      {children}
+    </kbd>
+  );
+}
+
+/* ─────────────────────────────────────────────
    TRAILS as reading paths
 ───────────────────────────────────────────── */
 function TrailsSection({ completedSlugs }: { completedSlugs: string[] }) {
@@ -502,7 +728,7 @@ function TrailsSection({ completedSlugs }: { completedSlugs: string[] }) {
               lineHeight: 1.2,
             }}
           >
-            Três trilhas curadas. Leia na ordem ou salte.
+            Trilhas curadas. Leia na ordem ou salte.
           </h2>
           <p
             style={{ fontSize: 14, color: 'var(--ffv-muted)', marginTop: 10, lineHeight: 1.7 }}
@@ -549,6 +775,9 @@ function TrailCard({
     trail3: '/ferramentas-ia-codigo',
     trail4: '/aws-cloud-practitioner',
     trail5: '/aws-saa-c03',
+    trail6: '/como-aprender',
+    trail7: '/devops-containers',
+    trail8: '/engenharia-software',
   };
   const href = hrefByTrailId[trail.id] ?? '/';
 

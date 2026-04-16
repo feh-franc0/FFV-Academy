@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, QAItem, ExamDomainBadge, ArchDiagram } from '@/components/article/primitives';
+import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, QAItem, ExamDomainBadge, StackFlow } from '@/components/article/primitives';
 
 export const metadata: Metadata = {
   title: 'Migração para o Arquiteto AWS: DMS, SCT, MGN e DRS — FFV Academy',
@@ -98,22 +98,16 @@ function Content() {
       </Section>
 
       <Section title="DMS + SCT: migração de bancos heterogêneos" accent={ACCENT}>
-        <ArchDiagram title="DMS + SCT + CDC" accent={ACCENT}>{`
-  On-prem Oracle                                  AWS Aurora PostgreSQL
-  ┌──────────────┐                                ┌──────────────┐
-  │   Source     │    1. SCT converte schema      │   Target     │
-  │   Database   │ ─────────────────────────────→ │  (pronto)    │
-  └──────┬───────┘                                └──────┬───────┘
-         │                                               ▲
-         │  2. DMS Full Load (dados iniciais)            │
-         └─────────────────────────────────────────────→ │
-         │                                               │
-         │  3. DMS CDC (change data capture contínuo)    │
-         └─────────────────────────────────────────────→ │
-         │                                               │
-         │  4. Cutover quando lag de CDC = 0             │
-         └─── redireciona aplicação ────────────────────→
-        `}</ArchDiagram>
+        <StackFlow
+          title="DMS + SCT + CDC — Oracle on-prem → Aurora PostgreSQL"
+          accent={ACCENT}
+          items={[
+            { icon: '🧬', label: 'SCT: converte schema', sub: 'Schema Conversion Tool', detail: 'DDL, procs, triggers, funções Oracle → equivalentes PostgreSQL. Gera relatório de incompatibilidades.' },
+            { icon: '📥', label: 'DMS Full Load', sub: 'bulk de dados iniciais', detail: 'Copia linhas existentes do source para o target. Duração escala com volume; pode rodar por horas.' },
+            { icon: '🔁', label: 'DMS CDC', sub: 'change data capture contínuo', detail: 'Replicação quase real-time das mudanças. Mantém target em sincronia enquanto source continua em produção.' },
+            { icon: '🔀', label: 'Cutover', sub: 'lag CDC = 0', detail: 'Redireciona a aplicação para o target. Idealmente em janela curta com stop de writes no source.' },
+          ]}
+        />
         <ComparisonTable
           accent={ACCENT}
           headers={['Componente', 'Papel']}

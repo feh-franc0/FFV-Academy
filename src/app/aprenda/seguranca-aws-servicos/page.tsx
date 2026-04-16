@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, ArchDiagram, QAItem, ExamDomainBadge } from '@/components/article/primitives';
+import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, NodeGraph, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
 export const metadata: Metadata = {
   title: 'Segurança AWS: KMS, GuardDuty, Shield, WAF e mais — FFV Academy',
@@ -80,26 +80,48 @@ function Content() {
       </Section>
 
       <Section title="Mapa mental: o catálogo de segurança" accent={ACCENT}>
-        <ArchDiagram title="Serviços de segurança agrupados por função" accent={ACCENT}>{`
-┌─────────────────────────────────────────────────────────────┐
-│                    SEGURANÇA NA AWS                         │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  🔑 Identidade          🔒 Criptografia    👀 Detecção      │
-│  ├─ IAM                 ├─ KMS              ├─ GuardDuty    │
-│  ├─ Identity Center     ├─ CloudHSM         ├─ Inspector    │
-│  ├─ Cognito             ├─ Secrets Manager  ├─ Macie        │
-│  ├─ Directory Service   ├─ ACM              ├─ Detective    │
-│                         ├─ Parameter Store  ├─ Security Hub │
-│                                                             │
-│  🌐 Rede / App          📋 Compliance       📜 Governança   │
-│  ├─ Shield (DDoS)       ├─ Artifact         ├─ Config       │
-│  ├─ WAF                 ├─ Audit Manager    ├─ CloudTrail   │
-│  ├─ Network Firewall    ├─ Compliance reps. ├─ Trusted Adv. │
-│  ├─ Firewall Manager                        ├─ Control Tower│
-│                                             ├─ Organizations│
-└─────────────────────────────────────────────────────────────┘
-`}</ArchDiagram>
+        <NodeGraph
+          title="Catálogo de segurança AWS por função"
+          accent={ACCENT}
+          columns={[
+            {
+              label: '🔑 Identidade',
+              nodes: [
+                { label: 'IAM', sub: 'Identity Center · Cognito · Directory Service' },
+              ],
+            },
+            {
+              label: '🔒 Criptografia',
+              nodes: [
+                { label: 'KMS', sub: 'CloudHSM · Secrets Manager · ACM · Parameter Store' },
+              ],
+            },
+            {
+              label: '👀 Detecção',
+              nodes: [
+                { label: 'GuardDuty', sub: 'Inspector · Macie · Detective · Security Hub', tone: 'emphasis' },
+              ],
+            },
+            {
+              label: '🌐 Rede / App',
+              nodes: [
+                { label: 'Shield (DDoS)', sub: 'WAF · Network Firewall · Firewall Manager' },
+              ],
+            },
+            {
+              label: '📋 Compliance',
+              nodes: [
+                { label: 'Artifact', sub: 'Audit Manager · Compliance reports' },
+              ],
+            },
+            {
+              label: '📜 Governança',
+              nodes: [
+                { label: 'Config', sub: 'CloudTrail · Trusted Advisor · Control Tower · Organizations' },
+              ],
+            },
+          ]}
+        />
       </Section>
 
       <Section title="Criptografia: KMS, CloudHSM, ACM" accent={ACCENT}>

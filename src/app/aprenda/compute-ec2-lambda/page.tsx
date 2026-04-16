@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, ArchDiagram, QAItem, ExamDomainBadge } from '@/components/article/primitives';
+import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, QAItem, ExamDomainBadge, NodeGraph } from '@/components/article/primitives';
 
 export const metadata: Metadata = {
   title: 'Compute AWS: EC2, Lambda, Containers — FFV Academy',
@@ -80,19 +80,41 @@ function Content() {
       </Section>
 
       <Section title="O espectro compute da AWS" accent={ACCENT}>
-        <ArchDiagram title="Do mais controle → menos controle" accent={ACCENT}>{`
-┌────────────────────────────────────────────────────────────┐
-│  mais controle ←────────────────────────→ mais gerenciado │
-│                                                            │
-│  EC2         →  ECS/EKS  →  Fargate  →  Lambda            │
-│  (VMs)          (cont.)     (cont.       (funções)        │
-│                              serverless)                   │
-│                                                            │
-│  patch SO    patch img   nada             nada           │
-│  escolha     escolha     nada             nada           │
-│  AMI         image                                        │
-└────────────────────────────────────────────────────────────┘
-`}</ArchDiagram>
+        <NodeGraph
+          title="Do mais controle → menos controle"
+          accent={ACCENT}
+          legend="← mais controle · mais gerenciado →"
+          columns={[
+            {
+              label: 'EC2',
+              nodes: [
+                { icon: '🖥️', label: 'VMs', sub: 'escolhe AMI, tipo, disco, rede' },
+                { icon: '🔧', label: 'patch do SO', sub: 'é com você', tone: 'emphasis' },
+              ],
+            },
+            {
+              label: 'ECS / EKS',
+              nodes: [
+                { icon: '📦', label: 'Containers', sub: 'orquestrador AWS' },
+                { icon: '🏷️', label: 'patch da imagem', sub: 'SO do host é AWS' },
+              ],
+            },
+            {
+              label: 'Fargate',
+              nodes: [
+                { icon: '☁️', label: 'Container serverless', sub: 'sem instâncias pra gerenciar' },
+                { icon: '💤', label: 'infra invisível', sub: 'só CPU/RAM por task', tone: 'muted' },
+              ],
+            },
+            {
+              label: 'Lambda',
+              nodes: [
+                { icon: '⚡', label: 'Funções event-driven', sub: 'cold start + runtime', tone: 'emphasis' },
+                { icon: '🫥', label: 'zero infra', sub: 'pagamento por ms executado', tone: 'muted' },
+              ],
+            },
+          ]}
+        />
       </Section>
 
       <Section title="Amazon EC2 (Elastic Compute Cloud)" accent={ACCENT}>

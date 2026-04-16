@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, MindMap, ArchDiagram, QAItem, ExamDomainBadge } from '@/components/article/primitives';
+import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, MindMap, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
 export const metadata: Metadata = {
   title: 'O que é Cloud Computing? — FFV Academy',
@@ -141,21 +141,21 @@ function Content() {
         <p>
           Os 3 modelos diferenciam-se por <strong>quanto da pilha</strong> o cliente gerencia. Quanto mais alto no stack, menos responsabilidade do cliente.
         </p>
-        <ArchDiagram title="A pizza da responsabilidade" accent={ACCENT}>{`
-┌─────────────────────────────────────────────────────────────────┐
-│ Stack     │ On-premises │   IaaS     │    PaaS    │    SaaS    │
-├─────────────────────────────────────────────────────────────────┤
-│ Aplicações│   Você      │   Você     │   Você     │  Fornec.   │
-│ Dados     │   Você      │   Você     │   Você     │  Fornec.   │
-│ Runtime   │   Você      │   Você     │  Fornec.   │  Fornec.   │
-│ Middleware│   Você      │   Você     │  Fornec.   │  Fornec.   │
-│ SO        │   Você      │   Você     │  Fornec.   │  Fornec.   │
-│ Virtualiz.│   Você      │  Fornec.   │  Fornec.   │  Fornec.   │
-│ Servidor  │   Você      │  Fornec.   │  Fornec.   │  Fornec.   │
-│ Storage   │   Você      │  Fornec.   │  Fornec.   │  Fornec.   │
-│ Rede      │   Você      │  Fornec.   │  Fornec.   │  Fornec.   │
-└─────────────────────────────────────────────────────────────────┘
-`}</ArchDiagram>
+        <ComparisonTable
+          accent={ACCENT}
+          headers={['Camada do stack', 'On-premises', 'IaaS', 'PaaS', 'SaaS']}
+          rows={[
+            ['Aplicações', 'Você', 'Você', 'Você', 'Fornecedor'],
+            ['Dados', 'Você', 'Você', 'Você', 'Fornecedor'],
+            ['Runtime', 'Você', 'Você', 'Fornecedor', 'Fornecedor'],
+            ['Middleware', 'Você', 'Você', 'Fornecedor', 'Fornecedor'],
+            ['Sistema operacional', 'Você', 'Você', 'Fornecedor', 'Fornecedor'],
+            ['Virtualização', 'Você', 'Fornecedor', 'Fornecedor', 'Fornecedor'],
+            ['Servidor', 'Você', 'Fornecedor', 'Fornecedor', 'Fornecedor'],
+            ['Storage', 'Você', 'Fornecedor', 'Fornecedor', 'Fornecedor'],
+            ['Rede', 'Você', 'Fornecedor', 'Fornecedor', 'Fornecedor'],
+          ]}
+        />
 
         <ComparisonTable
           accent={ACCENT}

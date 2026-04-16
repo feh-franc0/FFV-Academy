@@ -7,7 +7,7 @@ import {
   InlineCode,
   ComparisonTable,
   DecisionBox,
-  ArchDiagram,
+  StackFlow,
   QAItem,
   ExamDomainBadge,
   KeyValue,
@@ -96,26 +96,25 @@ function Content() {
           Aplicações usam <strong>envelope encryption</strong>: KMS gera uma data key para a operação, retorna versão
           em claro (usada para criptografar dados) e versão encrypted (armazenada junto com os dados).
         </p>
-        <ArchDiagram title="Envelope encryption" accent={ACCENT}>
-{`   ┌──── App ────┐                              ┌──── KMS ────┐
-   │ encrypt 1GB │                              │     CMK     │
-   └──────┬──────┘                              └──────┬──────┘
-          │                                            │
-          │ 1. GenerateDataKey(CMK, 256)                │
-          │───────────────────────────────────────────▶ │
-          │                                            │
-          │ 2. DataKeyPlaintext + DataKeyEncrypted     │
-          │◀─────────────────────────────────────────── │
-          │                                            │
-          │ 3. AES-256 (data, DataKeyPlaintext)        │
-          │ 4. armazena [Ciphertext, DataKeyEncrypted] │
-          │ 5. zera DataKeyPlaintext da memória        │
-
-   Para descriptografar:
-   1. ler [Ciphertext, DataKeyEncrypted]
-   2. Decrypt(DataKeyEncrypted) → KMS retorna DataKeyPlaintext
-   3. AES-256 decrypt local`}
-        </ArchDiagram>
+        <StackFlow
+          title="Envelope encryption — encrypt"
+          accent={ACCENT}
+          items={[
+            { icon: '🔑', label: 'GenerateDataKey', sub: 'App → KMS (CMK, 256)', detail: 'App chama KMS pedindo uma chave de dados de 256 bits derivada da CMK.' },
+            { icon: '📦', label: 'KMS responde', sub: 'DataKey plaintext + encrypted', detail: 'KMS retorna duas versões: plaintext (uso imediato) e encrypted (armazenar).' },
+            { icon: '🔐', label: 'AES-256 local', sub: 'data × plaintext key', detail: 'App criptografa o dado (1GB+) localmente — KMS nunca vê o payload.' },
+            { icon: '💾', label: 'Armazena', sub: '[Ciphertext + EncryptedKey]', detail: 'Salva o ciphertext ao lado do encrypted data key. Plaintext é zerado da memória.' },
+          ]}
+        />
+        <StackFlow
+          title="Envelope encryption — decrypt"
+          accent={ACCENT}
+          items={[
+            { icon: '📂', label: 'Lê armazenamento', sub: '[Ciphertext, EncryptedKey]', detail: 'Recupera os dois blobs salvos juntos.' },
+            { icon: '🔓', label: 'KMS Decrypt', sub: 'EncryptedKey → Plaintext', detail: 'Chama KMS:Decrypt no data key encriptado. KMS valida policy e retorna plaintext.' },
+            { icon: '📄', label: 'AES-256 decrypt', sub: 'Ciphertext × plaintext key', detail: 'Descriptografa localmente. Plaintext key é usada e imediatamente descartada.' },
+          ]}
+        />
         <ComparisonTable
           accent={ACCENT}
           headers={['Tipo de CMK', 'Gestão', 'Rotação', 'Cross-account?', 'Caso']}

@@ -7,10 +7,10 @@ import {
   InlineCode,
   ComparisonTable,
   DecisionBox,
-  ArchDiagram,
   QAItem,
   ExamDomainBadge,
   KeyValue,
+  StackFlow,
 } from '@/components/article/primitives';
 
 export const metadata: Metadata = {
@@ -81,18 +81,46 @@ function Content() {
       </div>
 
       <Section title="Arquitetura típica de data lake AWS" accent={ACCENT}>
-        <ArchDiagram title="Pipeline end-to-end" accent={ACCENT}>
-{`  Sources
-  ──────────
-  App logs ──┐
-  RDS CDC ───┤     Ingest          Storage         Catalog/ETL        Query/BI
-  IoT      ──┤  ┌───────────┐   ┌───────────┐   ┌───────────┐    ┌───────────┐
-  Clickstream┼─▶│ Kinesis   │──▶│    S3     │──▶│   Glue    │───▶│  Athena   │
-  SaaS     ──┤  │ Streams   │   │ data lake │   │ Catalog   │    │  Redshift │
-  Batch CSV──┘  │ Firehose  │   │ parquet   │   │ Crawlers  │    │  QuickSight│
-                │ DMS       │   │ particion.│   │ ETL jobs  │    │  SageMaker │
-                └───────────┘   └───────────┘   └───────────┘    └───────────┘`}
-        </ArchDiagram>
+        <StackFlow
+          title="Pipeline end-to-end"
+          accent={ACCENT}
+          items={[
+            {
+              icon: '🎯',
+              label: 'Sources',
+              sub: 'origens',
+              detail: 'App logs · RDS CDC · IoT · Clickstream · SaaS · Batch CSV — qualquer origem de dado bruto.',
+              connector: 'stream / CDC',
+            },
+            {
+              icon: '🌊',
+              label: 'Ingest',
+              sub: 'entrada',
+              detail: 'Kinesis Streams · Firehose · DMS — coletam e entregam dados ao data lake com buffering e schema-on-write opcional.',
+              connector: 'grava em',
+            },
+            {
+              icon: '🪣',
+              label: 'Storage',
+              sub: 'S3 data lake',
+              detail: 'S3 particionado (year/month/day) em Parquet/ORC, lifecycle para Glacier, versionamento, criptografia KMS.',
+              connector: 'catalogado por',
+            },
+            {
+              icon: '🗂️',
+              label: 'Catalog & ETL',
+              sub: 'Glue',
+              detail: 'Glue Catalog mantém schemas · Crawlers descobrem estrutura · ETL jobs transformam e normalizam em Parquet.',
+              connector: 'expõe pra',
+            },
+            {
+              icon: '🔍',
+              label: 'Query & BI',
+              sub: 'consumo',
+              detail: 'Athena (SQL serverless) · Redshift (DW massivo) · QuickSight (BI) · SageMaker (ML sobre dados catalogados).',
+            },
+          ]}
+        />
       </Section>
 
       <Section title="Athena — SQL serverless sobre S3" accent={ACCENT}>

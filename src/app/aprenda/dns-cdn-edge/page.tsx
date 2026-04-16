@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, ArchDiagram, QAItem, ExamDomainBadge } from '@/components/article/primitives';
+import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, ArchDiagram, StackFlow, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
 export const metadata: Metadata = {
   title: 'Route 53, CloudFront e Global Accelerator — FFV Academy',
@@ -187,19 +187,17 @@ function Content() {
       </Section>
 
       <Section title="Padrões de arquitetura de edge" accent={ACCENT}>
-        <ArchDiagram title="Stack típico para app web global" accent={ACCENT}>{`
-   Usuário → Route 53 (latency routing)
-                │
-                ├──► CloudFront (cache estático)
-                │       │
-                │       └─► S3 (HTML/CSS/JS)
-                │
-                └──► CloudFront (APIs dinâmicas)
-                        │
-                        └─► ALB (us-east-1)
-                                │
-                                └─► EC2 / ECS / Lambda
-`}</ArchDiagram>
+        <StackFlow
+          title="Stack típico para app web global"
+          accent={ACCENT}
+          items={[
+            { icon: '🌎', label: 'Usuário', sub: 'de qualquer geografia', detail: 'Resolver DNS aponta para Route 53.' },
+            { icon: '🗺️', label: 'Route 53', sub: 'latency routing', detail: 'Escolhe o endpoint mais rápido para aquele usuário. Pode retornar CloudFront estático ou dinâmico.' },
+            { icon: '⚡', label: 'CloudFront', sub: 'estático + dinâmico', detail: 'Cache de HTML/CSS/JS no edge. APIs passam sem cache, mas aproveitam a rede AWS.' },
+            { icon: '🪣', label: 'S3 / ALB', sub: 'origem', detail: 'Estático: S3 (HTML/CSS/JS). Dinâmico: ALB em us-east-1 (ou outra região).' },
+            { icon: '⚙️', label: 'EC2 / ECS / Lambda', sub: 'compute', detail: 'Responde as requisições dinâmicas atrás do ALB.' },
+          ]}
+        />
       </Section>
 
       <Section title="CloudFront + WAF + Shield" accent={ACCENT}>

@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, ArchDiagram, QAItem, ExamDomainBadge } from '@/components/article/primitives';
+import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, NodeGraph, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
 export const metadata: Metadata = {
   title: 'Monitoramento AWS: CloudWatch, CloudTrail e Config — FFV Academy',
@@ -80,22 +80,33 @@ function Content() {
       </Section>
 
       <Section title="A trindade da observabilidade" accent={ACCENT}>
-        <ArchDiagram title="Qual serviço responde qual pergunta" accent={ACCENT}>{`
-┌──────────────────┬────────────────────┬────────────────────┐
-│   CloudWatch     │   CloudTrail       │      Config        │
-├──────────────────┼────────────────────┼────────────────────┤
-│ "Como a EC2 está │ "Quem deletou a    │ "O bucket tinha    │
-│  performando?"   │  EC2 ontem?"       │  versioning on?"   │
-├──────────────────┼────────────────────┼────────────────────┤
-│ Métricas + Logs  │ Log de API calls   │ Histórico de       │
-│ + Alarms +       │ (quem/quando/      │ configurações      │
-│ Dashboards       │ onde/o quê)        │ dos recursos       │
-├──────────────────┼────────────────────┼────────────────────┤
-│ 15 meses de      │ 90 dias grátis     │ 7 anos (S3)        │
-│ retenção (paga)  │ (Event history)    │ com Config         │
-│                  │ Indefinido (S3)    │ Recorder           │
-└──────────────────┴────────────────────┴────────────────────┘
-`}</ArchDiagram>
+        <NodeGraph
+          title="Qual serviço responde qual pergunta"
+          accent={ACCENT}
+          columns={[
+            {
+              label: 'CloudWatch',
+              nodes: [
+                { icon: '📊', label: '"Como a EC2 está performando?"', sub: 'Métricas + Logs + Alarms + Dashboards', tone: 'emphasis' },
+                { icon: '🗓️', label: 'Retenção', sub: 'Até 15 meses (pago); logs podem ir para S3', tone: 'emphasis' },
+              ],
+            },
+            {
+              label: 'CloudTrail',
+              nodes: [
+                { icon: '🕵️', label: '"Quem deletou a EC2 ontem?"', sub: 'Log de API calls: quem / quando / onde / o quê' },
+                { icon: '🗓️', label: 'Retenção', sub: '90 dias grátis (Event history); indefinido se enviar para S3' },
+              ],
+            },
+            {
+              label: 'Config',
+              nodes: [
+                { icon: '🧾', label: '"O bucket tinha versioning on?"', sub: 'Histórico de configurações dos recursos' },
+                { icon: '🗓️', label: 'Retenção', sub: 'Até 7 anos (Config Recorder + S3)' },
+              ],
+            },
+          ]}
+        />
       </Section>
 
       <Section title="Amazon CloudWatch" accent={ACCENT}>

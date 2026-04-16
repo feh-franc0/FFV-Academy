@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Inter, Poppins, Roboto_Mono } from 'next/font/google';
 import './globals.css';
 import { GameHUD } from '@/components/GameHUD';
+import { CommandPalette } from '@/components/CommandPalette';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
 // Inter — corpo do texto (máxima legibilidade)
@@ -60,6 +61,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-screen flex flex-col" style={{ background: 'var(--ffv-bg)', color: 'var(--foreground)' }}>
         <TooltipProvider>
           <GameHUD />
+          <CommandPalette />
           <main className="flex-1 pt-14">{children}</main>
         </TooltipProvider>
       </body>

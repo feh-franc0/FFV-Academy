@@ -1,14 +1,31 @@
 'use client';
 
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { useGameState } from '@/hooks/useGameState';
 import { Progress } from '@/components/ui/progress';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { LEVELS } from '@/lib/curriculum';
+import { HUBS, LEVELS } from '@/lib/curriculum';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { CommandPaletteTrigger } from '@/components/CommandPalette';
+
+type NavItem = { href: string; icon: string; label: string; color?: string };
+
+const PROGRESSO: NavItem = { href: '/progresso', icon: '📊', label: 'Progresso', color: 'var(--ffv-green)' };
 
 export function GameHUD() {
-  const { state, levelInfo } = useGameState();
+  const { state, levelInfo, dueCards } = useGameState();
+  const pathname = usePathname() ?? '/';
+
+  const navItems: NavItem[] = [
+    ...HUBS.map(h => ({
+      href: h.href,
+      icon: h.icon,
+      label: h.shortName,
+      color: h.color,
+    })),
+    PROGRESSO,
+  ];
 
   return (
     <header
@@ -31,50 +48,59 @@ export function GameHUD() {
         <span style={{ color: 'var(--ffv-blue)', fontWeight: 400 }}>Academy</span>
       </Link>
 
-      {/* Nav links */}
+      {/* Nav links — hubs + progresso */}
       <nav className="hidden md:flex items-center gap-1 mx-6 mr-auto">
-        <Link
-          href="/fundamentos-da-ia"
-          className="px-2.5 py-1 rounded-md text-xs font-medium transition-colors hover:text-white whitespace-nowrap"
-          style={{ color: 'var(--ffv-muted)' }}
-        >
-          🧠 Fundamentos
-        </Link>
-        <Link
-          href="/ia-alem-do-llm"
-          className="px-2.5 py-1 rounded-md text-xs font-medium transition-colors hover:text-white whitespace-nowrap"
-          style={{ color: 'var(--ffv-muted)' }}
-        >
-          🏗️ Além do LLM
-        </Link>
-        <Link
-          href="/ferramentas-ia-codigo"
-          className="px-2.5 py-1 rounded-md text-xs font-medium transition-colors hover:text-white whitespace-nowrap"
-          style={{ color: 'var(--ffv-muted)' }}
-        >
-          💻 Ferramentas
-        </Link>
-        <Link
-          href="/aws-cloud-practitioner"
-          className="px-2.5 py-1 rounded-md text-xs font-medium transition-colors hover:text-white whitespace-nowrap"
-          style={{ color: 'var(--ffv-muted)' }}
-        >
-          ☁️ Practitioner
-        </Link>
-        <Link
-          href="/aws-saa-c03"
-          className="px-2.5 py-1 rounded-md text-xs font-medium transition-colors hover:text-white whitespace-nowrap"
-          style={{ color: 'var(--ffv-muted)' }}
-        >
-          🏛️ SAA-C03
-        </Link>
+        {navItems.map(item => (
+          <NavLink key={item.href} item={item} active={pathname === item.href || pathname.startsWith(item.href + '/')} />
+        ))}
       </nav>
 
-      <div className="flex items-center gap-3 ml-auto">
+      <div className="flex items-center gap-2 ml-auto">
+        <CommandPaletteTrigger />
+        {state && dueCards.length > 0 && (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Link
+                  href="/revisar"
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold transition-opacity hover:opacity-90"
+                  style={{
+                    background: 'color-mix(in srgb, var(--ffv-green) 14%, transparent)',
+                    border: '1px solid color-mix(in srgb, var(--ffv-green) 35%, transparent)',
+                    color: 'var(--ffv-green)',
+                  }}
+                />
+              }
+            >
+              🧠 {dueCards.length}
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              <p>{dueCards.length} card{dueCards.length !== 1 ? 's' : ''} pendente{dueCards.length !== 1 ? 's' : ''} — revisar agora</p>
+            </TooltipContent>
+          </Tooltip>
+        )}
         {state && <HUDStats state={state} levelInfo={levelInfo} />}
         <ThemeToggle />
       </div>
     </header>
+  );
+}
+
+function NavLink({ item, active }: { item: NavItem; active: boolean }) {
+  const accent = item.color ?? 'var(--ffv-blue)';
+  return (
+    <Link
+      href={item.href}
+      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium whitespace-nowrap transition-colors"
+      style={{
+        color: active ? 'var(--foreground)' : 'var(--ffv-muted)',
+        background: active ? `color-mix(in srgb, ${accent} 14%, transparent)` : 'transparent',
+        border: `1px solid ${active ? `color-mix(in srgb, ${accent} 32%, transparent)` : 'transparent'}`,
+      }}
+    >
+      <span style={{ fontSize: 13 }}>{item.icon}</span>
+      <span>{item.label}</span>
+    </Link>
   );
 }
 
@@ -99,16 +125,20 @@ function HUDStats({
             <div
               className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold cursor-default"
               style={{
-                background: 'rgba(255,166,87,0.1)',
-                border: '1px solid rgba(255,166,87,0.25)',
+                background: 'color-mix(in srgb, var(--ffv-orange) 12%, transparent)',
+                border: '1px solid color-mix(in srgb, var(--ffv-orange) 28%, transparent)',
                 color: 'var(--ffv-orange)',
               }}
             >
               🔥 {state.streak}d
+              {state.freezes > 0 && <span className="ml-1 opacity-80">· 🧊{state.freezes}</span>}
             </div>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            <p>{state.streak} dias seguidos de leitura</p>
+            <p>{state.streak} dias seguidos de estudo</p>
+            {state.freezes > 0 && (
+              <p className="text-xs opacity-70">🧊 {state.freezes} freeze{state.freezes !== 1 ? 's' : ''} — te salva se você pular um dia</p>
+            )}
           </TooltipContent>
         </Tooltip>
       )}

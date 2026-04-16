@@ -7,7 +7,7 @@ import {
   InlineCode,
   ComparisonTable,
   DecisionBox,
-  ArchDiagram,
+  NodeGraph,
   QAItem,
   ExamDomainBadge,
   KeyValue,
@@ -93,24 +93,35 @@ function Content() {
       </div>
 
       <Section title="Mapa mental de storage para compute" accent={ACCENT}>
-        <ArchDiagram title="Taxonomia de storage AWS" accent={ACCENT}>
-{`                     ┌──────────────────────┐
-                     │  Preciso de storage  │
-                     │  para minha instância│
-                     └─────────┬────────────┘
-                               │
-     ┌─────────────────────────┼─────────────────────────┐
-     │                         │                         │
-  BLOCK                      FILE                    OBJECT
-  (único host)           (multi-host)              (qualquer)
-     │                         │                         │
-     ├─ EBS (gp3/io2/st1/sc1) │                         └─ S3
-     └─ Instance Store         ├─ EFS (NFS / Linux)
-        (ephemeral)            ├─ FSx for Windows (SMB)
-                               ├─ FSx for Lustre (HPC/ML)
-                               ├─ FSx for NetApp ONTAP
-                               └─ FSx for OpenZFS`}
-        </ArchDiagram>
+        <NodeGraph
+          title="Taxonomia: qual storage para qual uso?"
+          accent={ACCENT}
+          columns={[
+            {
+              label: 'BLOCK',
+              nodes: [
+                { icon: '💽', label: 'EBS', sub: 'gp3 · io2 · st1 · sc1 — volume persistente anexado a 1 EC2' },
+                { icon: '⚡', label: 'Instance Store', sub: 'SSD efêmero, perde ao stop/terminate — cache, buffers' },
+              ],
+            },
+            {
+              label: 'FILE',
+              nodes: [
+                { icon: '📁', label: 'EFS', sub: 'NFS para Linux, elástico, multi-AZ', tone: 'emphasis' },
+                { icon: '🪟', label: 'FSx for Windows', sub: 'SMB, AD-integrado, Windows workloads', tone: 'emphasis' },
+                { icon: '🚀', label: 'FSx for Lustre', sub: 'HPC/ML — sub-ms, integra com S3', tone: 'emphasis' },
+                { icon: '🧬', label: 'FSx for NetApp ONTAP', sub: 'NFS/SMB/iSCSI, snapshots, migração lift-and-shift', tone: 'emphasis' },
+                { icon: '🧊', label: 'FSx for OpenZFS', sub: 'NFS com snapshots/clones instantâneos', tone: 'emphasis' },
+              ],
+            },
+            {
+              label: 'OBJECT',
+              nodes: [
+                { icon: '🪣', label: 'S3', sub: 'API HTTP — qualquer cliente, qualquer região. Ilimitado.' },
+              ],
+            },
+          ]}
+        />
       </Section>
 
       <Section title="EBS — block storage anexado à EC2" accent={ACCENT}>

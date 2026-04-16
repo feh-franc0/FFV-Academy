@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, ArchDiagram, QAItem, ExamDomainBadge } from '@/components/article/primitives';
+import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, StackFlow, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
 export const metadata: Metadata = {
   title: 'Serverless Avançado: Lambda, API GW e Step Functions — FFV Academy',
@@ -114,19 +114,32 @@ function Content() {
       </Section>
 
       <Section title="Cold Start e Concurrency" accent={ACCENT}>
-        <ArchDiagram title="Ciclo de vida de uma execution environment" accent={ACCENT}>{`
-   INIT (cold start)
-   ├── Download código                 ]
-   ├── Start runtime (JVM, Node, etc.) ] ~200-3000 ms
-   ├── Executar código de init         ]
-   │
-   INVOKE (warm)
-   ├── Executar handler                 ~1-100 ms
-   │
-   (reutilizado para próximas invocations até ~15 min idle)
-   │
-   SHUTDOWN
-`}</ArchDiagram>
+        <StackFlow
+          title="Ciclo de vida de uma execution environment"
+          accent={ACCENT}
+          items={[
+            {
+              icon: '❄️',
+              label: 'INIT (cold start)',
+              sub: '~200-3000ms',
+              detail: 'Download do código, start do runtime (JVM, Node, etc.) e execução do código de init. Só acontece na 1ª invocation ou quando scale-up cria novo env.',
+              connector: '~ms de latência',
+            },
+            {
+              icon: '🔥',
+              label: 'INVOKE (warm)',
+              sub: '~1-100ms',
+              detail: 'Handler executa. Env já está pronto: só processa o request. Reutilizado para próximas invocations até ~15 min idle.',
+              connector: 'idle timeout',
+            },
+            {
+              icon: '💤',
+              label: 'SHUTDOWN',
+              sub: 'auto',
+              detail: 'AWS destrói o environment após inatividade. Próxima invocation vai incorrer em cold start novamente.',
+            },
+          ]}
+        />
         <ComparisonTable
           accent={ACCENT}
           headers={['Estratégia', 'Efeito']}
@@ -213,23 +226,46 @@ function Content() {
             ['Express Workflow', 'Alta volume, <5 min, sem histórico detalhado', 'Paga por request + duração (muito mais barato)'],
           ]}
         />
-        <ArchDiagram title="Exemplo: order processing" accent={ACCENT}>{`
-  [Start] → ValidateOrder (Lambda)
-             │
-             ├─ fraudulent? → Choice ─┬─ yes → NotifyFraud → End
-             │                         └─ no  → ChargeCard (Lambda)
-             │
-             ↓
-           Parallel:
-             ├─ UpdateInventory (DynamoDB)
-             └─ SendConfirmation (SES)
-             │
-             ↓
-           ShipOrder (SQS → EC2 worker)
-             │
-             ↓
-           [End]
-`}</ArchDiagram>
+        <StackFlow
+          title="Exemplo: order processing state machine"
+          accent={ACCENT}
+          items={[
+            {
+              icon: '▶️',
+              label: 'ValidateOrder',
+              sub: 'Task · Lambda',
+              detail: 'Lambda valida payload do pedido e checa anti-fraude.',
+              connector: 'resultado',
+            },
+            {
+              icon: '🔀',
+              label: 'Choice: fraudulent?',
+              sub: 'Choice',
+              detail: 'Se fraudulento → NotifyFraud → End. Se OK → ChargeCard (Lambda).',
+              connector: 'ok',
+            },
+            {
+              icon: '⚡',
+              label: 'Parallel',
+              sub: 'Parallel',
+              detail: 'Executa em paralelo: UpdateInventory (DynamoDB) + SendConfirmation (SES). Step Functions espera ambos terminarem.',
+              connector: 'ambos done',
+            },
+            {
+              icon: '📦',
+              label: 'ShipOrder',
+              sub: 'Task · SQS',
+              detail: 'Publica mensagem em SQS; EC2 worker (consumer) processa o envio físico.',
+              connector: 'end',
+            },
+            {
+              icon: '🏁',
+              label: 'End',
+              sub: 'Succeed',
+              detail: 'State machine termina. Histórico completo fica no console de Step Functions.',
+            },
+          ]}
+        />
       </Section>
 
       <Section title="EventBridge (CloudWatch Events v2)" accent={ACCENT}>

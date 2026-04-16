@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, ArchDiagram, QAItem, ExamDomainBadge } from '@/components/article/primitives';
+import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, LayerStack, StackFlow, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
 export const metadata: Metadata = {
   title: 'ECS vs EKS: Orquestração de Containers — FFV Academy',
@@ -96,17 +96,17 @@ function Content() {
       </Section>
 
       <Section title="Amazon ECS — conceitos" accent={ACCENT}>
-        <ArchDiagram title="Hierarquia ECS" accent={ACCENT}>{`
-   Cluster (agrupamento lógico)
-    │
-    ├── Task Definition (receita: imagem, CPU, RAM, portas)
-    │
-    ├── Task (instância rodando da task definition)
-    │
-    └── Service (mantém N tasks, integra com LB, faz rolling deploy)
-
-   Capacity Providers: Fargate | EC2 | Fargate Spot | EC2 Spot
-`}</ArchDiagram>
+        <LayerStack
+          title="Hierarquia ECS"
+          accent={ACCENT}
+          layers={[
+            { label: 'Cluster', content: 'Agrupamento lógico de capacity (EC2 ou Fargate)', note: 'top-level', tone: 'default' },
+            { label: 'Task Def', content: 'Receita JSON: imagem, CPU, RAM, portas, env, IAM roles', note: 'imutável' },
+            { label: 'Task', content: '1+ containers rodando da task definition (mesmo network ns)', note: 'análogo a Pod' },
+            { label: 'Service', content: 'Mantém N tasks desejadas, integra com ALB/NLB, rolling deploy', note: 'controller' },
+            { label: 'Capacity', content: 'Fargate · EC2 · Fargate Spot · EC2 Spot', note: 'providers', tone: 'base' },
+          ]}
+        />
         <ul className="flex flex-col gap-1 text-xs pl-4">
           <li>• <strong>Cluster</strong> — agrupamento lógico de capacity (EC2 ou Fargate)</li>
           <li>• <strong>Task Definition</strong> — JSON: containerDefinitions[], cpu, memory, networkMode, taskRole, executionRole</li>
@@ -170,24 +170,17 @@ function Content() {
       </Section>
 
       <Section title="Amazon EKS — Kubernetes gerenciado" accent={ACCENT}>
-        <ArchDiagram title="Arquitetura EKS" accent={ACCENT}>{`
-   Control Plane (gerenciado AWS)
-   ┌────────────────────────────────┐
-   │ API Server  etcd  Scheduler    │  ← AWS mantém e patchea
-   │ Controller  Cloud Controller   │     multi-AZ, HA automático
-   └────────────┬───────────────────┘
-                │
-   ┌────────────┴────────────────┐
-   │ Worker Nodes (você gerencia) │
-   │ ┌──────────┐  ┌───────────┐  │
-   │ │ Managed  │  │ Self-mgd  │  │
-   │ │ Node Grp │  │ Node Grp  │  │
-   │ └──────────┘  └───────────┘  │
-   │ ┌──────────────────────────┐ │
-   │ │ Fargate Profile          │ │
-   │ └──────────────────────────┘ │
-   └──────────────────────────────┘
-`}</ArchDiagram>
+        <LayerStack
+          title="Arquitetura EKS"
+          accent={ACCENT}
+          separatorLabel="control ↔ data plane"
+          layers={[
+            { label: 'Control Plane', content: 'API Server · etcd · Scheduler · Controller · Cloud Controller', note: 'AWS gerencia', tone: 'default', separatorAfter: true },
+            { label: 'Managed NG', content: 'AWS provisiona e atualiza EC2 no cluster (autoscaling, patch)', note: 'gerenciado' },
+            { label: 'Self-managed', content: 'Você cria ASG, registra no cluster, controla tudo', note: 'full control' },
+            { label: 'Fargate Profile', content: 'Pods rodam em Fargate serverless, selecionados por namespace/labels', note: 'serverless', tone: 'writable' },
+          ]}
+        />
         <p><strong>3 tipos de worker nodes:</strong></p>
         <ComparisonTable
           accent={ACCENT}

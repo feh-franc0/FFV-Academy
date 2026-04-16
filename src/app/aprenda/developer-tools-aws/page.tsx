@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, InlineCode, CodeBlock, ComparisonTable, DecisionBox, QAItem, ExamDomainBadge, ArchDiagram } from '@/components/article/primitives';
+import { Section, Callout, InlineCode, CodeBlock, ComparisonTable, DecisionBox, QAItem, ExamDomainBadge, StackFlow } from '@/components/article/primitives';
 
 export const metadata: Metadata = {
   title: 'Developer Tools AWS: CodePipeline, CDK, CloudFormation e SAM — FFV Academy',
@@ -77,16 +77,39 @@ function Content() {
       <ExamDomainBadge domain="Technology" weight="~34% do CLF-C02" color={ACCENT} />
 
       <Section title="Pipeline CI/CD na AWS" accent={ACCENT}>
-        <ArchDiagram title="Fluxo típico com os serviços Code*" accent={ACCENT}>{`
-  ┌─────────────┐   ┌────────────┐   ┌────────────┐   ┌────────────┐
-  │ CodeCommit  │→ │ CodePipeline │→ │ CodeBuild  │→ │ CodeDeploy │
-  │ (git repo)  │   │ (orquestra)  │   │ (build+test)│  │ (deploy)  │
-  └─────────────┘   └────────────┘   └────────────┘   └────────────┘
-     ▲ push              │                │                │
-     │                   ▼                ▼                ▼
-    dev               SNS/EventBridge    S3 artifact       EC2/ECS/Lambda
-                       notificações      CloudWatch Logs   Blue/Green · Canary
-        `}</ArchDiagram>
+        <StackFlow
+          title="Fluxo típico com os serviços Code*"
+          accent={ACCENT}
+          items={[
+            {
+              icon: '👨‍💻',
+              label: 'CodeCommit',
+              sub: 'git repo',
+              detail: 'Dev faz push no repositório Git gerenciado. O push dispara eventos de mudança no CodePipeline.',
+              connector: 'push dispara',
+            },
+            {
+              icon: '🎯',
+              label: 'CodePipeline',
+              sub: 'orquestra',
+              detail: 'Orquestra stages (Source → Build → Test → Deploy). Notifica via SNS/EventBridge quando avança ou falha.',
+              connector: 'stage build',
+            },
+            {
+              icon: '🔨',
+              label: 'CodeBuild',
+              sub: 'build + test',
+              detail: 'Executa compile/tests em container gerenciado. Artifact final é upado para S3. Logs vão ao CloudWatch.',
+              connector: 'artifact',
+            },
+            {
+              icon: '🚀',
+              label: 'CodeDeploy',
+              sub: 'deploy',
+              detail: 'Aplica artifact em EC2, ECS ou Lambda. Suporta Blue/Green e Canary.',
+            },
+          ]}
+        />
       </Section>
 
       <Section title="Serviços Code* um a um" accent={ACCENT}>

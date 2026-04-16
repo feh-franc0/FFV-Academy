@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, ArchDiagram, QAItem, ExamDomainBadge } from '@/components/article/primitives';
+import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, QAItem, ExamDomainBadge, NodeGraph, StackFlow } from '@/components/article/primitives';
 
 export const metadata: Metadata = {
   title: 'AWS IAM: Identidade, Grupos, Roles e Policies — FFV Academy',
@@ -80,29 +80,32 @@ function Content() {
       </Section>
 
       <Section title="A hierarquia IAM" accent={ACCENT}>
-        <ArchDiagram title="Identidades, permissões e o fluxo de avaliação" accent={ACCENT}>{`
-                      ┌──────────────────────┐
-                      │   ROOT USER          │  ← criada com a conta
-                      │   (dono absoluto)    │    NUNCA usar no dia-a-dia
-                      └──────────────────────┘
-                                 │
-            ┌────────────────────┼───────────────────┐
-            │                    │                   │
-            ▼                    ▼                   ▼
-   ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-   │   IAM USER   │     │  IAM GROUP   │     │   IAM ROLE   │
-   │  (pessoa)    │     │ (coleção de  │     │ (serviço ou  │
-   │              │     │   users)     │     │  acesso temp)│
-   └──────────────┘     └──────────────┘     └──────────────┘
-          │                     │                   │
-          └─────────┬───────────┴───────────────────┘
-                    │
-                    ▼
-            ┌──────────────────┐
-            │   POLICY (JSON)  │   Effect + Action + Resource
-            │  Allow / Deny    │   (opcional: Condition)
-            └──────────────────┘
-`}</ArchDiagram>
+        <StackFlow
+          title="Identidades, permissões e o fluxo de avaliação"
+          accent={ACCENT}
+          items={[
+            {
+              icon: '👑',
+              label: 'Root user',
+              sub: 'dono absoluto',
+              detail: 'Criado com a conta, acessa tudo. Nunca usar no dia-a-dia — habilita MFA e guarda as credenciais num cofre.',
+              connector: 'cria as identidades abaixo',
+            },
+            {
+              icon: '👤',
+              label: 'IAM User · Group · Role',
+              sub: '3 identidades',
+              detail: 'User = pessoa permanente · Group = coleção lógica de Users · Role = identidade assumida temporariamente (por serviço ou acesso cross-account).',
+              connector: 'recebem permissões via',
+            },
+            {
+              icon: '📜',
+              label: 'Policy (JSON)',
+              sub: 'Allow/Deny',
+              detail: 'Effect + Action + Resource (+ Condition opcional). Anexada a User, Group ou Role — é a única coisa que concede permissão na AWS.',
+            },
+          ]}
+        />
       </Section>
 
       <Section title="Os 4 componentes centrais" accent={ACCENT}>
@@ -154,27 +157,42 @@ function Content() {
       </Section>
 
       <Section title="Regra de ouro: Explicit Deny &gt; Explicit Allow &gt; Default Deny" accent={ACCENT}>
-        <ArchDiagram title="Fluxo de avaliação IAM" accent={ACCENT}>{`
-     Request API
-         │
-         ▼
-   ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-   │  Há Deny    │ sim │  Negar      │     │             │
-   │  explícito? │────▶│  (para)     │     │             │
-   └─────────────┘     └─────────────┘     │             │
-         │ não                              │             │
-         ▼                                  │             │
-   ┌─────────────┐     ┌─────────────┐     │             │
-   │  Há Allow   │ sim │  Permitir   │     │             │
-   │  explícito? │────▶│  (permite)  │     │             │
-   └─────────────┘     └─────────────┘     │             │
-         │ não                              │             │
-         ▼                                  │             │
-   ┌─────────────┐                          │             │
-   │  Default    │                          │             │
-   │  Deny       │                          │             │
-   └─────────────┘                          │             │
-`}</ArchDiagram>
+        <StackFlow
+          title="Fluxo de avaliação IAM"
+          accent={ACCENT}
+          items={[
+            {
+              icon: '📡',
+              label: 'Request API',
+              sub: 'entrada',
+              detail: 'Qualquer chamada (console, CLI, SDK) dispara a avaliação do IAM antes de o serviço executar a ação.',
+              connector: '1º teste',
+            },
+            {
+              icon: '⛔',
+              label: 'Explicit Deny?',
+              sub: 'short-circuit',
+              detail: 'Se QUALQUER policy aplicável tem um Deny explícito → bloqueia imediatamente e para aqui. Deny sempre vence.',
+              color: '#f78166',
+              connector: 'se não, segue',
+            },
+            {
+              icon: '✅',
+              label: 'Explicit Allow?',
+              sub: 'concede',
+              detail: 'Pelo menos uma policy precisa ter Allow para a combinação Action + Resource (respeitando Condition, se houver).',
+              color: '#3fb950',
+              connector: 'se nenhum Allow bater',
+            },
+            {
+              icon: '🔒',
+              label: 'Default Deny',
+              sub: 'regra silenciosa',
+              detail: 'Toda chamada começa negada. Sem Allow explícito, a AWS recusa — mesmo que não exista Deny algum.',
+              color: 'var(--ffv-muted)',
+            },
+          ]}
+        />
         <p>
           Toda chamada começa <strong>negada por padrão</strong>. Você precisa de pelo menos um <InlineCode>Allow</InlineCode> em alguma policy aplicável. Mas um <InlineCode>Deny</InlineCode> explícito em QUALQUER policy sempre vence — é uma ferramenta poderosa para bloquear ações mesmo que outra policy permita.
         </p>

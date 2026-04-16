@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, ArchDiagram, QAItem, ExamDomainBadge } from '@/components/article/primitives';
+import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, LayerStack, NodeGraph, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
 export const metadata: Metadata = {
   title: 'Infraestrutura Global da AWS: Regiões, AZs e Edge — FFV Academy',
@@ -80,24 +80,17 @@ function Content() {
       </Section>
 
       <Section title="Hierarquia visual da infraestrutura AWS" accent={ACCENT}>
-        <ArchDiagram title="Hierarquia física" accent={ACCENT}>{`
-┌─────────────────────────────────────────────────────────────┐
-│  AWS GLOBAL (uma única conta, serviços globais)             │
-│  ├─ IAM, Route 53, CloudFront, WAF                          │
-│  │                                                          │
-│  ├─ REGIÃO (ex: sa-east-1 — São Paulo)                      │
-│  │   ├─ AZ sa-east-1a      ← data center(s) físico(s)       │
-│  │   │   └─ racks, servidores, discos                       │
-│  │   ├─ AZ sa-east-1b      ← outro data center (~km)        │
-│  │   └─ AZ sa-east-1c      ← outro data center              │
-│  │                                                          │
-│  ├─ REGIÃO (us-east-1 — N. Virginia)                        │
-│  │   └─ 6 AZs                                               │
-│  │                                                          │
-│  └─ 600+ EDGE LOCATIONS (CloudFront, Route 53, Shield)      │
-│      (mais próximos do usuário final — só cache/DNS)        │
-└─────────────────────────────────────────────────────────────┘
-`}</ArchDiagram>
+        <LayerStack
+          title="Hierarquia física da AWS"
+          accent={ACCENT}
+          layers={[
+            { label: 'GLOBAL', content: 'Conta única + serviços globais', note: 'IAM · Route 53 · CloudFront · WAF', tone: 'base' },
+            { label: 'REGION', content: 'sa-east-1 (São Paulo)', note: '3 AZs isoladas', tone: 'default' },
+            { label: 'AZ', content: 'sa-east-1a · 1b · 1c', note: 'Cada AZ = 1+ data center físico (racks, servidores, discos)', tone: 'writable' },
+            { label: 'REGION', content: 'us-east-1 (N. Virginia)', note: '6 AZs', tone: 'default' },
+            { label: 'EDGE', content: '600+ Edge Locations', note: 'Cache/DNS próximos ao usuário (CloudFront, Route 53, Shield)', tone: 'base' },
+          ]}
+        />
       </Section>
 
       <Section title="Região (Region)" accent={ACCENT}>
@@ -115,18 +108,16 @@ function Content() {
       </Section>
 
       <Section title="Critérios para escolher uma Região" accent={ACCENT}>
-        <ArchDiagram title="4 fatores decisivos" accent={ACCENT}>{`
-         ┌──────────────────────────────────────────────┐
-         │         ESCOLHA DE REGIÃO                    │
-         └──────────────────────────────────────────────┘
-                  │              │              │        │
-                  ▼              ▼              ▼        ▼
-         ┌─────────────┐  ┌────────────┐ ┌────────┐ ┌──────────┐
-         │ Compliance  │  │ Latência   │ │ Preço  │ │Serviços  │
-         │ (LGPD, GDPR)│  │ (proxim.   │ │ (custo │ │disponív. │
-         │             │  │  usuários) │ │ varia) │ │ na Região│
-         └─────────────┘  └────────────┘ └────────┘ └──────────┘
-`}</ArchDiagram>
+        <NodeGraph
+          title="4 fatores decisivos na escolha de Região"
+          accent={ACCENT}
+          columns={[
+            { label: 'Compliance', nodes: [{ icon: '📋', label: 'Soberania de dados', sub: 'LGPD · GDPR · HIPAA · PCI' }] },
+            { label: 'Latência', nodes: [{ icon: '⚡', label: 'Proximidade dos usuários', sub: 'Round-trip ms conta em workloads interativos', tone: 'emphasis' }] },
+            { label: 'Preço', nodes: [{ icon: '💰', label: 'Custo por região', sub: 'us-east-1 barato; sa-east-1 entre os mais caros' }] },
+            { label: 'Serviços', nodes: [{ icon: '🧩', label: 'Disponibilidade', sub: 'Nem todo serviço chega a todas regiões' }] },
+          ]}
+        />
         <ComparisonTable
           accent={ACCENT}
           headers={['Fator', 'Pergunta prática', 'Regra geral']}

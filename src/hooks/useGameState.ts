@@ -1,7 +1,19 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { loadState, completeModule, saveQuizScore, isTrailUnlocked, type GameState, type CompleteModuleResult } from '@/lib/engine';
+import {
+  loadState,
+  completeModule,
+  saveQuizScore,
+  submitCardReview,
+  isTrailUnlocked,
+  getDueCards,
+  type GameState,
+  type CompleteModuleResult,
+  type CompleteModuleInput,
+  type ReviewCardResult,
+} from '@/lib/engine';
+import type { ReviewQuality } from '@/lib/srs';
 import { getLevelInfo, getTrailProgress, CURRICULUM } from '@/lib/curriculum';
 
 export function useGameState() {
@@ -15,8 +27,8 @@ export function useGameState() {
     setState(loadState());
   }, []);
 
-  const markComplete = useCallback((slug: string): CompleteModuleResult => {
-    const result = completeModule(slug);
+  const markComplete = useCallback((input: CompleteModuleInput): CompleteModuleResult => {
+    const result = completeModule(input);
     setState(loadState());
     return result;
   }, []);
@@ -24,6 +36,12 @@ export function useGameState() {
   const submitQuiz = useCallback((slug: string, score: number, total: number) => {
     saveQuizScore(slug, score, total);
     setState(loadState());
+  }, []);
+
+  const reviewOne = useCallback((cardId: string, outcome: ReviewQuality): ReviewCardResult => {
+    const result = submitCardReview(cardId, outcome);
+    setState(loadState());
+    return result;
   }, []);
 
   const levelInfo = state ? getLevelInfo(state.xp) : null;
@@ -42,13 +60,17 @@ export function useGameState() {
       )
     : 0;
 
+  const dueCards = state ? getDueCards(state.reviewCards) : [];
+
   return {
     state,
     levelInfo,
     trailsProgress,
     overallPct,
+    dueCards,
     markComplete,
     submitQuiz,
+    reviewOne,
     refresh,
   };
 }

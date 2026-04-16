@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, QAItem, ExamDomainBadge, ArchDiagram } from '@/components/article/primitives';
+import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, QAItem, ExamDomainBadge, StackFlow } from '@/components/article/primitives';
 
 export const metadata: Metadata = {
   title: 'ML/IA para Arquiteto AWS: SageMaker, Bedrock e Pipelines — FFV Academy',
@@ -94,31 +94,39 @@ function Content() {
       </Section>
 
       <Section title="Arquitetura de referência: inferência em produção" accent={ACCENT}>
-        <ArchDiagram title="Pipeline de inferência Real-time" accent={ACCENT}>{`
-  Client (App)
-     │ HTTPS
-     ▼
-  ┌─────────────────┐
-  │  API Gateway    │  (rate limit, API key, WAF)
-  └────────┬────────┘
-           │
-           ▼
-  ┌─────────────────┐
-  │  Lambda         │  (pré-processa input, auth)
-  └────────┬────────┘
-           │ InvokeEndpoint
-           ▼
-  ┌─────────────────────────────────┐
-  │  SageMaker Real-time Endpoint   │
-  │  ├── Instance1 (ml.g5.xlarge)   │
-  │  ├── Instance2 (ml.g5.xlarge)   │  ←  Auto Scaling
-  │  └── Instance3 (ml.g5.xlarge)   │
-  │                                 │
-  │  Production Variants:           │
-  │    ModelA (Blue)  90%           │
-  │    ModelB (Green) 10% ← Canary  │
-  └─────────────────────────────────┘
-        `}</ArchDiagram>
+        <StackFlow
+          title="Pipeline de inferência Real-time"
+          accent={ACCENT}
+          items={[
+            {
+              icon: '📱',
+              label: 'Client (App)',
+              sub: 'HTTPS',
+              detail: 'Aplicação web/mobile faz POST com payload da inferência. TLS obrigatório.',
+              connector: 'API',
+            },
+            {
+              icon: '🚪',
+              label: 'API Gateway',
+              sub: 'rate limit · API key · WAF',
+              detail: 'Authn/authz, throttling, WAF contra abuso. Expõe endpoint público gerenciado.',
+              connector: 'pré-proc',
+            },
+            {
+              icon: '⚡',
+              label: 'Lambda',
+              sub: 'pré-processa · auth',
+              detail: 'Valida input, enriquece com dados de sessão, formata payload. Chama InvokeEndpoint no SageMaker.',
+              connector: 'InvokeEndpoint',
+            },
+            {
+              icon: '🧠',
+              label: 'SageMaker Real-time Endpoint',
+              sub: 'auto scaling · blue/green',
+              detail: '3× ml.g5.xlarge com Auto Scaling por SageMakerVariantInvocationsPerInstance. Production Variants: ModelA 90% (Blue) + ModelB 10% (Canary Green).',
+            },
+          ]}
+        />
         <p>
           <strong>Production Variants</strong> permitem hospedar múltiplos modelos atrás do mesmo endpoint com tráfego dividido por percentual. É como o
           SageMaker implementa Blue/Green e Canary. Auto Scaling usa métrica <InlineCode>SageMakerVariantInvocationsPerInstance</InlineCode>.
@@ -148,26 +156,39 @@ function Content() {
       </Section>
 
       <Section title="Arquitetura: chatbot corporativo com RAG" accent={ACCENT}>
-        <ArchDiagram title="Bedrock + Knowledge Bases + OpenSearch" accent={ACCENT}>{`
-  Doc corporativos                   Usuário pergunta
-  (SharePoint, S3, Confluence)           │
-           │                              ▼
-           ▼                       ┌──────────────┐
-  ┌───────────────┐                │   App Web    │
-  │  Data Sources │                └──────┬───────┘
-  │  (Knowledge   │                       │
-  │   Base)       │                       ▼
-  └──────┬────────┘                ┌──────────────┐
-         │ indexa                   │   Bedrock    │
-         ▼                          │   Agent      │
-  ┌───────────────┐    retrieves   │              │
-  │   OpenSearch  │←─────────────── │   + Claude   │
-  │  Serverless   │                 │   /Titan     │
-  │  (vectors)    │                 └──────┬───────┘
-  └───────────────┘                        │
-                                            ▼
-                                    Resposta contextual
-        `}</ArchDiagram>
+        <StackFlow
+          title="Bedrock + Knowledge Bases + OpenSearch"
+          accent={ACCENT}
+          items={[
+            {
+              icon: '📚',
+              label: 'Data Sources',
+              sub: 'Knowledge Base',
+              detail: 'Documentos corporativos em SharePoint, S3, Confluence. Knowledge Base conecta fontes e gerencia sync incremental.',
+              connector: 'chunking + embed',
+            },
+            {
+              icon: '🧮',
+              label: 'OpenSearch Serverless',
+              sub: 'vector store',
+              detail: 'Armazena embeddings (vetores) dos chunks. Serverless escala automaticamente. Busca k-NN por similaridade semântica.',
+              connector: 'retrieve',
+            },
+            {
+              icon: '🤖',
+              label: 'Bedrock Agent',
+              sub: 'Claude · Titan',
+              detail: 'Agent orquestra: RetrieveAndGenerate busca chunks relevantes, monta prompt com contexto e invoca foundation model.',
+              connector: 'resposta',
+            },
+            {
+              icon: '💬',
+              label: 'App Web',
+              sub: 'UI usuário',
+              detail: 'Recebe resposta contextual com citations. Stream de tokens para UX fluida. Guardrails filtram PII/conteúdo sensível.',
+            },
+          ]}
+        />
         <p>
           Knowledge Bases abstrai todo o pipeline RAG: upload docs → chunking → embeddings → vector DB → retrieval → augmentação de prompt. Você chama
           <InlineCode>RetrieveAndGenerate</InlineCode> e pronto.
@@ -194,28 +215,46 @@ function Content() {
       </Section>
 
       <Section title="Data lake alimentando ML" accent={ACCENT}>
-        <ArchDiagram title="Pipeline end-to-end: ingestão → ML → inferência" accent={ACCENT}>{`
-  Kinesis Streams                Glue ETL
-       │                            │
-       ▼                            ▼
-  S3 (raw zone) ──── Athena ──→ S3 (curated)
-       │                            │
-       │ glue crawler               │
-       ▼                            ▼
-  Glue Data Catalog        SageMaker Processing Job
-                                    │
-                                    ▼
-                           SageMaker Training Job
-                                    │
-                                    ▼
-                           SageMaker Model Registry
-                                    │
-                                    ▼
-                           SageMaker Endpoint (produção)
-                                    │
-                                    ▼
-                           CloudWatch + Model Monitor
-        `}</ArchDiagram>
+        <StackFlow
+          title="Pipeline end-to-end: ingestão → ML → inferência"
+          accent={ACCENT}
+          items={[
+            {
+              icon: '🌊',
+              label: 'Ingest · Kinesis + Glue ETL',
+              sub: 'streaming + batch',
+              detail: 'Eventos via Kinesis, jobs ETL em Glue. Dados brutos desembarcam no S3 raw zone.',
+              connector: 'bronze → silver',
+            },
+            {
+              icon: '📦',
+              label: 'S3 curated + Data Catalog',
+              sub: 'Athena · Glue Crawler',
+              detail: 'Glue Crawler indexa schemas no Data Catalog. Athena permite query SQL sobre dados curados no S3.',
+              connector: 'features',
+            },
+            {
+              icon: '⚙️',
+              label: 'SageMaker Processing + Training',
+              sub: 'jobs gerenciados',
+              detail: 'Processing Job (pandas/Spark) prepara features. Training Job roda treino distribuído em GPU opcional.',
+              connector: 'registra',
+            },
+            {
+              icon: '🏛️',
+              label: 'SageMaker Model Registry',
+              sub: 'versioning',
+              detail: 'Versões do modelo com aprovação manual/automática. Promove para produção via pipeline CI/CD.',
+              connector: 'deploy',
+            },
+            {
+              icon: '🚀',
+              label: 'SageMaker Endpoint',
+              sub: 'produção',
+              detail: 'Endpoint Real-time/Serverless/Async exposto ao resto da arquitetura. CloudWatch + Model Monitor detectam drift e performance.',
+            },
+          ]}
+        />
       </Section>
 
       <Section title="Cenários arquiteturais" accent={ACCENT}>
