@@ -5,6 +5,7 @@ import { useGameState } from '@/hooks/useGameState';
 import { Progress } from '@/components/ui/progress';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { LEVELS } from '@/lib/curriculum';
+import { ThemeToggle } from '@/components/ThemeToggle';
 
 export function GameHUD() {
   const { state, levelInfo } = useGameState();
@@ -13,8 +14,9 @@ export function GameHUD() {
     <header
       className="fixed top-0 left-0 right-0 z-50 h-14 flex items-center px-5"
       style={{
-        background: 'rgba(13,17,23,0.94)',
+        background: 'color-mix(in srgb, var(--ffv-bg) 92%, transparent)',
         backdropFilter: 'blur(14px)',
+        WebkitBackdropFilter: 'blur(14px)',
         borderBottom: '1px solid var(--ffv-border)',
       }}
     >
@@ -33,28 +35,45 @@ export function GameHUD() {
       <nav className="hidden md:flex items-center gap-1 mx-6 mr-auto">
         <Link
           href="/fundamentos-da-ia"
-          className="px-3 py-1 rounded-md text-xs font-medium transition-colors hover:text-white"
+          className="px-2.5 py-1 rounded-md text-xs font-medium transition-colors hover:text-white whitespace-nowrap"
           style={{ color: 'var(--ffv-muted)' }}
         >
           🧠 Fundamentos
         </Link>
         <Link
           href="/ia-alem-do-llm"
-          className="px-3 py-1 rounded-md text-xs font-medium transition-colors hover:text-white"
+          className="px-2.5 py-1 rounded-md text-xs font-medium transition-colors hover:text-white whitespace-nowrap"
           style={{ color: 'var(--ffv-muted)' }}
         >
           🏗️ Além do LLM
         </Link>
         <Link
           href="/ferramentas-ia-codigo"
-          className="px-3 py-1 rounded-md text-xs font-medium transition-colors hover:text-white"
+          className="px-2.5 py-1 rounded-md text-xs font-medium transition-colors hover:text-white whitespace-nowrap"
           style={{ color: 'var(--ffv-muted)' }}
         >
           💻 Ferramentas
         </Link>
+        <Link
+          href="/aws-cloud-practitioner"
+          className="px-2.5 py-1 rounded-md text-xs font-medium transition-colors hover:text-white whitespace-nowrap"
+          style={{ color: 'var(--ffv-muted)' }}
+        >
+          ☁️ Practitioner
+        </Link>
+        <Link
+          href="/aws-saa-c03"
+          className="px-2.5 py-1 rounded-md text-xs font-medium transition-colors hover:text-white whitespace-nowrap"
+          style={{ color: 'var(--ffv-muted)' }}
+        >
+          🏛️ SAA-C03
+        </Link>
       </nav>
 
-      {!state ? null : <HUDStats state={state} levelInfo={levelInfo} />}
+      <div className="flex items-center gap-3 ml-auto">
+        {state && <HUDStats state={state} levelInfo={levelInfo} />}
+        <ThemeToggle />
+      </div>
     </header>
   );
 }

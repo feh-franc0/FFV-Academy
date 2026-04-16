@@ -173,7 +173,7 @@ export function completeModule(slug: string): CompleteModuleResult {
   for (const trail of CURRICULUM) {
     const allDone = trail.modules.every(m => state.completedModules.includes(m.slug));
     if (allDone) {
-      const badgeId = trail.id === 'trail1' ? 'trail1_done' : trail.id === 'trail2' ? 'trail2_done' : 'trail3_done';
+      const badgeId = `${trail.id}_done`;
       const r = unlockBadge(state, badgeId);
       if (r.unlocked) { state = r.state; newBadges.push(badgeId); }
     }
