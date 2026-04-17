@@ -8,10 +8,15 @@ import {
   submitCardReview,
   isTrailUnlocked,
   getDueCards,
+  recordArticleVisit,
+  updateArticleProgress,
+  completeOnboarding,
+  setPreferredHub,
   type GameState,
   type CompleteModuleResult,
   type CompleteModuleInput,
   type ReviewCardResult,
+  type LastArticle,
 } from '@/lib/engine';
 import type { ReviewQuality } from '@/lib/srs';
 import { getLevelInfo, getTrailProgress, CURRICULUM } from '@/lib/curriculum';
@@ -44,6 +49,26 @@ export function useGameState() {
     return result;
   }, []);
 
+  const trackVisit = useCallback((meta: Omit<LastArticle, 'at' | 'progress'> & { progress?: number }) => {
+    recordArticleVisit(meta);
+    setState(loadState());
+  }, []);
+
+  const trackProgress = useCallback((slug: string, progress: number) => {
+    updateArticleProgress(slug, progress);
+    // Intentionally skip setState here — too noisy on scroll. Next focus refresh will pick it up.
+  }, []);
+
+  const finishOnboarding = useCallback((hub: string | null) => {
+    completeOnboarding(hub);
+    setState(loadState());
+  }, []);
+
+  const choosePreferredHub = useCallback((hub: string | null) => {
+    setPreferredHub(hub);
+    setState(loadState());
+  }, []);
+
   const levelInfo = state ? getLevelInfo(state.xp) : null;
 
   const trailsProgress = CURRICULUM.map(trail => ({
@@ -72,5 +97,9 @@ export function useGameState() {
     submitQuiz,
     reviewOne,
     refresh,
+    trackVisit,
+    trackProgress,
+    finishOnboarding,
+    choosePreferredHub,
   };
 }

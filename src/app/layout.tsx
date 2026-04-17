@@ -3,6 +3,8 @@ import { Inter, Poppins, Roboto_Mono } from 'next/font/google';
 import './globals.css';
 import { GameHUD } from '@/components/GameHUD';
 import { CommandPalette } from '@/components/CommandPalette';
+import { MobileNav } from '@/components/MobileNav';
+import { OnboardingModal } from '@/components/OnboardingModal';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
 // Inter — corpo do texto (máxima legibilidade)
@@ -62,7 +64,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <TooltipProvider>
           <GameHUD />
           <CommandPalette />
-          <main className="flex-1 pt-14">{children}</main>
+          <OnboardingModal />
+          <main className="flex-1 pt-14 pb-16 md:pb-0">{children}</main>
+          <MobileNav />
         </TooltipProvider>
       </body>
     </html>

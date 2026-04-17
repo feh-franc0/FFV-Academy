@@ -1,12 +1,17 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useGameState } from '@/hooks/useGameState';
-import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
-import { BADGES_DEF } from '@/lib/curriculum';
+import { BADGES_DEF, CURRICULUM, getHubForTrail } from '@/lib/curriculum';
 import { ArticleToc } from '@/components/article/ArticleToc';
+import { ReadingProgressBar } from '@/components/article/ReadingProgressBar';
+import { RelatedArticles } from '@/components/article/RelatedArticles';
+import { Prerequisites } from '@/components/article/Prerequisites';
+import { NextSteps } from '@/components/article/NextSteps';
+import { ArticleJsonLd } from '@/components/article/ArticleJsonLd';
+import { CelebrationOverlay, type CelebrationEvent } from '@/components/CelebrationOverlay';
 
 export interface QuizQuestion {
   question: string;
@@ -27,6 +32,7 @@ interface ModuleLayoutProps {
   nextTitle?: string;
   quiz: QuizQuestion[];
   children: React.ReactNode;
+  seoDesc?: string;
 }
 
 export function ModuleLayout({
@@ -41,15 +47,37 @@ export function ModuleLayout({
   nextTitle,
   quiz,
   children,
+  seoDesc,
 }: ModuleLayoutProps) {
-  const { state, markComplete, submitQuiz } = useGameState();
+  const { state, markComplete, submitQuiz, trackVisit, trackProgress } = useGameState();
   const [quizStarted, setQuizStarted] = useState(false);
   const [answers, setAnswers] = useState<(number | null)[]>(quiz.map(() => null));
   const [submitted, setSubmitted] = useState(false);
   const [result, setResult] = useState<{ xpGained: number; newBadges: string[]; leveledUp: boolean; newLevel: number; cardsAdded: number } | null>(null);
+  const [celebrations, setCelebrations] = useState<CelebrationEvent[]>([]);
 
   const isCompleted = state?.completedModules.includes(slug) ?? false;
   const quizScore = state?.quizScores[slug];
+
+  // Hub ancestry for breadcrumb
+  const hub = useMemo(() => {
+    const trail = CURRICULUM.find(t => t.modules.some(m => m.slug === slug));
+    return trail ? getHubForTrail(trail.id) : undefined;
+  }, [slug]);
+
+  // Track visit on mount
+  useEffect(() => {
+    trackVisit({
+      slug,
+      title,
+      icon,
+      trailName,
+      trailColor,
+      readTime,
+      xp,
+      href: `/aprenda/${slug}`,
+    });
+  }, [slug, title, icon, trailName, trailColor, readTime, xp, trackVisit]);
 
   function handleAnswer(qi: number, ai: number) {
     if (submitted) return;
@@ -62,6 +90,17 @@ export function ModuleLayout({
     const r = markComplete({ slug, title, trailColor, readTime, quiz });
     setResult(r);
     setSubmitted(true);
+
+    // Build celebration queue: level up first, then each new badge
+    const events: CelebrationEvent[] = [];
+    if (r.leveledUp) events.push({ kind: 'level', level: r.newLevel });
+    for (const badgeId of r.newBadges) {
+      events.push({ kind: 'badge', badgeId });
+    }
+    if (events.length > 0) {
+      // Small delay so the user sees the score result first
+      setTimeout(() => setCelebrations(events), 400);
+    }
   }
 
   const allAnswered = answers.every(a => a !== null);
@@ -70,12 +109,43 @@ export function ModuleLayout({
 
   return (
     <article className="max-w-2xl mx-auto px-6 pb-20" data-article-root>
-      {/* Breadcrumb */}
-      <nav className="flex items-center gap-2 text-xs pt-8 mb-8" style={{ color: 'var(--ffv-muted)' }}>
-        <Link href="/" className="hover:text-white transition-colors">FFV Academy</Link>
-        <span>/</span>
+      {seoDesc && <ArticleJsonLd title={title} description={seoDesc} slug={slug} readTime={readTime} />}
+      <ReadingProgressBar
+        containerSelector="[data-article-content]"
+        color={trailColor}
+        onProgress={p => trackProgress(slug, p)}
+      />
+
+      {/* Breadcrumb — FFV / Hub / Trail / Article */}
+      <nav
+        className="flex items-center gap-1.5 text-xs pt-8 mb-8 flex-wrap"
+        style={{ color: 'var(--ffv-muted)' }}
+        aria-label="Migalha de pão"
+      >
+        <Link
+          href="/"
+          className="transition-colors"
+          style={{ color: 'var(--ffv-muted)' }}
+          onMouseOver={e => { e.currentTarget.style.color = 'var(--foreground)'; }}
+          onMouseOut={e => { e.currentTarget.style.color = 'var(--ffv-muted)'; }}
+        >
+          FFV Academy
+        </Link>
+        <span aria-hidden>/</span>
+        {hub && (
+          <>
+            <Link
+              href={hub.href}
+              className="transition-colors"
+              style={{ color: hub.color }}
+            >
+              {hub.shortName ?? hub.name}
+            </Link>
+            <span aria-hidden>/</span>
+          </>
+        )}
         <span style={{ color: trailColor }}>{trailName}</span>
-        <span>/</span>
+        <span aria-hidden>/</span>
         <span style={{ color: 'var(--foreground)' }}>{title}</span>
       </nav>
 
@@ -117,6 +187,9 @@ export function ModuleLayout({
       >
         <ArticleToc containerSelector="[data-article-content]" accent={trailColor} />
       </aside>
+
+      {/* Prerequisites */}
+      <Prerequisites slug={slug} accent={trailColor} />
 
       {/* Content */}
       <div className="prose-ffv" data-article-content>{children}</div>
@@ -282,6 +355,16 @@ export function ModuleLayout({
           </div>
         )}
       </section>
+
+      <NextSteps slug={slug} />
+      <RelatedArticles currentSlug={slug} />
+
+      {celebrations.length > 0 && (
+        <CelebrationOverlay
+          events={celebrations}
+          onDismiss={() => setCelebrations([])}
+        />
+      )}
     </article>
   );
 }

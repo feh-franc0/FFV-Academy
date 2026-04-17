@@ -5,6 +5,7 @@ import type { CSSProperties } from 'react';
 import { CURRICULUM, HUBS, getHubStats, getHubTrails, type Hub, type Module, type Trail } from '@/lib/curriculum';
 import { useGameState } from '@/hooks/useGameState';
 import { HabitDashboard } from '@/components/HabitDashboard';
+import { ContinueCard } from '@/components/ContinueCard';
 
 /** A flat, sortable view of every post with its trail context. */
 type PostWithTrail = Module & { trail: Trail; index: number };
@@ -31,7 +32,9 @@ export function HomeClient() {
   return (
     <div style={{ background: 'var(--ffv-bg)', color: 'var(--foreground)' }}>
       <Hero totalArticles={totalArticles} />
+      <ContinueCard />
       <HabitDashboard />
+      <StartingPointSection completedSlugs={state?.completedModules ?? []} />
       <FeaturedArticle post={featured} />
       <HubsSection completedSlugs={state?.completedModules ?? []} />
       <TrailsSection completedSlugs={state?.completedModules ?? []} />
@@ -778,6 +781,14 @@ function TrailCard({
     trail6: '/como-aprender',
     trail7: '/devops-containers',
     trail8: '/engenharia-software',
+    trail9: '/ai-native',
+    trail10: '/sistemas-distribuidos',
+    trail11: '/observabilidade-sre',
+    trail12: '/fundamentos-tecnicos',
+    trail13: '/claude-anthropic',
+    trail14: '/sql-databases',
+    trail15: '/como-computador-funciona',
+    trail16: '/redes-web',
   };
   const href = hrefByTrailId[trail.id] ?? '/';
 
@@ -964,6 +975,117 @@ function TrailCard({
         </div>
       </article>
     </Link>
+  );
+}
+
+/* ─────────────────────────────────────────────
+   POR ONDE COMEÇAR — diagnostic for new visitors
+───────────────────────────────────────────── */
+
+const STARTING_PATHS = [
+  {
+    condition: 'zero',
+    icon: '🌱',
+    title: 'Nunca estudei IA',
+    desc: 'Comece pela Trilha 1 — do conceito de IA até Transformers. Base sólida, sem pré-requisitos.',
+    href: '/fundamentos-da-ia',
+    cta: 'Começar do zero',
+    color: '#58a6ff',
+  },
+  {
+    condition: 'knows-basics',
+    icon: '⚡',
+    title: 'Já sei o básico de IA',
+    desc: 'Pule direto para KV Cache, MoE e Tool Calling — como modelos funcionam em produção.',
+    href: '/ia-alem-do-llm',
+    cta: 'IA Além do LLM',
+    color: '#d2a8ff',
+  },
+  {
+    condition: 'wants-tools',
+    icon: '🔧',
+    title: 'Quero usar IA para codar',
+    desc: 'Claude Code, Cursor, Codex — qual usar e quando. Comparação técnica real.',
+    href: '/ferramentas-ia-codigo',
+    cta: 'Coding Agents',
+    color: '#ffa657',
+  },
+  {
+    condition: 'wants-aws',
+    icon: '☁️',
+    title: 'Quero certificação AWS',
+    desc: 'Do Cloud Practitioner ao Solutions Architect — conteúdo alinhado ao exame oficial.',
+    href: '/aws-cloud-practitioner',
+    cta: 'AWS Cloud',
+    color: '#ff9900',
+  },
+  {
+    condition: 'wants-eng',
+    icon: '🏗️',
+    title: 'Quero virar engenheiro sênior',
+    desc: 'DevOps, distribuídos, observabilidade, arquitetura — sair do coder e virar engenheiro de sistemas.',
+    href: '/engenharia',
+    cta: 'Engenharia',
+    color: '#e3b341',
+  },
+];
+
+function StartingPointSection({ completedSlugs }: { completedSlugs: string[] }) {
+  if (completedSlugs.length > 5) return null;
+
+  return (
+    <section className="px-6 py-16" style={{ borderTop: '1px solid var(--ffv-border)' }}>
+      <div className="max-w-5xl mx-auto">
+        <div className="mb-8">
+          <SectionLabel color="var(--ffv-green)">POR ONDE COMEÇAR?</SectionLabel>
+          <h2
+            style={{
+              fontSize: 'clamp(1.4rem, 2.5vw, 1.8rem)',
+              fontWeight: 800,
+              letterSpacing: '-0.02em',
+              marginTop: 8,
+              lineHeight: 1.2,
+            }}
+          >
+            Escolha seu caminho
+          </h2>
+          <p style={{ fontSize: 14, color: 'var(--ffv-muted)', marginTop: 8, lineHeight: 1.7 }}>
+            {completedSlugs.length === 0
+              ? 'Primeira vez aqui? Cada caminho leva a um conjunto diferente de habilidades.'
+              : 'Você já começou — aqui estão outros caminhos que podem te interessar.'}
+          </p>
+        </div>
+
+        <div
+          className="grid gap-4"
+          style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}
+        >
+          {STARTING_PATHS.map(path => (
+            <Link
+              key={path.href}
+              href={path.href}
+              className="p-4 rounded-xl flex flex-col gap-2 transition-transform hover:scale-[1.02]"
+              style={{
+                background: 'var(--ffv-bg2)',
+                border: `1px solid ${path.color}25`,
+              }}
+            >
+              <span className="text-2xl">{path.icon}</span>
+              <span className="font-semibold text-sm">{path.title}</span>
+              <span className="text-xs" style={{ color: 'var(--ffv-muted)', lineHeight: 1.6 }}>
+                {path.desc}
+              </span>
+              <span
+                className="text-xs font-semibold mt-auto pt-2"
+                style={{ color: path.color }}
+              >
+                {path.cta} →
+              </span>
+            </Link>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 

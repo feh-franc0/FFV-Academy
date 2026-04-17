@@ -1,6 +1,9 @@
 import type { Metadata } from 'next';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
+import { Section, Callout, CodeBlock } from '@/components/article/primitives';
+
+const accent = '#ffa657';
 
 export const metadata: Metadata = {
   title: 'Amazon Q e Kiro: a Aposta da AWS — FFV Academy',
@@ -69,7 +72,7 @@ function Content() {
         A AWS lançou dois produtos distintos no mercado de coding agents — com filosofias quase opostas. O <strong>Amazon Q Developer</strong> é uma extensão de IDE voltada para o ecossistema AWS. O <strong>Kiro</strong> (2025) é uma aposta em uma forma diferente de pensar desenvolvimento de software.
       </p>
 
-      <Section title="Amazon Q Developer: herdeiro do CodeWhisperer">
+      <Section accent={accent} title="Amazon Q Developer: herdeiro do CodeWhisperer">
         <p>
           O Amazon Q Developer é a evolução do <strong>CodeWhisperer</strong>, o assistente de código da AWS lançado em 2022. A renomeação reflete uma expansão de escopo: de autocomplete para um assistente completo integrado ao ecossistema AWS.
         </p>
@@ -94,7 +97,7 @@ function Content() {
         </div>
       </Section>
 
-      <Section title="A pergunta honesta: e se eu passar contexto AWS pro meu Claude Code?">
+      <Section accent={accent} title="A pergunta honesta: e se eu passar contexto AWS pro meu Claude Code?">
         <p>
           Essa é a pergunta certa. Claude Code com CLAUDE.md bem montado, acesso à AWS CLI na máquina, e WebFetch da documentação AWS — ele não ficaria tão bom quanto o Q? Para a maioria das tarefas de código, <strong>sim, fica competitivo</strong>. O moat do Q não está no LLM. Está em quatro camadas que Claude Code não replica facilmente:
         </p>
@@ -116,7 +119,7 @@ function Content() {
         </Callout>
       </Section>
 
-      <Section title="Q Code Transformation: por dentro do killer feature">
+      <Section accent={accent} title="Q Code Transformation: por dentro do killer feature">
         <p>
           O recurso mais diferenciado do Q Developer não é autocomplete — é a <strong>transformação de código legado</strong> em larga escala. E o detalhe técnico que pouca gente sabe: <em>o LLM não é o protagonista</em>.
         </p>
@@ -159,7 +162,7 @@ function Content() {
         </div>
       </Section>
 
-      <Section title="Kiro: uma filosofia diferente de desenvolvimento">
+      <Section accent={accent} title="Kiro: uma filosofia diferente de desenvolvimento">
         <p>
           Lançado em 2025, o Kiro não é uma evolução do Q Developer. É uma aposta em uma abordagem diferente: <strong>spec-driven development</strong>.
         </p>
@@ -187,7 +190,7 @@ function Content() {
         </div>
       </Section>
 
-      <Section title="Hooks: automação no ciclo de desenvolvimento">
+      <Section accent={accent} title="Hooks: automação no ciclo de desenvolvimento">
         <p>
           Um recurso técnico interessante do Kiro são os <strong>hooks</strong>: scripts que executam automaticamente em resposta a eventos do ciclo de desenvolvimento.
         </p>
@@ -212,7 +215,7 @@ run: |
         </p>
       </Section>
 
-      <Section title="Q Developer vs Kiro: quando usar cada um">
+      <Section accent={accent} title="Q Developer vs Kiro: quando usar cada um">
         <div className="flex flex-col gap-3">
           <div className="p-4 rounded-xl" style={{ background: 'var(--ffv-bg2)', border: '1px solid rgba(255,166,87,0.3)' }}>
             <p className="font-semibold text-xs mb-2" style={{ color: 'var(--ffv-orange)' }}>Use Amazon Q Developer quando:</p>
@@ -242,31 +245,3 @@ run: |
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section>
-      <h2 className="text-base font-bold mb-3 flex items-center gap-2">
-        <span className="w-1 h-4 rounded-full inline-block" style={{ background: '#ffa657' }} />
-        {title}
-      </h2>
-      <div className="flex flex-col gap-3">{children}</div>
-    </section>
-  );
-}
-
-function CodeBlock({ children }: { children: React.ReactNode }) {
-  return (
-    <pre className="p-4 rounded-lg text-xs overflow-x-auto whitespace-pre-wrap" style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)', color: 'var(--ffv-green)', fontFamily: 'var(--font-roboto-mono)' }}>
-      {children}
-    </pre>
-  );
-}
-
-function Callout({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="p-4 rounded-xl flex gap-3" style={{ background: 'rgba(255,166,87,0.08)', border: '1px solid rgba(255,166,87,0.2)' }}>
-      <span className="text-xl flex-shrink-0">💡</span>
-      <p className="text-sm">{children}</p>
-    </div>
-  );
-}

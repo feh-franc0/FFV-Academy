@@ -62,7 +62,7 @@ cp -r "$OUT/_next" "$DEST/"
 cp "$OUT/favicon.ico" "$DEST/" 2>/dev/null || true
 cp "$OUT/index.html" "$DEST/index.html"
 cp "$OUT/404.html" "$DEST/404.html"
-for route in ia aws engenharia progresso fundamentos-da-ia ia-alem-do-llm ferramentas-ia-codigo aws-cloud-practitioner aws-saa-c03 como-aprender devops-containers engenharia-software revisar; do
+for route in ia aws engenharia progresso fundamentos-da-ia ia-alem-do-llm ferramentas-ia-codigo aws-cloud-practitioner aws-saa-c03 como-aprender devops-containers engenharia-software ai-native sistemas-distribuidos observabilidade-sre revisar glossario fundamentos-tecnicos claude-anthropic sql-databases como-computador-funciona redes-web; do
   mkdir -p "$DEST/$route"
   cp "$OUT/$route.html" "$DEST/$route/index.html"
 done
@@ -129,6 +129,9 @@ public_html/
 ├── como-aprender/index.html
 ├── devops-containers/index.html
 ├── engenharia-software/index.html
+├── ai-native/index.html
+├── sistemas-distribuidos/index.html
+├── observabilidade-sre/index.html
 ├── revisar/index.html          ← fila de revisão espaçada (SRS)
 └── aprenda/<slug>/index.html   ← um por módulo
 ```
@@ -141,9 +144,9 @@ Além das 8 trilhas, o currículo expõe **4 hubs** — agrupadores editoriais d
 
 | Hub | Rota | Cor | Trilhas |
 |-----|------|-----|---------|
-| Inteligência Artificial | `/ia` | `#58a6ff` | trail1, trail2, trail3 |
+| Inteligência Artificial | `/ia` | `#58a6ff` | trail1, trail2, trail3, trail9 |
 | AWS Cloud | `/aws` | `#ff9900` | trail4, trail5 |
-| Engenharia de Software | `/engenharia` | `#e3b341` | trail7, trail8 |
+| Engenharia de Software | `/engenharia` | `#e3b341` | trail7, trail8, trail10, trail11 |
 | Como Aprender | `/como-aprender` | `#3fb950` | trail6 |
 
 Os hubs são **aditivos**, não substituem as rotas de trilha — todas as URLs históricas seguem funcionando. O nav do [GameHUD](src/components/GameHUD.tsx) mostra **hubs + Progresso** (não trilhas individuais). O [CommandPalette](src/components/CommandPalette.tsx) (Cmd/Ctrl+K) permite navegar por tudo a qualquer momento.
@@ -168,6 +171,14 @@ Helpers disponíveis no `curriculum.ts`: `getHubBySlug(slug)`, `getHubForTrail(t
 /como-aprender           → Trilha 6 — listagem (psicologia do aprendizado; funciona como hub também)
 /devops-containers       → Trilha 7 — listagem (Docker + Kubernetes + CI/CD)
 /engenharia-software     → Trilha 8 — listagem (engenharia moderna, agents, testes, segurança, arquitetura)
+/ai-native               → Trilha 9 — listagem (RAG, agents, MCP, LLMOps)
+/sistemas-distribuidos   → Trilha 10 — listagem (CAP, consensus, sagas, MVCC, rate limiting)
+/observabilidade-sre     → Trilha 11 — listagem (métricas RED/USE, OTel, SLOs, incident response)
+/fundamentos-tecnicos    → Trilha 12 — listagem (Linux, Git, HTTP, SSH, DNS/TLS, JSON/YAML)
+/claude-anthropic        → Trilha 13 — listagem (Claude Code, MCP, hooks, skills, API, prompt engineering)
+/sql-databases           → Trilha 14 — listagem (SQL, joins, índices, EXPLAIN, transactions, migrations)
+/como-computador-funciona → Trilha 15 — listagem (CPU, memória, syscalls, I/O, threads, containers)
+/redes-web               → Trilha 16 — listagem (OSI, TCP, QUIC, HTTP/2-3, TLS, DNS, proxies, CORS)
 /revisar                 → Fila de revisão espaçada (SRS) com SM-2 simplificado
 /aprenda/[slug]          → Artigo + quiz + XP
 ```
@@ -399,6 +410,71 @@ Deixar de ser coder e virar engenheiro de software de verdade — SDD, agents, t
 | `testes-profissionais` | Testes Profissionais: pirâmide, propriedades, contrato e fuzz | 85 |
 | `seguranca-software-real` | Segurança de Software de Verdade: threat model ao SBOM | 90 |
 | `arquitetura-software-moderna` | Arquitetura Moderna: trade-offs, ADRs, C4 e evolução | 95 |
+
+### Trilha 9 — Engenharia AI-Native (`#ff7eb6`) — `/ai-native`
+
+RAG real, agent patterns, MCP, LLMOps — o que separa um protótipo de IA de um sistema AI-native em produção.
+
+| Slug | Título | XP |
+|------|--------|----|
+| `rag-fundamentos` | RAG: por que "só jogar tudo no LLM" não funciona | 80 |
+| `chunking-embeddings` | Chunking e Embeddings: as decisões que fazem ou quebram seu RAG | 85 |
+| `hybrid-search-reranking` | Hybrid Search + Reranking: do BM25 ao cross-encoder | 90 |
+| `rag-evaluation` | Avaliando RAG: recall@k, nDCG e LLM-as-judge | 80 |
+| `agentes-padroes` | Agent Patterns: ReAct, Reflexion e Tree of Thoughts | 90 |
+| `multi-agent-systems` | Multi-Agent Systems: orchestrator-worker, swarms e handoffs | 85 |
+| `context-engineering` | Context Engineering: prompt caching, subagents e skills | 80 |
+| `mcp-servers` | MCP Deep Dive: construindo um servidor profissional | 90 |
+| `llm-apis-producao` | LLM APIs em Produção: streaming, structured output, batch e cache | 80 |
+| `llmops-drift-canary` | LLMOps: eval harness, drift detection e canary de prompts | 90 |
+
+### Trilha 10 — Sistemas Distribuídos (`#f78166`) — `/sistemas-distribuidos`
+
+CAP, consensus, idempotência, sagas, event sourcing — a base técnica que separa "funciona no localhost" de "funciona em escala".
+
+| Slug | Título | XP |
+|------|--------|----|
+| `cap-pacelc` | CAP e PACELC: o teorema que define toda arquitetura distribuída | 80 |
+| `consistency-models` | Modelos de Consistência: strong, eventual, causal, read-your-writes | 85 |
+| `consensus-raft` | Consensus e Raft: como nós discordam e chegam a acordo | 90 |
+| `idempotencia-retries` | Idempotência e Retries: o antídoto pra rede que quebra | 75 |
+| `sagas-2pc` | Sagas vs 2PC: transações distribuídas sem perder o sono | 85 |
+| `event-sourcing-cqrs` | Event Sourcing e CQRS: quando eventos são a fonte da verdade | 85 |
+| `postgres-mvcc-isolation` | Postgres Profundo: MVCC, Isolation Levels e Locks | 85 |
+| `rate-limiting-distribuido` | Rate Limiting Distribuído: token bucket, sliding window, Redis | 75 |
+
+### Trilha 11 — Observabilidade & SRE (`#79c0ff`) — `/observabilidade-sre`
+
+Métricas RED/USE, OpenTelemetry, SLOs, error budgets, incident response — o que separa "fazer deploy" de operar sistema em produção.
+
+| Slug | Título | XP |
+|------|--------|----|
+| `observability-pilares` | Observability: os 3 pilares (logs, métricas, traces) e por que não basta | 75 |
+| `metricas-red-use` | Métricas RED e USE: os frameworks que cobrem 90% dos casos | 70 |
+| `opentelemetry-stack` | OpenTelemetry end-to-end: instrumentação app → backend | 90 |
+| `logs-estruturados` | Logs Estruturados: JSON, correlation IDs e levels com propósito | 70 |
+| `distributed-tracing` | Distributed Tracing: spans, baggage e sampling strategies | 80 |
+| `slos-error-budgets` | SLOs e Error Budgets: a contabilidade da confiabilidade | 80 |
+| `incident-response-postmortem` | Incident Response: comando, comunicação e postmortem blameless | 80 |
+
+### Trilha 13 — Claude & Anthropic na Prática (`#cc785c`) — `/claude-anthropic`
+
+Do terminal ao deploy: Claude Code CLI, MCP, hooks, skills, API da Anthropic, prompt engineering e workflows profissionais.
+
+| Slug | Título | XP |
+|------|--------|----|
+| `anthropic-ecossistema` | O ecossistema Anthropic: Claude, modelos, produtos e roadmap | 40 |
+| `claude-code-primeiros-passos` | Claude Code: instalação, autenticação e primeiro uso real | 50 |
+| `claude-code-modos-de-uso` | Modos de uso: interativo, não-interativo, pipe e headless | 60 |
+| `claude-code-claude-md` | CLAUDE.md: como dar memória, contexto e personalidade ao agente | 65 |
+| `claude-code-permissoes` | Permissões e segurança: o que Claude pode e não pode fazer | 55 |
+| `claude-code-mcp-na-pratica` | MCP na prática: conectar Drive, GitHub, Slack e bancos de dados | 75 |
+| `claude-code-hooks` | Hooks: automatizar revisões, validações e ações customizadas | 70 |
+| `claude-code-skills-commands` | Skills e slash commands: criar seus próprios workflows | 65 |
+| `claude-api-fundamentos` | API da Anthropic: messages, streaming, vision, batch e cache | 75 |
+| `prompt-engineering-claude` | Prompt engineering para Claude: técnicas que realmente funcionam | 70 |
+| `claude-em-producao` | Claude em produção: custo real, rate limits, caching e segurança | 80 |
+| `workflows-ia-profissional` | Workflows profissionais: do problema ao resultado com Claude Code | 85 |
 
 ### Regra de slugs
 **Slugs são IDs permanentes no localStorage** — nunca renomear um slug sem migração de dados do usuário.

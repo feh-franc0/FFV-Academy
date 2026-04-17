@@ -24,6 +24,9 @@ const TRAIL_HREF: Record<string, string> = {
   trail6: '/como-aprender',
   trail7: '/devops-containers',
   trail8: '/engenharia-software',
+  trail9: '/ai-native',
+  trail10: '/sistemas-distribuidos',
+  trail11: '/observabilidade-sre',
 };
 
 function buildItems(): Item[] {

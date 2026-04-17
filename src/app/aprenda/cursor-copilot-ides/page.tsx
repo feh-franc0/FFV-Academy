@@ -1,6 +1,9 @@
 import type { Metadata } from 'next';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
+import { Section, Callout, CodeBlock } from '@/components/article/primitives';
+
+const accent = '#ffa657';
 
 export const metadata: Metadata = {
   title: 'Cursor, Copilot e os IDEs Aumentados — FFV Academy',
@@ -69,7 +72,7 @@ function Content() {
         Para muitos desenvolvedores, o editor de código é a extensão do pensamento. Cursor e GitHub Copilot apostam nessa premissa: em vez de mover o desenvolvedor para um terminal ou interface de chat, eles trazem a IA diretamente para onde o código vive.
       </p>
 
-      <Section title="Cursor: um fork, não um plugin">
+      <Section accent={accent} title="Cursor: um fork, não um plugin">
         <p>
           Este detalhe técnico muda tudo. O Cursor não é uma extensão do VSCode — é um <strong>fork</strong> do VSCode (que é open-source). A diferença prática:
         </p>
@@ -92,7 +95,7 @@ function Content() {
         </p>
       </Section>
 
-      <Section title="Os modos do Cursor">
+      <Section accent={accent} title="Os modos do Cursor">
         <p>
           O Cursor tem três formas distintas de interagir com IA, cada uma com filosofia diferente:
         </p>
@@ -121,7 +124,7 @@ function Content() {
         </div>
       </Section>
 
-      <Section title="Como o Cursor indexa o seu repositório">
+      <Section accent={accent} title="Como o Cursor indexa o seu repositório">
         <p>
           Para incluir contexto relevante sem estourar a janela, o Cursor usa <strong>embeddings semânticos</strong>:
         </p>
@@ -157,7 +160,7 @@ function Content() {
         </div>
       </Section>
 
-      <Section title="Edit format: o detalhe que muda 20+ pontos em benchmark">
+      <Section accent={accent} title="Edit format: o detalhe que muda 20+ pontos em benchmark">
         <p>
           Essa é a evidência mais contraintuitiva de toda essa trilha. O <strong>Aider benchmark</strong> (Paul Gauthier, mantenedor do Aider) comparou o mesmo LLM pedindo para editar código em formatos diferentes:
         </p>
@@ -186,7 +189,7 @@ udiff-simple          → diff sem linha de contexto extra
         </Callout>
       </Section>
 
-      <Section title="GitHub Copilot: da completions à ambição de agente">
+      <Section accent={accent} title="GitHub Copilot: da completions à ambição de agente">
         <p>
           O Copilot original (2021) era puramente autocomplete. Em 2024-2025, a Microsoft/GitHub expandiu agressivamente:
         </p>
@@ -208,7 +211,7 @@ udiff-simple          → diff sem linha de contexto extra
         </div>
       </Section>
 
-      <Section title="O modelo do Copilot: não é fixo">
+      <Section accent={accent} title="O modelo do Copilot: não é fixo">
         <p>
           Uma mudança estratégica importante em 2024: o GitHub Copilot se tornou <strong>model-agnostic</strong>. Em vez de só o modelo da OpenAI, você pode escolher:
         </p>
@@ -230,7 +233,7 @@ udiff-simple          → diff sem linha de contexto extra
         </p>
       </Section>
 
-      <Section title="Copilot Enterprise: o diferencial corporativo">
+      <Section accent={accent} title="Copilot Enterprise: o diferencial corporativo">
         <p>
           Para times corporativos, o <strong>Copilot Enterprise</strong> oferece algo que as outras ferramentas não têm (ainda): a possibilidade de incluir bases de código privadas no índice.
         </p>
@@ -242,7 +245,7 @@ udiff-simple          → diff sem linha de contexto extra
         </Callout>
       </Section>
 
-      <Section title="IDE-first vs terminal-first: a escolha filosófica">
+      <Section accent={accent} title="IDE-first vs terminal-first: a escolha filosófica">
         <p>
           Não há certo e errado — há diferentes fluxos de trabalho. A tabela honesta:
         </p>
@@ -282,18 +285,6 @@ udiff-simple          → diff sem linha de contexto extra
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section>
-      <h2 className="text-base font-bold mb-3 flex items-center gap-2">
-        <span className="w-1 h-4 rounded-full inline-block" style={{ background: '#ffa657' }} />
-        {title}
-      </h2>
-      <div className="flex flex-col gap-3">{children}</div>
-    </section>
-  );
-}
-
 function ModeCard({ mode, shortcut, color, desc, when }: { mode: string; shortcut: string; color: string; desc: string; when: string }) {
   return (
     <div className="p-3 rounded-lg" style={{ background: 'var(--ffv-bg2)', border: `1px solid ${color}30` }}>
@@ -307,19 +298,3 @@ function ModeCard({ mode, shortcut, color, desc, when }: { mode: string; shortcu
   );
 }
 
-function CodeBlock({ children }: { children: React.ReactNode }) {
-  return (
-    <pre className="p-4 rounded-lg text-xs overflow-x-auto whitespace-pre-wrap" style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)', color: 'var(--ffv-green)', fontFamily: 'var(--font-roboto-mono)' }}>
-      {children}
-    </pre>
-  );
-}
-
-function Callout({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="p-4 rounded-xl flex gap-3" style={{ background: 'rgba(255,166,87,0.08)', border: '1px solid rgba(255,166,87,0.2)' }}>
-      <span className="text-xl flex-shrink-0">💡</span>
-      <p className="text-sm">{children}</p>
-    </div>
-  );
-}

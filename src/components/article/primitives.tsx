@@ -135,7 +135,7 @@ export function DecisionBox({ scenario, winner, winnerColor = 'var(--ffv-blue)',
   winner: string;
   winnerColor?: string;
   why: string;
-  alternatives?: { name: string; note: string }[];
+  alternatives?: { name?: string; label?: string; note?: string; when?: string }[];
 }) {
   return (
     <div className="p-4 rounded-xl" style={{ background: 'var(--ffv-bg2)', border: `1px solid ${winnerColor}25` }}>
@@ -148,12 +148,16 @@ export function DecisionBox({ scenario, winner, winnerColor = 'var(--ffv-blue)',
       <p className="text-xs mb-2" style={{ color: 'var(--ffv-muted)' }}>{why}</p>
       {alternatives && alternatives.length > 0 && (
         <div className="flex flex-col gap-1">
-          {alternatives.map(alt => (
-            <p key={alt.name} className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
-              <span style={{ color: 'var(--ffv-border)' }}>Alt: </span>
-              <span className="font-semibold">{alt.name}</span> — {alt.note}
-            </p>
-          ))}
+          {alternatives.map((alt, i) => {
+            const altName = alt.name ?? alt.label ?? '';
+            const altNote = alt.note ?? alt.when ?? '';
+            return (
+              <p key={altName || i} className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
+                <span style={{ color: 'var(--ffv-border)' }}>Alt: </span>
+                <span className="font-semibold">{altName}</span> — {altNote}
+              </p>
+            );
+          })}
         </div>
       )}
     </div>
@@ -224,6 +228,274 @@ export function QAItem({ q, a }: { q: string; a: ReactNode }) {
     <div className="p-4 rounded-xl" style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}>
       <p className="text-xs font-semibold mb-2" style={{ color: 'var(--ffv-blue)' }}>❓ {q}</p>
       <div className="text-xs leading-6" style={{ color: 'var(--ffv-muted)' }}>{a}</div>
+    </div>
+  );
+}
+
+// ─── Visual diagram components (replace ASCII ArchDiagram) ──────────────────
+
+/** Nested boxes hierarchy — IA > ML > Deep Learning > LLMs */
+export function HierarchyDiagram({ title, levels, accent = 'var(--ffv-blue)' }: {
+  title?: string;
+  levels: { label: string; desc?: string }[];
+  accent?: string;
+}) {
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${accent}30`, background: 'var(--ffv-bg2)' }}>
+      {title && (
+        <div className="px-4 py-2 text-[10px] uppercase tracking-widest font-semibold" style={{ background: `${accent}12`, color: accent, borderBottom: `1px solid ${accent}30` }}>
+          🗺️ {title}
+        </div>
+      )}
+      <div className="p-5">
+        {levels.map((level, i) => {
+          const depth = i;
+          const opacity = Math.max(0.08, 0.18 - depth * 0.02);
+          return (
+            <div
+              key={i}
+              className="rounded-lg p-3"
+              style={{
+                marginLeft: `${depth * 20}px`,
+                marginBottom: i < levels.length - 1 ? '0' : undefined,
+                border: `1px solid ${accent}${Math.round((0.35 - depth * 0.05) * 255).toString(16).padStart(2, '0')}`,
+                background: `color-mix(in srgb, ${accent} ${Math.round(opacity * 100)}%, var(--ffv-bg2))`,
+                marginTop: i > 0 ? '-1px' : undefined,
+                position: 'relative',
+                zIndex: levels.length - i,
+              }}
+            >
+              <span className="text-xs font-bold uppercase tracking-wide" style={{ color: accent }}>
+                {level.label}
+              </span>
+              {level.desc && (
+                <span className="text-xs ml-2" style={{ color: 'var(--ffv-muted)' }}>
+                  — {level.desc}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** Sequential flow with arrows — A → B → C → D */
+export function FlowDiagram({ title, steps, orientation = 'horizontal', accent = 'var(--ffv-blue)' }: {
+  title?: string;
+  steps: { icon?: string; label: string; desc?: string }[];
+  orientation?: 'horizontal' | 'vertical';
+  accent?: string;
+}) {
+  const isHorizontal = orientation === 'horizontal';
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${accent}30`, background: 'var(--ffv-bg2)' }}>
+      {title && (
+        <div className="px-4 py-2 text-[10px] uppercase tracking-widest font-semibold" style={{ background: `${accent}12`, color: accent, borderBottom: `1px solid ${accent}30` }}>
+          🗺️ {title}
+        </div>
+      )}
+      <div
+        className={isHorizontal ? 'flex flex-row flex-wrap items-center gap-0 p-5' : 'flex flex-col gap-0 p-5'}
+        style={{ background: `linear-gradient(135deg, color-mix(in srgb, ${accent} 4%, var(--ffv-bg2)) 0%, var(--ffv-bg2) 100%)` }}
+      >
+        {steps.map((step, i) => (
+          <Fragment key={i}>
+            <div
+              className="flex flex-col items-center text-center rounded-lg p-3 min-w-[100px]"
+              style={{
+                border: `1px solid ${accent}35`,
+                background: `color-mix(in srgb, ${accent} 10%, var(--ffv-bg2))`,
+                flex: isHorizontal ? '1 1 0' : undefined,
+              }}
+            >
+              {step.icon && <span className="text-xl mb-1">{step.icon}</span>}
+              <span className="text-xs font-bold" style={{ color: accent }}>{step.label}</span>
+              {step.desc && (
+                <span className="text-[11px] mt-1 leading-4" style={{ color: 'var(--ffv-muted)' }}>{step.desc}</span>
+              )}
+            </div>
+            {i < steps.length - 1 && (
+              <div
+                className={`flex items-center justify-center font-bold text-base shrink-0 ${isHorizontal ? 'px-1' : 'py-1 self-center'}`}
+                style={{ color: `${accent}90` }}
+              >
+                {isHorizontal ? '→' : '↓'}
+              </div>
+            )}
+          </Fragment>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Two parallel flows side by side — Traditional Programming vs ML */
+export function ComparisonFlow({ title, left, right, accent = 'var(--ffv-blue)' }: {
+  title?: string;
+  left: { label: string; steps: string[] };
+  right: { label: string; steps: string[] };
+  accent?: string;
+}) {
+  const renderFlow = (flow: { label: string; steps: string[] }, color: string) => (
+    <div className="flex-1 flex flex-col gap-2">
+      <div
+        className="rounded-lg px-3 py-2 text-center text-[10px] font-bold uppercase tracking-widest"
+        style={{ background: `color-mix(in srgb, ${color} 18%, var(--ffv-bg2))`, color, border: `1px solid ${color}40` }}
+      >
+        {flow.label}
+      </div>
+      {flow.steps.map((step, i) => (
+        <Fragment key={i}>
+          <div
+            className="rounded-lg px-3 py-2 text-center text-xs"
+            style={{ background: `color-mix(in srgb, ${color} 8%, var(--ffv-bg2))`, color: 'var(--foreground)', border: `1px solid ${color}25` }}
+          >
+            {step}
+          </div>
+          {i < flow.steps.length - 1 && (
+            <div className="text-center text-base" style={{ color: `${color}70` }}>↓</div>
+          )}
+        </Fragment>
+      ))}
+    </div>
+  );
+
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${accent}30`, background: 'var(--ffv-bg2)' }}>
+      {title && (
+        <div className="px-4 py-2 text-[10px] uppercase tracking-widest font-semibold" style={{ background: `${accent}12`, color: accent, borderBottom: `1px solid ${accent}30` }}>
+          🗺️ {title}
+        </div>
+      )}
+      <div className="p-5 flex gap-4">
+        {renderFlow(left, accent)}
+        <div className="flex items-center justify-center text-2xl shrink-0" style={{ color: 'var(--ffv-muted)' }}>⟺</div>
+        {renderFlow(right, 'var(--ffv-green)')}
+      </div>
+    </div>
+  );
+}
+
+/** Multi-column architecture diagram — Encoder-only vs Decoder-only vs Encoder-Decoder */
+export function ArchFlow({ title, columns, accent = 'var(--ffv-blue)' }: {
+  title?: string;
+  columns: {
+    header: string;
+    headerColor?: string;
+    items: string[];
+    footer?: string;
+    useCases?: string[];
+  }[];
+  accent?: string;
+}) {
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${accent}30`, background: 'var(--ffv-bg2)' }}>
+      {title && (
+        <div className="px-4 py-2 text-[10px] uppercase tracking-widest font-semibold" style={{ background: `${accent}12`, color: accent, borderBottom: `1px solid ${accent}30` }}>
+          🗺️ {title}
+        </div>
+      )}
+      <div className="p-5 grid gap-3" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))` }}>
+        {columns.map((col, i) => {
+          const color = col.headerColor ?? accent;
+          return (
+            <div
+              key={i}
+              className="flex flex-col rounded-lg overflow-hidden"
+              style={{ border: `1px solid ${color}35` }}
+            >
+              <div
+                className="px-3 py-2 text-center text-[10px] font-bold uppercase tracking-wide"
+                style={{ background: `color-mix(in srgb, ${color} 20%, var(--ffv-bg2))`, color }}
+              >
+                {col.header}
+              </div>
+              <div className="flex-1 flex flex-col gap-1 p-3" style={{ background: `color-mix(in srgb, ${color} 5%, var(--ffv-bg2))` }}>
+                {col.items.filter(Boolean).map((item, j) => (
+                  <div key={j} className="text-[11px] leading-5 py-1 px-2 rounded" style={{ color: 'var(--foreground)', background: `color-mix(in srgb, ${color} 8%, var(--ffv-bg2))`, border: `1px solid ${color}20` }}>
+                    {item}
+                  </div>
+                ))}
+              </div>
+              {col.footer && (
+                <div className="px-3 py-2 text-center text-[10px] font-semibold" style={{ background: `color-mix(in srgb, ${color} 12%, var(--ffv-bg2))`, color, borderTop: `1px solid ${color}25` }}>
+                  {col.footer}
+                </div>
+              )}
+              {col.useCases && col.useCases.length > 0 && (
+                <div className="px-3 py-2" style={{ borderTop: `1px solid ${color}20`, background: 'var(--ffv-bg2)' }}>
+                  <div className="text-[10px] font-semibold mb-1" style={{ color: 'var(--ffv-muted)' }}>CASOS DE USO</div>
+                  {col.useCases.map((uc, j) => (
+                    <div key={j} className="text-[11px] leading-5" style={{ color: 'var(--ffv-muted)' }}>• {uc}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** Attention weight matrix — colored cells by intensity */
+export function MatrixDiagram({ title, rowLabels, colLabels, data, highlightThreshold = 0.5, accent = 'var(--ffv-blue)' }: {
+  title?: string;
+  rowLabels: string[];
+  colLabels: string[];
+  data: number[][];
+  highlightThreshold?: number;
+  accent?: string;
+}) {
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${accent}30`, background: 'var(--ffv-bg2)' }}>
+      {title && (
+        <div className="px-4 py-2 text-[10px] uppercase tracking-widest font-semibold" style={{ background: `${accent}12`, color: accent, borderBottom: `1px solid ${accent}30` }}>
+          🗺️ {title}
+        </div>
+      )}
+      <div className="p-5 overflow-x-auto">
+        <table className="w-full border-collapse text-center text-xs" style={{ tableLayout: 'auto' }}>
+          <thead>
+            <tr>
+              <th className="p-2" style={{ color: 'var(--ffv-muted)', fontWeight: 400 }}></th>
+              {colLabels.map((col, i) => (
+                <th key={i} className="p-2 font-bold text-[11px]" style={{ color: accent }}>{col}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rowLabels.map((row, ri) => (
+              <tr key={ri}>
+                <td className="p-2 font-bold text-[11px] text-left" style={{ color: accent }}>{row}</td>
+                {data[ri]?.map((val, ci) => {
+                  const intensity = Math.round(val * 60);
+                  const isHigh = val >= highlightThreshold;
+                  return (
+                    <td
+                      key={ci}
+                      className="p-2 rounded"
+                      style={{
+                        background: isHigh
+                          ? `color-mix(in srgb, ${accent} ${intensity}%, var(--ffv-bg2))`
+                          : `color-mix(in srgb, ${accent} ${Math.max(4, intensity / 3)}%, var(--ffv-bg2))`,
+                        color: isHigh ? 'var(--foreground)' : 'var(--ffv-muted)',
+                        fontWeight: isHigh ? 600 : 400,
+                        border: `1px solid ${accent}20`,
+                        fontSize: '11px',
+                      }}
+                    >
+                      {val.toFixed(2)}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -668,6 +940,56 @@ export function KeyValue({ items, accent = 'var(--ffv-blue)' }: {
           <span style={{ color: 'var(--ffv-muted)' }}>{it.v}</span>
         </div>
       ))}
+    </div>
+  );
+}
+
+/** Annotated mathematical formula — shows formula parts with tooltips/annotations */
+export function AnnotatedFormula({ title, formula, parts, accent = 'var(--ffv-blue)' }: {
+  title?: string;
+  formula?: string;
+  parts: { text: string; annotation?: string; highlight?: boolean }[];
+  accent?: string;
+}) {
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${accent}30`, background: 'var(--ffv-bg2)' }}>
+      {title && (
+        <div className="px-4 py-2 text-[10px] uppercase tracking-widest font-semibold" style={{ background: `${accent}12`, color: accent, borderBottom: `1px solid ${accent}30` }}>
+          ƒ {title}
+        </div>
+      )}
+      <div className="p-5">
+        {formula && (
+          <div className="text-sm font-mono mb-4 p-3 rounded-lg text-center" style={{ background: 'var(--ffv-bg)', border: `1px solid ${accent}25`, color: 'var(--foreground)' }}>
+            {formula}
+          </div>
+        )}
+        <div className="flex flex-wrap gap-2 justify-center">
+          {parts.map((part, i) => (
+            part.annotation ? (
+              <div key={i} className="flex flex-col items-center gap-1">
+                <div
+                  className="px-2 py-1 rounded text-sm font-mono font-semibold"
+                  style={{
+                    background: part.highlight ? `color-mix(in srgb, ${accent} 20%, var(--ffv-bg2))` : 'var(--ffv-bg)',
+                    border: `1px solid ${part.highlight ? accent : 'var(--ffv-border)'}40`,
+                    color: part.highlight ? accent : 'var(--foreground)',
+                  }}
+                >
+                  {part.text}
+                </div>
+                <div className="text-[10px] text-center max-w-[120px] leading-tight" style={{ color: 'var(--ffv-muted)' }}>
+                  {part.annotation}
+                </div>
+              </div>
+            ) : (
+              <div key={i} className="flex items-center px-1 text-sm font-mono" style={{ color: 'var(--ffv-muted)' }}>
+                {part.text}
+              </div>
+            )
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

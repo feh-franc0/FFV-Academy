@@ -1,6 +1,9 @@
 import type { Metadata } from 'next';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
+import { Section, Callout, CodeBlock } from '@/components/article/primitives';
+
+const accent = '#ffa657';
 
 export const metadata: Metadata = {
   title: 'OpenAI Codex: o Agente na Nuvem — FFV Academy',
@@ -69,7 +72,7 @@ function Content() {
         Esse módulo responde de frente a pergunta técnica que todo mundo faz: <em>"o harness do Codex precisa abstrair várias linguagens de tool call — isso degrada performance?"</em>. A resposta curta: <strong>não do jeito que a intuição sugere</strong>. A resposta longa — com dados — é o que vem a seguir.
       </p>
 
-      <Section title="Antes: dois produtos, o mesmo nome">
+      <Section accent={accent} title="Antes: dois produtos, o mesmo nome">
         <div className="flex flex-col gap-3">
           <div className="p-4 rounded-xl" style={{ background: 'var(--ffv-bg2)', border: '1px solid rgba(88,166,255,0.3)' }}>
             <p className="font-semibold text-xs mb-1" style={{ color: '#58a6ff' }}>Codex (2021) — modelo de completions</p>
@@ -86,7 +89,7 @@ function Content() {
         </div>
       </Section>
 
-      <Section title="Arquitetura: cloud sandbox">
+      <Section accent={accent} title="Arquitetura: cloud sandbox">
         <p>
           Esta é a diferença arquitetural central. Enquanto Claude Code opera na sua máquina, o Codex opera em um ambiente completamente remoto:
         </p>
@@ -110,7 +113,7 @@ Você revisa o PR como faria com qualquer dev`}</CodeBlock>
         </p>
       </Section>
 
-      <Section title="Assíncrono e paralelo: o grande diferencial">
+      <Section accent={accent} title="Assíncrono e paralelo: o grande diferencial">
         <p>
           Claude Code é síncrono: você manda uma tarefa e espera a resposta antes de enviar a próxima. O Codex é assíncrono:
         </p>
@@ -133,7 +136,7 @@ Você revisa o PR como faria com qualquer dev`}</CodeBlock>
         </p>
       </Section>
 
-      <Section title="O modelo por baixo: codex-1 → GPT-5.1-Codex-Max">
+      <Section accent={accent} title="O modelo por baixo: codex-1 → GPT-5.1-Codex-Max">
         <p>
           A linhagem é importante porque cada versão mudou o que o harness precisa gerenciar:
         </p>
@@ -154,7 +157,7 @@ Você revisa o PR como faria com qualquer dev`}</CodeBlock>
         </Callout>
       </Section>
 
-      <Section title="A pergunta que todo mundo faz: o harness mata performance?">
+      <Section accent={accent} title="A pergunta que todo mundo faz: o harness mata performance?">
         <p>
           A intuição é razoável: se o harness precisa receber tool calls em JSON, validar, parsear, roteá-las, converter erros de volta para o modelo, traduzir entre formatos — tudo isso parece que deveria cobrar um preço. Mas os números não confirmam isso da forma que se imagina.
         </p>
@@ -184,7 +187,7 @@ Você revisa o PR como faria com qualquer dev`}</CodeBlock>
         </p>
       </Section>
 
-      <Section title="A evidência concreta">
+      <Section accent={accent} title="A evidência concreta">
         <p>
           Três pontos de dado públicos para ancorar a discussão:
         </p>
@@ -211,7 +214,7 @@ Você revisa o PR como faria com qualquer dev`}</CodeBlock>
         </Callout>
       </Section>
 
-      <Section title="Trade-offs reais: cloud vs local">
+      <Section accent={accent} title="Trade-offs reais: cloud vs local">
         <div className="flex flex-col gap-3">
           <div className="p-4 rounded-xl" style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}>
             <p className="font-semibold text-xs mb-3" style={{ color: 'var(--ffv-green)' }}>✓ Vantagens do Cloud Sandbox</p>
@@ -234,7 +237,7 @@ Você revisa o PR como faria com qualquer dev`}</CodeBlock>
         </div>
       </Section>
 
-      <Section title="Segurança e privacidade: o elefante na sala">
+      <Section accent={accent} title="Segurança e privacidade: o elefante na sala">
         <p>
           Esta é uma decisão que cada time precisa tomar conscientemente. Ao usar o Codex, o código do seu repositório é enviado para a OpenAI para ser processado no sandbox.
         </p>
@@ -246,7 +249,7 @@ Você revisa o PR como faria com qualquer dev`}</CodeBlock>
         </p>
       </Section>
 
-      <Section title="Então, Codex ou Claude Code?">
+      <Section accent={accent} title="Então, Codex ou Claude Code?">
         <p>
           A pergunta correta não é "qual é melhor" e sim "qual é o problema". Critérios concretos:
         </p>
@@ -273,31 +276,3 @@ Você revisa o PR como faria com qualquer dev`}</CodeBlock>
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section>
-      <h2 className="text-base font-bold mb-3 flex items-center gap-2">
-        <span className="w-1 h-4 rounded-full inline-block" style={{ background: '#ffa657' }} />
-        {title}
-      </h2>
-      <div className="flex flex-col gap-3">{children}</div>
-    </section>
-  );
-}
-
-function CodeBlock({ children }: { children: React.ReactNode }) {
-  return (
-    <pre className="p-4 rounded-lg text-xs overflow-x-auto whitespace-pre-wrap" style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)', color: 'var(--ffv-green)', fontFamily: 'var(--font-roboto-mono)' }}>
-      {children}
-    </pre>
-  );
-}
-
-function Callout({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="p-4 rounded-xl flex gap-3" style={{ background: 'rgba(255,166,87,0.08)', border: '1px solid rgba(255,166,87,0.2)' }}>
-      <span className="text-xl flex-shrink-0">💡</span>
-      <p className="text-sm">{children}</p>
-    </div>
-  );
-}

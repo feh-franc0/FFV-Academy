@@ -1,6 +1,9 @@
 import type { Metadata } from 'next';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
+import { Section, Callout, CodeBlock } from '@/components/article/primitives';
+
+const accent = '#ffa657';
 
 export const metadata: Metadata = {
   title: 'O Panorama dos Coding Agents — FFV Academy',
@@ -69,7 +72,7 @@ function Content() {
         Em 2021, a OpenAI lançou o GitHub Copilot. Era impressionante: digitava metade de uma função e a IA completava. Em 2025, Claude Code executa tarefas inteiras no seu terminal, lê toda a sua codebase, roda testes e abre PRs sozinho. O que aconteceu no meio?
       </p>
 
-      <Section title="Três gerações de ferramentas">
+      <Section accent={accent} title="Três gerações de ferramentas">
         <p>
           A evolução aconteceu em três saltos claros. Cada geração não substituiu a anterior — ela expandiu o que é possível:
         </p>
@@ -102,7 +105,7 @@ function Content() {
         </div>
       </Section>
 
-      <Section title="O modelo é só um componente">
+      <Section accent={accent} title="O modelo é só um componente">
         <p>
           Este é o insight mais importante desta trilha inteira: <strong>o LLM em si é apenas uma peça</strong>. O que diferencia Claude Code de GitHub Copilot não é (só) a qualidade do modelo — é o <strong>harness</strong>: a camada de infraestrutura ao redor.
         </p>
@@ -129,7 +132,7 @@ function Content() {
         </p>
       </Section>
 
-      <Section title="O loop agêntico: como um agente pensa">
+      <Section accent={accent} title="O loop agêntico: como um agente pensa">
         <p>
           Todo coding agent moderno opera em um loop básico chamado <strong>ReAct</strong> (Reasoning + Acting), formalizado em um paper do Google/Princeton em 2022:
         </p>
@@ -156,7 +159,7 @@ while (objetivo não alcançado) {
         </Callout>
       </Section>
 
-      <Section title="Por que agora?">
+      <Section accent={accent} title="Por que agora?">
         <p>
           Três coisas precisaram acontecer simultaneamente para os coding agents funcionarem bem:
         </p>
@@ -178,7 +181,7 @@ while (objetivo não alcançado) {
         </div>
       </Section>
 
-      <Section title="Os modelos estão empatando — o harness não">
+      <Section accent={accent} title="Os modelos estão empatando — o harness não">
         <p>
           Um dado que muda a leitura do mercado: <strong>no SWE-bench Verified (abril/2026), seis modelos frontier estão dentro de ~0,8 ponto percentual</strong>. Claude Opus 4.6, Sonnet 4.6, GPT-5.1, Gemini 3 Pro, Haiku 4.5, codex-max — todos virtualmente empatados.
         </p>
@@ -210,17 +213,6 @@ Claude Opus 4.5 nativo                →  52,0%
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section>
-      <h2 className="text-base font-bold mb-3 flex items-center gap-2">
-        <span className="w-1 h-4 rounded-full inline-block" style={{ background: '#ffa657' }} />
-        {title}
-      </h2>
-      <div className="flex flex-col gap-3">{children}</div>
-    </section>
-  );
-}
 
 function GenerationCard({ gen, color, title, tools, desc, example }: {
   gen: string; color: string; title: string; tools: string; desc: string; example: string;
@@ -238,19 +230,3 @@ function GenerationCard({ gen, color, title, tools, desc, example }: {
   );
 }
 
-function CodeBlock({ children }: { children: React.ReactNode }) {
-  return (
-    <pre className="p-4 rounded-lg text-xs overflow-x-auto whitespace-pre-wrap" style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)', color: 'var(--ffv-green)', fontFamily: 'var(--font-roboto-mono)' }}>
-      {children}
-    </pre>
-  );
-}
-
-function Callout({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="p-4 rounded-xl flex gap-3" style={{ background: 'rgba(255,166,87,0.08)', border: '1px solid rgba(255,166,87,0.2)' }}>
-      <span className="text-xl flex-shrink-0">💡</span>
-      <p className="text-sm">{children}</p>
-    </div>
-  );
-}

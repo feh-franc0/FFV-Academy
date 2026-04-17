@@ -1,6 +1,9 @@
 import type { Metadata } from 'next';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
+import { Section, Callout, CodeBlock } from '@/components/article/primitives';
+
+const accent = '#ffa657';
 
 export const metadata: Metadata = {
   title: 'Qual Ferramenta de IA Usar e Quando — FFV Academy',
@@ -9,37 +12,37 @@ export const metadata: Metadata = {
 
 const quiz: QuizQuestion[] = [
   {
-    question: 'Você precisa refatorar um monólito de 500k linhas de código espalhado por 300 arquivos. Qual ferramenta tem a abordagem mais adequada?',
+    question: 'Você tem 2 horas para implementar uma feature de autenticação OAuth2 que exige mexer em 8 arquivos diferentes (middleware, rotas, models, testes). Você prefere trabalhar no terminal. Qual ferramenta maximiza o throughput nesse cenário?',
     options: [
-      'GitHub Copilot — tem acesso a todo o repositório via embeddings',
-      'OpenAI Codex — roda em sandbox isolado sem consumir sua máquina',
-      'Claude Code — lê arquivos explicitamente, executa grep/glob para navegação precisa, e o loop agêntico lida bem com tarefas de múltiplos passos em grande escala',
-      'Kiro — a spec formaliza os requisitos da refatoração',
-    ],
-    correct: 2,
-    explanation: 'Para refatorações grandes, Claude Code tem vantagem: ele lê arquivos explicitamente (não via embeddings aproximados), executa grep para encontrar todos os usos de um padrão com precisão, e o loop agêntico mantém contexto de progresso ao longo de dezenas de arquivos.',
-  },
-  {
-    question: 'Qual é o critério mais importante para decidir entre ferramentas cloud (Codex) e local (Claude Code) em ambientes corporativos?',
-    options: [
-      'Qual tem o modelo mais recente',
-      'Qual é mais barato por token',
-      'Política de privacidade de dados: o código-fonte passa pelos servidores de quem? Isso é aceitável para os dados em questão?',
-      'Qual tem melhor UX',
-    ],
-    correct: 2,
-    explanation: 'Em ambientes corporativos, o código-fonte é propriedade intelectual sensível. Ferramentas cloud (Codex) enviam seu repo para a infraestrutura da OpenAI. Claude Code só envia o texto dos prompts para a API da Anthropic. Para dados regulados (LGPD, HIPAA, PCI), essa distinção pode ser decisiva.',
-  },
-  {
-    question: 'Um desenvolvedor júnior está aprendendo uma codebase nova. Qual ferramenta é mais indicada para o processo de aprendizado?',
-    options: [
-      'Claude Code — tem acesso total ao código',
-      'Cursor ou Copilot — o feedback visual inline ajuda a entender as sugestões no contexto, sem precisar alternar entre terminal e editor',
-      'Amazon Q — é mais seguro',
-      'Kiro — a spec força a documentar antes de implementar',
+      'Cursor — o diff visual facilita revisar cada arquivo mudado e você não precisa sair do editor',
+      'Claude Code — o loop agêntico mantém estado entre arquivos, roda os testes no final de cada iteração, e o contexto longo (200k) aguenta o histórico de toda a sessão sem truncar',
+      'GitHub Copilot — completions inline em cada arquivo são mais rápidas que agentes para tarefas multi-arquivo',
+      'OpenAI Codex — submeter a tarefa assincronamente libera você para trabalhar em outra coisa enquanto ele gera o PR',
     ],
     correct: 1,
-    explanation: 'Para aprendizado, contexto visual é fundamental. IDEs como Cursor mostram as sugestões de IA diretamente no código com syntax highlighting, explicações inline e diffs coloridos. O desenvolvedor vê exatamente o que está sendo mudado, reduzindo a fricção de aceitar código sem entender.',
+    explanation: 'Para tarefas multi-arquivo com dependências cruzadas, Claude Code no terminal é superior: ele lê arquivos explicitamente (não via embeddings), executa os testes após cada mudança e vê o resultado, mantém o plano completo no contexto. Cursor é excelente para feedback visual, mas o fluxo de terminal agêntico ganha em tarefas onde o modelo precisa iterar sobre erros de compilação/teste.',
+  },
+  {
+    question: 'No SWE-bench Pro (novembro 2025), o mesmo modelo base (Claude Opus) testado em três harnesses diferentes obteve 45.9%, 50.1% e 55.4%. O que isso prova sobre a escolha de ferramenta?',
+    options: [
+      'Que o SWE-bench não é confiável e resultados variam aleatoriamente entre execuções',
+      'Que modelos mais novos sempre superam modelos mais antigos — o resultado de 55.4% é do modelo mais recente',
+      'Que o harness (scaffold de agente) impacta o resultado em quase 10 pontos percentuais com o MESMO modelo — a infraestrutura importa tanto quanto o modelo',
+      'Que Claude Code trapaceia nos benchmarks por ter acesso a dados de treino do SWE-bench',
+    ],
+    correct: 2,
+    explanation: 'Mesmo modelo, mesmo benchmark, três harnesses: spread de 9.5 pontos. Isso destrói o argumento de que "escolher o modelo certo é tudo". O loop de agente, o edit format, o turn budget e o context management do scaffold explicam mais do resultado do que a diferença entre modelos frontier — que em abril/2026 têm apenas 0.8 pontos de spread no SWE-bench Verified.',
+  },
+  {
+    question: 'Sua equipe usa GitHub Copilot para refactoring de uma codebase de 200k linhas em Python. Os devs reclamam que Copilot "esquece" o contexto entre arquivos e sugere o mesmo padrão problemático que vocês estão tentando remover. Qual é a limitação técnica raiz?',
+    options: [
+      'Copilot tem bugs na versão atual que causam sugestões desatualizadas — atualizar resolve',
+      'Copilot é um IDE completion tool: o contexto é janela local (arquivo atual + alguns adjacentes via embeddings). Ele não mantém estado de uma "sessão de refactoring" — cada completão é independente',
+      'Python não é bem suportado pelo Copilot — migrar para TypeScript resolve o problema',
+      'É necessário upgradar para o Copilot Enterprise que tem context window maior',
+    ],
+    correct: 1,
+    explanation: 'Copilot (e a maioria dos IDE completions) opera com contexto local: arquivo aberto + vizinhos via embeddings semânticos. Para um refactoring que exige consciência de padrão em todo o codebase, você precisa de um agente que navegue explicitamente os arquivos relevantes (grep para ocorrências, leia cada um, entenda o padrão). Essa é exatamente a diferença entre IDE completion e agente com loop.',
   },
 ];
 
@@ -69,7 +72,7 @@ function Content() {
         Depois de entender como cada ferramenta funciona por dentro, a pergunta prática: qual usar? A resposta honesta é "depende" — mas depende de coisas específicas e mensuráveis. Sem achismo.
       </p>
 
-      <Section title="O erro mais comum: escolher pela hype">
+      <Section accent={accent} title="O erro mais comum: escolher pela hype">
         <p>
           A maioria das comparações online é baseada em <em>qual ferramenta completou este benchmark específico mais rápido</em>. Isso é quase inútil para decidir o que usar no seu trabalho. O que importa é diferente:
         </p>
@@ -88,7 +91,7 @@ function Content() {
         </div>
       </Section>
 
-      <Section title="Matriz de decisão por contexto">
+      <Section accent={accent} title="Matriz de decisão por contexto">
         <div className="flex flex-col gap-4">
           <DecisionBlock
             scenario="Tarefa longa e complexa (feature completa, refatoração grande)"
@@ -166,7 +169,7 @@ function Content() {
         </div>
       </Section>
 
-      <Section title="Os benchmarks: o que os números mostram em 2026">
+      <Section accent={accent} title="Os benchmarks: o que os números mostram em 2026">
         <p>
           Em vez de opinião, dados públicos. Abril/2026:
         </p>
@@ -220,7 +223,7 @@ function Content() {
         </Callout>
       </Section>
 
-      <Section title="Mitos comuns (e a realidade dos dados)">
+      <Section accent={accent} title="Mitos comuns (e a realidade dos dados)">
         <div className="p-4 rounded-xl" style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}>
           <div className="flex flex-col gap-3 text-xs">
             {[
@@ -240,7 +243,7 @@ function Content() {
         </div>
       </Section>
 
-      <Section title="Custo real: além do preço por token">
+      <Section accent={accent} title="Custo real: além do preço por token">
         <p>
           O custo de uma ferramenta de coding agent vai além do preço da API. A conta completa:
         </p>
@@ -258,7 +261,7 @@ function Content() {
         </p>
       </Section>
 
-      <Section title="Recomendação prática: não escolha um">
+      <Section accent={accent} title="Recomendação prática: não escolha um">
         <p>
           A conclusão contraintuitiva depois de entender todas as ferramentas: as melhores equipes de engenharia não escolhem <em>uma</em> ferramenta — elas usam ferramentas diferentes para contextos diferentes.
         </p>
@@ -283,18 +286,6 @@ function Content() {
         </Callout>
       </Section>
     </div>
-  );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section>
-      <h2 className="text-base font-bold mb-3 flex items-center gap-2">
-        <span className="w-1 h-4 rounded-full inline-block" style={{ background: '#ffa657' }} />
-        {title}
-      </h2>
-      <div className="flex flex-col gap-3">{children}</div>
-    </section>
   );
 }
 
@@ -328,19 +319,3 @@ function DecisionBlock({ scenario, winner, winnerColor, why, alternatives }: {
   );
 }
 
-function CodeBlock({ children }: { children: React.ReactNode }) {
-  return (
-    <pre className="p-4 rounded-lg text-xs overflow-x-auto whitespace-pre-wrap" style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)', color: 'var(--ffv-green)', fontFamily: 'var(--font-roboto-mono)' }}>
-      {children}
-    </pre>
-  );
-}
-
-function Callout({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="p-4 rounded-xl flex gap-3" style={{ background: 'rgba(255,166,87,0.08)', border: '1px solid rgba(255,166,87,0.2)' }}>
-      <span className="text-xl flex-shrink-0">💡</span>
-      <p className="text-sm">{children}</p>
-    </div>
-  );
-}

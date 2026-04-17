@@ -13,6 +13,19 @@ export interface StudyDay {
   modulesCompleted: number;
 }
 
+export interface LastArticle {
+  slug: string;
+  title: string;
+  icon: string;
+  trailName: string;
+  trailColor: string;
+  readTime: number;
+  xp: number;
+  href: string;
+  at: string;       // ISO timestamp
+  progress: number; // 0..1, scroll read ratio
+}
+
 export interface GameState {
   xp: number;
   level: number;
@@ -29,6 +42,11 @@ export interface GameState {
   freezes: number;          // 0-2 streak freezes in bank
   dailyGoal: number;        // default 3 cards/day
   lastReviewDate: string | null;
+  // UX v2 (personalization + continuity)
+  lastArticle: LastArticle | null;
+  preferredHub: string | null;    // hub slug chosen at onboarding
+  onboardedAt: string | null;     // ISO
+  articleProgress: Record<string, number>; // slug → 0..1
 }
 
 export interface CompleteModuleResult {
@@ -54,6 +72,10 @@ const DEFAULT_STATE: GameState = {
   freezes: 0,
   dailyGoal: 3,
   lastReviewDate: null,
+  lastArticle: null,
+  preferredHub: null,
+  onboardedAt: null,
+  articleProgress: {},
 };
 
 export function loadState(): GameState {
@@ -71,6 +93,10 @@ export function loadState(): GameState {
         freezes: typeof parsed.freezes === 'number' ? parsed.freezes : 0,
         dailyGoal: typeof parsed.dailyGoal === 'number' ? parsed.dailyGoal : 3,
         lastReviewDate: typeof parsed.lastReviewDate === 'string' ? parsed.lastReviewDate : null,
+        lastArticle: parsed.lastArticle && typeof parsed.lastArticle === 'object' ? parsed.lastArticle : null,
+        preferredHub: typeof parsed.preferredHub === 'string' ? parsed.preferredHub : null,
+        onboardedAt: typeof parsed.onboardedAt === 'string' ? parsed.onboardedAt : null,
+        articleProgress: parsed.articleProgress && typeof parsed.articleProgress === 'object' ? parsed.articleProgress : {},
       };
     }
   } catch {}
@@ -369,6 +395,51 @@ export function submitCardReview(cardId: string, outcome: ReviewQuality): Review
 export function setDailyGoal(goal: number) {
   const state = loadState();
   saveState({ ...state, dailyGoal: Math.max(1, Math.min(20, Math.round(goal))) });
+}
+
+export function recordArticleVisit(meta: Omit<LastArticle, 'at' | 'progress'> & { progress?: number }) {
+  const state = loadState();
+  const existingProgress = state.articleProgress[meta.slug] ?? 0;
+  const progress = Math.max(existingProgress, meta.progress ?? 0.02);
+  const lastArticle: LastArticle = {
+    ...meta,
+    progress,
+    at: new Date().toISOString(),
+  };
+  saveState({
+    ...state,
+    lastArticle,
+    articleProgress: { ...state.articleProgress, [meta.slug]: progress },
+  });
+}
+
+export function updateArticleProgress(slug: string, progress: number) {
+  const state = loadState();
+  const clamped = Math.max(0, Math.min(1, progress));
+  const existing = state.articleProgress[slug] ?? 0;
+  if (clamped <= existing + 0.01) return;
+  const next: GameState = {
+    ...state,
+    articleProgress: { ...state.articleProgress, [slug]: clamped },
+  };
+  if (state.lastArticle && state.lastArticle.slug === slug) {
+    next.lastArticle = { ...state.lastArticle, progress: clamped, at: new Date().toISOString() };
+  }
+  saveState(next);
+}
+
+export function completeOnboarding(preferredHub: string | null) {
+  const state = loadState();
+  saveState({
+    ...state,
+    onboardedAt: new Date().toISOString(),
+    preferredHub,
+  });
+}
+
+export function setPreferredHub(preferredHub: string | null) {
+  const state = loadState();
+  saveState({ ...state, preferredHub });
 }
 
 // Todas as trilhas liberadas — o leitor escolhe por onde começa

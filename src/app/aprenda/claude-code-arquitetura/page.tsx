@@ -1,6 +1,9 @@
 import type { Metadata } from 'next';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
+import { Section, Callout, CodeBlock } from '@/components/article/primitives';
+
+const accent = '#ffa657';
 
 export const metadata: Metadata = {
   title: 'Claude Code: Arquitetura por Dentro — FFV Academy',
@@ -69,7 +72,7 @@ function Content() {
         Em março-abril de 2026, partes significativas do código-fonte do Claude Code vazaram publicamente. Isso transformou o que era especulação em arquitetura documentada. Este módulo usa essas fontes (além da documentação oficial da Anthropic) para descrever o que está de fato por trás do CLI, sem marketing.
       </p>
 
-      <Section title="Separação Session / Harness / Sandbox">
+      <Section accent={accent} title="Separação Session / Harness / Sandbox">
         <p>
           O código organiza a execução em três camadas distintas — essa separação é o que permite o mesmo binário funcionar em terminal local, IDE, CI/CD e como SDK:
         </p>
@@ -90,7 +93,7 @@ function Content() {
         </p>
       </Section>
 
-      <Section title="O catálogo real de ferramentas">
+      <Section accent={accent} title="O catálogo real de ferramentas">
         <p>
           A documentação oficial agrupa as ferramentas em cinco categorias. No código vazado os schemas completos ocupam cerca de 29.000 linhas:
         </p>
@@ -111,7 +114,7 @@ function Content() {
         </div>
       </Section>
 
-      <Section title="Auto-compact: por que sessões de horas não estouram contexto">
+      <Section accent={accent} title="Auto-compact: por que sessões de horas não estouram contexto">
         <p>
           O detalhe técnico mais importante do Claude Code — e o que explica por que ele vence em tarefas longas — é o <strong>auto-compact</strong>. Quando a conversa chega a ≈98% da janela do modelo, o harness dispara:
         </p>
@@ -141,7 +144,7 @@ if (contextTokens >= windowSize * 0.98) {
         </p>
       </Section>
 
-      <Section title="Prompt caching: onde os 60-90% de latência somem">
+      <Section accent={accent} title="Prompt caching: onde os 60-90% de latência somem">
         <p>
           O system prompt do Claude Code é pesado — dezenas de milhares de tokens entre instruções, definições de ferramentas e CLAUDE.md carregados. Mandar tudo de novo a cada turno seria insustentável.
         </p>
@@ -166,7 +169,7 @@ if (contextTokens >= windowSize * 0.98) {
         </Callout>
       </Section>
 
-      <Section title="Tier 1 vs Tier 2: o modelo de permissões">
+      <Section accent={accent} title="Tier 1 vs Tier 2: o modelo de permissões">
         <p>
           Cada ferramenta é classificada por blast radius. O harness valida a tier antes de executar — é o que permite você rodar Claude Code em CI sem se preocupar que ele vai dar <code className="px-1 rounded text-xs" style={{ background: 'var(--ffv-bg3)', color: 'var(--ffv-red)' }}>rm -rf</code> por acidente.
         </p>
@@ -189,7 +192,7 @@ Plan Mode       → Só Tier 1. Produz plano sem executar
 Auto (yolo)     → Autoriza tudo. Use em CI ou sandbox isolado`}</CodeBlock>
       </Section>
 
-      <Section title="MCP: ferramentas sem recompilar o agente">
+      <Section accent={accent} title="MCP: ferramentas sem recompilar o agente">
         <p>
           O Claude Code implementa o <strong>Model Context Protocol</strong>, padrão aberto da Anthropic para expor ferramentas externas ao agente sem precisar alterar o binário. Você configura um servidor MCP em <code className="px-1 rounded text-xs" style={{ background: 'var(--ffv-bg3)', color: 'var(--ffv-green)' }}>~/.claude/mcp.json</code> e as ferramentas aparecem no próximo turno.
         </p>
@@ -198,7 +201,7 @@ Auto (yolo)     → Autoriza tudo. Use em CI ou sandbox isolado`}</CodeBlock>
         </p>
       </Section>
 
-      <Section title="Fluxo completo de um turno">
+      <Section accent={accent} title="Fluxo completo de um turno">
         <p>
           Quando você escreve <code className="px-1 rounded text-xs" style={{ background: 'var(--ffv-bg3)', color: 'var(--ffv-green)' }}>claude "adiciona validação de email no formulário"</code>, o QueryEngine faz:
         </p>
@@ -220,7 +223,7 @@ Auto (yolo)     → Autoriza tudo. Use em CI ou sandbox isolado`}</CodeBlock>
 3. SESSION: persiste histórico serializado em ~/.claude/`}</CodeBlock>
       </Section>
 
-      <Section title="CLAUDE.md hierárquico: o canal pra mudar comportamento">
+      <Section accent={accent} title="CLAUDE.md hierárquico: o canal pra mudar comportamento">
         <p>
           O CLAUDE.md não é um arquivo só — o harness busca e empilha do repo até o cwd. Isso permite convenções por subprojeto:
         </p>
@@ -239,7 +242,7 @@ Auto (yolo)     → Autoriza tudo. Use em CI ou sandbox isolado`}</CodeBlock>
         </Callout>
       </Section>
 
-      <Section title="Modelos disponíveis e economia de roteamento">
+      <Section accent={accent} title="Modelos disponíveis e economia de roteamento">
         <p>
           O Claude Code é desacoplado do modelo. O usuário pode escolher:
         </p>
@@ -267,31 +270,3 @@ Auto (yolo)     → Autoriza tudo. Use em CI ou sandbox isolado`}</CodeBlock>
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section>
-      <h2 className="text-base font-bold mb-3 flex items-center gap-2">
-        <span className="w-1 h-4 rounded-full inline-block" style={{ background: '#ffa657' }} />
-        {title}
-      </h2>
-      <div className="flex flex-col gap-3">{children}</div>
-    </section>
-  );
-}
-
-function CodeBlock({ children }: { children: React.ReactNode }) {
-  return (
-    <pre className="p-4 rounded-lg text-xs overflow-x-auto whitespace-pre-wrap" style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)', color: 'var(--ffv-green)', fontFamily: 'var(--font-roboto-mono)' }}>
-      {children}
-    </pre>
-  );
-}
-
-function Callout({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="p-4 rounded-xl flex gap-3" style={{ background: 'rgba(255,166,87,0.08)', border: '1px solid rgba(255,166,87,0.2)' }}>
-      <span className="text-xl flex-shrink-0">💡</span>
-      <p className="text-sm">{children}</p>
-    </div>
-  );
-}
