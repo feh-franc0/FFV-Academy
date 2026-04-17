@@ -26,6 +26,16 @@ export function useGameState() {
 
   useEffect(() => {
     setState(loadState());
+    // Sincroniza estado entre tabs abertas simultaneamente
+    function handleStorageChange(e: StorageEvent) {
+      if (e.key === 'ffv_academy' && e.newValue) {
+        try {
+          setState(loadState());
+        } catch {}
+      }
+    }
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
   const refresh = useCallback(() => {

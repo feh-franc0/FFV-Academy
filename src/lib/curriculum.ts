@@ -1984,13 +1984,18 @@ export const CURRICULUM: Trail[] = [
 ];
 
 export const LEVELS = [
-  { level: 1, name: 'Curioso',         xpMin: 0,    xpMax: 100,  color: '#8b949e', icon: '🌱' },
-  { level: 2, name: 'Aprendiz',        xpMin: 100,  xpMax: 250,  color: '#58a6ff', icon: '📚' },
-  { level: 3, name: 'Praticante',      xpMin: 250,  xpMax: 500,  color: '#3fb950', icon: '⚡' },
-  { level: 4, name: 'Desenvolvedor',   xpMin: 500,  xpMax: 800,  color: '#ffa657', icon: '🔧' },
-  { level: 5, name: 'Especialista',    xpMin: 800,  xpMax: 1200, color: '#d2a8ff', icon: '🧠' },
-  { level: 6, name: 'Arquiteto de IA', xpMin: 1200, xpMax: 1800, color: '#f78166', icon: '🏗️' },
-  { level: 7, name: 'Mestre da IA',    xpMin: 1800, xpMax: 9999, color: '#ffa657', icon: '🚀' },
+  { level: 1,  name: 'Curioso',              xpMin: 0,    xpMax: 100,  color: '#8b949e', icon: '🌱' },
+  { level: 2,  name: 'Aprendiz',             xpMin: 100,  xpMax: 250,  color: '#58a6ff', icon: '📚' },
+  { level: 3,  name: 'Praticante',           xpMin: 250,  xpMax: 500,  color: '#3fb950', icon: '⚡' },
+  { level: 4,  name: 'Desenvolvedor',        xpMin: 500,  xpMax: 800,  color: '#ffa657', icon: '🔧' },
+  { level: 5,  name: 'Especialista',         xpMin: 800,  xpMax: 1200, color: '#d2a8ff', icon: '🧠' },
+  { level: 6,  name: 'Arquiteto de IA',      xpMin: 1200, xpMax: 1800, color: '#f78166', icon: '🏗️' },
+  { level: 7,  name: 'Mestre da IA',         xpMin: 1800, xpMax: 2600, color: '#ffa657', icon: '🚀' },
+  { level: 8,  name: 'Engenheiro Sênior',    xpMin: 2600, xpMax: 3800, color: '#ff7eb6', icon: '💡' },
+  { level: 9,  name: 'Arquiteto de Sistemas',xpMin: 3800, xpMax: 5500, color: '#79c0ff', icon: '🏛️' },
+  { level: 10, name: 'Principal Engineer',   xpMin: 5500, xpMax: 7500, color: '#e3b341', icon: '🌟' },
+  { level: 11, name: 'Staff Engineer',       xpMin: 7500, xpMax: 9500, color: '#3fb950', icon: '⚜️' },
+  { level: 12, name: 'Distinguished Engineer',xpMin: 9500, xpMax: 99999, color: '#58a6ff', icon: '👑' },
 ];
 
 export interface BadgeDef {
@@ -2023,9 +2028,20 @@ export const BADGES_DEF: BadgeDef[] = [
   { id: 'trail14_done',  name: 'Database Engineer',    icon: '🗃️', desc: 'Completou a trilha de SQL & Databases',                  xpBonus: 225 },
   { id: 'trail15_done',  name: 'Systems Thinker',      icon: '🔩', desc: 'Completou a trilha Como o Computador Funciona',           xpBonus: 225 },
   { id: 'trail16_done',  name: 'Network Engineer',     icon: '🌐', desc: 'Completou a trilha de Redes & Web',                      xpBonus: 225 },
-  { id: 'all_done',       name: 'Mestre Completo',      icon: '👑', desc: 'Completou TODAS as trilhas',           xpBonus: 500 },
-  { id: 'speed_run',      name: 'Speed Run',            icon: '⚡', desc: 'Completou 3 módulos no mesmo dia',     xpBonus: 50  },
-  { id: 'curious',        name: 'Muito Curioso',        icon: '🔍', desc: 'Revisitou um módulo já concluído',     xpBonus: 5   },
+  { id: 'all_done',            name: 'Mestre Completo',        icon: '👑', desc: 'Completou TODAS as trilhas',                        xpBonus: 500 },
+  { id: 'speed_run',           name: 'Speed Run',              icon: '⚡', desc: 'Completou 3 módulos no mesmo dia',                  xpBonus: 50  },
+  { id: 'curious',             name: 'Muito Curioso',          icon: '🔍', desc: 'Revisitou um módulo já concluído',                  xpBonus: 5   },
+  // Badges de maestria progressiva
+  { id: 'perfect_5',          name: 'Precisão Cirúrgica',     icon: '🎯', desc: '5 quizzes perfeitos acumulados',                    xpBonus: 50  },
+  { id: 'perfect_20',         name: 'Sniper do Conhecimento', icon: '🏹', desc: '20 quizzes perfeitos acumulados',                   xpBonus: 150 },
+  { id: 'cards_50',           name: 'Revisor Dedicado',       icon: '📋', desc: 'Revisou 50 cards no SRS',                           xpBonus: 75  },
+  { id: 'cards_200',          name: 'Mestre da Revisão',      icon: '🔁', desc: 'Revisou 200 cards no SRS',                          xpBonus: 200 },
+  { id: 'modules_25',         name: 'Disciplinado',           icon: '📖', desc: 'Completou 25 módulos',                               xpBonus: 100 },
+  { id: 'modules_75',         name: 'Estudioso',              icon: '📚', desc: 'Completou 75 módulos',                               xpBonus: 250 },
+  { id: 'two_trails_done',    name: 'Multidisciplinar',       icon: '🎓', desc: 'Completou 2 trilhas completas',                     xpBonus: 150 },
+  { id: 'five_trails_done',   name: 'Polímata Tech',          icon: '🌐', desc: 'Completou 5 trilhas completas',                     xpBonus: 400 },
+  { id: 'streak_60',          name: '2 Meses Imparável',      icon: '🔥', desc: '60 dias de estudo consecutivos',                    xpBonus: 500 },
+  { id: 'marathon',           name: 'Maratonista',            icon: '🏃', desc: '5 módulos em um único dia',                         xpBonus: 100 },
 ];
 
 export function getLevelInfo(xp: number) {

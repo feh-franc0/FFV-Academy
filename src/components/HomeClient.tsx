@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import type { CSSProperties } from 'react';
-import { CURRICULUM, HUBS, getHubStats, getHubTrails, type Hub, type Module, type Trail } from '@/lib/curriculum';
+import { CURRICULUM, HUBS, LEVELS, getHubStats, getHubTrails, type Hub, type Module, type Trail } from '@/lib/curriculum';
 import { useGameState } from '@/hooks/useGameState';
 import { HabitDashboard } from '@/components/HabitDashboard';
 import { ContinueCard } from '@/components/ContinueCard';
@@ -29,20 +29,77 @@ export function HomeClient() {
   const featured =
     ALL_POSTS.find(p => p.slug === 'qual-coding-agent-usar') ?? ALL_POSTS[ALL_POSTS.length - 1];
 
+  // Determina se é first-visit (nunca completou nada e nunca fez onboarding)
+  const isFirstVisit = state !== null && state.completedModules.length === 0 && !state.onboardedAt;
+  // Determina se é returning user (já tem progresso)
+  const isReturning = state !== null && state.completedModules.length > 0;
+
   return (
     <div style={{ background: 'var(--ffv-bg)', color: 'var(--foreground)' }}>
       <Hero totalArticles={totalArticles} />
-      <ContinueCard />
-      <HabitDashboard />
+
+      {/* RETURN-VISIT: prioriza continuidade */}
+      {isReturning && (
+        <>
+          <ContinueCard />
+          <HabitDashboard />
+        </>
+      )}
+
+      {/* FIRST-VISIT: guia ao primeiro passo */}
+      {isFirstVisit && <FirstVisitGuide />}
+
       <StartingPointSection completedSlugs={state?.completedModules ?? []} />
       <FeaturedArticle post={featured} />
       <HubsSection completedSlugs={state?.completedModules ?? []} />
       <TrailsSection completedSlugs={state?.completedModules ?? []} />
+
+      {/* AllPosts com link para /explorar para não sobrecarregar a home */}
       <AllPostsSection posts={ALL_POSTS} featuredSlug={featured.slug} />
+
       <LearnGameSection />
       <AuthorSection />
+      <NewsletterSection />
       <FinalCta state={state} />
     </div>
+  );
+}
+
+/* ─────────────────────────────────────────────
+   FIRST-VISIT GUIDE — orienta o novo visitante
+───────────────────────────────────────────── */
+function FirstVisitGuide() {
+  const hubs = HUBS.slice(0, 3);
+  return (
+    <section className="px-6 py-10 max-w-5xl mx-auto">
+      <p className="text-xs font-mono uppercase tracking-widest mb-4" style={{ color: 'var(--ffv-muted)' }}>
+        Por onde começar?
+      </p>
+      <h2 className="text-xl font-bold mb-2">Escolha sua área de interesse</h2>
+      <p className="text-sm mb-6" style={{ color: 'var(--ffv-muted)' }}>
+        Cada hub reúne trilhas relacionadas. Você pode estudar em qualquer ordem.
+      </p>
+      <div className="grid gap-3 sm:grid-cols-3">
+        {hubs.map(hub => (
+          <Link
+            key={hub.id}
+            href={hub.href}
+            className="block p-4 rounded-xl transition-all"
+            style={{
+              background: 'var(--ffv-bg2)',
+              border: '1px solid var(--ffv-border)',
+            }}
+          >
+            <span className="text-2xl">{hub.icon}</span>
+            <p className="font-semibold mt-2 mb-1" style={{ fontSize: 14 }}>{hub.name}</p>
+            <p className="text-xs leading-5" style={{ color: 'var(--ffv-muted)' }}>{hub.tagline}</p>
+            <p className="text-xs mt-3 font-medium" style={{ color: hub.color }}>
+              {hub.trailIds.length} trilhas →
+            </p>
+          </Link>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -89,7 +146,7 @@ function Hero({ totalArticles }: { totalArticles: number }) {
             maxWidth: 900,
           }}
         >
-          Entenda a IA por dentro.
+          Engenharia de software
           <br />
           <span
             style={{
@@ -99,7 +156,7 @@ function Hero({ totalArticles }: { totalArticles: number }) {
               backgroundClip: 'text',
             }}
           >
-            Não por fora.
+            para a era da IA.
           </span>
         </h1>
 
@@ -112,16 +169,16 @@ function Hero({ totalArticles }: { totalArticles: number }) {
             marginBottom: 40,
           }}
         >
-          Um blog técnico sobre Inteligência Artificial escrito por quem constrói software há mais de
-          uma década. Zero hype, zero clickbait. Arquitetura real, dados públicos, decisões testadas.
-          Cada artigo vira XP na sua trilha de aprendizado.
+          IA, AWS, DevOps e Sistemas Distribuídos explicados por dentro — escritos por quem constrói
+          software há mais de uma década. Zero hype, zero clickbait. Arquitetura real, dados
+          públicos, decisões testadas. Cada artigo vira XP na sua trilha de aprendizado.
         </p>
 
         <div className="flex items-center gap-3 flex-wrap mb-14">
-          <PrimaryCTA href="/fundamentos-da-ia" color="var(--ffv-blue)">
-            Começar do zero
+          <PrimaryCTA href="/ia" color="var(--ffv-blue)">
+            Explorar trilhas
           </PrimaryCTA>
-          <GhostCTA href="/ferramentas-ia-codigo">Ver trilha mais recente →</GhostCTA>
+          <GhostCTA href="/progresso">Ver meu progresso →</GhostCTA>
         </div>
 
         <HeroMetrics totalArticles={totalArticles} />
@@ -1099,15 +1156,7 @@ function LearnGameSection() {
     { n: '03', icon: '⚡', title: 'Ganhe XP', desc: 'Curioso → Aprendiz → Praticante → ... → Mestre. Cada post te aproxima do topo.', color: 'var(--ffv-orange)' },
     { n: '04', icon: '🔥', title: 'Mantenha o streak', desc: 'Consistência é o único segredo real. Agora com recompensa visível.', color: 'var(--ffv-green)' },
   ];
-  const levels = [
-    { icon: '🌱', name: 'Curioso', color: '#8b949e' },
-    { icon: '📚', name: 'Aprendiz', color: '#58a6ff' },
-    { icon: '⚡', name: 'Praticante', color: '#3fb950' },
-    { icon: '🔧', name: 'Desenvolvedor', color: '#ffa657' },
-    { icon: '🧠', name: 'Especialista', color: '#d2a8ff' },
-    { icon: '🏗️', name: 'Arquiteto', color: '#f78166' },
-    { icon: '🚀', name: 'Mestre da IA', color: '#ffa657' },
-  ];
+  const levels = LEVELS.map(l => ({ icon: l.icon, name: l.name, color: l.color }));
 
   return (
     <section className="px-6 py-20" style={{ borderTop: '1px solid var(--ffv-border)' }}>
@@ -1279,6 +1328,52 @@ function AuthorSection() {
             </blockquote>
           </div>
         </div>
+      </div>
+    </section>
+  );
+}
+
+/* ─────────────────────────────────────────────
+   NEWSLETTER — assinatura opcional por email
+───────────────────────────────────────────── */
+function NewsletterSection() {
+  return (
+    <section
+      className="px-6 py-16"
+      style={{ borderTop: '1px solid var(--ffv-border)', background: 'var(--ffv-bg2)' }}
+    >
+      <div className="max-w-2xl mx-auto text-center">
+        <SectionLabel color="var(--ffv-green)">NEWSLETTER</SectionLabel>
+        <h2
+          style={{
+            fontSize: 'clamp(1.4rem, 2.5vw, 1.8rem)',
+            fontWeight: 800,
+            letterSpacing: '-0.02em',
+            marginTop: 8,
+            marginBottom: 12,
+          }}
+        >
+          Um artigo por semana. Sem spam.
+        </h2>
+        <p style={{ fontSize: 14, color: 'var(--ffv-muted)', lineHeight: 1.7, marginBottom: 24 }}>
+          Cada semana, um novo artigo técnico — IA, engenharia, AWS, sistemas distribuídos.
+          Direto no seu email. Grátis para sempre.
+        </p>
+        <a
+          href="https://buttondown.com/fernandofrancovalle"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-2 px-6 py-3 rounded-xl font-semibold text-sm transition-opacity hover:opacity-80"
+          style={{ background: 'var(--ffv-green)', color: '#0d1117' }}
+        >
+          Quero receber →
+        </a>
+        <p
+          className="font-mono text-xs mt-4"
+          style={{ color: 'var(--ffv-muted)', letterSpacing: '0.04em' }}
+        >
+          SEM SPAM · CANCELE QUANDO QUISER
+        </p>
       </div>
     </section>
   );

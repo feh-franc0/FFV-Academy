@@ -29,12 +29,12 @@ const robotoMono = Roboto_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'FFV Academy — Aprenda IA do Zero ao Avançado',
-  description: 'Trilha de aprendizado gamificada sobre Inteligência Artificial. Do conceito básico até arquiteturas avançadas. Aprenda com XP, badges e progresso visual.',
-  keywords: 'aprender inteligencia artificial, trilha IA, curso IA gamificado, LLM aprender, machine learning iniciantes',
+  title: 'FFV Academy — Escola de Engenharia para a Era da IA',
+  description: 'Aprenda IA, engenharia de software, AWS e sistemas distribuídos como engenheiro — não como consumidor de hype. Trilhas gamificadas com XP, quiz e revisão espaçada. 100% gratuito, sem cadastro.',
+  keywords: 'escola engenharia software, aprender inteligencia artificial, trilha IA, engenharia era ia, LLM aprender, machine learning devs, aws cloud practitioner, sistemas distribuidos',
   openGraph: {
-    title: 'FFV Academy — Aprenda IA do Zero ao Avançado',
-    description: 'Trilha gamificada de IA. XP, badges, progresso visual. 100% gratuito, sem cadastro.',
+    title: 'FFV Academy — Escola de Engenharia para a Era da IA',
+    description: 'IA, AWS, DevOps e Engenharia de Software explicados por dentro. Zero hype, arquitetura real. 16 trilhas gamificadas, 100% gratuito.',
     type: 'website',
     url: 'https://fernandofrancovalle.com',
   },
@@ -59,6 +59,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="pt-BR" className={`${inter.variable} ${poppins.variable} ${robotoMono.variable}`} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        {/* Umami Analytics — privacy-first, sem cookies, GDPR-ok */}
+        <script
+          defer
+          src="https://cloud.umami.is/script.js"
+          data-website-id="ffv-academy"
+          data-domains="fernandofrancovalle.com"
+          data-do-not-track="true"
+        />
       </head>
       <body className="min-h-screen flex flex-col" style={{ background: 'var(--ffv-bg)', color: 'var(--foreground)' }}>
         <TooltipProvider>

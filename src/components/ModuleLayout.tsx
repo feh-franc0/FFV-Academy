@@ -87,7 +87,8 @@ export function ModuleLayout({
   function handleSubmit() {
     const score = answers.filter((a, i) => a === quiz[i].correct).length;
     submitQuiz(slug, score, quiz.length);
-    const r = markComplete({ slug, title, trailColor, readTime, quiz });
+    const quizScore = quiz.length > 0 ? score / quiz.length : 1;
+    const r = markComplete({ slug, title, trailColor, readTime, quiz, quizScore });
     setResult(r);
     setSubmitted(true);
 

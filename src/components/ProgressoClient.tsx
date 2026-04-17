@@ -1,7 +1,9 @@
 'use client';
 
 import Link from 'next/link';
+import { useRef } from 'react';
 import { useGameState } from '@/hooks/useGameState';
+import { exportState, importState } from '@/lib/engine';
 import {
   BADGES_DEF,
   CURRICULUM,
@@ -30,7 +32,37 @@ const TRAIL_HREF: Record<string, string> = {
 };
 
 export function ProgressoClient() {
-  const { state, levelInfo, dueCards } = useGameState();
+  const { state, levelInfo, dueCards, refresh } = useGameState();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  function handleExport() {
+    const json = exportState();
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ffv-academy-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const json = ev.target?.result as string;
+      const ok = importState(json);
+      if (ok) {
+        refresh();
+        alert('Dados importados com sucesso!');
+      } else {
+        alert('Arquivo inválido ou corrompido. Tente outro backup.');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  }
 
   if (!state) {
     return (
@@ -131,6 +163,53 @@ export function ProgressoClient() {
               </div>
             );
           })}
+        </div>
+      </section>
+
+      <section className="max-w-5xl mx-auto px-6 pb-20">
+        <SectionLabel>DADOS</SectionLabel>
+        <div
+          className="mt-4 p-6 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center gap-6"
+          style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}
+        >
+          <div className="flex-1 min-w-0">
+            <p style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Backup do seu progresso</p>
+            <p style={{ fontSize: 12, color: 'var(--ffv-muted)', lineHeight: 1.6 }}>
+              Seu progresso fica salvo no navegador. Exporte para não perder nada ao limpar o cache
+              ou trocar de dispositivo.
+            </p>
+          </div>
+          <div className="flex items-center gap-3 flex-shrink-0">
+            <button
+              onClick={handleExport}
+              className="px-4 py-2 rounded-lg font-semibold text-sm transition-opacity hover:opacity-80"
+              style={{
+                background: 'color-mix(in srgb, var(--ffv-blue) 15%, transparent)',
+                border: '1px solid color-mix(in srgb, var(--ffv-blue) 40%, transparent)',
+                color: 'var(--ffv-blue)',
+              }}
+            >
+              Exportar backup
+            </button>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="px-4 py-2 rounded-lg font-semibold text-sm transition-opacity hover:opacity-80"
+              style={{
+                background: 'color-mix(in srgb, var(--ffv-muted) 10%, transparent)',
+                border: '1px solid var(--ffv-border)',
+                color: 'var(--ffv-muted)',
+              }}
+            >
+              Importar backup
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".json"
+              className="hidden"
+              onChange={handleImport}
+            />
+          </div>
         </div>
       </section>
     </div>

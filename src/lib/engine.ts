@@ -27,6 +27,7 @@ export interface LastArticle {
 }
 
 export interface GameState {
+  schemaVersion: number;    // incrementar a cada migração destrutiva
   xp: number;
   level: number;
   streak: number;
@@ -49,6 +50,20 @@ export interface GameState {
   articleProgress: Record<string, number>; // slug → 0..1
 }
 
+const CURRENT_SCHEMA = 1;
+
+/** Migra estado antigo (sem schemaVersion) para versão atual. */
+function migrateState(parsed: Record<string, unknown>): Partial<GameState> {
+  const version = typeof parsed.schemaVersion === 'number' ? parsed.schemaVersion : 0;
+  let state = { ...parsed } as Record<string, unknown>;
+  // v0 → v1: sem mudanças destrutivas, só adiciona schemaVersion
+  if (version < 1) {
+    state = { ...state, schemaVersion: 1 };
+  }
+  // v1 → v2: adicionar aqui no futuro
+  return state as Partial<GameState>;
+}
+
 export interface CompleteModuleResult {
   xpGained: number;
   newBadges: string[];
@@ -58,6 +73,7 @@ export interface CompleteModuleResult {
 }
 
 const DEFAULT_STATE: GameState = {
+  schemaVersion: CURRENT_SCHEMA,
   xp: 0,
   level: 1,
   streak: 0,
@@ -83,30 +99,69 @@ export function loadState(): GameState {
   try {
     const raw = localStorage.getItem(ENGINE_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw);
-      // Migration: merge with defaults so new fields exist on old states
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const migrated = migrateState(parsed);
       return {
         ...DEFAULT_STATE,
-        ...parsed,
-        reviewCards: Array.isArray(parsed.reviewCards) ? parsed.reviewCards : [],
-        studyDays: Array.isArray(parsed.studyDays) ? parsed.studyDays : [],
-        freezes: typeof parsed.freezes === 'number' ? parsed.freezes : 0,
-        dailyGoal: typeof parsed.dailyGoal === 'number' ? parsed.dailyGoal : 3,
-        lastReviewDate: typeof parsed.lastReviewDate === 'string' ? parsed.lastReviewDate : null,
-        lastArticle: parsed.lastArticle && typeof parsed.lastArticle === 'object' ? parsed.lastArticle : null,
-        preferredHub: typeof parsed.preferredHub === 'string' ? parsed.preferredHub : null,
-        onboardedAt: typeof parsed.onboardedAt === 'string' ? parsed.onboardedAt : null,
-        articleProgress: parsed.articleProgress && typeof parsed.articleProgress === 'object' ? parsed.articleProgress : {},
+        ...migrated,
+        schemaVersion: CURRENT_SCHEMA,
+        reviewCards: Array.isArray(migrated.reviewCards) ? migrated.reviewCards : [],
+        studyDays: Array.isArray(migrated.studyDays) ? migrated.studyDays : [],
+        freezes: typeof migrated.freezes === 'number' ? migrated.freezes : 0,
+        dailyGoal: typeof migrated.dailyGoal === 'number' ? migrated.dailyGoal : 3,
+        lastReviewDate: typeof migrated.lastReviewDate === 'string' ? migrated.lastReviewDate : null,
+        lastArticle: migrated.lastArticle && typeof migrated.lastArticle === 'object' ? migrated.lastArticle as LastArticle : null,
+        preferredHub: typeof migrated.preferredHub === 'string' ? migrated.preferredHub : null,
+        onboardedAt: typeof migrated.onboardedAt === 'string' ? migrated.onboardedAt : null,
+        articleProgress: migrated.articleProgress && typeof migrated.articleProgress === 'object' ? migrated.articleProgress as Record<string, number> : {},
       };
     }
   } catch {}
   return { ...DEFAULT_STATE, startedAt: new Date().toISOString() };
 }
 
+let _saveErrorCallback: ((msg: string) => void) | null = null;
+/** Registra callback para erros de persistência (ex: localStorage cheio). */
+export function onSaveError(cb: (msg: string) => void) { _saveErrorCallback = cb; }
+
 function saveState(state: GameState) {
   try {
     localStorage.setItem(ENGINE_KEY, JSON.stringify(state));
-  } catch {}
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Erro ao salvar progresso';
+    _saveErrorCallback?.(msg);
+    // Re-tentativa com dados críticos mínimos (preserva progresso, descarta histórico pesado)
+    try {
+      const minimal = { ...state, studyDays: state.studyDays.slice(-30), reviewCards: state.reviewCards.slice(-100) };
+      localStorage.setItem(ENGINE_KEY, JSON.stringify(minimal));
+    } catch {}
+  }
+}
+
+/** Exporta o estado completo como JSON string para download pelo usuário. */
+export function exportState(): string {
+  const state = loadState();
+  return JSON.stringify({ ...state, exportedAt: new Date().toISOString() }, null, 2);
+}
+
+/** Importa estado a partir de JSON exportado. Retorna true se sucesso, false se JSON inválido. */
+export function importState(json: string): boolean {
+  try {
+    const parsed = JSON.parse(json) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object') return false;
+    // Valida campos mínimos obrigatórios
+    if (typeof parsed.xp !== 'number' || !Array.isArray(parsed.completedModules)) return false;
+    const migrated = migrateState(parsed);
+    const next: GameState = {
+      ...DEFAULT_STATE,
+      ...migrated,
+      schemaVersion: CURRENT_SCHEMA,
+      reviewCards: Array.isArray(migrated.reviewCards) ? migrated.reviewCards : [],
+      studyDays: Array.isArray(migrated.studyDays) ? migrated.studyDays : [],
+    };
+    localStorage.setItem(ENGINE_KEY, JSON.stringify(next));
+    return true;
+  } catch { return false; }
 }
 
 function recordStudyDay(state: GameState, delta: Partial<Omit<StudyDay, 'date'>>): GameState {
@@ -222,6 +277,8 @@ export interface CompleteModuleInput {
   trailColor: string;
   readTime: number;
   quiz: Array<{ question: string; options: string[]; correct: number; explanation: string }>;
+  /** Proporção do quiz acertada (0..1). Se omitido, assume 1 (100% base + bonus). */
+  quizScore?: number;
 }
 
 export function completeModule(input: CompleteModuleInput): CompleteModuleResult {
@@ -242,10 +299,17 @@ export function completeModule(input: CompleteModuleInput): CompleteModuleResult
   // Marca streak
   state = touchStreak(state);
 
-  // Adiciona XP
+  // Adiciona XP — 70% base garantido + 30% proporcional ao quiz score
   let leveledUp = false;
   let newLevel = state.level;
-  const xpGained = isRevisit ? 5 : moduleXP;
+  let xpGained: number;
+  if (isRevisit) {
+    xpGained = 5;
+  } else {
+    const baseXP = Math.round(moduleXP * 0.7);
+    const bonusXP = Math.round(moduleXP * 0.3 * (input.quizScore ?? 1));
+    xpGained = baseXP + bonusXP;
+  }
   ({ state, leveledUp, newLevel } = addXP(state, xpGained));
 
   // Marca módulo como completo
@@ -296,15 +360,48 @@ export function completeModule(input: CompleteModuleInput): CompleteModuleResult
     const r = unlockBadge(state, 'streak_30');
     if (r.unlocked) { state = r.state; newBadges.push('streak_30'); }
   }
+  if (state.streak >= 60) {
+    const r = unlockBadge(state, 'streak_60');
+    if (r.unlocked) { state = r.state; newBadges.push('streak_60'); }
+  }
+
+  // Badges de volume de módulos
+  if (state.completedModules.length >= 25) {
+    const r = unlockBadge(state, 'modules_25');
+    if (r.unlocked) { state = r.state; newBadges.push('modules_25'); }
+  }
+  if (state.completedModules.length >= 75) {
+    const r = unlockBadge(state, 'modules_75');
+    if (r.unlocked) { state = r.state; newBadges.push('modules_75'); }
+  }
+
+  // Badge: maratonista (5 módulos em 1 dia)
+  const todayCountMarathon = state.studyDays.find(d => d.date === todayISO())?.modulesCompleted ?? 0;
+  if (todayCountMarathon >= 5) {
+    const r = unlockBadge(state, 'marathon');
+    if (r.unlocked) { state = r.state; newBadges.push('marathon'); }
+  }
 
   // Badges de trilha completa
+  let completedTrailCount = 0;
   for (const trail of CURRICULUM) {
     const allDone = trail.modules.every(m => state.completedModules.includes(m.slug));
     if (allDone) {
+      completedTrailCount += 1;
       const badgeId = `${trail.id}_done`;
       const r = unlockBadge(state, badgeId);
       if (r.unlocked) { state = r.state; newBadges.push(badgeId); }
     }
+  }
+
+  // Badges de múltiplas trilhas completas
+  if (completedTrailCount >= 2) {
+    const r = unlockBadge(state, 'two_trails_done');
+    if (r.unlocked) { state = r.state; newBadges.push('two_trails_done'); }
+  }
+  if (completedTrailCount >= 5) {
+    const r = unlockBadge(state, 'five_trails_done');
+    if (r.unlocked) { state = r.state; newBadges.push('five_trails_done'); }
   }
 
   // Badge: tudo completo
@@ -321,19 +418,27 @@ export function completeModule(input: CompleteModuleInput): CompleteModuleResult
 }
 
 export function saveQuizScore(slug: string, score: number, total: number) {
-  const state = loadState();
+  let state = loadState();
   const perfect = score === total;
-  const updated = {
-    ...state,
-    quizScores: { ...state.quizScores, [slug]: { score, total, perfect } },
-  };
+  state = { ...state, quizScores: { ...state.quizScores, [slug]: { score, total, perfect } } };
 
   if (perfect) {
-    const r = unlockBadge(updated, 'quiz_perfect');
-    saveState(r.unlocked ? r.state : updated);
-  } else {
-    saveState(updated);
+    const r = unlockBadge(state, 'quiz_perfect');
+    if (r.unlocked) state = r.state;
+
+    // Contagem acumulada de quizzes perfeitos
+    const perfectCount = Object.values(state.quizScores).filter(s => s.perfect).length;
+    if (perfectCount >= 5) {
+      const r5 = unlockBadge(state, 'perfect_5');
+      if (r5.unlocked) state = r5.state;
+    }
+    if (perfectCount >= 20) {
+      const r20 = unlockBadge(state, 'perfect_20');
+      if (r20.unlocked) state = r20.state;
+    }
   }
+
+  saveState(state);
 }
 
 export interface ReviewCardResult {
@@ -380,6 +485,17 @@ export function submitCardReview(cardId: string, outcome: ReviewQuality): Review
   if (state.streak >= 7) {
     const r = unlockBadge(state, 'streak_7');
     if (r.unlocked) { state = r.state; newBadges.push('streak_7'); }
+  }
+
+  // Badges de volume de cards revisados
+  const totalCardsReviewed = state.studyDays.reduce((acc, d) => acc + d.cardsReviewed, 0);
+  if (totalCardsReviewed >= 50) {
+    const r = unlockBadge(state, 'cards_50');
+    if (r.unlocked) { state = r.state; newBadges.push('cards_50'); }
+  }
+  if (totalCardsReviewed >= 200) {
+    const r = unlockBadge(state, 'cards_200');
+    if (r.unlocked) { state = r.state; newBadges.push('cards_200'); }
   }
 
   saveState(state);
