@@ -102,12 +102,18 @@ export function loadState(): GameState {
   try {
     const raw = localStorage.getItem(ENGINE_KEY);
     if (raw) {
-      // Support both lz-string compressed (new) and plain JSON (legacy)
-      let jsonStr: string | null = null;
-      try {
-        jsonStr = LZString.decompress(raw);
-      } catch { /* not compressed */ }
-      const finalStr = jsonStr || raw;
+      // Support both lz-string compressed (new) and plain JSON (legacy).
+      // Skip decompress for plain JSON — LZString.decompress can hang on arbitrary input.
+      let finalStr: string;
+      if (raw.charAt(0) === '{') {
+        finalStr = raw;
+      } else {
+        let jsonStr: string | null = null;
+        try {
+          jsonStr = LZString.decompress(raw);
+        } catch { /* not compressed */ }
+        finalStr = jsonStr || raw;
+      }
       const parsed = JSON.parse(finalStr) as Record<string, unknown>;
       const migrated = migrateState(parsed);
       return {
