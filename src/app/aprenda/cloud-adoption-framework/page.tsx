@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, MindMap, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'AWS CAF e os 7 Rs da Migração — FFV Academy',
-  description: 'AWS Cloud Adoption Framework (CAF), as 6 perspectivas e as 7 estratégias de migração (Rehost, Replatform, Refactor, Retire, Retain, Relocate, Repurchase).',
-};
+export const metadata = getModuleMetadata('cloud-adoption-framework');
 
 const ACCENT = '#ff9900';
 

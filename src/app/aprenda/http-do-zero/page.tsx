@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#8b949e';
 
-export const metadata: Metadata = {
-  title: 'HTTP do zero: request, response, status, headers, cookies — FFV Academy',
-  description: 'GET, POST, status codes, headers, cookies, CORS — o protocolo HTTP explicado de dentro para fora, sem pular os detalhes que importam em produção.',
-};
+export const metadata = getModuleMetadata('http-do-zero');
 
 const quiz: QuizQuestion[] = [
   {

@@ -11,5 +11,5 @@ export const metadata: Metadata = {
 };
 
 export default function AINativePage() {
-  return <TrailBlogClient trail={CURRICULUM[8]} />;
+  return <TrailBlogClient trail={CURRICULUM[7]} />;
 }

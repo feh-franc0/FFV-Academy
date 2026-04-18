@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -6,10 +6,7 @@ import {
   FlowDiagram, QAItem, CodeBlock, StackFlow,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Como Avaliar Modelos de IA — FFV Academy',
-  description: 'Benchmarks (MMLU, HumanEval, SWE-bench, LMArena), pitfalls de benchmark, eval proprio, LLM-as-judge.',
-};
+export const metadata = getModuleMetadata('como-avaliar-modelos');
 
 const accent = '#d2a8ff';
 

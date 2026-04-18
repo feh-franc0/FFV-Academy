@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -12,11 +12,7 @@ import {
   ArchDiagram,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Hybrid Search + Reranking: do BM25 ao cross-encoder — FFV Academy',
-  description:
-    'Pipeline profissional de retrieval: BM25 + vetor fundidos com RRF, cross-encoder reranking (Cohere, Jina, Voyage), HyDE e query expansion para levar RAG de 60% para 85%+ de precisão.',
-};
+export const metadata = getModuleMetadata('hybrid-search-reranking');
 
 const ACCENT = '#ff7eb6';
 

@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout, type QuizQuestion } from '@/components/ModuleLayout';
 import {
   Section,
@@ -13,11 +13,7 @@ import {
   KeyValue,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'S3 Profundo: Classes, Lifecycle, Replication e Criptografia — SAA-C03',
-  description: 'Mergulho profissional no S3 para o exame SAA-C03: 8 storage classes, lifecycle policies, versioning, replication CRR/SRR, Object Lock, encryption SSE-S3/KMS/C/CSE, multipart e performance.',
-  keywords: 'S3, storage classes, intelligent tiering, glacier, lifecycle, replication, object lock, SSE-KMS, multipart, SAA-C03',
-};
+export const metadata = getModuleMetadata('s3-avancado');
 
 const ACCENT = '#146eb4';
 

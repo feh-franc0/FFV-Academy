@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -16,11 +16,7 @@ import {
   Timeline,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Docker Completo: do zero ao production-ready — FFV Academy',
-  description:
-    'Guia denso e profissional de Docker em PT-BR: containers vs VMs, arquitetura (dockerd, containerd, runc, OCI), imagens, layers, Dockerfile, multi-stage, Compose, volumes, redes, segurança e otimização.',
-};
+export const metadata = getModuleMetadata('docker-completo');
 
 const ACCENT = '#2496ed';
 
@@ -91,6 +87,7 @@ export default function Page() {
       trailColor={ACCENT}
       nextSlug="kubernetes-completo"
       nextTitle="Kubernetes Completo: do Pod ao cluster de produção"
+      relatedSlugs={['kubernetes-completo','github-actions-cicd','containers-namespaces-cgroups']}
       quiz={quiz}
     >
       <Content />

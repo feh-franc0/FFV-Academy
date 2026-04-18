@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, ArchDiagram, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'EC2 Profissional: Auto Scaling e Load Balancers — FFV Academy',
-  description: 'Auto Scaling Groups, scaling policies, ALB vs NLB vs GWLB, target groups, placement groups e purchasing options para SAA-C03.',
-};
+export const metadata = getModuleMetadata('ec2-autoscaling-elb');
 
 const ACCENT = '#146eb4';
 

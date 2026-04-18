@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout, type QuizQuestion } from '@/components/ModuleLayout';
 import {
   Section,
@@ -8,11 +8,7 @@ import {
 } from '@/components/article/primitives';
 import type { ReactNode } from 'react';
 
-export const metadata: Metadata = {
-  title: 'Simulado SAA-C03 Comentado (25 questões) — FFV Academy',
-  description: 'Simulado final AWS Solutions Architect Associate SAA-C03 com 25 questões distribuídas pelos 4 domínios oficiais e explicações profundas de cada alternativa.',
-  keywords: 'simulado SAA-C03, questões AWS, solutions architect, exame comentado, prática',
-};
+export const metadata = getModuleMetadata('simulado-saa-c03');
 
 const ACCENT = '#146eb4';
 

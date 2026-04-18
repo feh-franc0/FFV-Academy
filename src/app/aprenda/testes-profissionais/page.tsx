@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -13,11 +13,7 @@ import {
   StackFlow,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Testes Profissionais: pirâmide, contrato, property-based, fuzz — FFV Academy',
-  description:
-    'Tipos de testes em 2026: pirâmide moderna, unit, integração, contrato, E2E, property-based, snapshot, mutation, fuzz, chaos. Qual usar e onde.',
-};
+export const metadata = getModuleMetadata('testes-profissionais');
 
 const ACCENT = '#e3b341';
 

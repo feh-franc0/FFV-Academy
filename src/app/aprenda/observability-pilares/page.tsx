@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import {
   Section,
@@ -12,13 +12,7 @@ import {
 
 const ACCENT = '#79c0ff';
 
-export const metadata: Metadata = {
-  title: 'Observability: os 3 pilares e por que não basta | FFV Academy',
-  description:
-    'Logs, métricas e traces: os 3 pilares clássicos de observability, por que eles sozinhos não explicam incidentes, cardinalidade, events e continuous profiling.',
-  keywords:
-    'observability 3 pilares, logs metricas traces, cardinalidade metricas, continuous profiling pprof, monitoring vs observability, events, pyroscope',
-};
+export const metadata = getModuleMetadata('observability-pilares');
 
 const quiz = [
   {

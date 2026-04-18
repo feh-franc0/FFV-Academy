@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, LayerStack, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Modelo de Responsabilidade Compartilhada — FFV Academy',
-  description: 'Security "of" the cloud vs. security "in" the cloud. A linha divisória entre AWS e cliente — o que cada lado faz e por que isso cai em toda prova de certificação AWS.',
-};
+export const metadata = getModuleMetadata('modelo-responsabilidade-compartilhada');
 
 const ACCENT = '#ff9900';
 

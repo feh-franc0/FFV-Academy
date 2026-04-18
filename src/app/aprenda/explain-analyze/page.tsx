@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#336791';
 
-export const metadata: Metadata = {
-  title: 'EXPLAIN ANALYZE: lendo o plano e otimizando query — FFV Academy',
-  description: 'Seq Scan vs Index Scan vs Bitmap Scan, Nested Loop vs Hash Join vs Merge Join. Como ler o plano de execução PostgreSQL e transformar queries lentas em rápidas.',
-};
+export const metadata = getModuleMetadata('explain-analyze');
 
 const quiz: QuizQuestion[] = [
   {

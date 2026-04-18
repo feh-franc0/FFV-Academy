@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -12,11 +12,7 @@ import {
   ArchDiagram,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'CAP e PACELC: o teorema que define toda arquitetura distribuída — FFV Academy',
-  description:
-    'Teorema CAP explicado sem mito: Consistency, Availability, Partition tolerance — e por que você escolhe entre CP e AP. PACELC estende para o trade-off de latência. Dynamo, Spanner, Cassandra na prática.',
-};
+export const metadata = getModuleMetadata('cap-pacelc');
 
 const ACCENT = '#f78166';
 
@@ -83,6 +79,7 @@ export default function Page() {
       trailColor={ACCENT}
       nextSlug="consistency-models"
       nextTitle="Modelos de Consistência: strong, eventual, causal, read-your-writes"
+      relatedSlugs={['consensus-raft','consistency-models','idempotencia-retries']}
       quiz={quiz}
     >
       <Content />

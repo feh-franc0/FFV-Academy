@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -12,11 +12,7 @@ import {
   ArchDiagram,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Context Engineering: prompt caching, subagents e skills — FFV Academy',
-  description:
-    'Context engineering em 2026: prompt caching (Anthropic/OpenAI), compaction, subagent delegation, Agent Skills, CLAUDE.md/AGENTS.md, context window budget e lost-in-the-middle.',
-};
+export const metadata = getModuleMetadata('context-engineering');
 
 const ACCENT = '#ff7eb6';
 
@@ -83,6 +79,7 @@ export default function Page() {
       trailColor={ACCENT}
       nextSlug="mcp-servers"
       nextTitle="MCP Deep Dive: construindo um servidor profissional"
+      relatedSlugs={['rag-fundamentos','claude-api-fundamentos','prompt-engineering-claude']}
       quiz={quiz}
     >
       <Content />

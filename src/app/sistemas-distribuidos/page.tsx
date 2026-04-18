@@ -11,5 +11,5 @@ export const metadata: Metadata = {
 };
 
 export default function SistemasDistribuidosPage() {
-  return <TrailBlogClient trail={CURRICULUM[9]} />;
+  return <TrailBlogClient trail={CURRICULUM[8]} />;
 }

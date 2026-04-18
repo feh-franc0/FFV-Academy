@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import {
   Section,
@@ -12,13 +12,7 @@ import {
 
 const ACCENT = '#f78166';
 
-export const metadata: Metadata = {
-  title: 'Sagas vs 2PC: transações distribuídas sem perder o sono | FFV Academy',
-  description:
-    'Transações distribuídas em microserviços: 2PC e por que ele dói, Saga pattern (orchestration vs choreography), compensating actions e outbox pattern.',
-  keywords:
-    'saga pattern, two phase commit 2pc, orchestration choreography, outbox pattern, compensating action, transacao distribuida, microservices',
-};
+export const metadata = getModuleMetadata('sagas-2pc');
 
 const quiz = [
   {

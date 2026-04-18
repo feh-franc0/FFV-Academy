@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#1f6feb';
 
-export const metadata: Metadata = {
-  title: 'HTTP/1.1, /2, /3: multiplexing, HPACK, server push — FFV Academy',
-  description: 'Como cada versão do HTTP resolveu limitações da anterior. Pipelining, multiplexing, header compression, server push e HTTP/3 sobre QUIC.',
-};
+export const metadata = getModuleMetadata('http-1-vs-2-vs-3');
 
 const quiz: QuizQuestion[] = [
   {

@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
-const accent = '#cc785c';
+const accent = '#a78bfa';
 
-export const metadata: Metadata = {
-  title: 'Workflows profissionais com Claude Code: do problema ao resultado — FFV Academy',
-  description: 'Como estruturar workflows reais com Claude Code: spec → implementação → revisão → deploy. Casos práticos de uso no dia a dia — com e sem experiência em código.',
-};
+export const metadata = getModuleMetadata('workflows-ia-profissional');
 
 const quiz: QuizQuestion[] = [
   {
@@ -54,8 +51,8 @@ export default function WorkflowsIaProfissionalPage() {
       icon="🚀"
       xp={85}
       readTime={17}
-      trailName="Claude & Anthropic na Prática"
-      trailColor="#cc785c"
+      trailName="API Claude & Agents"
+      trailColor="#a78bfa"
       nextSlug="rag-fundamentos"
       nextTitle="RAG: por que 'só jogar tudo no LLM' não funciona"
       quiz={quiz}

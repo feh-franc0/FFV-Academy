@@ -2,16 +2,33 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { BrainCircuit, Cloud, Wrench, Bot, ChartBarIncreasing } from 'lucide-react';
 import { useGameState } from '@/hooks/useGameState';
 import { Progress } from '@/components/ui/progress';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { HUBS, LEVELS } from '@/lib/curriculum';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { CommandPaletteTrigger } from '@/components/CommandPalette';
+import type { ComponentType, SVGProps } from 'react';
 
-type NavItem = { href: string; icon: string; label: string; color?: string };
+type LucideIcon = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
 
-const PROGRESSO: NavItem = { href: '/progresso', icon: '📊', label: 'Progresso', color: 'var(--ffv-green)' };
+const HUB_ICONS: Record<string, LucideIcon> = {
+  '/ia': BrainCircuit,
+  '/aws': Cloud,
+  '/engenharia': Wrench,
+  '/claude-anthropic': Bot,
+};
+
+type NavItem = { href: string; label: string; color?: string };
+
+const PROGRESSO: NavItem = { href: '/progresso', label: 'Progresso', color: 'var(--ffv-green)' };
+
+function NavIcon({ href, size }: { href: string; size: number }) {
+  const Icon = href === '/progresso' ? ChartBarIncreasing : HUB_ICONS[href];
+  if (!Icon) return null;
+  return <Icon size={size} strokeWidth={1.8} />;
+}
 
 export function GameHUD() {
   const { state, levelInfo, dueCards } = useGameState();
@@ -20,7 +37,6 @@ export function GameHUD() {
   const navItems: NavItem[] = [
     ...HUBS.map(h => ({
       href: h.href,
-      icon: h.icon,
       label: h.shortName,
       color: h.color,
     })),
@@ -43,7 +59,7 @@ export function GameHUD() {
         className="flex items-center gap-2 font-bold text-sm tracking-tight"
         style={{ color: 'var(--foreground)' }}
       >
-        <span className="text-lg">🧠</span>
+        <BrainCircuit size={20} strokeWidth={1.8} style={{ color: 'var(--ffv-blue)' }} />
         <span>FFV</span>
         <span style={{ color: 'var(--ffv-blue)', fontWeight: 400 }}>Academy</span>
       </Link>
@@ -98,7 +114,7 @@ function NavLink({ item, active }: { item: NavItem; active: boolean }) {
         border: `1px solid ${active ? `color-mix(in srgb, ${accent} 32%, transparent)` : 'transparent'}`,
       }}
     >
-      <span style={{ fontSize: 13 }}>{item.icon}</span>
+      <NavIcon href={item.href} size={14} />
       <span>{item.label}</span>
     </Link>
   );

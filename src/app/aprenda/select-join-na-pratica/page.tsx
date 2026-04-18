@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#336791';
 
-export const metadata: Metadata = {
-  title: 'SELECT e JOIN na prática: INNER, LEFT, self-join — FFV Academy',
-  description: 'Os JOINs que resolvem 90% dos problemas reais: INNER, LEFT/RIGHT, FULL OUTER, self-join para hierarquias e CTEs para queries complexas legíveis.',
-};
+export const metadata = getModuleMetadata('select-join-na-pratica');
 
 const quiz: QuizQuestion[] = [
   {

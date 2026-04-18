@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, QAItem, ExamDomainBadge, NodeGraph } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Compute AWS: EC2, Lambda, Containers — FFV Academy',
-  description: 'EC2 instance families, pricing models, Lambda serverless, ECS vs EKS vs Fargate. Tudo sobre compute cobrado no CLF-C02.',
-};
+export const metadata = getModuleMetadata('compute-ec2-lambda');
 
 const ACCENT = '#ff9900';
 
@@ -58,6 +55,7 @@ export default function Page() {
       trailColor={ACCENT}
       nextSlug="storage-s3-ebs-efs"
       nextTitle="Storage: S3, EBS, EFS, Glacier"
+      relatedSlugs={['iam-fundamentos','networking-vpc-route53','containers-ecs-eks']}
       quiz={quiz}
     >
       <Content />

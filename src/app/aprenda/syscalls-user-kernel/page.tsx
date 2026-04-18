@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#6e7681';
 
-export const metadata: Metadata = {
-  title: 'Syscalls: a fronteira entre user-space e kernel — FFV Academy',
-  description: 'O que é uma syscall, por que trocar entre user mode e kernel mode tem custo, como strace revela o que seu programa faz de verdade.',
-};
+export const metadata = getModuleMetadata('syscalls-user-kernel');
 
 const quiz: QuizQuestion[] = [
   {

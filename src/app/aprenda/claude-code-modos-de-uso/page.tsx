@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#cc785c';
 
-export const metadata: Metadata = {
-  title: 'Claude Code: modos de uso interativo, não-interativo, pipe e headless — FFV Academy',
-  description: 'Claude Code tem 4 modos principais. Interativo (chat), não-interativo (scripts), pipe (stdin/stdout) e headless (automação CI/CD). Quando e como usar cada um.',
-};
+export const metadata = getModuleMetadata('claude-code-modos-de-uso');
 
 const quiz: QuizQuestion[] = [
   {
@@ -54,7 +51,7 @@ export default function ClaudeCodeModosDeUsoPage() {
       icon="🔀"
       xp={60}
       readTime={12}
-      trailName="Claude & Anthropic na Prática"
+      trailName="Claude Code: do zero ao poder total"
       trailColor="#cc785c"
       nextSlug="claude-code-claude-md"
       nextTitle="CLAUDE.md: como dar memória, contexto e personalidade ao agente"

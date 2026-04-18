@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, NodeGraph, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Monitoramento AWS: CloudWatch, CloudTrail e Config — FFV Academy',
-  description: 'Métricas, logs, alarmes, auditoria de API calls, drift de configuração. Os 3 serviços essenciais de observabilidade AWS explicados para o CLF-C02.',
-};
+export const metadata = getModuleMetadata('monitoramento-cloudwatch');
 
 const ACCENT = '#ff9900';
 

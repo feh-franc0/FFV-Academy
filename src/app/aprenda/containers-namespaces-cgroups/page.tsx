@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#6e7681';
 
-export const metadata: Metadata = {
-  title: 'Containers por baixo: namespaces e cgroups no Linux — FFV Academy',
-  description: 'Docker não é mágica — é Linux namespaces + cgroups + union filesystem. Entender isso explica por que containers são mais leves que VMs e como security funciona.',
-};
+export const metadata = getModuleMetadata('containers-namespaces-cgroups');
 
 const quiz: QuizQuestion[] = [
   {

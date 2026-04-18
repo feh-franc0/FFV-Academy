@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
-const accent = '#cc785c';
+const accent = '#a78bfa';
 
-export const metadata: Metadata = {
-  title: 'Prompt engineering para Claude: técnicas que realmente funcionam — FFV Academy',
-  description: 'Claude tem características únicas de prompt engineering. Chain-of-thought, XML tags para estrutura, prefill, few-shot, como evitar alucinações e extrair JSON confiável.',
-};
+export const metadata = getModuleMetadata('prompt-engineering-claude');
 
 const quiz: QuizQuestion[] = [
   {
@@ -54,10 +51,10 @@ export default function PromptEngineeringClaudePage() {
       icon="✍️"
       xp={70}
       readTime={14}
-      trailName="Claude & Anthropic na Prática"
-      trailColor="#cc785c"
-      nextSlug="claude-em-producao"
-      nextTitle="Claude em produção: custo real, rate limits, caching e segurança"
+      trailName="API Claude & Agents"
+      trailColor="#a78bfa"
+      nextSlug="claude-tool-use"
+      nextTitle="Tool Use com Claude: definir, chamar e orquestrar ferramentas"
       quiz={quiz}
     >
       <Content />

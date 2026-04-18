@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -6,10 +6,7 @@ import {
   HierarchyDiagram, ComparisonFlow, QAItem, Timeline, CodeBlock,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'O que é Inteligência Artificial? — FFV Academy',
-  description: 'Definição real de IA, história dos AI winters ao Transformer, ANI vs AGI, ML vs DL vs LLMs, e onde IA de verdade funciona hoje.',
-};
+export const metadata = getModuleMetadata('o-que-e-ia');
 
 const accent = '#58a6ff';
 
@@ -73,6 +70,7 @@ export default function OQueEIAPage() {
       nextSlug="dados-o-combustivel"
       nextTitle="Dados: o Combustível"
       seoDesc="Definição real de IA, história dos AI winters, ANI vs AGI, ML vs DL vs LLMs, e aplicações atuais."
+      relatedSlugs={['o-que-e-llm', 'como-ia-aprende', 'o-que-e-cloud']}
       quiz={quiz}
     >
       <Content />

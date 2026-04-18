@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#1f6feb';
 
-export const metadata: Metadata = {
-  title: 'TCP de verdade: handshake, congestion control, retransmissão — FFV Academy',
-  description: 'Como o three-way handshake funciona, slow start, AIMD, retransmissão com timeout e fast retransmit. O que torna TCP confiável sobre IP não-confiável.',
-};
+export const metadata = getModuleMetadata('tcp-handshake-congestao');
 
 const quiz: QuizQuestion[] = [
   {

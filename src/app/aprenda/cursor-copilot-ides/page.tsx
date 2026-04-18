@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock } from '@/components/article/primitives';
 
 const accent = '#ffa657';
 
-export const metadata: Metadata = {
-  title: 'Cursor, Copilot e os IDEs Aumentados — FFV Academy',
-  description: 'Como Cursor e GitHub Copilot integram IA diretamente no editor — a filosofia IDE-first e como ela se diferencia de agentes de terminal como Claude Code.',
-};
+export const metadata = getModuleMetadata('cursor-copilot-ides');
 
 const quiz: QuizQuestion[] = [
   {

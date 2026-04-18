@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#8b949e';
 
-export const metadata: Metadata = {
-  title: 'SSH e chaves: como acessar máquinas remotas com segurança — FFV Academy',
-  description: 'Par de chaves RSA/Ed25519, ssh-keygen, authorized_keys, ssh-agent, config file, port forwarding — tudo que você precisa para nunca mais digitar senha em SSH.',
-};
+export const metadata = getModuleMetadata('ssh-chaves-acesso-remoto');
 
 const quiz: QuizQuestion[] = [
   {

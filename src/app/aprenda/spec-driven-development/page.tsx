@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -13,11 +13,7 @@ import {
   StackFlow,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Spec-Driven Development (SDD): a nova espinha dorsal — FFV Academy',
-  description:
-    'SDD em PT-BR: como escrever specs executáveis que agents transformam em código e testes, templates profissionais, workflow, boas práticas e armadilhas.',
-};
+export const metadata = getModuleMetadata('spec-driven-development');
 
 const ACCENT = '#e3b341';
 

@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#336791';
 
-export const metadata: Metadata = {
-  title: 'Índices que funcionam: B-tree, hash, GIN, covering, composto — FFV Academy',
-  description: 'Quando um índice é usado e quando não é. B-tree vs hash vs GIN, índice composto e a ordem importa, covering index para evitar heap scan.',
-};
+export const metadata = getModuleMetadata('indices-que-funcionam');
 
 const quiz: QuizQuestion[] = [
   {

@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -6,10 +6,7 @@ import {
   QAItem, StackFlow, CodeBlock, FlowDiagram, ArchFlow, ComparisonFlow,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Como a IA Aprende (Machine Learning) — FFV Academy',
-  description: 'Supervisionado, não-supervisionado e RL. Gradiente descendente, loss function, backpropagation, learning rate e otimizadores explicados com visualizações.',
-};
+export const metadata = getModuleMetadata('como-ia-aprende');
 
 const accent = '#58a6ff';
 

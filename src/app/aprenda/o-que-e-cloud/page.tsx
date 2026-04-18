@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, MindMap, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'O que é Cloud Computing? — FFV Academy',
-  description: 'IaaS, PaaS, SaaS, modelos de deployment, economia de escala. O conceito que originou a AWS, explicado do zero ao nível CLF-C02.',
-};
+export const metadata = getModuleMetadata('o-que-e-cloud');
 
 const ACCENT = '#ff9900';
 
@@ -58,6 +55,7 @@ export default function Page() {
       trailColor={ACCENT}
       nextSlug="aws-global-infra"
       nextTitle="Infraestrutura Global: Regiões, AZs e Edge"
+      relatedSlugs={['iam-fundamentos','compute-ec2-lambda','o-que-e-ia']}
       quiz={quiz}
     >
       <Content />

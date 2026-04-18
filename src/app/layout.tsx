@@ -59,21 +59,18 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="pt-BR" className={`${inter.variable} ${poppins.variable} ${robotoMono.variable}`} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
-        {/* Umami Analytics — privacy-first, sem cookies, GDPR-ok */}
-        <script
-          defer
-          src="https://cloud.umami.is/script.js"
-          data-website-id="ffv-academy"
-          data-domains="fernandofrancovalle.com"
-          data-do-not-track="true"
-        />
+        {/* Google Search Console — verificação de propriedade (substituir pelo token gerado no GSC) */}
+        {/* <meta name="google-site-verification" content="SEU_TOKEN_GSC_AQUI" /> */}
+        {/* Plausible Analytics — privacy-first, sem cookies, LGPD-ok, evento quiz-complete via JS */}
+        <script defer data-domain="fernandofrancovalle.com" src="https://plausible.io/js/script.js" />
       </head>
       <body className="min-h-screen flex flex-col" style={{ background: 'var(--ffv-bg)', color: 'var(--foreground)' }}>
+        <a href="#main-content" className="skip-to-content">Pular para o conteúdo</a>
         <TooltipProvider>
           <GameHUD />
           <CommandPalette />
           <OnboardingModal />
-          <main className="flex-1 pt-14 pb-16 md:pb-0">{children}</main>
+          <main id="main-content" className="flex-1 pt-14 pb-16 md:pb-0">{children}</main>
           <MobileNav />
         </TooltipProvider>
       </body>

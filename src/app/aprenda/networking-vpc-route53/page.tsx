@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, ArchDiagram, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Networking AWS: VPC, Route 53, CloudFront — FFV Academy',
-  description: 'VPC, subnets, Security Groups, NACLs, Internet Gateway, NAT, Route 53, CloudFront, Direct Connect. A rede na AWS explicada com diagramas.',
-};
+export const metadata = getModuleMetadata('networking-vpc-route53');
 
 const ACCENT = '#ff9900';
 

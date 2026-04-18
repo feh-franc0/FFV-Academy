@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#336791';
 
-export const metadata: Metadata = {
-  title: 'Connection pool, N+1 e o que mata sua API — FFV Academy',
-  description: 'Por que 100 queries são piores que 1 query com JOIN. N+1 query problem e como detectar. PgBouncer, SQLAlchemy pool, asyncpg — configuração correta.',
-};
+export const metadata = getModuleMetadata('connection-pool-n-plus-1');
 
 const quiz: QuizQuestion[] = [
   {

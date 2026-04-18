@@ -16,8 +16,31 @@ export function TrailBlogClient({ trail }: Props) {
   const completedModules = state?.completedModules ?? [];
   const totalXP = trail.modules.reduce((acc, m) => acc + m.xp, 0);
 
+  const courseJsonLd = {
+    '@context': 'https://schema.org',
+    '@type': 'Course',
+    name: trail.name,
+    description: trail.desc,
+    provider: {
+      '@type': 'Organization',
+      name: 'FFV Academy',
+      url: 'https://fernandofrancovalle.com',
+    },
+    url: trail.href ? `https://fernandofrancovalle.com${trail.href}` : 'https://fernandofrancovalle.com',
+    inLanguage: 'pt-BR',
+    isAccessibleForFree: true,
+    numberOfCredits: trail.modules.length,
+    hasCourseInstance: trail.modules.slice(0, 5).map(m => ({
+      '@type': 'CourseInstance',
+      name: m.title,
+      url: `https://fernandofrancovalle.com/aprenda/${m.slug}`,
+      courseMode: 'online',
+    })),
+  };
+
   return (
     <div className="max-w-2xl mx-auto px-6 pb-24">
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(courseJsonLd) }} />
 
       {/* ── Breadcrumb ── */}
       <nav className="flex items-center gap-2 text-xs pt-10 mb-8" style={{ color: 'var(--ffv-muted)' }}>

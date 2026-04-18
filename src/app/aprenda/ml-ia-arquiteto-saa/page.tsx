@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, QAItem, ExamDomainBadge, StackFlow } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'ML/IA para Arquiteto AWS: SageMaker, Bedrock e Pipelines — FFV Academy',
-  description: 'Arquiteturas de inferência (real-time, serverless, async, batch), SageMaker endpoints, integração com Bedrock, MLOps pipelines e data lake alimentando ML para o SAA-C03.',
-};
+export const metadata = getModuleMetadata('ml-ia-arquiteto-saa');
 
 const ACCENT = '#146eb4';
 

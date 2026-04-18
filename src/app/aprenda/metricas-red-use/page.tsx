@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import {
   Section,
@@ -11,13 +11,7 @@ import {
 
 const ACCENT = '#79c0ff';
 
-export const metadata: Metadata = {
-  title: 'Métricas RED e USE: os frameworks que cobrem 90% dos casos | FFV Academy',
-  description:
-    'RED (Rate, Errors, Duration) para serviços, USE (Utilization, Saturation, Errors) para recursos, Golden Signals do Google SRE — quando aplicar cada um.',
-  keywords:
-    'metricas red use, red method, use method, golden signals sre, metricas servico, metricas recurso, four golden signals',
-};
+export const metadata = getModuleMetadata('metricas-red-use');
 
 const quiz = [
   {

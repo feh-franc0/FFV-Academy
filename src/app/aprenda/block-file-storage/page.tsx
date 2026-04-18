@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout, type QuizQuestion } from '@/components/ModuleLayout';
 import {
   Section,
@@ -13,11 +13,7 @@ import {
   KeyValue,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'EBS, EFS e FSx: Quando Usar Cada Um — SAA-C03',
-  description: 'Block, file e specialty storage no SAA-C03: EBS gp3/io2/st1/sc1, EFS Standard/IA, FSx Windows/Lustre/NetApp/OpenZFS, Storage Gateway e quando usar cada um.',
-  keywords: 'EBS, EFS, FSx, gp3, io2, Lustre, NetApp ONTAP, Windows File Server, Storage Gateway, SAA-C03',
-};
+export const metadata = getModuleMetadata('block-file-storage');
 
 const ACCENT = '#146eb4';
 

@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#6e7681';
 
-export const metadata: Metadata = {
-  title: 'Threads vs processos vs fibras: modelo de concorrência — FFV Academy',
-  description: 'O que diferencia um thread de um processo no SO, context switch, por que green threads existem, e como Go goroutines e Python asyncio resolvem diferente.',
-};
+export const metadata = getModuleMetadata('threads-vs-processos');
 
 const quiz: QuizQuestion[] = [
   {

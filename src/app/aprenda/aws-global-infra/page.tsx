@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, LayerStack, NodeGraph, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Infraestrutura Global da AWS: Regiões, AZs e Edge — FFV Academy',
-  description: 'Regiões, Availability Zones, Edge Locations, Local Zones, Wavelength e Outposts. A geografia que sustenta alta disponibilidade, latência baixa e conformidade regulatória.',
-};
+export const metadata = getModuleMetadata('aws-global-infra');
 
 const ACCENT = '#ff9900';
 

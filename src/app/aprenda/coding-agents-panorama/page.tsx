@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock } from '@/components/article/primitives';
 
 const accent = '#ffa657';
 
-export const metadata: Metadata = {
-  title: 'O Panorama dos Coding Agents — FFV Academy',
-  description: 'O que são coding agents, como evoluíram de autocomplete para agentes autônomos, e o que separa cada geração de ferramentas.',
-};
+export const metadata = getModuleMetadata('coding-agents-panorama');
 
 const quiz: QuizQuestion[] = [
   {
@@ -58,6 +55,7 @@ export default function CodingAgentsPanoramaPage() {
       trailColor="#ffa657"
       nextSlug="claude-code-arquitetura"
       nextTitle="Claude Code: Filosofia e Arquitetura"
+      relatedSlugs={['claude-code-primeiros-passos','cursor-copilot-ides','agentes-padroes']}
       quiz={quiz}
     >
       <Content />

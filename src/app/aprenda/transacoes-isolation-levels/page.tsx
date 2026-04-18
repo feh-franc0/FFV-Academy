@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#336791';
 
-export const metadata: Metadata = {
-  title: 'Transações e isolation levels: ACID sem decoreba — FFV Academy',
-  description: 'ACID não é decoreba — é o que evita dirty reads, non-repeatable reads e phantom reads. Read Committed, Repeatable Read, Serializable: quando usar cada um.',
-};
+export const metadata = getModuleMetadata('transacoes-isolation-levels');
 
 const quiz: QuizQuestion[] = [
   {

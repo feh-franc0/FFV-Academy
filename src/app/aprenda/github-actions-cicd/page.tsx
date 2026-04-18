@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -13,11 +13,7 @@ import {
   StackFlow,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'GitHub Actions: CI/CD profissional do zero — FFV Academy',
-  description:
-    'GitHub Actions em PT-BR, nível profissional: workflows, jobs, matrix, reusable workflows, secrets, OIDC para AWS/Azure, cache, release automatizado e deploy em Kubernetes.',
-};
+export const metadata = getModuleMetadata('github-actions-cicd');
 
 const ACCENT = '#2496ed';
 
@@ -88,6 +84,7 @@ export default function Page() {
       trailColor={ACCENT}
       nextSlug="jenkins-pipelines"
       nextTitle="Jenkins Pipelines: o CI/CD da era enterprise"
+      relatedSlugs={['docker-completo','kubernetes-completo','claude-code-primeiros-passos']}
       quiz={quiz}
     >
       <Content />

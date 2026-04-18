@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout, type QuizQuestion } from '@/components/ModuleLayout';
 import {
   Section,
@@ -13,11 +13,7 @@ import {
   StackFlow,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Analytics: Athena, EMR, Kinesis, Glue, Redshift — SAA-C03',
-  description: 'Analytics e Big Data para SAA-C03: Athena serverless SQL, EMR Hadoop/Spark, Kinesis streams, Glue ETL e Data Catalog, Redshift data warehouse e QuickSight BI.',
-  keywords: 'Athena, EMR, Kinesis, Glue, Redshift, QuickSight, data lake, ETL, Parquet, SAA-C03',
-};
+export const metadata = getModuleMetadata('analytics-bigdata');
 
 const ACCENT = '#146eb4';
 

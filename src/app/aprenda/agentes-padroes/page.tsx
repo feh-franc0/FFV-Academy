@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -12,11 +12,7 @@ import {
   ArchDiagram,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Agent Patterns: ReAct, Reflexion e Tree of Thoughts — FFV Academy',
-  description:
-    'Os padrões de agent que importam em produção: ReAct (think-act-observe), Reflexion (self-critique), Tree of Thoughts, Plan-and-Execute e Router. Quando cada um vale, quando quebra.',
-};
+export const metadata = getModuleMetadata('agentes-padroes');
 
 const ACCENT = '#ff7eb6';
 
@@ -83,6 +79,7 @@ export default function Page() {
       trailColor={ACCENT}
       nextSlug="multi-agent-systems"
       nextTitle="Multi-Agent Systems: orchestrator-worker, swarms e handoffs"
+      relatedSlugs={['multi-agent-systems','claude-code-primeiros-passos','mcp-servers']}
       quiz={quiz}
     >
       <Content />

@@ -8,5 +8,5 @@ export const metadata: Metadata = {
 };
 
 export default function FundamentosTecnicosPage() {
-  return <TrailBlogClient trail={CURRICULUM[11]} />;
+  return <TrailBlogClient trail={CURRICULUM[10]} />;
 }

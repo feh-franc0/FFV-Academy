@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#336791';
 
-export const metadata: Metadata = {
-  title: 'Window functions: ranking, running totals, lead/lag — FFV Academy',
-  description: 'ROW_NUMBER, RANK, DENSE_RANK, LAG, LEAD, FIRST_VALUE, SUM OVER — as funções de janela que eliminam subqueries e self-joins complicados.',
-};
+export const metadata = getModuleMetadata('window-functions');
 
 const quiz: QuizQuestion[] = [
   {

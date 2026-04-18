@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -12,11 +12,7 @@ import {
   ArchDiagram,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Multi-Agent Systems: orchestrator-worker, swarms e handoffs — FFV Academy',
-  description:
-    'Padrões de multi-agent: orchestrator-worker, swarm com handoffs (OpenAI Swarm / Agents SDK), CrewAI, hierarquias. Quando múltiplos agents valem o custo e quando só duplicam o desperdício.',
-};
+export const metadata = getModuleMetadata('multi-agent-systems');
 
 const ACCENT = '#ff7eb6';
 
@@ -83,6 +79,7 @@ export default function Page() {
       trailColor={ACCENT}
       nextSlug="context-engineering"
       nextTitle="Context Engineering: prompt caching, subagents e skills"
+      relatedSlugs={['agentes-padroes','gerenciando-agents-ia','claude-code-primeiros-passos']}
       quiz={quiz}
     >
       <Content />

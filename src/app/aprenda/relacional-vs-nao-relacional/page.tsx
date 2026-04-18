@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#336791';
 
-export const metadata: Metadata = {
-  title: 'Relacional vs NoSQL: quando cada um ganha — FFV Academy',
-  description: 'PostgreSQL vs MongoDB vs Redis vs DynamoDB: modelos de dados, consistência vs disponibilidade, e quando cada banco de dados realmente ganha.',
-};
+export const metadata = getModuleMetadata('relacional-vs-nao-relacional');
 
 const quiz: QuizQuestion[] = [
   {

@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#8b949e';
 
-export const metadata: Metadata = {
-  title: 'Git de verdade: commit, branch, merge, rebase, reflog — FFV Academy',
-  description: 'O modelo mental de commits como snapshots, o DAG de objetos Git, staging area, merge vs rebase com exemplos, e reflog como rede de segurança.',
-};
+export const metadata = getModuleMetadata('git-de-verdade');
 
 const quiz: QuizQuestion[] = [
   {
@@ -58,6 +55,7 @@ export default function GitDeVerdadePage() {
       trailColor="#8b949e"
       nextSlug="github-fluxo-profissional"
       nextTitle="GitHub profissional: PR, review, issues, Actions básico"
+      relatedSlugs={['github-actions-cicd','github-fluxo-profissional','docker-completo']}
       quiz={quiz}
     >
       <Content />

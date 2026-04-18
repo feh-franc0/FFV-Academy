@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, ArchDiagram, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Databases na AWS: RDS, Aurora, DynamoDB, Redshift — FFV Academy',
-  description: 'Relational, NoSQL, Document, Graph, Time-series, Ledger, Data Warehouse. O catálogo AWS de bancos de dados explicado do zero ao CLF-C02.',
-};
+export const metadata = getModuleMetadata('databases-aws-basico');
 
 const ACCENT = '#ff9900';
 

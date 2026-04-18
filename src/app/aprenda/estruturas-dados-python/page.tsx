@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#3776ab';
 
-export const metadata: Metadata = {
-  title: 'dict, list, set, tuple: quando cada um e por quê — FFV Academy',
-  description: 'Complexidade de operações em dict, list, set e tuple Python. Quando dict é O(1) e quando não é. Por que set é mais rápido para busca. Deque vs list.',
-};
+export const metadata = getModuleMetadata('estruturas-dados-python');
 
 const quiz: QuizQuestion[] = [
   {

@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -12,11 +12,7 @@ import {
   ArchDiagram,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'MCP Deep Dive: construindo um servidor profissional — FFV Academy',
-  description:
-    'Model Context Protocol em profundidade: stdio vs HTTP/SSE, tools/resources/prompts, autenticação, rate limit, logging e um MCP server real em TypeScript e Python.',
-};
+export const metadata = getModuleMetadata('mcp-servers');
 
 const ACCENT = '#ff7eb6';
 
@@ -83,6 +79,7 @@ export default function Page() {
       trailColor={ACCENT}
       nextSlug="llm-apis-producao"
       nextTitle="LLM APIs em Produção: streaming, structured output, batch e cache"
+      relatedSlugs={['claude-code-primeiros-passos','agentes-padroes','claude-code-hooks']}
       quiz={quiz}
     >
       <Content />

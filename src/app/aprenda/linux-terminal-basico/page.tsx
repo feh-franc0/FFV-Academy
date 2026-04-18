@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#8b949e';
 
-export const metadata: Metadata = {
-  title: 'Linux no terminal: os 30 comandos que valem por 300 — FFV Academy',
-  description: 'ls, cd, grep, find, pipe, redireção — os comandos Linux que você usará todo dia, com a lógica por trás de cada um para fixar de verdade.',
-};
+export const metadata = getModuleMetadata('linux-terminal-basico');
 
 const quiz: QuizQuestion[] = [
   {

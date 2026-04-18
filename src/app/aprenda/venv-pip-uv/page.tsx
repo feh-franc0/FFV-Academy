@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#3776ab';
 
-export const metadata: Metadata = {
-  title: 'venv, pip, uv: isolamento de dependências Python sem dor — FFV Academy',
-  description: 'Por que virtualenvs existem, como pip resolve dependências, por que uv é 10-100x mais rápido e pyproject.toml como padrão moderno de projetos Python.',
-};
+export const metadata = getModuleMetadata('venv-pip-uv');
 
 const quiz: QuizQuestion[] = [
   {

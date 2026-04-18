@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -6,10 +6,7 @@ import {
   FlowDiagram, MatrixDiagram, ArchFlow, QAItem, StackFlow, CodeBlock, Timeline,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Transformers e Mecanismo de Atenção — FFV Academy',
-  description: 'Como funciona a arquitetura Transformer: self-attention com matrizes Q/K/V, positional encoding, multi-head attention, encoder vs decoder e por que GPT é decoder-only.',
-};
+export const metadata = getModuleMetadata('transformers');
 
 const accent = '#58a6ff';
 

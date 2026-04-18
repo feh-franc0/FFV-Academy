@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#6e7681';
 
-export const metadata: Metadata = {
-  title: 'I/O bloqueante, não-bloqueante, async: select/poll/epoll — FFV Academy',
-  description: 'Por que servidores web usam epoll em vez de um thread por conexão. Blocking vs non-blocking vs async I/O — o fundamento de event loops como asyncio e Node.js.',
-};
+export const metadata = getModuleMetadata('io-bloqueante-nao-bloqueante');
 
 const quiz: QuizQuestion[] = [
   {

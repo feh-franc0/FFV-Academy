@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout, type QuizQuestion } from '@/components/ModuleLayout';
 import {
   Section,
@@ -13,11 +13,7 @@ import {
   KeyValue,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Segurança Avançada: KMS, Secrets, WAF, Shield — SAA-C03',
-  description: 'Segurança de nível arquitetural para SAA-C03: KMS envelope encryption, CMK customer vs aws-managed, Secrets Manager vs Parameter Store, WAF rules, Shield Standard vs Advanced, Macie, Inspector, GuardDuty.',
-  keywords: 'KMS, envelope encryption, Secrets Manager, Parameter Store, WAF, Shield Advanced, Macie, Inspector, GuardDuty, SAA-C03',
-};
+export const metadata = getModuleMetadata('seguranca-avancada');
 
 const ACCENT = '#146eb4';
 

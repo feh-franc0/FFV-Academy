@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#cc785c';
 
-export const metadata: Metadata = {
-  title: 'O ecossistema Anthropic: Claude, modelos, produtos e roadmap — FFV Academy',
-  description: 'Claude 3, 3.5, 4 — o que diferencia Haiku, Sonnet e Opus. API, Claude.ai, Claude Code, MCP: o mapa completo do que a Anthropic oferece e quando usar cada produto.',
-};
+export const metadata = getModuleMetadata('anthropic-ecossistema');
 
 const quiz: QuizQuestion[] = [
   {
@@ -54,7 +51,7 @@ export default function AnthropicEcossistemaPage() {
       icon="⊕"
       xp={40}
       readTime={8}
-      trailName="Claude & Anthropic na Prática"
+      trailName="Claude Code: do zero ao poder total"
       trailColor="#cc785c"
       nextSlug="claude-code-primeiros-passos"
       nextTitle="Claude Code: instalação, autenticação e primeiro uso real"

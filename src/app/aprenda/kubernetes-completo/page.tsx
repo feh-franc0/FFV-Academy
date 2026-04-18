@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -14,11 +14,7 @@ import {
   SplitFlow,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Kubernetes Completo: do Pod ao cluster de produção — FFV Academy',
-  description:
-    'Guia profissional de Kubernetes em PT-BR: arquitetura do control plane, Pods, Deployments, Services, Ingress, ConfigMaps, Secrets, Storage, RBAC, HPA, Helm, observabilidade e kubectl essencial.',
-};
+export const metadata = getModuleMetadata('kubernetes-completo');
 
 const ACCENT = '#326ce5';
 
@@ -89,6 +85,7 @@ export default function Page() {
       trailColor={ACCENT}
       nextSlug=""
       nextTitle=""
+      relatedSlugs={['docker-completo','github-actions-cicd','observability-pilares']}
       quiz={quiz}
     >
       <Content />

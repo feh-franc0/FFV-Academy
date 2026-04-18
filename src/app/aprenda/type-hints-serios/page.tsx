@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#3776ab';
 
-export const metadata: Metadata = {
-  title: 'Type hints sérios: mypy, pyright, Protocol, Generic — FFV Academy',
-  description: 'Type hints não são decoração — são contratos que ferramentas verificam. mypy, pyright, Protocol para duck typing estático, Generic para código reutilizável.',
-};
+export const metadata = getModuleMetadata('type-hints-serios');
 
 const quiz: QuizQuestion[] = [
   {

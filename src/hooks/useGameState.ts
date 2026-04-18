@@ -8,15 +8,18 @@ import {
   submitCardReview,
   isTrailUnlocked,
   getDueCards,
+  getDailyChallenge,
   recordArticleVisit,
   updateArticleProgress,
   completeOnboarding,
   setPreferredHub,
+  setDailyGoal,
   type GameState,
   type CompleteModuleResult,
   type CompleteModuleInput,
   type ReviewCardResult,
   type LastArticle,
+  type DailyChallenge,
 } from '@/lib/engine';
 import type { ReviewQuality } from '@/lib/srs';
 import { getLevelInfo, getTrailProgress, CURRICULUM } from '@/lib/curriculum';
@@ -79,6 +82,11 @@ export function useGameState() {
     setState(loadState());
   }, []);
 
+  const updateDailyGoal = useCallback((goal: number) => {
+    setDailyGoal(goal);
+    setState(loadState());
+  }, []);
+
   const levelInfo = state ? getLevelInfo(state.xp) : null;
 
   const trailsProgress = CURRICULUM.map(trail => ({
@@ -96,6 +104,7 @@ export function useGameState() {
     : 0;
 
   const dueCards = state ? getDueCards(state.reviewCards) : [];
+  const dailyChallenge = state ? getDailyChallenge() : null;
 
   return {
     state,
@@ -103,6 +112,7 @@ export function useGameState() {
     trailsProgress,
     overallPct,
     dueCards,
+    dailyChallenge,
     markComplete,
     submitQuiz,
     reviewOne,
@@ -111,5 +121,6 @@ export function useGameState() {
     trackProgress,
     finishOnboarding,
     choosePreferredHub,
+    updateDailyGoal,
   };
 }

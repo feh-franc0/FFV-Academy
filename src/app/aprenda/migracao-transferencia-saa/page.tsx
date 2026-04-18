@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, QAItem, ExamDomainBadge, StackFlow } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Migração para o Arquiteto AWS: DMS, SCT, MGN e DRS — FFV Academy',
-  description: 'Padrões arquiteturais de migração para o SAA-C03: DMS + Schema Conversion Tool, AWS MGN lift-and-shift, AWS DRS, DataSync, Transfer Family e Snow Family.',
-};
+export const metadata = getModuleMetadata('migracao-transferencia-saa');
 
 const ACCENT = '#146eb4';
 

@@ -6,12 +6,14 @@ import { useGameState } from '@/hooks/useGameState';
 import { Badge } from '@/components/ui/badge';
 import { BADGES_DEF, CURRICULUM, getHubForTrail } from '@/lib/curriculum';
 import { ArticleToc } from '@/components/article/ArticleToc';
+import { MobileToc } from '@/components/article/MobileToc';
 import { ReadingProgressBar } from '@/components/article/ReadingProgressBar';
 import { RelatedArticles } from '@/components/article/RelatedArticles';
 import { Prerequisites } from '@/components/article/Prerequisites';
 import { NextSteps } from '@/components/article/NextSteps';
 import { ArticleJsonLd } from '@/components/article/ArticleJsonLd';
 import { CelebrationOverlay, type CelebrationEvent } from '@/components/CelebrationOverlay';
+import { RelatedModules } from '@/components/article/RelatedModules';
 
 export interface QuizQuestion {
   question: string;
@@ -33,6 +35,7 @@ interface ModuleLayoutProps {
   quiz: QuizQuestion[];
   children: React.ReactNode;
   seoDesc?: string;
+  relatedSlugs?: string[];
 }
 
 export function ModuleLayout({
@@ -48,6 +51,7 @@ export function ModuleLayout({
   quiz,
   children,
   seoDesc,
+  relatedSlugs,
 }: ModuleLayoutProps) {
   const { state, markComplete, submitQuiz, trackVisit, trackProgress } = useGameState();
   const [quizStarted, setQuizStarted] = useState(false);
@@ -92,6 +96,13 @@ export function ModuleLayout({
     setResult(r);
     setSubmitted(true);
 
+    // Plausible analytics — evento de conclusão de quiz
+    try {
+      (window as unknown as { plausible?: (e: string, o: object) => void }).plausible?.('quiz-complete', {
+        props: { module: slug, score: `${score}/${quiz.length}`, perfect: score === quiz.length },
+      });
+    } catch { /* analytics opcional */ }
+
     // Build celebration queue: level up first, then each new badge
     const events: CelebrationEvent[] = [];
     if (r.leveledUp) events.push({ kind: 'level', level: r.newLevel });
@@ -110,7 +121,18 @@ export function ModuleLayout({
 
   return (
     <article className="max-w-2xl mx-auto px-6 pb-20" data-article-root>
-      {seoDesc && <ArticleJsonLd title={title} description={seoDesc} slug={slug} readTime={readTime} />}
+      {seoDesc && (
+        <ArticleJsonLd
+          title={title}
+          description={seoDesc}
+          slug={slug}
+          readTime={readTime}
+          trailName={trailName}
+          trailHref={CURRICULUM.find(t => t.modules.some(m => m.slug === slug))?.href}
+          hubName={hub?.shortName ?? hub?.name}
+          hubHref={hub?.href}
+        />
+      )}
       <ReadingProgressBar
         containerSelector="[data-article-content]"
         color={trailColor}
@@ -188,6 +210,9 @@ export function ModuleLayout({
       >
         <ArticleToc containerSelector="[data-article-content]" accent={trailColor} />
       </aside>
+
+      {/* Bottom-sheet TOC on mobile/tablet */}
+      <MobileToc containerSelector="[data-article-content]" accent={trailColor} />
 
       {/* Prerequisites */}
       <Prerequisites slug={slug} accent={trailColor} />
@@ -358,6 +383,7 @@ export function ModuleLayout({
       </section>
 
       <NextSteps slug={slug} />
+      {relatedSlugs && relatedSlugs.length > 0 && <RelatedModules slugs={relatedSlugs} />}
       <RelatedArticles currentSlug={slug} />
 
       {celebrations.length > 0 && (

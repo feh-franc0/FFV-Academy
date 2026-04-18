@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#8b949e';
 
-export const metadata: Metadata = {
-  title: 'Processos, jobs, sinais: como o SO organiza execução — FFV Academy',
-  description: 'PID, fork, exec, foreground/background, kill, SIGTERM vs SIGKILL — entenda o que roda no seu sistema e como controlar processos no Linux.',
-};
+export const metadata = getModuleMetadata('processos-jobs-sinais');
 
 const quiz: QuizQuestion[] = [
   {

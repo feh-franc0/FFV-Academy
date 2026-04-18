@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock } from '@/components/article/primitives';
 
 const accent = '#ffa657';
 
-export const metadata: Metadata = {
-  title: 'Qual Ferramenta de IA Usar e Quando — FFV Academy',
-  description: 'Matriz de decisão técnica: quando Claude Code supera Cursor, quando Codex na nuvem faz sentido, quando o Q Developer vence. Sem achismo, com embasamento.',
-};
+export const metadata = getModuleMetadata('qual-coding-agent-usar');
 
 const quiz: QuizQuestion[] = [
   {

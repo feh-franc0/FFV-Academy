@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#1f6feb';
 
-export const metadata: Metadata = {
-  title: 'TLS 1.3: handshake, chaves, certificados, SNI, ALPN — FFV Academy',
-  description: 'Como o TLS 1.3 estabelece uma conexão segura em 1 RTT. Diffie-Hellman efêmero, Perfect Forward Secrecy, certificados X.509, SNI e ALPN.',
-};
+export const metadata = getModuleMetadata('tls-handshake-detalhe');
 
 const quiz: QuizQuestion[] = [
   {

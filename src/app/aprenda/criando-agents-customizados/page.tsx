@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -13,11 +13,7 @@ import {
   StackFlow,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Criando Agents Customizados: do subagent ao MCP — FFV Academy',
-  description:
-    'Como criar agents profissionais: subagents com system prompt, MCP (Model Context Protocol), tools customizados, sandbox, permissões e ciclo de vida real.',
-};
+export const metadata = getModuleMetadata('criando-agents-customizados');
 
 const ACCENT = '#e3b341';
 

@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, InlineCode, ExamDomainBadge } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Simulado CLF-C02 Comentado — FFV Academy',
-  description: 'Simulado completo do AWS Cloud Practitioner CLF-C02 com 20 questões estilo exame, todas comentadas em profundidade.',
-};
+export const metadata = getModuleMetadata('simulado-practitioner');
 
 const ACCENT = '#ff9900';
 

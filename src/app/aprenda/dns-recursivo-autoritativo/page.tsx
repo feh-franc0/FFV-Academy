@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#1f6feb';
 
-export const metadata: Metadata = {
-  title: 'DNS: recursivo, autoritativo, registros, TTL, DNSSEC — FFV Academy',
-  description: 'Como uma query DNS percorre resolvers recursivos até chegar no autoritativo. Tipos de registro (A, CNAME, MX, TXT, NS). TTL, caching e DNSSEC.',
-};
+export const metadata = getModuleMetadata('dns-recursivo-autoritativo');
 
 const quiz: QuizQuestion[] = [
   {

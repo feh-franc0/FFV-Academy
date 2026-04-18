@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#cc785c';
 
-export const metadata: Metadata = {
-  title: 'Claude Code hooks: automatizar revisões, validações e ações customizadas — FFV Academy',
-  description: 'Hooks são scripts que rodam automaticamente em eventos do Claude Code. Como criar hooks para lint, testes, validação e notificações após edições de arquivos.',
-};
+export const metadata = getModuleMetadata('claude-code-hooks');
 
 const quiz: QuizQuestion[] = [
   {
@@ -54,10 +51,10 @@ export default function ClaudeCodeHooksPage() {
       icon="🪝"
       xp={70}
       readTime={14}
-      trailName="Claude & Anthropic na Prática"
+      trailName="Claude Code: do zero ao poder total"
       trailColor="#cc785c"
-      nextSlug="claude-code-skills-commands"
-      nextTitle="Skills e slash commands: criar seus próprios workflows"
+      nextSlug="claude-code-mcp-na-pratica"
+      nextTitle="MCP na prática: conectar Drive, GitHub, Slack e bancos de dados"
       quiz={quiz}
     >
       <Content />

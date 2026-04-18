@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -13,11 +13,7 @@ import {
   StackFlow,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Azure DevOps Pipelines: CI/CD na Microsoft Cloud — FFV Academy',
-  description:
-    'Azure Pipelines em PT-BR: YAML pipelines, stages, environments, approvals, service connections, variable groups, templates e deploy em AKS + App Service com gate.',
-};
+export const metadata = getModuleMetadata('azure-devops-pipelines');
 
 const ACCENT = '#0078d4';
 

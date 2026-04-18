@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -6,10 +6,7 @@ import {
   FlowDiagram, ArchFlow, ComparisonFlow, QAItem, CodeBlock, StackFlow,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'KV Cache: Memoria Eficiente — FFV Academy',
-  description: 'Por que atencao e O(n2) sem cache, como KV Cache funciona token a token, GQA, MQA, PagedAttention (vLLM), Flash Attention e custos de memoria reais.',
-};
+export const metadata = getModuleMetadata('kv-cache');
 
 const accent = '#d2a8ff';
 

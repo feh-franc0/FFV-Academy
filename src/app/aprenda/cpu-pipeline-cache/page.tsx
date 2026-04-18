@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#6e7681';
 
-export const metadata: Metadata = {
-  title: 'CPU: pipeline, cache L1/L2/L3, branch prediction — FFV Academy',
-  description: 'Fetch-Decode-Execute em detalhe. Por que cache miss mata performance. Como branch prediction funciona e o que isso significa para o código que você escreve.',
-};
+export const metadata = getModuleMetadata('cpu-pipeline-cache');
 
 const quiz: QuizQuestion[] = [
   {

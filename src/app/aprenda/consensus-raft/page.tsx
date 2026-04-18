@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import {
   Section,
@@ -12,13 +12,7 @@ import {
 
 const ACCENT = '#f78166';
 
-export const metadata: Metadata = {
-  title: 'Consensus e Raft: como nós discordam e chegam a acordo | FFV Academy',
-  description:
-    'FLP impossibility, intuição do Paxos, e Raft explicado do zero: leader election, log replication e safety. Por que etcd, Consul, Kubernetes e CockroachDB usam Raft.',
-  keywords:
-    'raft, consensus, paxos, flp impossibility, leader election, log replication, etcd, consul, kubernetes, cockroachdb, sistemas distribuidos',
-};
+export const metadata = getModuleMetadata('consensus-raft');
 
 const quiz = [
   {
@@ -87,6 +81,7 @@ export default function Page() {
       trailColor={ACCENT}
       nextSlug="idempotencia-retries"
       nextTitle="Idempotência e Retries: o antídoto pra rede que quebra"
+      relatedSlugs={['cap-pacelc','messaging-eventos','event-sourcing-cqrs']}
       quiz={quiz}
     >
       <Content />

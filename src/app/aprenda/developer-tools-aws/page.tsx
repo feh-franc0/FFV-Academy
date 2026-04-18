@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, InlineCode, CodeBlock, ComparisonTable, DecisionBox, QAItem, ExamDomainBadge, StackFlow } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Developer Tools AWS: CodePipeline, CDK, CloudFormation e SAM — FFV Academy',
-  description: 'Os serviços de CI/CD, IaC e observabilidade de aplicações na AWS: CodeCommit, CodeBuild, CodeDeploy, CodePipeline, CloudFormation, CDK, SAM, Amplify e X-Ray.',
-};
+export const metadata = getModuleMetadata('developer-tools-aws');
 
 const ACCENT = '#ff9900';
 

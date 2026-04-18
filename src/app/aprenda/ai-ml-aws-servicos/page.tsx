@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'IA e ML na AWS: Bedrock, SageMaker, Q e amigos — FFV Academy',
-  description: 'Stack de IA e ML da AWS: SageMaker, Rekognition, Comprehend, Polly, Transcribe, Translate, Lex, Kendra, Bedrock e Amazon Q. Quando usar cada um.',
-};
+export const metadata = getModuleMetadata('ai-ml-aws-servicos');
 
 const ACCENT = '#ff9900';
 

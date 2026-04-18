@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#336791';
 
-export const metadata: Metadata = {
-  title: 'Modelagem e normalização: 1NF–3NF + quando desnormalizar — FFV Academy',
-  description: 'Primeira, segunda e terceira formas normais com exemplos reais. Anomalias de atualização. Quando desnormalizar intencionalmente para performance.',
-};
+export const metadata = getModuleMetadata('normalizacao-modelagem');
 
 const quiz: QuizQuestion[] = [
   {

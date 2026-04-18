@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#3776ab';
 
-export const metadata: Metadata = {
-  title: 'Modelo mental do Python: tudo é objeto, referência, mutabilidade — FFV Academy',
-  description: 'Por que listas são mutáveis e tuplas não, o que são referências vs cópias, identidade vs igualdade — o modelo mental que elimina bugs em Python.',
-};
+export const metadata = getModuleMetadata('python-modelo-mental');
 
 const quiz: QuizQuestion[] = [
   {

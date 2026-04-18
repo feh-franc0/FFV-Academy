@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock } from '@/components/article/primitives';
 
 const accent = '#336791';
 
-export const metadata: Metadata = {
-  title: 'GROUP BY, HAVING e agregações que resolvem 80% dos casos — FFV Academy',
-  description: 'COUNT, SUM, AVG, MIN, MAX com GROUP BY e HAVING. ROLLUP para subtotais. FILTER para agregações condicionais. As funções que transformam dados em métricas.',
-};
+export const metadata = getModuleMetadata('group-by-agregacoes');
 
 const quiz: QuizQuestion[] = [
   {

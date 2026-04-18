@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#3776ab';
 
-export const metadata: Metadata = {
-  title: 'asyncio explicado: event loop, coroutines, gather — FFV Academy',
-  description: 'Como asyncio funciona por dentro. Event loop, coroutines, await, gather, TaskGroup, asyncio.run — e quando usar async vs threads vs multiprocessing.',
-};
+export const metadata = getModuleMetadata('async-asyncio');
 
 const quiz: QuizQuestion[] = [
   {

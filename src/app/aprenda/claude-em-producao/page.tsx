@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
-const accent = '#cc785c';
+const accent = '#a78bfa';
 
-export const metadata: Metadata = {
-  title: 'Claude em produção: custo, rate limits, caching e segurança — FFV Academy',
-  description: 'Como operar Claude em produção: calcular e controlar custo por token, lidar com rate limits, implementar prompt caching, moderação de conteúdo e boas práticas de segurança.',
-};
+export const metadata = getModuleMetadata('claude-em-producao');
 
 const quiz: QuizQuestion[] = [
   {
@@ -54,8 +51,8 @@ export default function ClaudeEmProducaoPage() {
       icon="🏭"
       xp={80}
       readTime={16}
-      trailName="Claude & Anthropic na Prática"
-      trailColor="#cc785c"
+      trailName="API Claude & Agents"
+      trailColor="#a78bfa"
       nextSlug="workflows-ia-profissional"
       nextTitle="Workflows profissionais: do problema ao resultado com Claude Code"
       quiz={quiz}

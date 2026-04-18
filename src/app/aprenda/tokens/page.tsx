@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -6,10 +6,7 @@ import {
   QAItem, CodeBlock, FlowDiagram, ArchFlow, ComparisonFlow,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Tokens e Tokenizacao — FFV Academy',
-  description: 'BPE passo a passo, por que "morango" vira 3 tokens, tokenizer com tiktoken em Python, custo real por token e impacto em context windows.',
-};
+export const metadata = getModuleMetadata('tokens');
 
 const accent = '#58a6ff';
 

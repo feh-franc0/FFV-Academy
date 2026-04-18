@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -11,11 +11,7 @@ import {
   QAItem,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Chunking e Embeddings: as decisões que fazem ou quebram seu RAG — FFV Academy',
-  description:
-    'Estratégias de chunking (fixed, recursive, semantic, contextual), overlap, escolha de embedding (OpenAI, Voyage, BGE), cosine vs dot product e redução de dimensão.',
-};
+export const metadata = getModuleMetadata('chunking-embeddings');
 
 const ACCENT = '#ff7eb6';
 
@@ -82,6 +78,7 @@ export default function Page() {
       trailColor={ACCENT}
       nextSlug="hybrid-search-reranking"
       nextTitle="Hybrid Search + Reranking: do BM25 ao cross-encoder"
+      relatedSlugs={['rag-fundamentos','hybrid-search-reranking','context-engineering']}
       quiz={quiz}
     >
       <Content />

@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#8b949e';
 
-export const metadata: Metadata = {
-  title: 'DNS, TLS e certificados: o que acontece antes do seu request — FFV Academy',
-  description: 'Resolução DNS recursiva, handshake TLS 1.3, certificados X.509, Let\'s Encrypt — tudo que acontece antes do seu HTTP request chegar ao servidor.',
-};
+export const metadata = getModuleMetadata('dns-tls-certificados');
 
 const quiz: QuizQuestion[] = [
   {

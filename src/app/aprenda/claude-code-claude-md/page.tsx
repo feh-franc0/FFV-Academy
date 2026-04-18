@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#cc785c';
 
-export const metadata: Metadata = {
-  title: 'CLAUDE.md: memória, contexto e personalidade do agente — FFV Academy',
-  description: 'O CLAUDE.md é o arquivo que define como Claude age no seu projeto — comandos, contexto, regras e preferências. Como criar um CLAUDE.md eficaz e o que evitar.',
-};
+export const metadata = getModuleMetadata('claude-code-claude-md');
 
 const quiz: QuizQuestion[] = [
   {
@@ -54,7 +51,7 @@ export default function ClaudeCodeClaudeMdPage() {
       icon="📋"
       xp={65}
       readTime={13}
-      trailName="Claude & Anthropic na Prática"
+      trailName="Claude Code: do zero ao poder total"
       trailColor="#cc785c"
       nextSlug="claude-code-permissoes"
       nextTitle="Permissões e segurança: o que Claude pode e não pode fazer"

@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#1f6feb';
 
-export const metadata: Metadata = {
-  title: 'CORS, CSRF, cookies seguros: segurança web fundamental — FFV Academy',
-  description: 'Same-origin policy, CORS preflight, CSRF tokens vs SameSite cookies, atributos HttpOnly e Secure. Como atacantes exploram e como defender.',
-};
+export const metadata = getModuleMetadata('cors-csrf-cookies-seguros');
 
 const quiz: QuizQuestion[] = [
   {

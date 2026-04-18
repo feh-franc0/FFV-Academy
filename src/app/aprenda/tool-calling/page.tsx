@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -6,10 +6,7 @@ import {
   ComparisonFlow, FlowDiagram, QAItem, CodeBlock, StackFlow,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Tool Calling e Agentes — FFV Academy',
-  description: 'Como tool calling funciona: JSON schema de tools, parallel tool calls, error handling, retry. Exemplos Anthropic + OpenAI.',
-};
+export const metadata = getModuleMetadata('tool-calling');
 
 const accent = '#d2a8ff';
 

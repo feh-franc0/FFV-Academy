@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock } from '@/components/article/primitives';
 
 const accent = '#ffa657';
 
-export const metadata: Metadata = {
-  title: 'OpenAI Codex: o Agente na Nuvem — FFV Academy',
-  description: 'Codex (codex-1, GPT-5.1-Codex-Max), cloud sandbox, e a pergunta real: o harness precisa interpretar tool calls de vários formatos — isso degrada performance? Resposta com evidência.',
-};
+export const metadata = getModuleMetadata('openai-codex-cloud');
 
 const quiz: QuizQuestion[] = [
   {

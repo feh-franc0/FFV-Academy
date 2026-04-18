@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -12,11 +12,7 @@ import {
   CodeBlock,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Modelos de Consistência: strong, eventual, causal, read-your-writes — FFV Academy',
-  description:
-    'Linearizability, sequential, causal, eventual e session guarantees (read-your-writes, monotonic reads, bounded staleness). Quando cada modelo é o mínimo aceitável e quanto custa.',
-};
+export const metadata = getModuleMetadata('consistency-models');
 
 const ACCENT = '#f78166';
 

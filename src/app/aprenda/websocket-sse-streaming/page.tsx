@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#1f6feb';
 
-export const metadata: Metadata = {
-  title: 'WebSocket, SSE, streaming: comunicação bidirecional — FFV Academy',
-  description: 'Long polling, SSE e WebSocket: quando usar cada um. Como streaming de LLM funciona com SSE. WebSocket com autenticação e heartbeat.',
-};
+export const metadata = getModuleMetadata('websocket-sse-streaming');
 
 const quiz: QuizQuestion[] = [
   {

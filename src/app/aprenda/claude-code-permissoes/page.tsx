@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#cc785c';
 
-export const metadata: Metadata = {
-  title: 'Claude Code: permissões e segurança — o que Claude pode e não pode fazer — FFV Academy',
-  description: 'Sistema de permissões do Claude Code: trust levels, o que é permitido por padrão, como configurar limites, sandbox e boas práticas de segurança ao usar IA no terminal.',
-};
+export const metadata = getModuleMetadata('claude-code-permissoes');
 
 const quiz: QuizQuestion[] = [
   {
@@ -54,10 +51,10 @@ export default function ClaudeCodePermissoesPage() {
       icon="🔐"
       xp={55}
       readTime={11}
-      trailName="Claude & Anthropic na Prática"
+      trailName="Claude Code: do zero ao poder total"
       trailColor="#cc785c"
-      nextSlug="claude-code-mcp-na-pratica"
-      nextTitle="MCP na prática: conectar Drive, GitHub, Slack e bancos de dados"
+      nextSlug="claude-code-workflow-diario"
+      nextTitle="Workflow diário: explore → plan → code → commit"
       quiz={quiz}
     >
       <Content />

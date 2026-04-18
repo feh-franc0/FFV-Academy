@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout, type QuizQuestion } from '@/components/ModuleLayout';
 import {
   Section,
@@ -10,11 +10,7 @@ import {
   KeyValue,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Otimização de Custos: RI, Savings Plans, Spot — SAA-C03',
-  description: 'Cost optimization para SAA-C03: Reserved Instances, Savings Plans Compute vs EC2, Spot Instances, Trusted Advisor, Cost Explorer, Budgets, Cost Allocation Tags e padrões de redução de custo em arquiteturas.',
-  keywords: 'Reserved Instances, Savings Plans, Spot, cost optimization, Trusted Advisor, Cost Explorer, Budgets, SAA-C03',
-};
+export const metadata = getModuleMetadata('cost-optimization-saa');
 
 const ACCENT = '#146eb4';
 

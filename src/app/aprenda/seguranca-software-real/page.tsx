@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -13,11 +13,7 @@ import {
   StackFlow,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Segurança de Software Real: do threat model ao SBOM — FFV Academy',
-  description:
-    'Segurança profissional em 2026: threat modeling STRIDE, OWASP Top 10 de verdade, secrets, supply chain (SBOM/SLSA), SAST/DAST/IAST, shift-left vs shift-right.',
-};
+export const metadata = getModuleMetadata('seguranca-software-real');
 
 const ACCENT = '#e3b341';
 

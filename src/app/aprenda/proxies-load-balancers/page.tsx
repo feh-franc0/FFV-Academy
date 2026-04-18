@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#1f6feb';
 
-export const metadata: Metadata = {
-  title: 'Proxies, reverse proxies, load balancers L4 vs L7 — FFV Academy',
-  description: 'Forward vs reverse proxy. Load balancer na camada 4 (TCP) vs camada 7 (HTTP). Algoritmos de balanceamento, health checks e sticky sessions.',
-};
+export const metadata = getModuleMetadata('proxies-load-balancers');
 
 const quiz: QuizQuestion[] = [
   {

@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#8b949e';
 
-export const metadata: Metadata = {
-  title: 'Filesystem e permissões: rwx, chown, symlink, hardlink — FFV Academy',
-  description: 'Como o Linux organiza arquivos, o que significa rwxr-xr-x, chmod, chown, symlinks vs hardlinks — e por que isso quebra deploys.',
-};
+export const metadata = getModuleMetadata('filesystem-permissions');
 
 const quiz: QuizQuestion[] = [
   {

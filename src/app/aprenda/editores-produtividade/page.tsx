@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#8b949e';
 
-export const metadata: Metadata = {
-  title: 'VSCode/Vim produtivos: atalhos, plugins, multi-cursor — FFV Academy',
-  description: 'Os atalhos de teclado que mudam tudo, plugins essenciais, multi-cursor e terminal integrado no VSCode — mais Vim básico para quando não tem outra opção.',
-};
+export const metadata = getModuleMetadata('editores-produtividade');
 
 const quiz: QuizQuestion[] = [
   {

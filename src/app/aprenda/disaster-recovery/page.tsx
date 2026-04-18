@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout, type QuizQuestion } from '@/components/ModuleLayout';
 import {
   Section,
@@ -13,11 +13,7 @@ import {
   KeyValue,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Disaster Recovery: RPO, RTO e 4 Estratégias — SAA-C03',
-  description: 'Disaster Recovery para SAA-C03: conceitos RPO/RTO, as 4 estratégias (Backup & Restore, Pilot Light, Warm Standby, Multi-Site), AWS Backup, Route 53 failover e testes de DR.',
-  keywords: 'disaster recovery, RPO, RTO, pilot light, warm standby, multi-site, backup, SAA-C03',
-};
+export const metadata = getModuleMetadata('disaster-recovery');
 
 const ACCENT = '#146eb4';
 

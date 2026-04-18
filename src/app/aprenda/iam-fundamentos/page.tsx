@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, QAItem, ExamDomainBadge, NodeGraph, StackFlow } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'AWS IAM: Identidade, Grupos, Roles e Policies — FFV Academy',
-  description: 'Users, groups, roles, policies JSON, MFA, principle of least privilege. O sistema que controla QUEM pode fazer O QUÊ em TODA a AWS.',
-};
+export const metadata = getModuleMetadata('iam-fundamentos');
 
 const ACCENT = '#ff9900';
 
@@ -58,6 +55,7 @@ export default function Page() {
       trailColor={ACCENT}
       nextSlug="compute-ec2-lambda"
       nextTitle="Compute: EC2, Lambda e Containers"
+      relatedSlugs={['networking-vpc-route53','compute-ec2-lambda','o-que-e-cloud']}
       quiz={quiz}
     >
       <Content />

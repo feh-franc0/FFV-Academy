@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -6,10 +6,7 @@ import {
   ArchFlow, FlowDiagram, QAItem, CodeBlock,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Dados: o Combustível da IA — FFV Academy',
-  description: 'Qualidade vs quantidade de dados, data leakage, class imbalance, train/val/test split, data augmentation e pipelines de dados reais.',
-};
+export const metadata = getModuleMetadata('dados-o-combustivel');
 
 const accent = '#58a6ff';
 

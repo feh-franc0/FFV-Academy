@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock } from '@/components/article/primitives';
 
 const accent = '#ffa657';
 
-export const metadata: Metadata = {
-  title: 'Amazon Q e Kiro: a Aposta da AWS — FFV Academy',
-  description: 'O Amazon Q Developer integra IA ao ecossistema AWS com foco enterprise. O Kiro propõe spec-driven development. Duas filosofias distintas da mesma empresa.',
-};
+export const metadata = getModuleMetadata('amazon-q-kiro');
 
 const quiz: QuizQuestion[] = [
   {

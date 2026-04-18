@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout, type QuizQuestion } from '@/components/ModuleLayout';
 import {
   Section,
@@ -13,11 +13,7 @@ import {
   KeyValue,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Messaging: SQS, SNS, EventBridge, Kinesis — SAA-C03',
-  description: 'Desacoplamento e eventos no SAA-C03: SQS Standard vs FIFO vs DLQ, SNS fanout, EventBridge rules e pipes, Kinesis Streams vs Firehose vs Data Analytics.',
-  keywords: 'SQS, SNS, EventBridge, Kinesis, FIFO, DLQ, fanout, event-driven, SAA-C03',
-};
+export const metadata = getModuleMetadata('messaging-eventos');
 
 const ACCENT = '#146eb4';
 

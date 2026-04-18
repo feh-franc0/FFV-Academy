@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, QAItem, ExamDomainBadge, StackFlow } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Migração AWS: Migration Hub, DMS, MGN e DataSync — FFV Academy',
-  description: 'Os serviços de migração da AWS explicados: Migration Hub, Application Migration Service (MGN), Database Migration Service (DMS), Application Discovery, DataSync e Mainframe Modernization.',
-};
+export const metadata = getModuleMetadata('migracao-aws-servicos');
 
 const ACCENT = '#ff9900';
 

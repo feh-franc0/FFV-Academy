@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout, type QuizQuestion } from '@/components/ModuleLayout';
 import {
   Section,
@@ -13,11 +13,7 @@ import {
   KeyValue,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Bancos: Multi-AZ, Read Replicas e DynamoDB — SAA-C03',
-  description: 'Deep dive em bancos para o SAA-C03: RDS Multi-AZ vs Read Replicas, Aurora cluster e Serverless v2, DynamoDB modos de capacity, GSI/LSI, DAX, Streams, Global Tables e escolha arquitetural.',
-  keywords: 'RDS, Aurora, DynamoDB, Multi-AZ, Read Replica, GSI, LSI, DAX, Aurora Serverless, Global Tables, SAA-C03',
-};
+export const metadata = getModuleMetadata('rds-aurora-dynamodb');
 
 const ACCENT = '#146eb4';
 

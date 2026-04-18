@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, StackFlow, LayerStack, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'IAM Avançado: Policies JSON, STS e Organizations — FFV Academy',
-  description: 'Policies JSON em profundidade, STS AssumeRole, cross-account access, AWS Organizations, SCPs e Identity Center para o SAA-C03.',
-};
+export const metadata = getModuleMetadata('iam-avancado-organizations');
 
 const ACCENT = '#146eb4';
 

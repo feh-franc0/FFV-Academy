@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#8b949e';
 
-export const metadata: Metadata = {
-  title: 'JSON, YAML e variáveis de ambiente: config moderna — FFV Academy',
-  description: 'JSON e YAML como formatos universais de config, variáveis de ambiente, .env files e 12-factor app — como configurar sistemas modernos sem hardcode.',
-};
+export const metadata = getModuleMetadata('json-yaml-env');
 
 const quiz: QuizQuestion[] = [
   {

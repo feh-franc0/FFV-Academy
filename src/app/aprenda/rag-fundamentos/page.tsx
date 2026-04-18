@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -12,11 +12,7 @@ import {
   ArchDiagram,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'RAG: por que "só jogar tudo no LLM" não funciona — FFV Academy',
-  description:
-    'RAG (Retrieval-Augmented Generation) na prática: limite de contexto, alucinação, arquitetura em dois estágios. Quando RAG vence fine-tuning e por que naive RAG falha em produção.',
-};
+export const metadata = getModuleMetadata('rag-fundamentos');
 
 const ACCENT = '#ff7eb6';
 
@@ -83,6 +79,7 @@ export default function Page() {
       trailColor={ACCENT}
       nextSlug="chunking-embeddings"
       nextTitle="Chunking e Embeddings: as decisões que fazem ou quebram seu RAG"
+      relatedSlugs={['chunking-embeddings', 'claude-api-fundamentos', 'agentes-padroes']}
       quiz={quiz}
     >
       <Content />

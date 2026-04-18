@@ -1,12 +1,8 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable, DecisionBox, ArchDiagram } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Incident Response e Postmortem: do pager ao aprendizado | FFV Academy',
-  description: 'Incident Commander, roles, timeline, comunicação, blameless postmortem, 5 whys, action items com SLA. Como transformar incidentes em aprendizado organizacional.',
-  keywords: 'incident response, postmortem, blameless, SRE, on-call, incident commander, 5 whys, aprendizado',
-};
+export const metadata = getModuleMetadata('incident-response-postmortem');
 
 const ACCENT = '#79c0ff';
 

@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import {
   Section,
@@ -12,13 +12,7 @@ import {
 
 const ACCENT = '#f78166';
 
-export const metadata: Metadata = {
-  title: 'Rate Limiting Distribuído: token bucket, sliding window, Redis | FFV Academy',
-  description:
-    'Token bucket, leaky bucket, sliding window counter e log: os 4 algoritmos clássicos de rate limiting. Implementação com Redis + Lua script atômico, em produção.',
-  keywords:
-    'rate limiting distribuido, token bucket, leaky bucket, sliding window, redis rate limit, lua script atomic, api rate limit, throttling',
-};
+export const metadata = getModuleMetadata('rate-limiting-distribuido');
 
 const quiz = [
   {

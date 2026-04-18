@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#3776ab';
 
-export const metadata: Metadata = {
-  title: 'Empacotando projeto Python: pyproject.toml, ruff, PyPI — FFV Academy',
-  description: 'pyproject.toml completo, ruff para linting e formatação, hatchling como build backend, publicar no PyPI com uv e trusted publishing via GitHub Actions.',
-};
+export const metadata = getModuleMetadata('empacotamento-publicacao');
 
 const quiz: QuizQuestion[] = [
   {

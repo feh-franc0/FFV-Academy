@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#3776ab';
 
-export const metadata: Metadata = {
-  title: 'GIL, threading e multiprocessing: quando cada um — FFV Academy',
-  description: 'O que é o GIL e quando ele importa. threading para I/O-bound, multiprocessing para CPU-bound, concurrent.futures como interface unificada.',
-};
+export const metadata = getModuleMetadata('gil-threads-processos');
 
 const quiz: QuizQuestion[] = [
   {

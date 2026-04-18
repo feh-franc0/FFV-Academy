@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -14,11 +14,7 @@ import {
   SplitFlow,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Gerenciando Agents: orquestração, contexto e custo — FFV Academy',
-  description:
-    'Como gerenciar agents de IA em times profissionais: orquestração, contexto, custo de tokens, limites, políticas, auditoria e armadilhas reais.',
-};
+export const metadata = getModuleMetadata('gerenciando-agents-ia');
 
 const ACCENT = '#e3b341';
 

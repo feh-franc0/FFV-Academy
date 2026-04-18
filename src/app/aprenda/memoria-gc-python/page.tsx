@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#3776ab';
 
-export const metadata: Metadata = {
-  title: 'Memória em Python: refcount, GC, __slots__, weakref — FFV Academy',
-  description: 'Como Python gerencia memória com contagem de referências e garbage collector cíclico. __slots__ para reduzir uso, weakref para evitar memory leaks.',
-};
+export const metadata = getModuleMetadata('memoria-gc-python');
 
 const quiz: QuizQuestion[] = [
   {

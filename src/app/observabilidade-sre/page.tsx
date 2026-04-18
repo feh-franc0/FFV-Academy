@@ -11,5 +11,5 @@ export const metadata: Metadata = {
 };
 
 export default function ObservabilidadeSREPage() {
-  return <TrailBlogClient trail={CURRICULUM[10]} />;
+  return <TrailBlogClient trail={CURRICULUM[9]} />;
 }

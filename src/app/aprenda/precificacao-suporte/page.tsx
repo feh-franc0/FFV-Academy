@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Precificação AWS, Free Tier e Planos de Suporte — FFV Academy',
-  description: 'Pricing models, Free Tier, Cost Explorer, Budgets, Savings Plans, Reserved Instances, AWS Organizations e os 4 planos de suporte AWS.',
-};
+export const metadata = getModuleMetadata('precificacao-suporte');
 
 const ACCENT = '#ff9900';
 

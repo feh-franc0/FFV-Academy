@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#8b949e';
 
-export const metadata: Metadata = {
-  title: 'GitHub profissional: PR, review, issues, Actions — FFV Academy',
-  description: 'Fork vs clone, Pull Requests, code review eficaz, issues, labels, milestones e GitHub Actions para CI/CD básico — o fluxo que empresas usam de verdade.',
-};
+export const metadata = getModuleMetadata('github-fluxo-profissional');
 
 const quiz: QuizQuestion[] = [
   {

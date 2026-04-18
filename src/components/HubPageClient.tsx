@@ -6,23 +6,10 @@ import {
   HUBS,
   getHubStats,
   getHubTrails,
+  getTrailHref,
   type Hub,
   type Trail,
 } from '@/lib/curriculum';
-
-const TRAIL_HREF: Record<string, string> = {
-  trail1: '/fundamentos-da-ia',
-  trail2: '/ia-alem-do-llm',
-  trail3: '/ferramentas-ia-codigo',
-  trail4: '/aws-cloud-practitioner',
-  trail5: '/aws-saa-c03',
-  trail6: '/como-aprender',
-  trail7: '/devops-containers',
-  trail8: '/engenharia-software',
-  trail9: '/ai-native',
-  trail10: '/sistemas-distribuidos',
-  trail11: '/observabilidade-sre',
-};
 
 export function HubPageClient({ hub }: { hub: Hub }) {
   const { state } = useGameState();
@@ -257,7 +244,7 @@ function HubTrails({
               key={trail.id}
               trail={trail}
               number={idx + 1}
-              href={TRAIL_HREF[trail.id] ?? '/'}
+              href={getTrailHref(trail.id)}
               completed={completed}
               hubColor={hub.color}
             />

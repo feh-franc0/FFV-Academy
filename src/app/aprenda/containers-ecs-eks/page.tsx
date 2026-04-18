@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, LayerStack, StackFlow, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'ECS vs EKS: Orquestração de Containers — FFV Academy',
-  description: 'ECS, EKS, Fargate, launch types, service discovery, ingress e quando escolher cada um no AWS SAA-C03.',
-};
+export const metadata = getModuleMetadata('containers-ecs-eks');
 
 const ACCENT = '#146eb4';
 

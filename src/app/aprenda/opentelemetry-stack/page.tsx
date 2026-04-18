@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import {
   Section,
@@ -12,13 +12,7 @@ import {
 
 const ACCENT = '#79c0ff';
 
-export const metadata: Metadata = {
-  title: 'OpenTelemetry end-to-end: instrumentação app → backend | FFV Academy',
-  description:
-    'OpenTelemetry (OTel) em produção: SDK auto vs manual, Collector (receivers, processors, exporters), context propagation W3C, pipelines reais em Node, Python e Go.',
-  keywords:
-    'opentelemetry tutorial, otel collector, otel sdk, context propagation, instrumentacao auto manual, opentelemetry producao, otlp',
-};
+export const metadata = getModuleMetadata('opentelemetry-stack');
 
 const quiz = [
   {

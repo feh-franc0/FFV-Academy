@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { CURRICULUM, HUBS, type Module, type Trail } from '@/lib/curriculum';
+import { CURRICULUM, HUBS, getTrailHref, type Module, type Trail } from '@/lib/curriculum';
 
 type Item = {
   id: string;
@@ -13,20 +13,6 @@ type Item = {
   href: string;
   haystack: string;
   accent: string;
-};
-
-const TRAIL_HREF: Record<string, string> = {
-  trail1: '/fundamentos-da-ia',
-  trail2: '/ia-alem-do-llm',
-  trail3: '/ferramentas-ia-codigo',
-  trail4: '/aws-cloud-practitioner',
-  trail5: '/aws-saa-c03',
-  trail6: '/como-aprender',
-  trail7: '/devops-containers',
-  trail8: '/engenharia-software',
-  trail9: '/ai-native',
-  trail10: '/sistemas-distribuidos',
-  trail11: '/observabilidade-sre',
 };
 
 function buildItems(): Item[] {
@@ -86,7 +72,7 @@ function buildItems(): Item[] {
       title: trail.name,
       subtitle: trail.desc,
       icon: trail.icon,
-      href: TRAIL_HREF[trail.id] ?? '/',
+      href: getTrailHref(trail.id),
       haystack: `${trail.name} ${trail.desc} ${trail.id}`.toLowerCase(),
       accent: trail.color,
     });

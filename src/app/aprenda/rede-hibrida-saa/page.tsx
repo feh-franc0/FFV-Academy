@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, QAItem, ExamDomainBadge, ArchDiagram } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Rede Híbrida AWS: Direct Connect, VPN, PrivateLink e VPC Endpoints — FFV Academy',
-  description: 'Arquitetura de rede híbrida para o SAA-C03: Direct Connect, Site-to-Site VPN, Client VPN, PrivateLink, Gateway vs Interface Endpoints, Route 53 Resolver e Transit Gateway inter-region.',
-};
+export const metadata = getModuleMetadata('rede-hibrida-saa');
 
 const ACCENT = '#146eb4';
 

@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, NodeGraph, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Storage AWS: S3, EBS, EFS e Glacier — FFV Academy',
-  description: 'Object vs Block vs File storage na AWS. S3 storage classes, EBS volume types, EFS vs FSx, ciclos de vida e arquivamento com Glacier.',
-};
+export const metadata = getModuleMetadata('storage-s3-ebs-efs');
 
 const ACCENT = '#ff9900';
 

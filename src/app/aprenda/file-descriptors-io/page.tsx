@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#6e7681';
 
-export const metadata: Metadata = {
-  title: 'File descriptors e I/O: o que todo processo compartilha — FFV Academy',
-  description: 'stdin/stdout/stderr como file descriptors, por que tudo é arquivo no Linux, pipes, redirecionamento e como isso afeta performance de I/O.',
-};
+export const metadata = getModuleMetadata('file-descriptors-io');
 
 const quiz: QuizQuestion[] = [
   {

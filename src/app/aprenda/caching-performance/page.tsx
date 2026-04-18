@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout, type QuizQuestion } from '@/components/ModuleLayout';
 import {
   Section,
@@ -13,11 +13,7 @@ import {
   KeyValue,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Caching: ElastiCache, DAX e Padrões — SAA-C03',
-  description: 'Caching em profundidade para SAA-C03: ElastiCache Redis vs Memcached, DAX, CloudFront cache, cache-aside vs write-through vs write-behind, TTL, invalidação e consistência.',
-  keywords: 'ElastiCache, Redis, Memcached, DAX, cache-aside, write-through, TTL, CloudFront cache, SAA-C03',
-};
+export const metadata = getModuleMetadata('caching-performance');
 
 const ACCENT = '#146eb4';
 

@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#3776ab';
 
-export const metadata: Metadata = {
-  title: 'pytest profissional: fixture, parametrize, mock, coverage — FFV Academy',
-  description: 'pytest fixtures com scopes, parametrize para testes data-driven, monkeypatch e unittest.mock, coverage.py — testes que valem a pena escrever.',
-};
+export const metadata = getModuleMetadata('pytest-profissional');
 
 const quiz: QuizQuestion[] = [
   {

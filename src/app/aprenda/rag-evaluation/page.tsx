@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -11,11 +11,7 @@ import {
   ArchDiagram,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Avaliando RAG: recall@k, nDCG e LLM-as-judge — FFV Academy',
-  description:
-    'Golden dataset, métricas de retrieval (recall@k, MRR, nDCG) e de generation (faithfulness, context precision, answer relevance). RAGAS, LLM-as-judge sem vazamento e como rodar eval harness em CI.',
-};
+export const metadata = getModuleMetadata('rag-evaluation');
 
 const ACCENT = '#ff7eb6';
 

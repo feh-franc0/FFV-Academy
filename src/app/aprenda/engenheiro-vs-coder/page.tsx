@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -12,11 +12,7 @@ import {
   StackFlow,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Engenheiro vs Coder: o que mudou na era dos agents — FFV Academy',
-  description:
-    'Por que o coder está virando commodity e o que significa ser engenheiro de software de verdade em 2026: decompor, especificar, revisar, decidir, operar.',
-};
+export const metadata = getModuleMetadata('engenheiro-vs-coder');
 
 const ACCENT = '#e3b341';
 

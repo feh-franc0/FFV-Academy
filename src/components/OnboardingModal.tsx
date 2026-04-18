@@ -7,7 +7,7 @@ import { useGameState } from '@/hooks/useGameState';
 type Step = 'intro' | 'q-level' | 'q-goal' | 'choose';
 
 type Level = 'beginner' | 'intermediate' | 'advanced';
-type Goal = 'ia' | 'aws' | 'engenharia' | 'aprender';
+type Goal = 'ia' | 'aws' | 'engenharia' | 'claude';
 
 function recommendHub(level: Level | null, goal: Goal | null): string | null {
   if (!goal) return null;
@@ -16,7 +16,7 @@ function recommendHub(level: Level | null, goal: Goal | null): string | null {
     ia: level === 'advanced' ? 'ia' : 'ia',
     aws: 'aws',
     engenharia: 'engenharia',
-    aprender: 'como-aprender',
+    claude: 'claude-anthropic',
   };
   return hubByGoal[goal];
 }
@@ -31,7 +31,7 @@ const GOAL_OPTIONS: { value: Goal; label: string; desc: string; icon: string; hu
   { value: 'ia', label: 'Entender IA de verdade', desc: 'LLMs, transformers, RAG, agents — a fundo, sem hype.', icon: '🤖', hub: 'ia' },
   { value: 'aws', label: 'Dominar a AWS', desc: 'Cloud Practitioner, Solutions Architect — certificações e arquitetura real.', icon: '☁️', hub: 'aws' },
   { value: 'engenharia', label: 'Ser engenheiro de software melhor', desc: 'DevOps, sistemas distribuídos, SRE, engenharia moderna.', icon: '🔧', hub: 'engenharia' },
-  { value: 'aprender', label: 'Aprender a aprender', desc: 'Revisão espaçada, recall ativo, hábito de estudo — as técnicas que realmente funcionam.', icon: '📚', hub: 'como-aprender' },
+  { value: 'claude', label: 'Dominar o Claude & Anthropic', desc: 'Claude Code, API, agents, MCP, skills — o ecossistema completo para devs.', icon: '⊕', hub: 'claude-anthropic' },
 ];
 
 export function OnboardingModal() {

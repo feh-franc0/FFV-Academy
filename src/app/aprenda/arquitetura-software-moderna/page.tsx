@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -13,11 +13,7 @@ import {
   StackFlow,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Arquitetura Moderna: trade-offs, ADRs, C4 e evolução — FFV Academy',
-  description:
-    'Arquitetura de software em 2026: monolito modular vs microserviços, DDD, ADR (Architecture Decision Records), modelo C4, fitness functions e evolução sem big-rewrite.',
-};
+export const metadata = getModuleMetadata('arquitetura-software-moderna');
 
 const ACCENT = '#e3b341';
 

@@ -1,12 +1,8 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable, DecisionBox, ArchDiagram } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'SLOs e Error Budgets: da definição ao burn rate alert | FFV Academy',
-  description: 'SLI, SLO, SLA — diferenças e como definir. Error budget como recurso de engenharia. Multi-window multi-burn rate alerts. Toil budget e freeze policy.',
-  keywords: 'SLO, SLA, SLI, error budget, burn rate, alertas, SRE, confiabilidade, observabilidade',
-};
+export const metadata = getModuleMetadata('slos-error-budgets');
 
 const ACCENT = '#79c0ff';
 

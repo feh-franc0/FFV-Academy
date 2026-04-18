@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock } from '@/components/article/primitives';
 
 const accent = '#ffa657';
 
-export const metadata: Metadata = {
-  title: 'Claude Code: Arquitetura por Dentro — FFV Academy',
-  description: 'QueryEngine, Session/Harness/Sandbox, auto-compact a 98%, Tier 1/2 de permissões, prompt caching — o que o código do Claude Code realmente faz e por que isso explica seu desempenho em benchmark.',
-};
+export const metadata = getModuleMetadata('claude-code-arquitetura');
 
 const quiz: QuizQuestion[] = [
   {

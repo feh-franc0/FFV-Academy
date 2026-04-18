@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#8b949e';
 
-export const metadata: Metadata = {
-  title: 'Como o computador roda seu código — FFV Academy',
-  description: 'Do clique de tecla ao pixel na tela: CPU, memória, SO, processos e chamadas de sistema — o modelo mental que todo programador precisa ter.',
-};
+export const metadata = getModuleMetadata('como-computador-roda-codigo');
 
 const quiz: QuizQuestion[] = [
   {

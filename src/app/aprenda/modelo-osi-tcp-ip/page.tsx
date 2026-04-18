@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#1f6feb';
 
-export const metadata: Metadata = {
-  title: 'OSI e TCP/IP: as camadas que explicam tudo — FFV Academy',
-  description: 'O modelo OSI de 7 camadas, o stack TCP/IP real, encapsulamento, e como cada camada explica problemas de rede do dia a dia.',
-};
+export const metadata = getModuleMetadata('modelo-osi-tcp-ip');
 
 const quiz: QuizQuestion[] = [
   {

@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, ArchDiagram, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'VPC em Profundidade: NAT, Peering e Transit Gateway — FFV Academy',
-  description: 'Arquitetura de VPC profunda: subnets, NAT Gateway, VPC Peering, Transit Gateway, PrivateLink, VPN e Direct Connect para SAA-C03.',
-};
+export const metadata = getModuleMetadata('vpc-avancado');
 
 const ACCENT = '#146eb4';
 

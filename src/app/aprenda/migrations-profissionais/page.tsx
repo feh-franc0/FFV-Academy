@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#336791';
 
-export const metadata: Metadata = {
-  title: 'Migrations profissionais: reversíveis, zero-downtime — FFV Academy',
-  description: 'Alembic para Python, migrations reversíveis com up/down, zero-downtime em produção: adicionar coluna nullable, backfill em lotes, NOT NULL depois.',
-};
+export const metadata = getModuleMetadata('migrations-profissionais');
 
 const quiz: QuizQuestion[] = [
   {

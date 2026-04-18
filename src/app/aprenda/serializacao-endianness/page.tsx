@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#6e7681';
 
-export const metadata: Metadata = {
-  title: 'Serialização, endianness, UTF-8: os bytes que viajam — FFV Academy',
-  description: 'Por que "olá" tem bytes diferentes em UTF-8 e Latin-1. Big-endian vs little-endian. JSON vs Protobuf vs MessagePack — trade-offs de serialização.',
-};
+export const metadata = getModuleMetadata('serializacao-endianness');
 
 const quiz: QuizQuestion[] = [
   {

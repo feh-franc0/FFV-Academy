@@ -8,5 +8,5 @@ export const metadata: Metadata = {
 };
 
 export default function DevOpsContainersPage() {
-  return <TrailBlogClient trail={CURRICULUM[6]} />;
+  return <TrailBlogClient trail={CURRICULUM[5]} />;
 }

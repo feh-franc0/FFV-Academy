@@ -1,4 +1,5 @@
 import { Fragment, type ReactNode } from 'react';
+import { highlight } from 'sugar-high';
 
 type Tone = 'info' | 'warn' | 'danger' | 'success' | 'neutral';
 
@@ -55,15 +56,17 @@ export function Callout({ tone = 'info', icon, children }: {
 }
 
 export function CodeBlock({ lang, children }: { lang?: string; children: ReactNode }) {
+  const code = typeof children === 'string' ? children : String(children ?? '');
+  const highlighted = highlight(code);
   return (
-    <div className="rounded-lg overflow-hidden" style={{ border: '1px solid var(--ffv-border)' }}>
+    <div className="rounded-lg overflow-hidden sh-codeblock" style={{ border: '1px solid var(--ffv-border)' }}>
       {lang && (
         <div className="text-[10px] px-3 py-1 uppercase tracking-wider" style={{ background: 'var(--ffv-bg3)', color: 'var(--ffv-muted)', fontFamily: 'var(--font-roboto-mono)' }}>
           {lang}
         </div>
       )}
-      <pre className="p-4 text-xs overflow-x-auto whitespace-pre-wrap" style={{ background: 'var(--ffv-bg2)', color: 'var(--ffv-green)', fontFamily: 'var(--font-roboto-mono)' }}>
-        {children}
+      <pre className="p-4 text-xs overflow-x-auto whitespace-pre-wrap" style={{ background: 'var(--ffv-bg2)', fontFamily: 'var(--font-roboto-mono)' }}>
+        <code dangerouslySetInnerHTML={{ __html: highlighted }} />
       </pre>
     </div>
   );
@@ -91,42 +94,74 @@ export function ComparisonTable({ headers, rows, accent = 'var(--ffv-blue)' }: {
   accent?: string;
 }) {
   return (
-    <div className="overflow-x-auto rounded-xl" style={{ border: '1px solid var(--ffv-border)' }}>
-      <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
-        <thead>
-          <tr style={{ background: 'var(--ffv-bg2)' }}>
-            {headers.map((h, i) => (
-              <th
-                key={i}
-                className="text-left px-3 py-2 font-semibold"
-                style={{ color: i === 0 ? accent : 'var(--foreground)', borderBottom: '1px solid var(--ffv-border)' }}
-              >
-                {h}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, ri) => (
-            <tr key={ri} style={{ background: ri % 2 === 0 ? 'transparent' : 'var(--ffv-bg2)' }}>
-              {row.map((cell, ci) => (
-                <td
-                  key={ci}
-                  className="px-3 py-2 align-top"
-                  style={{
-                    color: ci === 0 ? 'var(--foreground)' : 'var(--ffv-muted)',
-                    borderBottom: ri === rows.length - 1 ? 'none' : '1px solid var(--ffv-border)',
-                    fontWeight: ci === 0 ? 600 : 400,
-                  }}
+    <>
+      {/* Desktop: table layout */}
+      <div className="hidden sm:block overflow-x-auto rounded-xl" style={{ border: '1px solid var(--ffv-border)' }}>
+        <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ background: 'var(--ffv-bg2)' }}>
+              {headers.map((h, i) => (
+                <th
+                  key={i}
+                  className="text-left px-3 py-2 font-semibold"
+                  style={{ color: i === 0 ? accent : 'var(--foreground)', borderBottom: '1px solid var(--ffv-border)' }}
                 >
-                  {cell}
-                </td>
+                  {h}
+                </th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {rows.map((row, ri) => (
+              <tr key={ri} style={{ background: ri % 2 === 0 ? 'transparent' : 'var(--ffv-bg2)' }}>
+                {row.map((cell, ci) => (
+                  <td
+                    key={ci}
+                    className="px-3 py-2 align-top"
+                    style={{
+                      color: ci === 0 ? 'var(--foreground)' : 'var(--ffv-muted)',
+                      borderBottom: ri === rows.length - 1 ? 'none' : '1px solid var(--ffv-border)',
+                      fontWeight: ci === 0 ? 600 : 400,
+                    }}
+                  >
+                    {cell}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Mobile: stacked cards */}
+      <div className="sm:hidden flex flex-col gap-3">
+        {rows.map((row, ri) => (
+          <div
+            key={ri}
+            className="rounded-xl p-3"
+            style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}
+          >
+            {row.map((cell, ci) => (
+              <div
+                key={ci}
+                className="flex items-start gap-2 text-xs"
+                style={{ marginBottom: ci < row.length - 1 ? 6 : 0 }}
+              >
+                <span
+                  className="flex-shrink-0 font-semibold"
+                  style={{ color: accent, minWidth: 80 }}
+                >
+                  {headers[ci]}
+                </span>
+                <span style={{ color: ci === 0 ? 'var(--foreground)' : 'var(--ffv-muted)', fontWeight: ci === 0 ? 600 : 400 }}>
+                  {cell}
+                </span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
 

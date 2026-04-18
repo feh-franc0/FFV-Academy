@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, NodeGraph, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Segurança AWS: KMS, GuardDuty, Shield, WAF e mais — FFV Academy',
-  description: 'O catálogo de serviços de segurança da AWS: KMS, Secrets Manager, GuardDuty, Shield, WAF, Inspector, Macie, Security Hub, Detective, Artifact.',
-};
+export const metadata = getModuleMetadata('seguranca-aws-servicos');
 
 const ACCENT = '#ff9900';
 

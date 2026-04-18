@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#3776ab';
 
-export const metadata: Metadata = {
-  title: 'Decorators e context managers: o que são de verdade — FFV Academy',
-  description: 'Decorators são funções que recebem funções. Context managers garantem cleanup. functools.wraps, @property, @classmethod, @staticmethod, contextlib.',
-};
+export const metadata = getModuleMetadata('decorators-context-managers');
 
 const quiz: QuizQuestion[] = [
   {

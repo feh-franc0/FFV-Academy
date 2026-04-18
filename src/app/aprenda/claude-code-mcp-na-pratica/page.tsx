@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#cc785c';
 
-export const metadata: Metadata = {
-  title: 'MCP na prática: conectar Drive, GitHub, Slack e bancos de dados — FFV Academy',
-  description: 'Model Context Protocol (MCP) permite que Claude acesse ferramentas externas. Como configurar servidores MCP prontos para Google Drive, GitHub, Postgres, Slack e mais.',
-};
+export const metadata = getModuleMetadata('claude-code-mcp-na-pratica');
 
 const quiz: QuizQuestion[] = [
   {
@@ -54,10 +51,10 @@ export default function ClaudeCodeMcpNaPraticaPage() {
       icon="🔌"
       xp={75}
       readTime={15}
-      trailName="Claude & Anthropic na Prática"
+      trailName="Claude Code: do zero ao poder total"
       trailColor="#cc785c"
-      nextSlug="claude-code-hooks"
-      nextTitle="Hooks: automatizar revisões, validações e ações customizadas"
+      nextSlug="claude-code-github-integration"
+      nextTitle="Claude Code + GitHub: PRs, issues e code review automatizados"
       quiz={quiz}
     >
       <Content />

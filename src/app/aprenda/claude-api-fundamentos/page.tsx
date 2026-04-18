@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
-const accent = '#cc785c';
+const accent = '#a78bfa';
 
-export const metadata: Metadata = {
-  title: 'API da Anthropic: messages, streaming, vision, batch e cache — FFV Academy',
-  description: 'A API Messages da Anthropic: como enviar conversas, streaming de respostas, processar imagens, batch de milhares de requests e prompt caching para reduzir custo.',
-};
+export const metadata = getModuleMetadata('claude-api-fundamentos');
 
 const quiz: QuizQuestion[] = [
   {
@@ -54,10 +51,10 @@ export default function ClaudeApiFundamentosPage() {
       icon="🔗"
       xp={75}
       readTime={15}
-      trailName="Claude & Anthropic na Prática"
-      trailColor="#cc785c"
-      nextSlug="prompt-engineering-claude"
-      nextTitle="Prompt engineering para Claude: técnicas que realmente funcionam"
+      trailName="API Claude & Agents"
+      trailColor="#a78bfa"
+      nextSlug="claude-features-avancadas"
+      nextTitle="Features avançadas: extended thinking, citations, code execution"
       quiz={quiz}
     >
       <Content />

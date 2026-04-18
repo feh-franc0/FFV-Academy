@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import {
   Section,
@@ -12,13 +12,7 @@ import {
 
 const ACCENT = '#f78166';
 
-export const metadata: Metadata = {
-  title: 'Postgres Profundo: MVCC, Isolation Levels e Locks | FFV Academy',
-  description:
-    'Como Postgres faz MVCC, os 4 isolation levels em detalhe, SELECT FOR UPDATE, advisory locks, VACUUM e bloat. O guia profissional pra dev moderno.',
-  keywords:
-    'postgres mvcc, isolation levels postgres, select for update, advisory lock postgres, vacuum bloat, repeatable read serializable, serializable snapshot isolation',
-};
+export const metadata = getModuleMetadata('postgres-mvcc-isolation');
 
 const quiz = [
   {

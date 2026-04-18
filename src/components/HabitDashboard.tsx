@@ -5,8 +5,10 @@ import { useMemo } from 'react';
 import { useGameState } from '@/hooks/useGameState';
 import { isoDate, todayISO } from '@/lib/srs';
 
+const GOAL_OPTIONS = [1, 3, 5, 7, 10];
+
 export function HabitDashboard() {
-  const { state, dueCards } = useGameState();
+  const { state, dueCards, dailyChallenge, updateDailyGoal } = useGameState();
 
   if (!state) return null;
   const hasStarted = (state.completedModules?.length ?? 0) > 0 || (state.reviewCards?.length ?? 0) > 0;
@@ -43,8 +45,52 @@ export function HabitDashboard() {
           <StatCard label="Streak" value={`${state.streak}d`} accent="var(--ffv-orange)" icon="🔥" />
           <StatCard label="Freezes" value={String(state.freezes ?? 0)} accent="var(--ffv-blue)" icon="🧊" hint={state.freezes > 0 ? 'te salva se esquecer' : 'faz streak de 7 dias'} />
           <StatCard label="XP hoje" value={`+${xpToday}`} accent="var(--ffv-green)" icon="⚡" />
-          <StatCard label={`Meta (${goal}/dia)`} value={`${cardsToday}/${goal}`} accent="var(--ffv-purple)" icon={goalPct >= 100 ? '🎯' : '📈'} hint={goalPct >= 100 ? 'meta batida hoje' : `${goalPct}%`} />
+          <GoalCard goal={goal} cardsToday={cardsToday} goalPct={goalPct} onGoalChange={updateDailyGoal} />
         </div>
+
+        {/* Daily Challenge */}
+        {dailyChallenge && !dailyChallenge.completed && (
+          <Link
+            href="/revisar"
+            className="block mb-4 p-4 rounded-xl transition-all hover:scale-[1.01]"
+            style={{
+              background: 'linear-gradient(135deg, color-mix(in srgb, var(--ffv-yellow) 12%, var(--ffv-bg)), color-mix(in srgb, var(--ffv-orange) 8%, var(--ffv-bg)))',
+              border: '1px solid color-mix(in srgb, var(--ffv-yellow) 30%, transparent)',
+            }}
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span style={{ fontSize: 24 }}>⚡</span>
+                <div>
+                  <div className="text-sm font-bold" style={{ color: 'var(--ffv-yellow)' }}>
+                    Desafio do Dia
+                  </div>
+                  <div className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
+                    Complete 1 card especial e ganhe XP triplicado
+                  </div>
+                </div>
+              </div>
+              <span
+                className="px-3 py-1.5 rounded-full text-xs font-bold"
+                style={{ background: 'var(--ffv-yellow)', color: '#0d1117' }}
+              >
+                3x XP →
+              </span>
+            </div>
+          </Link>
+        )}
+        {dailyChallenge?.completed && (
+          <div
+            className="mb-4 p-3 rounded-xl text-center text-xs font-medium"
+            style={{
+              background: 'color-mix(in srgb, var(--ffv-green) 8%, var(--ffv-bg))',
+              border: '1px solid color-mix(in srgb, var(--ffv-green) 25%, transparent)',
+              color: 'var(--ffv-green)',
+            }}
+          >
+            ✓ Desafio do dia concluído
+          </div>
+        )}
 
         <HeatmapSection studyDays={state.studyDays ?? []} />
 
@@ -181,6 +227,47 @@ function HeatmapSection({ studyDays }: { studyDays: Array<{ date: string; minute
             </div>
           ))}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function GoalCard({ goal, cardsToday, goalPct, onGoalChange }: {
+  goal: number;
+  cardsToday: number;
+  goalPct: number;
+  onGoalChange: (g: number) => void;
+}) {
+  return (
+    <div
+      className="p-4 rounded-xl"
+      style={{ background: 'var(--ffv-bg)', border: '1px solid var(--ffv-border)' }}
+    >
+      <div className="flex items-center gap-2 text-[10px] tracking-wider uppercase mb-1" style={{ color: 'var(--ffv-muted)' }}>
+        <span>{goalPct >= 100 ? '🎯' : '📈'}</span>
+        <span>Meta diária</span>
+      </div>
+      <div className="mt-1 text-2xl font-bold tabular-nums" style={{ color: 'var(--ffv-purple)' }}>
+        {cardsToday}/{goal}
+      </div>
+      <div className="text-[10px] mt-0.5 mb-2" style={{ color: 'var(--ffv-muted)' }}>
+        {goalPct >= 100 ? 'meta batida hoje' : `${goalPct}%`}
+      </div>
+      <div className="flex gap-1 flex-wrap">
+        {GOAL_OPTIONS.map(g => (
+          <button
+            key={g}
+            onClick={() => onGoalChange(g)}
+            className="text-[10px] px-2 py-0.5 rounded-full font-semibold transition-all"
+            style={{
+              background: g === goal ? 'var(--ffv-purple)' : 'var(--ffv-bg2)',
+              color: g === goal ? '#0d1117' : 'var(--ffv-muted)',
+              border: `1px solid ${g === goal ? 'var(--ffv-purple)' : 'var(--ffv-border)'}`,
+            }}
+          >
+            {g}
+          </button>
+        ))}
       </div>
     </div>
   );

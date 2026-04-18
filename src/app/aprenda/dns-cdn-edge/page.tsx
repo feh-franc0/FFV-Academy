@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, ArchDiagram, StackFlow, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Route 53, CloudFront e Global Accelerator — FFV Academy',
-  description: 'Route 53 routing policies, CloudFront behaviors, Global Accelerator — a borda da AWS para o SAA-C03.',
-};
+export const metadata = getModuleMetadata('dns-cdn-edge');
 
 const ACCENT = '#146eb4';
 

@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -12,11 +12,7 @@ import {
   ArchDiagram,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'LLMOps: eval harness, drift detection e canary de prompts — FFV Academy',
-  description:
-    'LLMOps profissional: eval harness (promptfoo, LangSmith, custom), regressão de prompt, canary/A-B de prompts, drift detection, cost attribution e SLO de qualidade.',
-};
+export const metadata = getModuleMetadata('llmops-drift-canary');
 
 const ACCENT = '#ff7eb6';
 

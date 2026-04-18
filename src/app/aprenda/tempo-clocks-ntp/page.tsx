@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#6e7681';
 
-export const metadata: Metadata = {
-  title: 'Tempo distribuído: NTP, clock skew, monotonic vs wall — FFV Academy',
-  description: 'Por que servidores em datacenters divergem de tempo mesmo sincronizados. Wall clock vs monotonic clock. Lamport timestamps e Google TrueTime.',
-};
+export const metadata = getModuleMetadata('tempo-clocks-ntp');
 
 const quiz: QuizQuestion[] = [
   {

@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#cc785c';
 
-export const metadata: Metadata = {
-  title: 'Skills e slash commands Claude Code: criar seus próprios workflows — FFV Academy',
-  description: 'Skills são workflows customizados invocados via /nome-do-comando. Como criar skills para deploy, revisão de código, geração de documentação e tarefas repetitivas.',
-};
+export const metadata = getModuleMetadata('claude-code-skills-commands');
 
 const quiz: QuizQuestion[] = [
   {
@@ -54,10 +51,10 @@ export default function ClaudeCodeSkillsCommandsPage() {
       icon="⚡"
       xp={65}
       readTime={13}
-      trailName="Claude & Anthropic na Prática"
+      trailName="Claude Code: do zero ao poder total"
       trailColor="#cc785c"
-      nextSlug="claude-api-fundamentos"
-      nextTitle="API da Anthropic: messages, streaming, vision, batch e cache"
+      nextSlug="claude-code-subagents"
+      nextTitle="Subagents: delegar tarefas a agentes isolados"
       quiz={quiz}
     >
       <Content />

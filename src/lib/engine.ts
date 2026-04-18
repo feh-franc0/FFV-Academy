@@ -1,7 +1,8 @@
 'use client';
 
-import { CURRICULUM, LEVELS, BADGES_DEF, getLevelInfo } from './curriculum';
-import { type ReviewCard, type ReviewQuality, createCard, reviewCard, getDueCards, todayISO, isoDate } from './srs';
+import LZString from 'lz-string';
+import { CURRICULUM, LEVELS, BADGES_DEF, getLevelInfo, getHubForTrail } from './curriculum';
+import { type ReviewCard, type ReviewQuality, createCard, reviewCard, getDueCards, todayISO, isoDate, daysBetween } from './srs';
 
 const ENGINE_KEY = 'ffv_academy';
 
@@ -39,6 +40,7 @@ export interface GameState {
   startedAt: string | null;
   // SRS + habit tracking (Phase 1)
   reviewCards: ReviewCard[];
+  archivedCards: ReviewCard[];  // cards GC'd: easeFactor > 3.0 && interval > 90
   studyDays: StudyDay[];
   freezes: number;          // 0-2 streak freezes in bank
   dailyGoal: number;        // default 3 cards/day
@@ -84,6 +86,7 @@ const DEFAULT_STATE: GameState = {
   totalStudyTime: 0,
   startedAt: null,
   reviewCards: [],
+  archivedCards: [],
   studyDays: [],
   freezes: 0,
   dailyGoal: 3,
@@ -99,13 +102,20 @@ export function loadState(): GameState {
   try {
     const raw = localStorage.getItem(ENGINE_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      // Support both lz-string compressed (new) and plain JSON (legacy)
+      let jsonStr: string | null = null;
+      try {
+        jsonStr = LZString.decompress(raw);
+      } catch { /* not compressed */ }
+      const finalStr = jsonStr || raw;
+      const parsed = JSON.parse(finalStr) as Record<string, unknown>;
       const migrated = migrateState(parsed);
       return {
         ...DEFAULT_STATE,
         ...migrated,
         schemaVersion: CURRENT_SCHEMA,
         reviewCards: Array.isArray(migrated.reviewCards) ? migrated.reviewCards : [],
+        archivedCards: Array.isArray(migrated.archivedCards) ? migrated.archivedCards : [],
         studyDays: Array.isArray(migrated.studyDays) ? migrated.studyDays : [],
         freezes: typeof migrated.freezes === 'number' ? migrated.freezes : 0,
         dailyGoal: typeof migrated.dailyGoal === 'number' ? migrated.dailyGoal : 3,
@@ -120,20 +130,48 @@ export function loadState(): GameState {
   return { ...DEFAULT_STATE, startedAt: new Date().toISOString() };
 }
 
+/**
+ * Move SRS cards that are well-known (easeFactor > 3.0 && interval > 90 days)
+ * to archivedCards, keeping reviewCards lean for daily use.
+ */
+function gcSRSCards(state: GameState): GameState {
+  const active: ReviewCard[] = [];
+  const toArchive: ReviewCard[] = [];
+
+  for (const card of state.reviewCards) {
+    if (card.easeFactor > 3.0 && card.interval > 90) {
+      toArchive.push(card);
+    } else {
+      active.push(card);
+    }
+  }
+
+  if (toArchive.length === 0) return state;
+
+  // Merge into archivedCards, avoiding duplicates
+  const archivedIds = new Set(state.archivedCards.map(c => c.id));
+  const newArchived = [...state.archivedCards, ...toArchive.filter(c => !archivedIds.has(c.id))];
+
+  return { ...state, reviewCards: active, archivedCards: newArchived };
+}
+
 let _saveErrorCallback: ((msg: string) => void) | null = null;
 /** Registra callback para erros de persistência (ex: localStorage cheio). */
 export function onSaveError(cb: (msg: string) => void) { _saveErrorCallback = cb; }
 
 function saveState(state: GameState) {
+  // GC well-known SRS cards before persisting
+  const gc = gcSRSCards(state);
   try {
-    localStorage.setItem(ENGINE_KEY, JSON.stringify(state));
+    const compressed = LZString.compress(JSON.stringify(gc));
+    localStorage.setItem(ENGINE_KEY, compressed);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Erro ao salvar progresso';
     _saveErrorCallback?.(msg);
     // Re-tentativa com dados críticos mínimos (preserva progresso, descarta histórico pesado)
     try {
-      const minimal = { ...state, studyDays: state.studyDays.slice(-30), reviewCards: state.reviewCards.slice(-100) };
-      localStorage.setItem(ENGINE_KEY, JSON.stringify(minimal));
+      const minimal = { ...gc, studyDays: gc.studyDays.slice(-30), reviewCards: gc.reviewCards.slice(-100) };
+      localStorage.setItem(ENGINE_KEY, LZString.compress(JSON.stringify(minimal)));
     } catch {}
   }
 }
@@ -157,9 +195,10 @@ export function importState(json: string): boolean {
       ...migrated,
       schemaVersion: CURRENT_SCHEMA,
       reviewCards: Array.isArray(migrated.reviewCards) ? migrated.reviewCards : [],
+      archivedCards: Array.isArray(migrated.archivedCards) ? migrated.archivedCards : [],
       studyDays: Array.isArray(migrated.studyDays) ? migrated.studyDays : [],
     };
-    localStorage.setItem(ENGINE_KEY, JSON.stringify(next));
+    localStorage.setItem(ENGINE_KEY, LZString.compress(JSON.stringify(next)));
     return true;
   } catch { return false; }
 }
@@ -394,6 +433,24 @@ export function completeModule(input: CompleteModuleInput): CompleteModuleResult
     }
   }
 
+  // Badges de maestria de trilha (≥80% média de quiz nos módulos com quiz)
+  for (const trail of CURRICULUM) {
+    const masteryBadgeId = `${trail.id}_mastery`;
+    if (state.badges.includes(masteryBadgeId)) continue;
+    const allDone = trail.modules.every(m => state.completedModules.includes(m.slug));
+    if (!allDone) continue;
+    const modulesWithQuiz = trail.modules.filter(m => state.quizScores[m.slug]);
+    if (modulesWithQuiz.length === 0) continue;
+    const avgScore = modulesWithQuiz.reduce((sum, m) => {
+      const qs = state.quizScores[m.slug];
+      return sum + (qs ? qs.score / qs.total : 0);
+    }, 0) / modulesWithQuiz.length;
+    if (avgScore >= 0.8) {
+      const r = unlockBadge(state, masteryBadgeId);
+      if (r.unlocked) { state = r.state; newBadges.push(masteryBadgeId); }
+    }
+  }
+
   // Badges de múltiplas trilhas completas
   if (completedTrailCount >= 2) {
     const r = unlockBadge(state, 'two_trails_done');
@@ -411,6 +468,85 @@ export function completeModule(input: CompleteModuleInput): CompleteModuleResult
   if (allTrailsDone) {
     const r = unlockBadge(state, 'all_done');
     if (r.unlocked) { state = r.state; newBadges.push('all_done'); }
+  }
+
+  // ─── Badges de comportamento ───
+
+  // Early bird: estudou antes das 8h
+  {
+    const hour = new Date().getHours();
+    if (hour < 8) {
+      const r = unlockBadge(state, 'early_bird');
+      if (r.unlocked) { state = r.state; newBadges.push('early_bird'); }
+    }
+  }
+
+  // Night owl: estudou depois das 22h
+  {
+    const hour = new Date().getHours();
+    if (hour >= 22) {
+      const r = unlockBadge(state, 'night_owl');
+      if (r.unlocked) { state = r.state; newBadges.push('night_owl'); }
+    }
+  }
+
+  // Weekend warrior: estudou sábado E domingo da mesma semana
+  {
+    const today = new Date();
+    const dayOfWeek = today.getDay(); // 0=Sun, 6=Sat
+    if (dayOfWeek === 0 || dayOfWeek === 6) {
+      // Check if the other weekend day also has study
+      const otherDay = new Date(today);
+      otherDay.setDate(today.getDate() + (dayOfWeek === 6 ? 1 : -1));
+      const otherISO = otherDay.toISOString().slice(0, 10);
+      const hasOtherDay = state.studyDays.some(d => d.date === otherISO && (d.modulesCompleted > 0 || d.cardsReviewed > 0));
+      if (hasOtherDay) {
+        const r = unlockBadge(state, 'weekend_warrior');
+        if (r.unlocked) { state = r.state; newBadges.push('weekend_warrior'); }
+      }
+    }
+  }
+
+  // Streak 14 dias
+  if (state.streak >= 14) {
+    const r = unlockBadge(state, 'streak_14');
+    if (r.unlocked) { state = r.state; newBadges.push('streak_14'); }
+  }
+
+  // Explorer: módulos de 3+ hubs diferentes
+  {
+    const hubsSeen = new Set<string>();
+    for (const slug of state.completedModules) {
+      for (const trail of CURRICULUM) {
+        if (trail.modules.some(m => m.slug === slug)) {
+          const hub = getHubForTrail(trail.id);
+          if (hub) hubsSeen.add(hub.id);
+          break;
+        }
+      }
+      if (hubsSeen.size >= 3) break;
+    }
+    if (hubsSeen.size >= 3) {
+      const r = unlockBadge(state, 'explorer');
+      if (r.unlocked) { state = r.state; newBadges.push('explorer'); }
+    }
+  }
+
+  // Comeback: retomou depois de 7+ dias parado
+  {
+    if (state.startedAt && state.studyDays.length >= 2) {
+      const sorted = [...state.studyDays].sort((a, b) => a.date.localeCompare(b.date));
+      const todayStr = todayISO();
+      const todayIdx = sorted.findIndex(d => d.date === todayStr);
+      if (todayIdx > 0) {
+        const prevDate = sorted[todayIdx - 1].date;
+        const gap = daysBetween(prevDate, todayStr);
+        if (gap >= 7) {
+          const r = unlockBadge(state, 'comeback');
+          if (r.unlocked) { state = r.state; newBadges.push('comeback'); }
+        }
+      }
+    }
   }
 
   saveState(state);
@@ -498,6 +634,36 @@ export function submitCardReview(cardId: string, outcome: ReviewQuality): Review
     if (r.unlocked) { state = r.state; newBadges.push('cards_200'); }
   }
 
+  // Badge: perfect review (10 boas seguidas — checa os últimos 10 cards revisados hoje sem "again")
+  if (outcome !== 'again') {
+    const todayCards = state.studyDays.find(d => d.date === todayISO());
+    if (todayCards && todayCards.cardsReviewed >= 10) {
+      const r = unlockBadge(state, 'perfect_review');
+      if (r.unlocked) { state = r.state; newBadges.push('perfect_review'); }
+    }
+  }
+
+  // Badge: daily_goal_7 — bateu meta 7 dias seguidos
+  {
+    const today = todayISO();
+    let consecutiveGoalDays = 0;
+    for (let i = 0; i < 7; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dateStr = d.toISOString().slice(0, 10);
+      const day = state.studyDays.find(sd => sd.date === dateStr);
+      if (day && day.cardsReviewed >= state.dailyGoal) {
+        consecutiveGoalDays++;
+      } else {
+        break;
+      }
+    }
+    if (consecutiveGoalDays >= 7) {
+      const r = unlockBadge(state, 'daily_goal_7');
+      if (r.unlocked) { state = r.state; newBadges.push('daily_goal_7'); }
+    }
+  }
+
   saveState(state);
 
   return {
@@ -561,6 +727,40 @@ export function setPreferredHub(preferredHub: string | null) {
 // Todas as trilhas liberadas — o leitor escolhe por onde começa
 export function isTrailUnlocked(_trailId: string): boolean {
   return true;
+}
+
+/* ──────────────────────────────────────────────
+   DAILY CHALLENGE — 1 card aleatório por dia com XP triplicado
+──────────────────────────────────────────────── */
+
+export interface DailyChallenge {
+  card: ReviewCard;
+  xpMultiplier: number;
+  completed: boolean;
+}
+
+/**
+ * Retorna o Daily Challenge do dia (determinístico por data).
+ * Se o usuário não tem cards, retorna null.
+ * Se já completou hoje, marca como completed.
+ */
+export function getDailyChallenge(): DailyChallenge | null {
+  const state = loadState();
+  if (state.reviewCards.length === 0) return null;
+
+  // Hash da data → índice determinístico
+  const today = todayISO();
+  let hash = 0;
+  for (let i = 0; i < today.length; i++) {
+    hash = ((hash << 5) - hash + today.charCodeAt(i)) | 0;
+  }
+  const idx = Math.abs(hash) % state.reviewCards.length;
+  const card = state.reviewCards[idx];
+
+  // Checa se o card já foi revisado hoje (dueDate mudou para o futuro)
+  const completed = card.dueDate > today;
+
+  return { card, xpMultiplier: 3, completed };
 }
 
 export { LEVELS, getLevelInfo, getDueCards, todayISO, isoDate };

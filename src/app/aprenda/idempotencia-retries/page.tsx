@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import {
   Section,
@@ -12,13 +12,7 @@ import {
 
 const ACCENT = '#f78166';
 
-export const metadata: Metadata = {
-  title: 'Idempotência e Retries: o antídoto pra rede que quebra | FFV Academy',
-  description:
-    'Idempotência, idempotency keys, backoff exponencial com jitter, circuit breaker, deduplicação e entregas at-least-once vs exactly-once. O guia profissional.',
-  keywords:
-    'idempotencia api, idempotency key, retry backoff jitter, circuit breaker, exactly once, at least once, deduplicacao, stripe idempotency, sistemas distribuidos',
-};
+export const metadata = getModuleMetadata('idempotencia-retries');
 
 const quiz = [
   {

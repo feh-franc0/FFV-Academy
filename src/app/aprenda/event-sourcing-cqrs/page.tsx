@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import {
   Section,
@@ -12,13 +12,7 @@ import {
 
 const ACCENT = '#f78166';
 
-export const metadata: Metadata = {
-  title: 'Event Sourcing e CQRS: quando eventos são a fonte da verdade | FFV Academy',
-  description:
-    'Event Sourcing: armazenar deltas, não estado. CQRS: separar escrita e leitura. Projections, snapshots, event store e quando ESTA complexidade vale a pena.',
-  keywords:
-    'event sourcing, cqrs, event log, projection, kafka event store, eventstoredb, command query separation, replay, snapshot',
-};
+export const metadata = getModuleMetadata('event-sourcing-cqrs');
 
 const quiz = [
   {

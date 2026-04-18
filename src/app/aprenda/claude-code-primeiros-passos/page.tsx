@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#cc785c';
 
-export const metadata: Metadata = {
-  title: 'Claude Code: instalação, autenticação e primeiro uso real — FFV Academy',
-  description: 'Como instalar o Claude Code, autenticar com sua conta Anthropic, os primeiros comandos no terminal e como Claude Code difere de outros assistentes de IA.',
-};
+export const metadata = getModuleMetadata('claude-code-primeiros-passos');
 
 const quiz: QuizQuestion[] = [
   {
@@ -54,10 +51,11 @@ export default function ClaudeCodePrimeirosPassosPage() {
       icon="🖥️"
       xp={50}
       readTime={10}
-      trailName="Claude & Anthropic na Prática"
+      trailName="Claude Code: do zero ao poder total"
       trailColor="#cc785c"
       nextSlug="claude-code-modos-de-uso"
       nextTitle="Modos de uso: interativo, não-interativo, pipe e headless"
+      relatedSlugs={['claude-code-arquitetura','claude-code-hooks','mcp-servers']}
       quiz={quiz}
     >
       <Content />

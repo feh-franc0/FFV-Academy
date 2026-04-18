@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#3776ab';
 
-export const metadata: Metadata = {
-  title: 'Iteradores, generators e lazy evaluation — FFV Academy',
-  description: 'Como o protocolo de iteração funciona em Python. Generators com yield, expressões geradoras, itertools para pipelines funcionais e avaliação lazy.',
-};
+export const metadata = getModuleMetadata('iteradores-generators');
 
 const quiz: QuizQuestion[] = [
   {

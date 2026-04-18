@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, StackFlow, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Serverless Avançado: Lambda, API GW e Step Functions — FFV Academy',
-  description: 'Lambda deep dive (concurrency, cold start, layers), API Gateway REST vs HTTP, Step Functions e workflows serverless para SAA-C03.',
-};
+export const metadata = getModuleMetadata('serverless-lambda-avancado');
 
 const ACCENT = '#146eb4';
 

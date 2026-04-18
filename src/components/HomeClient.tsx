@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import type { CSSProperties } from 'react';
-import { CURRICULUM, HUBS, LEVELS, getHubStats, getHubTrails, type Hub, type Module, type Trail } from '@/lib/curriculum';
+import { CURRICULUM, HUBS, LEVELS, getHubStats, getHubTrails, getTrailHref, type Hub, type Module, type Trail } from '@/lib/curriculum';
 import { useGameState } from '@/hooks/useGameState';
 import { HabitDashboard } from '@/components/HabitDashboard';
 import { ContinueCard } from '@/components/ContinueCard';
@@ -146,7 +146,7 @@ function Hero({ totalArticles }: { totalArticles: number }) {
             maxWidth: 900,
           }}
         >
-          Engenharia de software
+          Aprenda IA, AWS e Engenharia de Software
           <br />
           <span
             style={{
@@ -156,7 +156,7 @@ function Hero({ totalArticles }: { totalArticles: number }) {
               backgroundClip: 'text',
             }}
           >
-            para a era da IA.
+            de forma gamificada e gratuita.
           </span>
         </h1>
 
@@ -169,9 +169,9 @@ function Hero({ totalArticles }: { totalArticles: number }) {
             marginBottom: 40,
           }}
         >
-          IA, AWS, DevOps e Sistemas Distribuídos explicados por dentro — escritos por quem constrói
-          software há mais de uma década. Zero hype, zero clickbait. Arquitetura real, dados
-          públicos, decisões testadas. Cada artigo vira XP na sua trilha de aprendizado.
+          Curso técnico gamificado para devs sérios: cada artigo dá XP, tem quiz e faz você evoluir de nível.
+          IA, AWS, Claude Code, sistemas distribuídos e muito mais — explicados por dentro, sem hype.
+          Sem cadastro. Sem paywall. Comece agora.
         </p>
 
         <div className="flex items-center gap-3 flex-wrap mb-14">
@@ -224,7 +224,7 @@ function HeroMetrics({ totalArticles }: { totalArticles: number }) {
   const items = [
     { n: String(totalArticles), label: 'artigos técnicos' },
     { n: String(CURRICULUM.length), label: 'trilhas de aprendizado' },
-    { n: '7', label: 'níveis de evolução' },
+    { n: String(LEVELS.length), label: 'níveis de evolução' },
     { n: '100%', label: 'gratuito, sem cadastro' },
   ];
   return (
@@ -829,25 +829,7 @@ function TrailCard({
   completedSlugs: string[];
 }) {
   const pct = Math.round((done / trail.modules.length) * 100);
-  const hrefByTrailId: Record<string, string> = {
-    trail1: '/fundamentos-da-ia',
-    trail2: '/ia-alem-do-llm',
-    trail3: '/ferramentas-ia-codigo',
-    trail4: '/aws-cloud-practitioner',
-    trail5: '/aws-saa-c03',
-    trail6: '/como-aprender',
-    trail7: '/devops-containers',
-    trail8: '/engenharia-software',
-    trail9: '/ai-native',
-    trail10: '/sistemas-distribuidos',
-    trail11: '/observabilidade-sre',
-    trail12: '/fundamentos-tecnicos',
-    trail13: '/claude-anthropic',
-    trail14: '/sql-databases',
-    trail15: '/como-computador-funciona',
-    trail16: '/redes-web',
-  };
-  const href = hrefByTrailId[trail.id] ?? '/';
+  const href = getTrailHref(trail.id);
 
   return (
     <Link href={href} className="block group" style={{ textDecoration: 'none', color: 'inherit' }}>

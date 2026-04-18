@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -6,10 +6,7 @@ import {
   ArchFlow, FlowDiagram, QAItem, CodeBlock,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Mixture of Experts (MoE) — FFV Academy',
-  description: 'Como MoE funciona: router, top-k experts, load balancing, Mixtral, DeepSeek v3, GPT-4. Trade-off memoria vs compute.',
-};
+export const metadata = getModuleMetadata('mixture-of-experts');
 
 const accent = '#d2a8ff';
 

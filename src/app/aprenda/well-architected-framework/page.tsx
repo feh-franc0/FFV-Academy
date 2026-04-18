@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, MindMap, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'AWS Well-Architected: os 6 Pilares — FFV Academy',
-  description: 'Operational Excellence, Security, Reliability, Performance, Cost Optimization e Sustainability. O framework que guia o design de toda arquitetura AWS.',
-};
+export const metadata = getModuleMetadata('well-architected-framework');
 
 const ACCENT = '#ff9900';
 

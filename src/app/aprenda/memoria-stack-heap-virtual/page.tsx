@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#6e7681';
 
-export const metadata: Metadata = {
-  title: 'Memória: stack, heap, virtual memory, page fault — FFV Academy',
-  description: 'Stack vs heap, por que stack overflow acontece, virtual memory como abstração, page fault e swapping — como o SO gerencia memória de todos os processos.',
-};
+export const metadata = getModuleMetadata('memoria-stack-heap-virtual');
 
 const quiz: QuizQuestion[] = [
   {

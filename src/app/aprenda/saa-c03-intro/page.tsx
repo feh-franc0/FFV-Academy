@@ -1,12 +1,9 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, ComparisonTable, MindMap, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'SAA-C03: Da Teoria à Arquitetura Real — FFV Academy',
-  description: 'Introdução ao AWS Solutions Architect Associate (SAA-C03): os 4 domínios do exame, diferenças do Practitioner e mentalidade de arquiteto.',
-};
+export const metadata = getModuleMetadata('saa-c03-intro');
 
 const ACCENT = '#146eb4';
 

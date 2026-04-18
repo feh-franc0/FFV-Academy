@@ -1,12 +1,8 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable, DecisionBox, ArchDiagram } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Distributed Tracing: spans, baggage e sampling strategies | FFV Academy',
-  description: 'Spans, parent-child, W3C Trace Context, baggage, head vs tail sampling, Jaeger vs Tempo. Como implementar tracing distribuído de verdade.',
-  keywords: 'distributed tracing, spans, W3C trace context, baggage, sampling, Jaeger, Tempo, OpenTelemetry, observabilidade',
-};
+export const metadata = getModuleMetadata('distributed-tracing');
 
 const ACCENT = '#79c0ff';
 

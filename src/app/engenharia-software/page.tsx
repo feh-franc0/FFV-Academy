@@ -9,5 +9,5 @@ export const metadata: Metadata = {
 };
 
 export default function EngenhariaSoftwarePage() {
-  return <TrailBlogClient trail={CURRICULUM[7]} />;
+  return <TrailBlogClient trail={CURRICULUM[6]} />;
 }

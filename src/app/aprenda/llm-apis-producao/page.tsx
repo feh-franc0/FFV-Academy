@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -11,11 +11,7 @@ import {
   QAItem,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'LLM APIs em Produção: streaming, structured output, batch e cache — FFV Academy',
-  description:
-    'Padrões profissionais para LLM APIs: streaming SSE, tool use, structured output com JSON schema/Zod, batch API (50% off), prompt caching, retry com jitter, rate limit handling.',
-};
+export const metadata = getModuleMetadata('llm-apis-producao');
 
 const ACCENT = '#ff7eb6';
 

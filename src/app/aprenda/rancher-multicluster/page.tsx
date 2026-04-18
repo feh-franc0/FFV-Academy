@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -14,11 +14,7 @@ import {
   SplitFlow,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Rancher: multi-cluster Kubernetes sem sofrer — FFV Academy',
-  description:
-    'Rancher Manager em PT-BR: RKE2, importar clusters, Fleet GitOps multi-cluster, Projects, RBAC unificado, monitoring e quando Rancher realmente vale a pena.',
-};
+export const metadata = getModuleMetadata('rancher-multicluster');
 
 const ACCENT = '#0075a8';
 

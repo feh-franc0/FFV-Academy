@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -13,10 +13,7 @@ import {
   CodeBlock,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Redes Neurais: o Cérebro Artificial — FFV Academy',
-  description: 'Como redes neurais funcionam por dentro: neurônio, forward pass, backpropagation, loss functions, overfitting, regularização e funções de ativação.',
-};
+export const metadata = getModuleMetadata('redes-neurais');
 
 const ACCENT = '#58a6ff';
 

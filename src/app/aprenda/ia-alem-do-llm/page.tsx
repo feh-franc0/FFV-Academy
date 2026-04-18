@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -6,10 +6,7 @@ import {
   ArchFlow, LayerStack, QAItem, CodeBlock, StackFlow, FlowDiagram,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Harness: a Infraestrutura do Agente — FFV Academy',
-  description: 'Os 6 componentes de um agente: LLM, tools, loop, contexto, subagentes e permissoes. Como Claude Code e Cursor funcionam por dentro.',
-};
+export const metadata = getModuleMetadata('ia-alem-do-llm');
 
 const accent = '#d2a8ff';
 

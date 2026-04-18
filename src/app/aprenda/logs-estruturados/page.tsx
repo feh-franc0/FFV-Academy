@@ -1,12 +1,8 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable, DecisionBox, ArchDiagram } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Logs Estruturados: JSON, correlation IDs e levels com propósito | FFV Academy',
-  description: 'JSON logs, trace_id/span_id correlation, log levels (o que DEBUG, INFO, WARN, ERROR realmente significam), structured logging libs e formatter cost.',
-  keywords: 'logs estruturados, structured logging, JSON logs, correlation ID, trace_id, log levels, observabilidade, SRE',
-};
+export const metadata = getModuleMetadata('logs-estruturados');
 
 const ACCENT = '#79c0ff';
 

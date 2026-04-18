@@ -1,9 +1,11 @@
 'use client';
 
 import Link from 'next/link';
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
+import { Share2 } from 'lucide-react';
 import { useGameState } from '@/hooks/useGameState';
 import { exportState, importState } from '@/lib/engine';
+import { ShareCard } from '@/components/ShareCard';
 import {
   BADGES_DEF,
   CURRICULUM,
@@ -12,28 +14,16 @@ import {
   getHubStats,
   getHubTrails,
   getLevelInfo,
+  getTrailHref,
   getTrailProgress,
   type Hub,
   type Trail,
 } from '@/lib/curriculum';
 
-const TRAIL_HREF: Record<string, string> = {
-  trail1: '/fundamentos-da-ia',
-  trail2: '/ia-alem-do-llm',
-  trail3: '/ferramentas-ia-codigo',
-  trail4: '/aws-cloud-practitioner',
-  trail5: '/aws-saa-c03',
-  trail6: '/como-aprender',
-  trail7: '/devops-containers',
-  trail8: '/engenharia-software',
-  trail9: '/ai-native',
-  trail10: '/sistemas-distribuidos',
-  trail11: '/observabilidade-sre',
-};
-
 export function ProgressoClient() {
   const { state, levelInfo, dueCards, refresh } = useGameState();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showShare, setShowShare] = useState(false);
 
   function handleExport() {
     const json = exportState();
@@ -95,8 +85,25 @@ export function ProgressoClient() {
     <div style={{ background: 'var(--ffv-bg)', color: 'var(--foreground)' }}>
       <Hero state={state} levelInfo={levelInfo ?? getLevelInfo(state.xp)} levelPct={levelPct} xpInLevel={xpInLevel} xpNeeded={xpNeeded} />
 
+      {showShare && <ShareCard onClose={() => setShowShare(false)} />}
+
       <section className="max-w-5xl mx-auto px-6 py-12">
-        <SectionLabel>VISÃO GERAL</SectionLabel>
+        <div className="flex items-center justify-between mb-0">
+          <SectionLabel>VISÃO GERAL</SectionLabel>
+          <button
+            type="button"
+            onClick={() => setShowShare(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors hover:opacity-80"
+            style={{
+              background: 'color-mix(in srgb, var(--ffv-blue) 12%, transparent)',
+              border: '1px solid color-mix(in srgb, var(--ffv-blue) 30%, transparent)',
+              color: 'var(--ffv-blue)',
+            }}
+          >
+            <Share2 size={14} />
+            Compartilhar
+          </button>
+        </div>
         <div className="grid gap-4 mt-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
           <Stat label="Artigos lidos" value={`${completed.length}`} sub={`de ${totalModules} · ${overallPct}%`} accent="var(--ffv-blue)" />
           <Stat label="XP total" value={state.xp.toLocaleString('pt-BR')} sub={`de ${totalXpPossible.toLocaleString('pt-BR')} disponíveis`} accent="var(--ffv-yellow)" />
@@ -356,7 +363,7 @@ function HubProgressCard({ hub, completedSlugs }: { hub: Hub; completedSlugs: st
 /* ───────── Trail row ───────── */
 function TrailProgressRow({ trail, completedSlugs }: { trail: Trail; completedSlugs: string[] }) {
   const tp = getTrailProgress(trail.modules, completedSlugs);
-  const href = TRAIL_HREF[trail.id] ?? '/';
+  const href = getTrailHref(trail.id);
   return (
     <Link href={href} className="block" style={{ textDecoration: 'none', color: 'inherit' }}>
       <div

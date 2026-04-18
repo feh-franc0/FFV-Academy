@@ -1,14 +1,11 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 const accent = '#1f6feb';
 
-export const metadata: Metadata = {
-  title: 'UDP, QUIC e HTTP/3: por que Google jogou TCP fora — FFV Academy',
-  description: 'UDP sem garantias e quando é melhor. QUIC resolve head-of-line blocking, 0-RTT e mobilidade de IP. HTTP/3 sobre QUIC: o futuro da web.',
-};
+export const metadata = getModuleMetadata('udp-quic-http3');
 
 const quiz: QuizQuestion[] = [
   {

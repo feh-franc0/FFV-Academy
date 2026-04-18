@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -14,10 +14,7 @@ import {
   StackFlow,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'O que é um LLM? — FFV Academy',
-  description: 'Como um Large Language Model funciona por dentro: pré-treino, fine-tuning, RLHF, context window, temperature, top-p, custos por token e os limites reais.',
-};
+export const metadata = getModuleMetadata('o-que-e-llm');
 
 const ACCENT = '#58a6ff';
 
@@ -82,6 +79,7 @@ export default function OQueELLMPage() {
       nextTitle="Tokens e Tokenização"
       quiz={quiz}
       seoDesc="Como um Large Language Model funciona por dentro: pré-treino, fine-tuning, RLHF, context window, temperature, top-p, custos e limites."
+      relatedSlugs={['rag-fundamentos', 'context-engineering', 'claude-api-fundamentos']}
     >
       <Content />
     </ModuleLayout>

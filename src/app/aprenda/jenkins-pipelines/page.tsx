@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
@@ -13,11 +13,7 @@ import {
   StackFlow,
 } from '@/components/article/primitives';
 
-export const metadata: Metadata = {
-  title: 'Jenkins Pipelines: o CI/CD da era enterprise — FFV Academy',
-  description:
-    'Jenkins profissional em PT-BR: arquitetura controller/agents, Jenkinsfile declarativo, agents Kubernetes, shared libraries, credentials, Blue Ocean e integração com GitHub.',
-};
+export const metadata = getModuleMetadata('jenkins-pipelines');
 
 const ACCENT = '#d33833';
 
