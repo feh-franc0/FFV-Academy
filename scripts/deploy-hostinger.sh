@@ -23,6 +23,7 @@ for route in \
   sistemas-distribuidos observabilidade-sre \
   fundamentos-tecnicos \
   claude-anthropic claude-code-masterclass claude-api-agents \
+  claude-code-pro \
   sql-databases como-computador-funciona redes-web \
   python-profundo \
   revisar glossario; do
@@ -30,7 +31,12 @@ for route in \
   cp "$OUT/$route.html" "$DEST/$route/index.html"
 done
 
-# Rotas de artigos (/aprenda/<slug>/)
+# Rotas de artigos (/aprenda/<slug>/) — pega todos automaticamente
+# Novos módulos 2026 trilha 13: cheatsheet-pratico, paralelismo-na-pratica, multi-projeto-multi-contexto
+# Novos módulos trilha 18 (harness engineering): harness-anatomia-do-agente,
+# harness-system-prompt-output-styles, harness-permissions-em-producao,
+# harness-skills-avancado-com-scripts, harness-hooks-cookbook-executivo,
+# harness-plugins-para-times, harness-agent-sdk-em-producao
 for f in "$OUT/aprenda/"*.html; do
   slug=$(basename "$f" .html)
   mkdir -p "$DEST/aprenda/$slug"

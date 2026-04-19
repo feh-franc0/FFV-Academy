@@ -206,8 +206,106 @@ grep -E "(sk-ant-|api_key|password|secret|token)" CLAUDE.md
 # - CI/CD usa ANTHROPIC_API_KEY como variável de ambiente segura (nunca hardcoded)`}</CodeBlock>
       </Section>
 
+      <Section accent={accent} title="Auto mode e /fewer-permission-prompts (2026)">
+        <p>Em 2026 o Claude Code ganhou um modo de permissão <strong>auto</strong> — um classificador decide em tempo real se uma ação merece prompt, baseado em risco estimado. E o <code>/fewer-permission-prompts</code> analisa seu transcript e gera automaticamente uma allowlist pro seu <code>settings.json</code>:</p>
+        <CodeBlock lang="shell">{`# Permission modes disponíveis:
+# - default      → pergunta pra ações de risco (padrão)
+# - acceptEdits  → auto-aprova Edit/Write, pergunta pra Bash
+# - plan         → read-only + planning, ignora edições (começa assim pra explorar)
+# - auto         → classifier-based: pergunta só quando risco é alto (2026)
+# - bypassPermissions → aprova TUDO (sandbox/container apenas)
+
+# Começar em plan mode pra exploração segura:
+claude --permission-mode plan
+
+# Auto mode pra dev experiente em projeto conhecido:
+claude --permission-mode auto
+
+# Shift+Tab cicla entre modos durante a sessão
+# (--allow-dangerously-skip-permissions habilita bypass via Shift+Tab)
+
+# Gerar allowlist a partir do seu uso real:
+/fewer-permission-prompts
+# Scanea transcripts de sessões passadas → identifica comandos que você
+# aprova sempre → adiciona em .claude/settings.json
+
+# Exemplo de allowlist gerada automaticamente:
+{
+  "permissions": {
+    "allow": [
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(npm run lint:*)",
+      "Bash(npm test:*)",
+      "Bash(pnpm:*)",
+      "Read(**)",
+      "Glob(**)",
+      "Grep(**)"
+    ]
+  }
+}
+
+# Nota: read-only Bash com globs (ls *.ts) não dispara prompt em 2026+
+# Nota: Bash wrappers (env/sudo/watch/ionice) agora matchados corretamente
+#       → Bash(npm *) não ignora "sudo npm install" como antes`}</CodeBlock>
+      </Section>
+
+      <Section accent={accent} title="Deny rules avançadas e sandbox de rede">
+        <CodeBlock lang="json">{`// .claude/settings.json — política de segurança completa
+{
+  "permissions": {
+    "allow": [
+      "Bash(git:*)",
+      "Bash(npm test:*)",
+      "Bash(pnpm lint:*)",
+      "Read(**)",
+      "Edit(src/**)",
+      "Edit(tests/**)"
+    ],
+    "deny": [
+      "Bash(rm -rf:*)",
+      "Bash(curl:*)",
+      "Bash(wget:*)",
+      "Bash(ssh:*)",
+      "Bash(git push --force:*)",
+      "Bash(sudo:*)",
+      "Bash(npm publish:*)",
+      "Edit(.env*)",
+      "Edit(**/secrets/**)",
+      "Write(/etc/**)",
+      "Write(~/.ssh/**)"
+    ],
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(docker:*)",
+      "Edit(package.json)",
+      "Edit(Dockerfile)"
+    ]
+  },
+  "sandbox": {
+    "network": {
+      "deniedDomains": [
+        "pastebin.com",
+        "transfer.sh",
+        "*.ngrok.io"
+      ]
+    }
+  },
+  "disableSkillShellExecution": false,
+  "defaultMode": "plan"
+}
+
+// Hierarquia (override de cima pra baixo):
+// enterprise (managed policy) > ~/.claude/settings.json > .claude/settings.json > .claude/settings.local.json
+
+// Nota importante sobre find em 2026:
+// "Bash(find:*)" NÃO auto-aprova mais "find -exec" ou "find -delete"
+// Isso é tratado como ação separada e pede confirmação`}</CodeBlock>
+      </Section>
+
       <Callout tone="success">
-        <strong>Princípios de segurança com Claude Code:</strong> menor privilégio (use --allowedTools mínimo para cada tarefa), revise antes de aprovar (leia o comando Bash antes de Enter), separe contextos (dados externos em sessões sem Bash), não commite segredos (nem no CLAUDE.md), use settings.json para codificar as políticas do time.
+        <strong>Princípios de segurança com Claude Code:</strong> menor privilégio (use --allowedTools mínimo para cada tarefa), revise antes de aprovar (leia o comando Bash antes de Enter), separe contextos (dados externos em sessões sem Bash), não commite segredos (nem no CLAUDE.md), use settings.json para codificar as políticas do time. Em 2026: comece em <code>plan mode</code> pra exploração, use <code>/fewer-permission-prompts</code> pra gerar allowlist do seu uso real, e configure <code>sandbox.network.deniedDomains</code> para bloquear exfiltração.
       </Callout>
 
       <Callout>

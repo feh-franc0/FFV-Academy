@@ -66,8 +66,43 @@ function Content() {
   return (
     <div className="flex flex-col gap-8 text-sm leading-7">
       <p className="text-base leading-8" style={{ color: 'var(--ffv-muted)' }}>
-        Toda vez que você pede a Claude Code para fazer a mesma coisa — "revise este código por questões de segurança", "gere uma descrição para o PR", "faça deploy no ambiente de staging" — você está repetindo um workflow que poderia ser um slash command. Skills transformam prompts repetitivos em comandos de uma palavra invocáveis em qualquer sessão.
+        Toda vez que você pede a Claude Code para fazer a mesma coisa — &ldquo;revise este código por segurança&rdquo;, &ldquo;gere uma descrição para o PR&rdquo;, &ldquo;faça deploy em staging&rdquo; — você está repetindo um workflow que poderia ser um slash command. Skills transformam prompts repetitivos em comandos de uma palavra invocáveis em qualquer sessão. Em 2026 o Claude Code expõe <strong>70+ slash commands built-in</strong> e um sistema de skills customizáveis com arquivos de suporte, frontmatter rico e injeção dinâmica de contexto.
       </p>
+
+      <Section accent={accent} title="Skills em 2026: .claude/skills/ com pastas e arquivos auxiliares">
+        <p>Em 2026 existem dois caminhos pra criar comandos customizados. O moderno (<code>.claude/skills/</code>) suporta pastas inteiras com scripts e references. O clássico (<code>.claude/commands/</code>) continua funcionando e é equivalente pra casos simples:</p>
+        <CodeBlock lang="shell">{`# Moderna (2026): diretório dedicado com arquivos de suporte
+.claude/skills/
+├── deploy/
+│   ├── SKILL.md           # entrada principal (frontmatter + instruções)
+│   ├── reference.md       # referências que Claude consulta quando precisa
+│   ├── examples.md        # exemplos de uso
+│   └── scripts/
+│       ├── validate.sh    # Claude pode executar
+│       └── rollback.sh
+└── pr-review/
+    ├── SKILL.md
+    └── checklist.md
+
+# Clássica (ainda suportada): arquivo único
+.claude/commands/deploy.md   # equivale a .claude/skills/deploy/SKILL.md
+
+# Hierarquia de discovery (em ordem de prioridade):
+# 1. Plugins (namespace: plugin-name:skill-name)
+# 2. .claude/skills/ do projeto
+# 3. ~/.claude/skills/ do usuário
+# 4. Enterprise managed skills
+# 5. .claude/commands/ legacy (projeto)
+# 6. ~/.claude/commands/ legacy (usuário)
+
+# Comandos de gestão:
+/skills                     # lista skills disponíveis (press 't' pra sort by token)
+/agents                     # UI pra criar/editar agents (similar)
+
+# Restrições de tamanho:
+# - description: até 1536 chars (incluindo when_to_use)
+# - Skill content: fica na conversa; skills invocadas compartilham budget de 25k tokens`}</CodeBlock>
+      </Section>
 
       <Section accent={accent} title="Anatomia de um slash command">
         <CodeBlock>{`# Skills ficam em .claude/commands/ como arquivos Markdown
@@ -262,8 +297,167 @@ Após gerar o SPEC.md, aguarde aprovação antes de começar a implementação.
 Escreva: "Especificação gerada em SPEC.md. Revise e diga 'implementar' para prosseguir."`}</CodeBlock>
       </Section>
 
+      <Section accent={accent} title="Frontmatter completo: controle total do comportamento">
+        <p>O frontmatter YAML da skill expõe controle fino sobre como ela executa. Tudo opcional, mas cada campo resolve uma necessidade real:</p>
+        <CodeBlock lang="yaml">{`---
+name: code-migration                        # identificador (lowercase, max 64 chars)
+description: |                              # quando Claude invoca automaticamente
+  Migra código legado para arquitetura nova.
+  Use quando arquivos usarem padrões deprecated ou
+  quando o usuário pedir migração de módulo.
+when_to_use: |                              # appended à description
+  Evite invocar se o arquivo já está na arquitetura nova.
+
+argument-hint: "[arquivo] [target-arch]"    # hint visual no TUI
+
+# Controle de invocação
+disable-model-invocation: false             # só usuário pode invocar (via /skill-name)
+user-invocable: true                        # usuário pode digitar /skill-name
+paths: "src/legacy/**,src/old/**"           # só ativa para esses paths
+
+# Controle de execução
+allowed-tools: "Read Edit Bash(git *)"      # pré-aprova tools (sem permission prompt)
+model: claude-opus-4-7                      # override do modelo
+effort: high                                # override do effort level
+context: fork                               # roda em subagent isolado
+agent: general-purpose                      # tipo de subagent quando context:fork
+shell: bash                                 # shell pra !\`cmd\` (bash|powershell)
+
+# Hooks específicos desta skill (só rodam durante)
+hooks:
+  PreToolUse:
+    - matcher: Edit
+      hooks:
+        - type: command
+          command: "./scripts/lint-check.sh"
+---
+
+## Instruções em markdown
+
+Instruções da skill aqui. Claude vai seguir durante a invocação.
+
+Variáveis disponíveis:
+- $ARGUMENTS — todos os args passados
+- $1, $2, $N — argumento específico (0-indexed: $0 = primeiro)
+- \${CLAUDE_SESSION_ID} — ID da sessão atual
+- \${CLAUDE_SKILL_DIR} — path da pasta desta skill (útil pra ler reference.md)`}</CodeBlock>
+      </Section>
+
+      <Section accent={accent} title="Dynamic context injection com !`comando`">
+        <p>Talvez a feature mais poderosa das skills modernas. O Claude Code executa comandos <strong>antes</strong> da skill rodar e substitui o resultado no markdown. Isso deixa a skill sempre atualizada com dados reais do sistema no momento da invocação:</p>
+        <CodeBlock lang="markdown">{`---
+name: release-notes
+description: Gera changelog baseado em commits desde última tag
+allowed-tools: "Read Bash(git *)"
+---
+
+# Release Notes
+
+Gere changelog formatado a partir dos dados reais abaixo.
+Esses valores são puxados NO MOMENTO da invocação:
+
+**Última tag:** !\`git describe --tags --abbrev=0\`
+
+**Commits desde então:**
+!\`git log $(git describe --tags --abbrev=0)..HEAD --oneline --no-merges\`
+
+**Branch atual:** !\`git branch --show-current\`
+
+**Data:** !\`date +%Y-%m-%d\`
+
+**Arquivos alterados:**
+!\`git diff --stat $(git describe --tags --abbrev=0)..HEAD\`
+
+## Instruções
+
+1. Agrupe commits em categorias (feat/fix/docs/chore)
+2. Escreva em português, tom editorial
+3. Destaque breaking changes em seção separada
+4. Inclua contador de PRs mergeados por tipo
+
+# O que acontece:
+# 1. Claude executa cada !\`cmd\` e substitui o output no markdown
+# 2. Só depois vê a skill "cozida" com os dados reais
+# 3. Então segue as instruções
+
+# Multi-line: use fence code block com !
+\`\`\`!
+git log --since="1 week ago" --pretty=format:"%h %s (%an)"
+\`\`\``}</CodeBlock>
+      </Section>
+
+      <Section accent={accent} title="Skill com scripts auxiliares: pastas completas">
+        <CodeBlock lang="shell">{`# Estrutura completa de uma skill de deploy
+.claude/skills/deploy/
+├── SKILL.md              # entrada (referência os arquivos abaixo)
+├── reference.md          # detalhes que Claude consulta quando precisa
+├── checklist.md          # checklist pré-deploy
+└── scripts/
+    ├── validate.sh       # Claude executa via Bash
+    ├── rollback.sh
+    └── health-check.sh
+
+# SKILL.md:
+---
+name: deploy
+description: Deploy completo com validação e rollback
+allowed-tools: "Bash Read"
+argument-hint: "[staging|production] [version]"
+---
+
+# Deploy
+
+Ambiente: $1
+Versão: $2
+
+## Pré-deploy
+Leia \${CLAUDE_SKILL_DIR}/checklist.md e execute cada item.
+
+## Execução
+1. Execute: bash \${CLAUDE_SKILL_DIR}/scripts/validate.sh $1
+2. Se validação OK, execute: bash \${CLAUDE_SKILL_DIR}/scripts/deploy.sh $1 $2
+3. Aguarde 30s, execute: bash \${CLAUDE_SKILL_DIR}/scripts/health-check.sh $1
+
+## Rollback automático
+Se qualquer health check falhar, execute IMEDIATAMENTE:
+bash \${CLAUDE_SKILL_DIR}/scripts/rollback.sh $1
+
+## Referência técnica
+Consulte \${CLAUDE_SKILL_DIR}/reference.md para detalhes de
+cada ambiente (URLs, credentials path, rollback strategy).
+
+# Vantagens desta estrutura:
+# - Scripts testáveis isoladamente (bash validate.sh staging)
+# - Reference.md só é lido quando Claude precisa (não polui contexto sempre)
+# - Checklist.md serve tanto pra Claude quanto pra dev humano
+# - Versionamento: tudo no git, time inteiro tem os mesmos scripts`}</CodeBlock>
+      </Section>
+
+      <Section accent={accent} title="Os 70+ slash commands built-in do Claude Code (2026)">
+        <p>Antes de criar skills customizadas, conheça o que já vem pronto. Os built-ins cobrem sessão, controle, análise, debugging, workflows, IDE, integrations, utilities e cloud. Muitos são skills pré-carregadas pelo próprio Claude Code (marcadas com Skill):</p>
+        <ComparisonTable
+          headers={['Categoria', 'Comandos principais']}
+          rows={[
+            ['Sessão', '/resume /continue /branch /clear /rename /rewind /export'],
+            ['Controle', '/permissions /model /effort /fast /permission-mode /config /status'],
+            ['Análise', '/review /security-review /diff /insights /context /cost'],
+            ['Debug', '/debug /doctor /simplify /batch /loop /compact /fewer-permission-prompts'],
+            ['Workflows', '/claude-api /init /agents /hooks /skills /memory /schedule /autofix-pr'],
+            ['IDE', '/ide /terminal-setup /keybindings /statusline /desktop /mobile'],
+            ['Integrations', '/chrome /mcp /plugin /install-github-app /install-slack-app'],
+            ['Utilities', '/help /add-dir /copy /color /btw /focus /theme /tui /release-notes /powerup /team-onboarding'],
+            ['Account', '/login /logout /auth /upgrade /usage /extra-usage /privacy-settings /feedback'],
+            ['Cloud', '/remote-control /remote /teleport /ultraplan /ultrareview /web-setup'],
+          ]}
+          accent={accent}
+        />
+        <Callout tone="info">
+          Para detalhe completo de cada um (e atalhos de teclado, flags, env vars), veja o módulo <strong>&ldquo;Cheat sheet prático: 50+ comandos&rdquo;</strong> no final desta trilha.
+        </Callout>
+      </Section>
+
       <Callout tone="success">
-        <strong>Skills como padrão do time:</strong> todo workflow repetitivo que a equipe faz mais de 3 vezes por semana merece um slash command. Commite em .claude/commands/, documente no CLAUDE.md, e o time inteiro se beneficia. A padronização reduz variação de qualidade — /pr-review sempre segue os mesmos critérios, /deploy sempre tem o mesmo checklist de segurança.
+        <strong>Skills como padrão do time:</strong> todo workflow repetitivo que a equipe faz mais de 3 vezes por semana merece um slash command. Commite em <code>.claude/skills/</code>, documente no CLAUDE.md, use <code>allowed-tools</code> para pré-aprovar ferramentas seguras e <code>!`cmd`</code> para injetar contexto ao vivo. Em 2026, skills com pastas completas e hooks scoped transformam a equipe inteira em usuários consistentes do Claude Code — /pr-review sempre segue os mesmos critérios, /deploy sempre tem o mesmo checklist.
       </Callout>
 
       <Callout>

@@ -53,6 +53,8 @@ export default function ClaudeCoworkPage() {
       readTime={14}
       trailName="Claude Code: do zero ao poder total"
       trailColor="#cc785c"
+      nextSlug="claude-code-cheatsheet-pratico"
+      nextTitle="Cheatsheet prático: 50+ comandos, 30 atalhos, 20 flags"
       quiz={quiz}
     >
       <Content />

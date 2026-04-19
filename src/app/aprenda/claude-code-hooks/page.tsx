@@ -70,14 +70,36 @@ function Content() {
       </p>
 
       <Section accent={accent} title="Eventos disponíveis: quando cada hook dispara">
+        <p>Em 2026 o Claude Code expõe <strong>24+ eventos de hook</strong>. Abaixo os mais usados, agrupados por categoria:</p>
         <ComparisonTable
-          headers={['Evento', 'Quando dispara', 'Pode bloquear?', 'Caso de uso típico']}
+          headers={['Evento', 'Categoria', 'Pode bloquear?', 'Caso de uso típico']}
           rows={[
-            ['PreToolUse', 'Antes de Claude usar uma ferramenta', 'Sim (exit ≠ 0 bloqueia)', 'Validar antes de editar, verificar permissões'],
-            ['PostToolUse', 'Depois de Claude usar uma ferramenta', 'Não', 'Rodar lint, formatar código, notificar'],
-            ['Stop', 'Quando Claude completa a resposta', 'Não', 'Resumir sessão, notificar por Slack, fazer backup'],
-            ['Notification', 'Quando Claude precisa de atenção do usuário', 'Não', 'Desktop notification, som, mensagem'],
-            ['SubagentStop', 'Quando um subagente termina', 'Não', 'Coletar resultado de tarefas paralelas'],
+            ['SessionStart', 'Sessão', 'Não', 'Carregar .env, setar estado inicial, logs'],
+            ['SessionEnd', 'Sessão', 'Não', 'Limpar temp files, enviar resumo'],
+            ['InstructionsLoaded', 'Sessão', 'Não', 'Log do CLAUDE.md carregado'],
+            ['UserPromptSubmit', 'Turn', 'Sim (bloqueia prompt)', 'Injetar contexto (git status), validar input'],
+            ['PreToolUse', 'Tool', 'Sim (block/allow/ask)', 'Validar antes de editar, bloquear rm -rf'],
+            ['PostToolUse', 'Tool', 'Não', 'Lint, formatação, audit log'],
+            ['PostToolUseFailure', 'Tool', 'Não', 'Auto-retry, alertar sobre falhas'],
+            ['PermissionRequest', 'Tool', 'Não', 'Log de permission prompts'],
+            ['PermissionDenied', 'Tool', 'Não', 'Alertar quando usuário nega ação'],
+            ['SubagentStart', 'Subagent', 'Não', 'Log de delegação'],
+            ['SubagentStop', 'Subagent', 'Não', 'Coletar resultado de workers paralelos'],
+            ['TaskCreated', 'Task', 'Não', 'Notificar de novas tarefas'],
+            ['TaskCompleted', 'Task', 'Não', 'Celebrar conclusão, mover cards no board'],
+            ['TeammateIdle', 'Task', 'Não', 'Notificar quando agente espera input'],
+            ['FileChanged', 'Files', 'Não', 'Reagir a mudanças de arquivo'],
+            ['CwdChanged', 'Files', 'Não', 'Log de navegação entre dirs'],
+            ['WorktreeCreate', 'Files', 'Não', 'Copiar .env para novo worktree'],
+            ['WorktreeRemove', 'Files', 'Não', 'Cleanup de recursos associados'],
+            ['ConfigChange', 'Files', 'Não', 'Reload de serviços'],
+            ['PreCompact', 'Context', 'Não', 'Salvar snapshot antes de compactar'],
+            ['PostCompact', 'Context', 'Não', 'Log pós-compaction'],
+            ['Elicitation', 'MCP', 'Não', 'Interceptar request de input estruturado'],
+            ['ElicitationResult', 'MCP', 'Não', 'Log de resposta do usuário'],
+            ['Notification', 'UI', 'Não', 'Desktop toast, som, webhook'],
+            ['Stop', 'Turn', 'Não', 'Resumir, postar no Slack, backup'],
+            ['StopFailure', 'Turn', 'Não', 'Alertar sobre erros fatais'],
           ]}
           accent={accent}
         />
@@ -282,8 +304,180 @@ echo '{"tool_name": "Edit", "tool_input": {"file_path": "/path/arquivo.ts"}}' \
 }`}</CodeBlock>
       </Section>
 
+      <Section accent={accent} title="Retorno JSON: decision allow/block/ask e hookSpecificOutput">
+        <p>Em 2026, hooks podem retornar JSON estruturado via stdout — muito mais poderoso que exit codes. Permite <strong>bloquear</strong>, <strong>permitir</strong>, <strong>pedir confirmação adicional</strong> e injetar mensagens contextuais que Claude vê como feedback:</p>
+        <CodeBlock lang="bash">{`#!/bin/bash
+# .claude/hooks/PreToolUse/smart-rm-guard.sh
+# Bloqueia rm -rf em paths críticos, pede confirmação em outros
+
+INPUT=$(cat)
+CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
+
+if [[ "$CMD" =~ rm[[:space:]]+-rf[[:space:]]+/ ]]; then
+  # Path absoluto crítico → bloqueia DIRETO
+  cat <<'JSON'
+{
+  "decision": "block",
+  "reason": "rm -rf em path absoluto é proibido",
+  "systemMessage": "🚨 Tentativa de rm -rf em path absoluto bloqueada",
+  "hookSpecificOutput": {
+    "PreToolUse": {
+      "permissionDecision": "deny"
+    }
+  }
+}
+JSON
+  exit 0
+fi
+
+if [[ "$CMD" =~ rm[[:space:]]+-rf ]]; then
+  # rm -rf relativo → pede confirmação extra
+  cat <<'JSON'
+{
+  "decision": "ask",
+  "reason": "rm -rf detectado — confirme antes de continuar",
+  "hookSpecificOutput": {
+    "PreToolUse": {
+      "permissionDecision": "ask"
+    }
+  }
+}
+JSON
+  exit 0
+fi
+
+# OK, passa
+echo '{"decision":"allow"}'
+exit 0`}</CodeBlock>
+        <p>Campos de retorno suportados em 2026:</p>
+        <CodeBlock lang="json">{`{
+  "decision": "block|allow|ask",         // decisão principal
+  "reason": "texto visível ao usuário",  // exibido no TUI
+  "continue": true,                      // se false, Claude para a turn
+  "stopReason": "mensagem ao parar",     // combinado com continue:false
+  "suppressOutput": false,               // esconde output do hook
+  "systemMessage": "aviso do sistema",   // banner na sessão
+  "hookSpecificOutput": {
+    "PreToolUse": {
+      "permissionDecision": "deny"       // override do permission system
+    }
+  }
+}
+
+// Exit codes também continuam funcionando:
+// 0 → success (parse JSON)
+// 2 → block error (stderr vai pra Claude como feedback)
+// outros → non-blocking warning`}</CodeBlock>
+      </Section>
+
+      <Section accent={accent} title="Hook types: command, http, prompt, agent">
+        <p>Hooks não precisam ser shell scripts. Em 2026 existem 4 tipos:</p>
+        <CodeBlock lang="json">{`// .claude/settings.json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "./check.sh", "timeout": 30 }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "https://hooks.slack.com/services/T00/B00/XXX",
+            "headers": { "Content-Type": "application/json" },
+            "allowedEnvVars": ["SLACK_CHANNEL"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Gere um resumo em 2 frases do que foi feito nesta sessão, destacando arquivos modificados e próximos passos.",
+            "model": "claude-haiku-4-5",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "agent",
+            "agent": "results-consolidator",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}`}</CodeBlock>
+        <ComparisonTable
+          headers={['Type', 'Execução', 'Quando usar']}
+          rows={[
+            ['command', 'Shell script local', 'Validações, lint, git operations'],
+            ['http', 'POST para URL', 'Slack/Discord webhook, API externa, audit'],
+            ['prompt', 'Claude avalia via LLM', 'Classificar severidade, gerar resumos, decisões com contexto'],
+            ['agent', 'Delega a subagent', 'Consolidar resultados, workflows complexos'],
+          ]}
+          accent={accent}
+        />
+      </Section>
+
+      <Section accent={accent} title="Skill-scoped hooks: hooks que ativam apenas durante uma skill">
+        <CodeBlock lang="yaml">{`# .claude/skills/deploy/SKILL.md
+---
+name: deploy
+description: Deploy seguro com validação automática
+allowed-tools: Bash, Read
+hooks:
+  PreToolUse:
+    - matcher: "Bash"
+      hooks:
+        - type: command
+          command: "./scripts/pre-deploy-check.sh"
+          timeout: 60
+  PostToolUse:
+    - matcher: "Bash"
+      hooks:
+        - type: command
+          command: "./scripts/post-deploy-verify.sh"
+  Stop:
+    - matcher: ".*"
+      hooks:
+        - type: http
+          url: "\${SLACK_WEBHOOK}"
+          allowedEnvVars: ["SLACK_WEBHOOK"]
+---
+
+# Deploy
+
+Execute o deploy para o ambiente: $ARGUMENTS
+
+1. Pré-verificação: testes passando, sem mudanças não commitadas
+2. Execute ./scripts/deploy.sh $ARGUMENTS
+3. Pós-verificação: health checks, métricas de latência
+4. Notificação no Slack automática via hook
+
+# Os hooks definidos aqui só rodam DURANTE a execução desta skill.
+# Quando /deploy termina, os hooks somem.
+# Hooks globais em settings.json continuam ativos normalmente.`}</CodeBlock>
+      </Section>
+
       <Callout tone="success">
-        <strong>Hooks vs CLAUDE.md vs instruções inline:</strong> use CLAUDE.md para contexto e preferências comportamentais (Claude pode ou não seguir). Use instruções inline na sessão para ajustes pontuais. Use hooks para automação que precisa ser garantida — lint que roda sempre, validações de segurança, notificações ao final. Hooks são determinísticos: não dependem de Claude "lembrar" de fazer algo.
+        <strong>Hooks vs CLAUDE.md vs instruções inline:</strong> use CLAUDE.md para contexto e preferências comportamentais (Claude pode ou não seguir). Use instruções inline na sessão para ajustes pontuais. Use hooks para automação que precisa ser garantida — lint que roda sempre, validações de segurança, notificações ao final. Hooks são determinísticos: não dependem de Claude &ldquo;lembrar&rdquo; de fazer algo. Em 2026, 24+ eventos cobrem todo o ciclo de vida (sessão/turn/tool/subagent/files/context/MCP/UI), com 4 tipos de execução (command/http/prompt/agent) e retorno JSON para decisões estruturadas.
       </Callout>
 
       <Callout>

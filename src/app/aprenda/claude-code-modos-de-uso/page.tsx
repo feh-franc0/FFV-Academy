@@ -251,8 +251,82 @@ docker run --rm -v $(pwd):/workspace anthropic/claude-code \
 # - Automação total em sandbox → --dangerously-skip-permissions em container`}</CodeBlock>
       </Section>
 
+      <Section accent={accent} title="Novos modos em 2026: batch, loop, schedule, ultraplan, ultrareview">
+        <p>A partir de 2026 o Claude Code introduziu novos modos-comando que não são invocação da CLI, mas sim slash commands que orquestram automaticamente múltiplas sessões, paralelização em cloud e agendamento. São o próximo nível sobre os 4 modos clássicos:</p>
+        <CodeBlock lang="shell">{`# /batch — paraleliza grandes mudanças em 5-30 worktrees + PRs simultâneos
+# Ideal para migrações e refactorings que tocam dezenas de arquivos
+/batch "migrar todos os useState para useReducer em src/features/"
+# → Claude abre worktrees paralelos, executa em cada um, abre PRs separados
+
+# /loop — executa o mesmo prompt em intervalo regular (ou auto-paced)
+/loop 5m /status                      # roda /status a cada 5 minutos
+/loop "verifique se o deploy terminou"  # auto-paced: Claude decide quando checar
+# Útil para polling de builds, deploys, CI/CD
+
+# /schedule — cria triggers recorrentes (cron remoto na infra Anthropic)
+/schedule "Toda sexta 14h: gerar relatório de PRs mergeados da semana"
+/schedule "Diariamente 9h: revisar issues abertas e priorizar"
+# Rodam em cloud mesmo quando seu terminal está fechado
+
+# /ultraplan — spawn session em modo "planning mode" na web (máxima capacidade)
+/ultraplan "Arquitetura para multi-tenancy do sistema de pagamentos"
+# → Abre sessão web com contexto 1M, retorna o plano final
+
+# /ultrareview [PR] — code review multi-agente em cloud sandbox
+/ultrareview 1234
+# → 3-5 agentes especializados (security, performance, style, tests)
+#   analisam em paralelo e consolidam em 1 review
+
+# /autofix-pr [prompt] — spawn web session que assiste o PR + pushes fixes
+/autofix-pr "aplique sugestões de review e corrija CI até passar"`}</CodeBlock>
+      </Section>
+
+      <Section accent={accent} title="Flags de produção em 2026">
+        <CodeBlock lang="shell">{`# --effort — controla profundidade de raciocínio (Opus 4.7 suporta max)
+claude -p "..." --effort max            # raciocínio máximo (mais caro, melhor)
+claude -p "..." --effort xhigh          # quase-máximo
+claude -p "..." --effort low            # rápido e barato
+
+# --max-budget-usd — para automaticamente quando custo atinge limite
+claude -p "migrar arquitetura" --max-budget-usd 5.00
+
+# --fork-session — usa com --resume: cria novo session-id (não sobrescreve)
+claude --resume "migration-v2" --fork-session
+# Útil para experimentar sem destruir a sessão original
+
+# --bare — pula discovery de hooks/skills/plugins/MCP/CLAUDE.md (boot rápido)
+claude --bare "pergunta simples sem contexto de projeto"
+# 10x mais rápido pra queries one-shot em repos grandes
+
+# --from-pr <num> — retoma sessões linkadas a um PR específico
+claude --from-pr 123
+
+# --worktree <nome> — isolamento automático em git worktree
+claude --worktree feature-auth --tmux   # cria branch + dir + tmux session
+
+# --agents — define subagents via JSON inline (override de config)
+claude --agents '{"reviewer":{"prompt":"Foque em segurança"}}'
+
+# --fallback-model — se modelo padrão estiver sobrecarregado (modo print)
+claude -p "..." --model opus --fallback-model sonnet
+
+# --json-schema — saída estruturada validada (modo print)
+claude -p "extraia nome e email deste texto" \\
+  --json-schema '{"type":"object","properties":{"name":{"type":"string"},"email":{"type":"string"}}}'
+
+# --teleport — puxa uma sessão web de volta pro terminal local
+claude --teleport
+
+# Variáveis de ambiente importantes:
+export CLAUDE_CODE_EFFORT_LEVEL=high    # default de effort
+export CLAUDE_CODE_USE_BEDROCK=1        # roda via Amazon Bedrock
+export CLAUDE_CODE_USE_VERTEX=1         # roda via Google Vertex AI
+export MAX_THINKING_TOKENS=10000        # limite de thinking (legacy models)
+export CLAUDE_CODE_NO_FLICKER=1         # rendering smooth em terminais problematic`}</CodeBlock>
+      </Section>
+
       <Callout tone="success">
-        <strong>Matriz de decisão de modo:</strong> conversa interativa e desenvolvimento → modo padrão. Script que processa saída de outros comandos → pipe com <code>-p</code>. Automação de tarefas repetitivas → não-interativo com <code>--allowedTools</code>. Pipeline CI/CD → SDK ou não-interativo com API key em variável de ambiente. A segurança aumenta quando você especifica explicitamente o que Claude pode fazer.
+        <strong>Matriz de decisão de modo:</strong> conversa interativa e desenvolvimento → modo padrão. Script que processa saída de outros comandos → pipe com <code>-p</code>. Automação de tarefas repetitivas → não-interativo com <code>--allowedTools</code>. Pipeline CI/CD → SDK ou não-interativo com API key em variável de ambiente. Migrations massivas → <code>/batch</code>. Polling → <code>/loop</code>. Cron remoto → <code>/schedule</code>. Planning profundo → <code>/ultraplan</code>. Code review robusto → <code>/ultrareview</code>. A segurança aumenta quando você especifica explicitamente o que Claude pode fazer.
       </Callout>
 
       <Callout>

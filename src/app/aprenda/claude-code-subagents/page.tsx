@@ -218,8 +218,101 @@ em formato: arquivo:linha | tipo | severidade | descrição em 1 linha.
 # allowed-tools: Read, Glob, Grep  # sem Bash, sem Edit`}</CodeBlock>
       </Section>
 
+      <Section accent={accent} title="Built-in subagents em 2026">
+        <p>O Claude Code traz subagents nativos — você não precisa criar nada pra usá-los. Cada um tem um perfil de ferramentas diferente, otimizado pra uma classe de tarefa:</p>
+        <ComparisonTable
+          headers={['Nome', 'Propósito', 'Ferramentas']}
+          rows={[
+            ['Explore', 'Exploração de codebase, leitura extensa, mapeamento', 'Read, Glob, Grep (read-only)'],
+            ['Plan', 'Planning mode — questiona requisitos, propõe estratégia', 'Read, Glob, Grep + WebSearch'],
+            ['general-purpose', 'Multi-step genérico: pesquisa + implementação', 'Todas exceto Edit/Write (varia)'],
+            ['code-reviewer', 'Review focado em qualidade, segurança, performance', 'Read, Glob, Grep'],
+            ['statusline-setup', 'Configuração do statusline customizado', 'Read, Edit'],
+          ]}
+          accent={accent}
+        />
+        <CodeBlock lang="shell">{`# Usar built-in diretamente via /agents ou Task tool:
+/agents                                 # UI pra listar + criar agents
+
+# Invocar em linha:
+"Use o subagent Explore para mapear toda a lógica de autenticação"
+"Delegue ao Plan: como dividir essa feature em PRs"
+"Peça ao code-reviewer pra analisar o último commit"
+
+# Spawning em background (o subagent roda enquanto você continua):
+"Spawn um Explore em background pra mapear o uso de React Query
+ no projeto. Me avise quando terminar."
+# → Claude retorna task ID, você recebe notificação quando pronto`}</CodeBlock>
+      </Section>
+
+      <Section accent={accent} title="Worktree isolation: paralelismo real sem conflito">
+        <p>O maior avanço de 2026 em subagents: <code>isolation: worktree</code> no frontmatter. Cada subagent recebe um git worktree automático — dir isolado, branch própria, cleanup automático. Isso permite rodar N subagents em paralelo mexendo em arquivos sem conflito:</p>
+        <CodeBlock lang="yaml">{`# .claude/agents/migration-worker/AGENT.md
+---
+name: migration-worker
+description: Migra um módulo específico de Solid para React. Use para migrations paralelas.
+tools: Read, Edit, Write, Bash
+model: claude-opus-4-7
+effort: high
+isolation: worktree        # ← cada invocação ganha worktree próprio
+skills:                    # ← skills pré-carregadas no startup
+  - refactor-helper
+  - test-generator
+---
+
+Você migra arquivos de Solid para React mantendo semântica equivalente.
+
+Processo:
+1. Leia o arquivo original
+2. Identifique primitivos Solid (createSignal, createEffect, etc.)
+3. Traduza pros equivalentes React (useState, useEffect)
+4. Mantenha a interface pública intacta
+5. Rode os testes do módulo
+6. Se testes falharem, itere até passar`}</CodeBlock>
+        <CodeBlock lang="shell">{`# Cenário: migrar 8 módulos em paralelo
+"Use 8 migration-worker em paralelo, um para cada módulo em src/features/.
+ Cada um trabalha em seu worktree isolado. Me avise quando todos terminarem."
+
+# O que acontece debaixo do capô:
+# 1. Claude cria 8 worktrees em .claude/worktrees/migration-{1..8}
+# 2. Cada worktree tem branch própria (worktree-migration-N)
+# 3. Os 8 subagents trabalham simultaneamente sem interferência
+# 4. Quando terminam: Claude reporta resultado + cleanup automático
+# 5. Você merge as 8 branches depois
+
+# Worktrees têm lifecycle próprio:
+# - Auto-cleanup se agent termina sem mudanças
+# - Prompt pra manter/remover se há mudanças
+# - Arquivos gitignored copiados via .worktreeinclude`}</CodeBlock>
+      </Section>
+
+      <Section accent={accent} title="Fan-out pattern: orquestrador + N workers">
+        <CodeBlock lang="shell">{`# Padrão clássico em projetos grandes:
+# 1 agente principal (orquestrador) + N subagents (workers)
+
+# Terminal 1: orquestrador principal
+claude --name "orchestrator"
+> "Planeje a migração completa. Divida em tarefas independentes.
+   Para cada tarefa, delegue a um subagent apropriado."
+
+# Claude gera plano, identifica 12 tarefas independentes
+# Delega 12 subagents em paralelo (via Task tool interno)
+# Cada subagent rode em worktree isolado
+# Claude consolida resultados e abre PRs
+
+# Terminal 2,3,4...: sessões manuais adicionais (se quiser)
+claude --worktree worker-1 --agent Explore
+claude --worktree worker-2 --agent code-reviewer
+# Essas ficam à disposição do dev humano pra tarefas manuais paralelas
+
+# Inspecionar tasks em qualquer sessão:
+# Ctrl+T       → toggle task list
+# /tasks       → lista explícita
+# /insights    → análise de patterns e friction`}</CodeBlock>
+      </Section>
+
       <Callout tone="success">
-        <strong>Subagents são multiplicadores de capacidade.</strong> A sessão principal mantém foco e contexto limpo enquanto subagents fazem o trabalho pesado em paralelo. Para projetos grandes, a combinação — sessão principal como orquestrador, subagents como workers especializados — é o que torna Claude Code viável em codebases reais de grande escala.
+        <strong>Subagents são multiplicadores de capacidade.</strong> A sessão principal mantém foco e contexto limpo enquanto subagents fazem o trabalho pesado em paralelo. Para projetos grandes, a combinação — sessão principal como orquestrador, built-ins (Explore/Plan/code-reviewer) pra tarefas conhecidas, subagents customizados com <code>isolation: worktree</code> pra trabalho paralelo sem conflito, <code>skills:</code> preload pra agent especializado desde o startup — é o que torna Claude Code viável em codebases reais de grande escala.
       </Callout>
 
       <Callout>
