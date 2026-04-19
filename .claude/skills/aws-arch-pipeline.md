@@ -307,6 +307,102 @@ Se solicitado, para cada aresta sem número, adicionar badge:
 </mxCell>
 ```
 
+### Passo 3.4 — Gate Geométrico (obrigatório antes do export PNG)
+
+**Scorer XML não enxerga geometria real.** Antes de gastar tempo no PNG/visual review, rodar o linter de layout que detecta sobreposições reais via bbox:
+
+```bash
+python3 scripts/drawio/layout-linter.py [arquivo] --json > /tmp/layout.json
+# exit 1 se houver CRITICO
+```
+
+**Regras detectadas (calibradas em casos reais):**
+
+| Regra | Detecta | Severidade |
+|-------|---------|-----------|
+| P27 | Bbox overlap > 20% entre células text/legenda (ex: leg_obs e leg_steps no mesmo y) | CRITICO se >30%, ALTO senão |
+| P28 | Badges fb_*/pill_* sobrepondo o ícone que anotam | ALTO se vinculado, MEDIO senão |
+| P29 | Express lanes paralelas com gap_y < 30px e x-overlap | CRITICO se ambas têm label, ALTO senão |
+| P31 | Step badges (numeração) sobre ícones AWS | ALTO |
+
+**Comportamento:** se houver qualquer CRITICO, aplicar fix RESTRUCTURE imediatamente (Edit no XML) e re-rodar linter. Não exportar PNG até zerar CRITICO. ALTO/MEDIO podem propagar para o gate visual.
+
+**Fix patterns prontos:**
+- P27: `cell_b.y = cell_a.y + cell_a.h + 6` (empilhar verticalmente)
+- P28: badge ACIMA `(icon.x + icon.w - badge.w, icon.y - badge.h - 4)` se icon.y > 290; senão DIREITA `(icon.x + icon.w + 4, icon.y + 2)`
+- P29: realocar para canal Y reservado — TOP1=125, TOP2=165, MID-OBS-1=548, MID-OBS-2=583, BOTTOM-RETURN=870
+- P31: mover step para corredor entre ícones (gap horizontal ≥ 30px de qualquer ícone)
+
+---
+
+### Passo 3.5 — Gate Visual (obrigatório após score XML ≥ 80)
+
+**XML passa ≠ visual passa.** Validado empiricamente: um diagrama com XML 100/100 pode ter visual 58/100 (real case baseline). O scorer lê atributos, mas não vê overlap real, cruzamento feio de arestas, densidade ruim, espaço morto. Por isso, após convergência do loop XML, rode o gate visual.
+
+**Progressão típica observada (4 iterações):**
+- v0 baseline: 58/100 (XML 100 mas visual ruim)
+- v1 tipografia + legenda: 72/100 (+14)
+- v2 nota IAM movida + bold edges + canais: 86/100 (+14)
+- v3 badges numerados + bold seletivo + AWS pill: 91/100 (+5)
+- v4 micro-tune (badges reposicionados, fontSize ícones 13): 93/100 (+2)
+- Convergência típica em 3-4 iterações visuais até zero CRITICO.
+
+```bash
+# 1. Exportar PNG em alta resolução
+bash scripts/drawio/export-png.sh [arquivo.drawio]
+
+# 2. Invocar /drawio-visual-review (lê PNG + 7 refs, compara)
+```
+
+A skill `/drawio-visual-review` retorna JSON com `visual_score` (0-100) e issues por severidade.
+
+**Matriz de decisão final (calibrada após 4 rodadas reais):**
+
+| XML Score | Visual Score | Visual CRITICO | Ação |
+|-----------|--------------|----------------|------|
+| ≥ 80      | ≥ 95         | 0              | **APROVADO FINAL** — abre drawio, encerra |
+| ≥ 80      | 85–94        | 0              | **PASSÁVEL** — pode ir para PR/review, fixes são polish |
+| ≥ 80      | ≥ 80         | ≥ 1            | LOOP VISUAL — aplica fixes, re-exporta, re-visual |
+| ≥ 80      | < 80         | qualquer       | LOOP VISUAL + atualizar skills se padrão recorrente |
+| < 80      | —            | —              | Não deve chegar aqui (Passo 2 não convergiu) |
+
+**Threshold ajustado:**
+- **Meta dura: 95/100 visual** com zero CRITICO (target enterprise-grade)
+- **Meta mínima: 85/100** com zero CRITICO (aceitável para PR interno)
+- Cada iteração visual = 1 turno de Edit + export PNG + visual review via Agent
+
+### Loop iterativo visual (max 5 iterações)
+
+```
+iter = 1
+while iter <= 5 and visual_score < 95:
+    1. Aplicar fixes apontados (priorizar CRITICOs, depois ALTOs)
+    2. Se houver padrão recorrente → atualizar draw-review.md (P2N) ou aws-arch.md
+    3. bash scripts/drawio/export-png.sh [arquivo]
+    4. Agent (visual-review) → JSON
+    5. Versionar: cp arquivo docs/architecture/versoes/vN-iterN.drawio
+    6. Se visual_score ≥ 95 e zero CRITICO: PASS, abrir no drawio
+    7. Se visual_score < 70 após iter 3: STOP, invocar /drawio-critico (problema estrutural)
+    iter += 1
+```
+
+**Após 5 iterações visuais sem passar:** invoca `/drawio-critico` para veredicto final e lista de correções manuais.
+
+### Aprendizados consolidados (das 4 rodadas reais)
+
+Cada iteração que **move ponteiro ≥ +5pts** deve ser absorvida como regra. Lições já consolidadas:
+
+| Aprendizado | Skill atualizada | Fix type |
+|-------------|------------------|----------|
+| Container headers fracos (fontSize<13) | aws-arch.md (seção containers) | GENERATE na criação |
+| Edge labels em cinza não-bold ilegíveis | draw-review.md P22 | AUTO |
+| Notas dentro de containers alheios | draw-review.md P21 | RESTRUCTURE |
+| Legendas truncadas (width<1100) | draw-review.md P23 | AUTO |
+| Sem badges numerados em fluxo >5 passos | aws-arch.md (seção numeração) | GENERATE |
+| Bold em TODAS edges fica pesado | aws-arch.md (seção arestas) | RESTRUCTURE |
+| Express lanes sem gap ≥30px | draw-review.md P25 | RESTRUCTURE |
+| Star pattern em zona central | draw-review.md P26 | RESTRUCTURE |
+
 ### Passo 4 — Relatório Final
 
 **PASS ✅:**

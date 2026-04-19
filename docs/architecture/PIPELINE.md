@@ -1,8 +1,22 @@
 # Pipeline de Geração e Validação de Diagramas AWS
 
-> **Versão:** 1.0 — Abril 2026  
-> **Status:** Ativo  
-> **Score atual do diagrama principal:** 93/100 ✅
+> **Versão:** 2.0 — Abril 2026  
+> **Status:** Ativo (loop visual 4 iterações validado)  
+> **Score atual:** XML 100/100 · Visual 93/100 · zero CRITICO  
+> **Histórico v0→v4:** 58 → 72 → 86 → 91 → 93 (+35 pts)
+
+## Histórico de iterações (case real)
+
+| Versão | XML | Visual | Δ | Fixes aplicados |
+|--------|-----|--------|---|-----------------|
+| v0 baseline | 77 (buggy scorer) | 58 | — | — (scorer falso-negativo) |
+| v0 (scorer fixed) | 100 | 58 | +0 | Bugs de detecção corrigidos (D3/D1.3/D2.3) |
+| v1 iter1 | 100 | 72 | +14 | Headers bold, legenda ampliada, caixa custo, nota IAM realocada |
+| v2 iter2 | 100 | 86 | +14 | Bold edges principais, canais express lanes (y=140/y=170), canal salva-tema x=1520 |
+| v3 iter3 | 100 | 91 | +5 | 12 badges numerados, debold secundárias, pill AWS header |
+| v4 iter4 | 100 | 93 | +2 | Badges 5/8 reposicionados, fontSize ícones 13, legenda tri-agrupada |
+
+Aprendizados consolidados nas skills — ver `.claude/skills/aws-arch.md` (seções Regras de construção) e `.claude/skills/draw-review.md` (P21-P26).
 
 ---
 

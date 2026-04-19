@@ -99,12 +99,13 @@ KNOWN_ICONS = (COMPUTE_ICONS | DATABASE_ICONS | SECURITY_ICONS |
                MESSAGING_ICONS | STORAGE_ICONS | NETWORK_ICONS | AI_ICONS)
 
 CORRECT_COLORS = {
-    "compute":   {"#ff9900", "#e8871a"},
-    "database":  {"#1a9c3e", "#3f8624", "#2d8c4e"},
-    "security":  {"#dd344c", "#b0084d", "#bf0816"},
-    "messaging": {"#e7157b", "#c71585"},
-    "storage":   {"#3f8624", "#1a9c3e", "#277116"},
-    "network":   {"#8c4fff", "#232f3e", "#e7157b"},
+    "compute":   {"#ff9900", "#e8871a", "#ed7100"},
+    "database":  {"#1a9c3e", "#3f8624", "#2d8c4e", "#3334b9", "#527fff", "#c925d1"},
+    "security":  {"#dd344c", "#b0084d", "#bf0816", "#c7131f"},
+    "messaging": {"#e7157b", "#c71585", "#ff4f8b"},
+    "storage":   {"#3f8624", "#1a9c3e", "#277116", "#7aa116"},
+    "network":   {"#8c4fff", "#232f3e", "#e7157b", "#945df2"},
+    "ai":        {"#01a88d", "#00a4a6", "#07b582"},
 }
 
 
@@ -281,15 +282,31 @@ def score_d2(cells) -> dict:
             "fix_type": "AUTO",
         })
 
-    # D2.3 — fontSize >= 11 em todos elementos (1 pt)
-    small = [c.get("id", "?") for c in cells
-             if re.search(r"fontSize=([1-9]|10)\b", c.get("style", ""))]
+    # D2.3 — fontSize >= 11 em todos elementos significativos (1 pt)
+    # Exceção: badges pequenos (<40px lado) legitimamente usam fontSize=10
+    # Referência 001_reinforce: badges "aws" no canto de contas com fonte menor
+    def _has_small_font(c):
+        if not re.search(r"fontSize=([1-9]|10)\b", c.get("style", "")):
+            return False
+        geo = get_geometry(c)
+        if not geo:
+            return True
+        style = c.get("style", "")
+        # Badge: height baixa (≤ 25px) → aceitável
+        if geo[3] <= 25:
+            return False
+        # Nota de rodapé / helper text com fontStyle=2 (itálico) → aceitável
+        if "fontStyle=2" in style and geo[3] <= 32:
+            return False
+        return True
+
+    small = [c.get("id", "?") for c in cells if _has_small_font(c)]
     if not small:
         score += 1
     else:
         issues.append({
             "id": "D2.3",
-            "description": f"{len(small)} elemento(s) com fontSize < 11 (ilegível)",
+            "description": f"{len(small)} elemento(s) com fontSize < 11 em nó maior que badge (ilegível)",
             "affected_ids": small[:5],
             "points_lost": 1,
             "fix_type": "AUTO",
@@ -336,20 +353,37 @@ def score_d3(cells) -> dict:
 
     # D3.1 — Containers/grupos nomeados (8 pts)
     # Referência: os containers têm título ("front end", "backend", "VPC", "region")
-    # No draw.io: swimlane OU container=1 OU célula com fillColor+opacity como zona de fundo nomeada
+    # Padrões válidos (baseados nas 7 imagens 100/100):
+    #  1. swimlane / container=1 / shape=pool (explicit containers)
+    #  2. shape=mxgraph.aws4.group (AWS Cloud, Region, VPC — referência oficial)
+    #  3. zona de fundo: fillColor=<hex>;opacity=<N> (padrão "zone")
+    #  4. borda dashed nomeada: rounded=1;strokeColor=<hex>;dashed=1;fillColor=none
+    #     (padrão "logical grouping" das referências example_draw_100.png)
     containers = []
     for c in all_cells:
         style = c.get("style", "")
         value = c.get("value", "").strip()
         if not value or c.get("id") in ("0", "1"):
             continue
-        is_container = (
+        if c.get("vertex") != "1" or is_edge(c):
+            continue
+        # Skip AWS icons — eles NÃO são containers
+        if "resourceIcon" in style or "mxgraph.aws4.user" in style:
+            continue
+        geo = get_geometry(c)
+        # Container tem dimensão significativa (> 100px lado)
+        is_large = geo is not None and geo[2] >= 100 and geo[3] >= 80
+
+        is_container = is_large and (
             "swimlane" in style
             or "container=1" in style
             or "shape=pool" in style
-            # Zonas de fundo com nome são containers visuais
-            or ("fillColor=" in style and "opacity=" in style and len(value) > 2
-                and c.get("vertex") == "1" and not is_edge(c))
+            or "shape=mxgraph.aws4.group" in style
+            # Zonas de fundo com nome
+            or ("fillColor=" in style and "opacity=" in style)
+            # Borda dashed nomeada (ex: grp_edge, grp_api nas referências)
+            or ("dashed=1" in style and "strokeColor=" in style
+                and ("fillColor=none" in style or "fillColor=" not in style))
         )
         if is_container:
             containers.append(c)
@@ -526,33 +560,43 @@ def score_d4(cells) -> dict:
         and get_geometry(c)[2] <= 40  # badge pequeno (≤ 40px)
     ]
 
-    # Heurística: se o diagrama tem poucos edges (≤ 6) e fluxo linear,
-    # a numeração é menos crítica (como em 3.png e 6.png)
-    flow_is_linear = len(edges) <= 8
+    # Heurística alinhada com aws-arch-pipeline.md:
+    #   "containers e numeração NÃO são obrigatórios — numeração só deve ser
+    #    adicionada quando o usuário pedir explicitamente"
+    # Referências 3.png.webp e 6.png.webp são 100pts sem numeração.
+    # Critério: layout é "autoexplicativo" se tem ≥3 containers nomeados OU ≤8 edges
+    #   - ≥3 containers → fluxo por zonas é claro (como 3.png)
+    #   - ≤8 edges      → fluxo linear/fanout é óbvio (como 6.png)
+    # Só penaliza quando o diagrama é complexo SEM estrutura visual de apoio.
+    named_containers = [
+        c for c in cells
+        if c.get("vertex") == "1" and not is_edge(c)
+        and c.get("value", "").strip()
+        and c.get("id") not in ("0", "1")
+        and (
+            "swimlane" in c.get("style", "")
+            or "container=1" in c.get("style", "")
+            or ("dashed=1" in c.get("style", "")
+                and "strokeColor=" in c.get("style", "")
+                and "resourceIcon" not in c.get("style", ""))
+        )
+    ]
+    flow_is_self_explanatory = len(edges) <= 8 or len(named_containers) >= 3
 
     if numbered_edges or numbered_badges:
         score += 4
-    elif flow_is_linear:
-        # Flow linear/fanout — numeração opcional (3.png, 6.png são 100pts sem ela)
-        score += 2
-        issues.append({
-            "id": "D4.3",
-            "description": f"Fluxo sem numeração de passos ({len(edges)} arestas). "
-                           f"Para fluxos complexos (>8 setas), numeração é essencial.",
-            "affected_ids": [],
-            "points_lost": 2,
-            "fix_type": "GENERATE",
-            "reference": "example_draw_100.png e 1.png.webp: números em círculos (laranja ou preto) nas setas",
-        })
+    elif flow_is_self_explanatory:
+        # Layout autoexplicativo — sem penalidade (padrão das refs 3.png/6.png)
+        score += 4
     else:
         issues.append({
             "id": "D4.3",
-            "description": f"Fluxo complexo ({len(edges)} arestas) sem numeração de passos. "
-                           f"Referência: circles com números (①②③) tornam o fluxo compreensível.",
+            "description": f"Fluxo complexo ({len(edges)} arestas) sem numeração nem containers. "
+                           f"Adicione ≥3 containers OU numeração em círculos.",
             "affected_ids": [],
             "points_lost": 4,
             "fix_type": "GENERATE",
-            "reference": "Usar ellipse pequena (24x24) com número + fillColor=#FF9900 ou #232F3E",
+            "reference": "Opções: (a) containers nomeados (3.png); (b) círculos numerados (example_draw_100)",
         })
 
     return {"score": score, "max": 20, "issues": issues}

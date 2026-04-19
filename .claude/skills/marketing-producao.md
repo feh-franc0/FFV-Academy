@@ -10,14 +10,27 @@ Pipeline completo de producao do video promocional FFV Academy. Um unico comando
 
 | Comando | O que faz |
 |---------|-----------|
-| `all` | **Pipeline completo**: gera video + review + auto-correcao. Resultado final: MP4 pronto. |
-| `video` | So gera o video (sem review). Equivale a `npm run video`. |
-| `review` | Analisa video existente com 5 experts e corrige problemas. |
-| `status` | Mostra estado atual do pipeline (o que existe, o que falta). |
+| `all` | **Pipeline institucional 80s 16:9**: gera video + review + auto-correcao. Resultado: promo.mp4 pronto. |
+| `video` | So gera o video 80s (sem review). Equivale a `npm run video`. |
+| `review` | Analisa video 80s existente com 5 experts e corrige problemas. |
+| `short [quiz\|progresso\|srs\|all]` | **Pipeline short 9:16** (TikTok/Reels). Delega para `/marketing-video-curto` — gera shorts de 45s com gravacao real. Ver skill dedicada para detalhes. |
+| `status` | Estado dos dois pipelines (institucional + shorts). |
 
 ---
 
-## Comando `all` — Pipeline Completo com Auto-Correcao
+## Comando `short` — Pipeline Short-form 9:16
+
+Delega totalmente para a skill `/marketing-video-curto` que orquestra gravacao real (Playwright), composicao 9:16 (Remotion), e loop de avaliacao (`marketing-avaliador-retencao` → `marketing-critico-ritmo` → `marketing-iterador`).
+
+Exemplos:
+- `/marketing-producao short quiz` → gera + itera o Short A (Quiz Hook)
+- `/marketing-producao short all` → gera + itera os 3 shorts
+
+Pipeline institucional 80s e shorts 9:16 sao independentes — geracao de shorts nao afeta `out/promo.mp4`.
+
+---
+
+## Comando `all` — Pipeline Institucional (80s 16:9) com Auto-Correcao
 
 ### O que faz automaticamente:
 

@@ -38,45 +38,74 @@ def fix_style(style: str) -> tuple[str, list[str]]:
         style = re.sub(r"labelBackgroundColor=#ffffff;?", "", style, flags=re.IGNORECASE)
         applied.append("D1.2: labelBackgroundColor branco removido")
 
-    # D1.3 — fontSize mínimo 11
-    def bump_fontsize(m):
-        val = int(m.group(1))
-        if val < 11:
-            return f"fontSize=11"
-        return m.group(0)
-    new_style = re.sub(r"fontSize=(\d+)", bump_fontsize, style)
-    if new_style != style:
-        style = new_style
-        applied.append("D1.3: fontSize aumentado para mínimo 11")
+    # D1.3 — fontSize mínimo 11 (EXCETO em badges/notas/helpers legítimos)
+    # Casos aceitos (padrão das refs 001_reinforce, 6.png.webp):
+    #  - badges sólidos: rounded=1 + fontColor branco
+    #  - notas/helpers itálicos: fontStyle=2
+    #  - caixas helper cinza claro: fillColor=#F5F5F5 ou #f5f5f5
+    style_lower = style.lower()
+    is_small_badge = (
+        "fontstyle=2" in style_lower
+        or ("rounded=1" in style_lower and "fontcolor=#ffffff" in style_lower)
+        or "fillcolor=#f5f5f5" in style_lower
+        # Edges de observabilidade/helper: fonte menor e cor cinza é intencional
+        or ("edgestyle=" in style_lower
+            and re.search(r"fontcolor=#[89a]\w\w\w\w\w", style_lower))
+    )
+    if not is_small_badge:
+        def bump_fontsize(m):
+            val = int(m.group(1))
+            if val < 11:
+                return "fontSize=11"
+            return m.group(0)
+        new_style = re.sub(r"fontSize=(\d+)", bump_fontsize, style)
+        if new_style != style:
+            style = new_style
+            applied.append("D1.3: fontSize aumentado para mínimo 11")
 
     # D4.2 — arestas de monitoramento sem dashed=1
     # (aplicado separadamente via fix_monitoring_edges)
 
-    # D5.1 — Compute com laranja AWS
-    if any(icon in style for icon in ["lambda", "ec2", "ecs", "fargate", "apprunner"]):
+    # Paleta AWS alinhada ao scorer (2024/2026) — aceita laranjas/verdes atualizados
+    CORRECT = {
+        "compute":   {"#ff9900", "#e8871a", "#ed7100"},
+        "database":  {"#1a9c3e", "#3f8624", "#2d8c4e", "#3334b9", "#527fff", "#c925d1"},
+        "security":  {"#dd344c", "#b0084d", "#bf0816", "#c7131f"},
+        "messaging": {"#e7157b", "#c71585", "#ff4f8b"},
+    }
+    COMPUTE_ICONS_F  = ["lambda", "ec2", "ecs", "fargate", "apprunner", "beanstalk"]
+    DATABASE_ICONS_F = ["dynamodb", "rds", "aurora", "elasticache", "redshift"]
+    SECURITY_ICONS_F = ["iam", "waf", "secrets_manager", "shield", "identity_and_access_management"]
+    MESSAGING_ICONS_F = ["sqs", "sns", "eventbridge", "kinesis"]
+
+    def _has_res_icon(s, needle):
+        return f"resIcon=mxgraph.aws4.{needle}" in s
+
+    # D5.1 — Compute com laranja AWS (só corrige se cor ESTÁ fora da paleta)
+    if any(_has_res_icon(style, i) for i in COMPUTE_ICONS_F):
         fill = re.search(r"fillColor=([^;\"]+)", style)
-        if fill and fill.group(1).lower() not in {"#ff9900", "#e8871a"}:
-            style = re.sub(r"fillColor=[^;\"]+", "fillColor=#FF9900", style)
+        if fill and fill.group(1).lower() not in CORRECT["compute"]:
+            style = re.sub(r"fillColor=[^;\"]+", "fillColor=#ED7100", style)
             applied.append("D5.1: fillColor de Compute corrigido para laranja AWS")
 
-    # D5.2 — Database com verde AWS
-    if any(icon in style for icon in ["dynamodb", "rds", "aurora", "elasticache"]):
+    # D5.2 — Database
+    if any(_has_res_icon(style, i) for i in DATABASE_ICONS_F):
         fill = re.search(r"fillColor=([^;\"]+)", style)
-        if fill and fill.group(1).lower() not in {"#1a9c3e", "#3f8624", "#2d8c4e"}:
-            style = re.sub(r"fillColor=[^;\"]+", "fillColor=#1A9C3E", style)
-            applied.append("D5.2: fillColor de Database corrigido para verde AWS")
+        if fill and fill.group(1).lower() not in CORRECT["database"]:
+            style = re.sub(r"fillColor=[^;\"]+", "fillColor=#3334B9", style)
+            applied.append("D5.2: fillColor de Database corrigido para azul AWS")
 
-    # D5.3 — Segurança com vermelho AWS
-    if any(icon in style for icon in ["iam", "waf", "secrets_manager", "shield"]):
+    # D5.3 — Segurança
+    if any(_has_res_icon(style, i) for i in SECURITY_ICONS_F):
         fill = re.search(r"fillColor=([^;\"]+)", style)
-        if fill and fill.group(1).lower() not in {"#dd344c", "#b0084d"}:
+        if fill and fill.group(1).lower() not in CORRECT["security"]:
             style = re.sub(r"fillColor=[^;\"]+", "fillColor=#DD344C", style)
             applied.append("D5.3: fillColor de Segurança corrigido para vermelho AWS")
 
-    # D5.4 — Mensageria com rosa AWS
-    if any(icon in style for icon in [";sqs;", ";sns;", "eventbridge", "kinesis"]):
+    # D5.4 — Mensageria
+    if any(_has_res_icon(style, i) for i in MESSAGING_ICONS_F):
         fill = re.search(r"fillColor=([^;\"]+)", style)
-        if fill and fill.group(1).lower() not in {"#e7157b", "#c71585"}:
+        if fill and fill.group(1).lower() not in CORRECT["messaging"]:
             style = re.sub(r"fillColor=[^;\"]+", "fillColor=#E7157B", style)
             applied.append("D5.4: fillColor de Mensageria corrigido para rosa AWS")
 

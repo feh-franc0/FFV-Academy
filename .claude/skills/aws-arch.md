@@ -288,21 +288,79 @@ Após apresentar a proposta e o usuário confirmar, gere o diagrama usando o MCP
 </mxGraphModel>
 ```
 
-**Regras de construção:**
-- Use shapes oficiais AWS (`shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.SERVICO`)
-- Antes de montar o diagrama, use a tool `search_shapes` para encontrar os shape IDs corretos de cada serviço AWS
-- Separe visualmente as camadas: Internet → Edge → Compute → Data → Async
-- Agrupe serviços dentro de VPC com retângulo de borda tracejada (`dashed=1`)
-- Use setas rotuladas com o protocolo (`HTTPS`, `gRPC`, `SQS`, `TCP 5432`)
-- Cores padronizadas:
-  - Compute: `fillColor=#FF9900;strokeColor=#d79b00` (laranja AWS)
-  - Database: `fillColor=#1A9C3E;strokeColor=#107C30` (verde)
-  - Storage: `fillColor=#3F8624;strokeColor=#2D6B1A` (verde escuro)
-  - Messaging: `fillColor=#E7157B;strokeColor=#AE0E5C` (rosa)
-  - Security/Auth: `fillColor=#DD344C;strokeColor=#AE0E5C` (vermelho)
-  - CDN/Edge: `fillColor=#8C4FFF;strokeColor=#6B3ACC` (roxo)
-  - Internet/Client: `fillColor=#DAE8FC;strokeColor=#6c8ebf` (azul claro)
-- Legendas no canto inferior direito explicando os símbolos
+**Regras de construção (calibradas após 4 iterações de revisão visual — baseline 58 → final 91+):**
+
+### Estilos de shape
+- Use shapes oficiais AWS: `shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.SERVICO`
+- **fontSize dos ícones: 13** (não 12 — vem mais legível em zoom)
+- **fontStyle=1** (bold) em TODOS os labels de ícone AWS
+- Label abaixo: `labelPosition=center;verticalLabelPosition=bottom;verticalAlign=top`
+
+### Cores padronizadas (paleta AWS 2024/2026)
+| Categoria | fillColor | strokeColor |
+|-----------|-----------|-------------|
+| Compute (Lambda/EC2/ECS) | `#ED7100` (novo) ou `#FF9900` (legado) | `#d79b00` |
+| Database (DynamoDB/RDS) | `#3334B9` (DynamoDB) ou `#1A9C3E` (Aurora) | `#107C30` |
+| Storage (S3/EFS) | `#3F8624` | `#2D6B1A` |
+| Messaging (SQS/SNS/SES) | `#E7157B` | `#AE0E5C` |
+| Security/Auth (IAM/WAF) | `#DD344C` | `#AE0E5C` |
+| CDN/Edge (CloudFront) | `#8C4FFF` | `#6B3ACC` |
+| AI/ML (Bedrock) | `#01A88D` | — |
+| Internet/Client | `#232F3E` (escuro) | — |
+
+### Layout em bandas
+- Separar visualmente: **Internet → Edge → API → Compute → Data → Messaging → Sec/Obs**
+- Fase 2 assíncrona (F3): **banda inferior separada** com container distinto (y=600+)
+- Ator externo (Browser) fora do container AWS Cloud: **x < 200**
+
+### Containers
+- `rounded=1;fillColor=none;strokeColor=<cor>;dashed=1;dashPattern=8 4`
+- **Header: fontSize=14, fontStyle=1 (bold), spacingLeft=10, spacingTop=6**
+- NUNCA fontSize<13 em header — headers fracos são a reclamação #1 da revisão visual
+- `shape=mxgraph.aws4.group` com `grIcon=group_aws_cloud` para AWS Cloud container
+
+### Regras críticas de layout (aprendidas na marra)
+- **max 4 edges por source** — acima disso vira star pattern (P11)
+- **espaçar express lanes ≥ 30px vertical** (P25)
+- **notas SEMPRE FORA de containers** ou em área vazia explícita do container dono (P21)
+- **canais reservados** para edges longas:
+  - Canal TOP (y=90-140): segurança/secrets acima dos containers
+  - Canal MID-UP (y=220): auth/session
+  - Canal MID-LOW (y=290): dados (Lambda→DB)
+  - Canal BOTTOM (y=570-580): observabilidade (logs/traces)
+  - Canal F3-FOOTER (y=870-880): F3 retornos
+- **Distribuir exit/entry points** quando múltiplas edges saem/entram de mesmo nó: usar `exitX=0.1/0.3/0.5/0.7/0.9` (P26)
+
+### Arestas e labels
+- **edgeStyle=orthogonalEdgeStyle;rounded=1** em TODAS
+- **labelBackgroundColor=#FFFFFF** em TODAS (destaca label de cruzamentos)
+- **fontStyle=1 (bold) SOMENTE no fluxo principal F1** — bold em TODAS fica pesado (lição ITER 3)
+- Edges secundárias (F3 async, observabilidade): `fontStyle=0` (normal) + `fontColor=#888888` para observabilidade
+- Labels curtos: max 2 palavras ("salva XP", "enfileira")
+- Vocabulário consistente por dimensão (todo CRUD = "lê"/"salva"; todo async = "enfileira"/"trigger"/"retorno IA")
+
+### Numeração de passos (OPCIONAL mas eleva 8-10 pts visuais)
+- Ellipse preta 22×22: `ellipse;fillColor=#232F3E;strokeColor=#232F3E;fontColor=#FFFFFF;fontSize=11;fontStyle=1`
+- Numerar 10-12 passos-chave do fluxo principal + F3
+- Posicionar no MIDPOINT da aresta, com offset de +8px para cima/lado para não colidir com label
+- Adicionar linha na legenda: "**Numeração 1→12:** ordem do fluxo · **1-4:** Edge/API · **5-9:** Compute/Data (F1) · **10-12:** F3 assíncrono"
+
+### Legenda obrigatória (padrão consolidado)
+- Background: `rounded=1;fillColor=#FAFAFA;strokeColor=#CCCCCC`
+- Largura mínima: 1600px
+- Contém:
+  1. Título "📖 Legenda" em bold fontSize=14
+  2. Badges de fase (F1 MVP azul / F2 Produção verde / F3 IA rosa)
+  3. Cores de serviço (pill coloridas + nome)
+  4. Tipos de aresta (sólida/tracejada, cores especiais)
+  5. Linha de numeração (se houver badges)
+  6. Nota de observabilidade em itálico cinza
+
+### Caixa de custo (padrão)
+- Largura ≥ 320px (truncamento é reclamação comum)
+- fontSize=12, align=left, fillColor=#F5F5F5
+- Prefixo "💰" destaca visualmente
+- 3 linhas: conservador + escala 10x + premissa (N usuários)
 
 **Após gerar:** pergunte se o usuário quer salvar o `.drawio` em um path específico do projeto.
 
