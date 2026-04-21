@@ -6,6 +6,7 @@ import { Share2 } from 'lucide-react';
 import { useGameState } from '@/hooks/useGameState';
 import { exportState, importState } from '@/lib/engine';
 import { ShareCard } from '@/components/ShareCard';
+import { Certificate, getCompletedTrailIds } from '@/components/Certificate';
 import {
   BADGES_DEF,
   CURRICULUM,
@@ -24,6 +25,7 @@ export function ProgressoClient() {
   const { state, levelInfo, dueCards, refresh } = useGameState();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showShare, setShowShare] = useState(false);
+  const [certificateTrailId, setCertificateTrailId] = useState<string | null>(null);
 
   function handleExport() {
     const json = exportState();
@@ -42,12 +44,12 @@ export function ProgressoClient() {
     const reader = new FileReader();
     reader.onload = ev => {
       const json = ev.target?.result as string;
-      const ok = importState(json);
-      if (ok) {
+      const result = importState(json);
+      if (result.ok) {
         refresh();
         alert('Dados importados com sucesso!');
       } else {
-        alert('Arquivo inválido ou corrompido. Tente outro backup.');
+        alert(`Arquivo inválido ou corrompido.\n\nMotivo: ${result.error}`);
       }
     };
     reader.readAsText(file);
@@ -130,6 +132,57 @@ export function ProgressoClient() {
           ))}
         </div>
       </section>
+
+      {/* Certificate modal */}
+      {certificateTrailId && (
+        <Certificate
+          trailId={certificateTrailId}
+          onClose={() => setCertificateTrailId(null)}
+        />
+      )}
+
+      {/* Certificados de trilhas concluídas */}
+      {(() => {
+        const completedTrails = getCompletedTrailIds(completed);
+        if (completedTrails.length === 0) return null;
+        return (
+          <section className="max-w-5xl mx-auto px-6 pb-20">
+            <SectionLabel>CERTIFICADOS DE CONCLUSÃO</SectionLabel>
+            <p className="text-xs mt-2 mb-4" style={{ color: 'var(--ffv-muted)' }}>
+              Você concluiu {completedTrails.length} trilha{completedTrails.length === 1 ? '' : 's'}. Gere o certificado em PNG e compartilhe no LinkedIn.
+            </p>
+            <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
+              {completedTrails.map(t => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setCertificateTrailId(t.id)}
+                  className="text-left p-4 rounded-xl transition-all hover:scale-[1.01]"
+                  style={{
+                    background: `color-mix(in srgb, ${t.color} 8%, var(--ffv-bg2))`,
+                    border: `1px solid ${t.color}40`,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    <span style={{ fontSize: 22 }}>{t.icon}</span>
+                    <span className="text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full" style={{ background: `${t.color}20`, color: t.color, border: `1px solid ${t.color}40` }}>
+                      🎓 Certificado
+                    </span>
+                  </div>
+                  <p className="text-sm font-bold mb-1" style={{ color: t.color }}>{t.name}</p>
+                  <p className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
+                    {t.modules.length} módulos · {t.modules.reduce((acc, m) => acc + m.xp, 0)} XP
+                  </p>
+                  <span className="inline-block mt-3 px-3 py-1 rounded-full text-xs font-semibold" style={{ background: t.color, color: '#0d1117' }}>
+                    Gerar PNG →
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+        );
+      })()}
 
       <section className="max-w-5xl mx-auto px-6 pb-20">
         <SectionLabel>BADGES</SectionLabel>

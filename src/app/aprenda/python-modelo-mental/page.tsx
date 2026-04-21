@@ -2,6 +2,7 @@ import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
+import { CodePlayground } from '@/components/article/CodePlayground';
 
 const accent = '#3776ab';
 
@@ -120,6 +121,33 @@ profunda = copy.deepcopy(original)
 rasa[0].append(99)     # afeta original (mesmo objeto interno)
 profunda[0].append(88) # NÃO afeta original (objeto novo)
 print(original)        # [[1, 2, 99], [3, 4]]`}</CodeBlock>
+
+        <p style={{ marginTop: 16 }}>
+          Rode você mesmo — mude os valores, adicione prints, e veja a diferença entre cópia rasa e profunda:
+        </p>
+        <CodePlayground
+          lang="python"
+          title="Experimento: shallow vs deep copy"
+          accent={accent}
+          initial={`import copy
+
+original = [[1, 2], [3, 4]]
+rasa = original.copy()
+profunda = copy.deepcopy(original)
+
+# Mude rasa[0] — afeta original?
+rasa[0].append(99)
+print("original:", original)
+print("rasa:    ", rasa)
+print("profunda:", profunda)
+
+# Agora mude profunda[0]
+profunda[0].append(88)
+print("---")
+print("original:", original)
+print("profunda:", profunda)
+`}
+        />
       </Section>
 
       <Section accent={accent} title="Mutabilidade: o que pode ser modificado in-place">

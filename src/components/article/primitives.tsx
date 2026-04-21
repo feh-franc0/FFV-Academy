@@ -282,7 +282,7 @@ export function HierarchyDiagram({ title, levels, accent = 'var(--ffv-blue)' }: 
           🗺️ {title}
         </div>
       )}
-      <div className="p-5">
+      <div className="p-4 sm:p-5">
         {levels.map((level, i) => {
           const depth = i;
           const opacity = Math.max(0.08, 0.18 - depth * 0.02);
@@ -291,7 +291,7 @@ export function HierarchyDiagram({ title, levels, accent = 'var(--ffv-blue)' }: 
               key={i}
               className="rounded-lg p-3"
               style={{
-                marginLeft: `${depth * 20}px`,
+                marginLeft: `clamp(${depth * 8}px, ${depth * 1.5}vw, ${depth * 20}px)`,
                 marginBottom: i < levels.length - 1 ? '0' : undefined,
                 border: `1px solid ${accent}${Math.round((0.35 - depth * 0.05) * 255).toString(16).padStart(2, '0')}`,
                 background: `color-mix(in srgb, ${accent} ${Math.round(opacity * 100)}%, var(--ffv-bg2))`,
@@ -332,7 +332,11 @@ export function FlowDiagram({ title, steps, orientation = 'horizontal', accent =
         </div>
       )}
       <div
-        className={isHorizontal ? 'flex flex-row flex-wrap items-center gap-0 p-5' : 'flex flex-col gap-0 p-5'}
+        className={
+          isHorizontal
+            ? 'flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-0 p-5'
+            : 'flex flex-col gap-0 p-5'
+        }
         style={{ background: `linear-gradient(135deg, color-mix(in srgb, ${accent} 4%, var(--ffv-bg2)) 0%, var(--ffv-bg2) 100%)` }}
       >
         {steps.map((step, i) => (
@@ -352,12 +356,24 @@ export function FlowDiagram({ title, steps, orientation = 'horizontal', accent =
               )}
             </div>
             {i < steps.length - 1 && (
-              <div
-                className={`flex items-center justify-center font-bold text-base shrink-0 ${isHorizontal ? 'px-1' : 'py-1 self-center'}`}
-                style={{ color: `${accent}90` }}
-              >
-                {isHorizontal ? '→' : '↓'}
-              </div>
+              isHorizontal ? (
+                <div
+                  className="flex items-center justify-center font-bold text-base shrink-0 py-1 sm:py-0 sm:px-1"
+                  style={{ color: `${accent}90` }}
+                  aria-hidden
+                >
+                  <span className="sm:hidden">↓</span>
+                  <span className="hidden sm:inline">→</span>
+                </div>
+              ) : (
+                <div
+                  className="flex items-center justify-center font-bold text-base shrink-0 py-1 self-center"
+                  style={{ color: `${accent}90` }}
+                  aria-hidden
+                >
+                  ↓
+                </div>
+              )
             )}
           </Fragment>
         ))}
@@ -404,9 +420,16 @@ export function ComparisonFlow({ title, left, right, accent = 'var(--ffv-blue)' 
           🗺️ {title}
         </div>
       )}
-      <div className="p-5 flex gap-4">
+      <div className="p-4 sm:p-5 flex flex-col sm:flex-row gap-3 sm:gap-4 items-stretch">
         {renderFlow(left, accent)}
-        <div className="flex items-center justify-center text-2xl shrink-0" style={{ color: 'var(--ffv-muted)' }}>⟺</div>
+        <div
+          className="flex items-center justify-center shrink-0"
+          style={{ color: 'var(--ffv-muted)', fontSize: 22, minHeight: 24 }}
+          aria-hidden
+        >
+          <span className="sm:hidden">↕</span>
+          <span className="hidden sm:inline">⟺</span>
+        </div>
         {renderFlow(right, 'var(--ffv-green)')}
       </div>
     </div>
@@ -432,7 +455,14 @@ export function ArchFlow({ title, columns, accent = 'var(--ffv-blue)' }: {
           🗺️ {title}
         </div>
       )}
-      <div className="p-5 grid gap-3" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))` }}>
+      <div
+        className="p-5 grid gap-3"
+        style={{
+          gridTemplateColumns: `repeat(auto-fit, minmax(min(100%, 260px), 1fr))`,
+          // desktop retoma layout fixo quando há espaço
+          ['--ffv-arch-cols' as string]: columns.length,
+        }}
+      >
         {columns.map((col, i) => {
           const color = col.headerColor ?? accent;
           return (
@@ -658,10 +688,10 @@ export function SplitFlow({ title, left, right, center, accent = 'var(--ffv-blue
           🗺️ {title}
         </div>
       )}
-      <div className="p-4 flex items-stretch gap-3">
+      <div className="p-4 flex flex-col sm:flex-row items-stretch gap-3">
         {renderColumn(left, 'left')}
         {center && (
-          <div className="flex items-center justify-center px-2">
+          <div className="flex items-center justify-center px-0 sm:px-2 py-1 sm:py-0">
             <div className="text-center">
               <div className="text-[10px] font-mono px-2 py-1 rounded" style={{ background: `${accent}20`, color: accent, border: `1px solid ${accent}50` }}>
                 {center}
@@ -880,7 +910,10 @@ export function NodeGraph({ title, accent = 'var(--ffv-blue)', columns, legend }
         </div>
       )}
       <div className="p-4 sm:p-5">
-        <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))` }}>
+        <div
+          className="grid gap-3"
+          style={{ gridTemplateColumns: `repeat(auto-fit, minmax(min(100%, 260px), 1fr))` }}
+        >
           {columns.map((col, ci) => (
             <div key={ci} className="flex flex-col gap-2">
               <div
@@ -970,8 +1003,16 @@ export function KeyValue({ items, accent = 'var(--ffv-blue)' }: {
   return (
     <div className="flex flex-col gap-2">
       {items.map((it, i) => (
-        <div key={i} className="flex items-start gap-3 text-xs">
-          <span className="font-semibold flex-shrink-0" style={{ color: accent, minWidth: 140 }}>{it.k}</span>
+        <div
+          key={i}
+          className="flex flex-col gap-0.5 sm:flex-row sm:items-start sm:gap-3 text-xs"
+        >
+          <span
+            className="font-semibold sm:flex-shrink-0 sm:min-w-[140px]"
+            style={{ color: accent }}
+          >
+            {it.k}
+          </span>
           <span style={{ color: 'var(--ffv-muted)' }}>{it.v}</span>
         </div>
       ))}

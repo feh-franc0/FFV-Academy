@@ -14,6 +14,12 @@ import { NextSteps } from '@/components/article/NextSteps';
 import { ArticleJsonLd } from '@/components/article/ArticleJsonLd';
 import { CelebrationOverlay, type CelebrationEvent } from '@/components/CelebrationOverlay';
 import { RelatedModules } from '@/components/article/RelatedModules';
+import { ShareSocial } from '@/components/ShareSocial';
+import { QuizWordleResult } from '@/components/QuizWordleResult';
+import { ModuleActions } from '@/components/ModuleActions';
+import { PrintCover, PrintQuizAnswerKey, PrintColophon } from '@/components/article/PrintLayout';
+import { isDailyModule, markDailyModuleCompleted } from '@/lib/dailyModule';
+import { GAME_CONFIG } from '@/lib/constants';
 
 export interface QuizQuestion {
   question: string;
@@ -59,9 +65,42 @@ export function ModuleLayout({
   const [submitted, setSubmitted] = useState(false);
   const [result, setResult] = useState<{ xpGained: number; newBadges: string[]; leveledUp: boolean; newLevel: number; cardsAdded: number } | null>(null);
   const [celebrations, setCelebrations] = useState<CelebrationEvent[]>([]);
+  const [timeAttack, setTimeAttack] = useState(false);
+  const [timeAttackFailed, setTimeAttackFailed] = useState(false);
+  const [timeAttackDeadline, setTimeAttackDeadline] = useState<number | null>(null);
+  const [timeLeft, setTimeLeft] = useState<number | null>(null);
 
   const isCompleted = state?.completedModules.includes(slug) ?? false;
   const quizScore = state?.quizScores[slug];
+  const [isDaily, setIsDaily] = useState(false);
+  const DAILY_BONUS_XP = GAME_CONFIG.DAILY_MODULE_BONUS_XP;
+  const TIME_ATTACK_BONUS_XP = GAME_CONFIG.TIME_ATTACK_BONUS_XP;
+  const TIME_ATTACK_SECONDS_PER_Q = GAME_CONFIG.TIME_ATTACK_SECONDS_PER_QUESTION;
+
+  useEffect(() => {
+    setIsDaily(isDailyModule(slug));
+  }, [slug]);
+
+  /**
+   * Timer do time-attack baseado em wall-clock (Date.now()) — robusto a:
+   * - Tab inativa (setInterval com delay maior)
+   * - DevTools pausado
+   * - Throttling do navegador
+   * Atualiza display a cada 250ms pra UI suave sem drift cumulativo.
+   */
+  useEffect(() => {
+    if (!quizStarted || submitted || !timeAttack || timeAttackDeadline === null) return;
+
+    const tick = () => {
+      const remainingMs = timeAttackDeadline - Date.now();
+      const remainingSec = Math.max(0, Math.ceil(remainingMs / 1000));
+      setTimeLeft(remainingSec);
+      if (remainingMs <= 0) setTimeAttackFailed(true);
+    };
+    tick();
+    const id = window.setInterval(tick, 250);
+    return () => window.clearInterval(id);
+  }, [quizStarted, submitted, timeAttack, timeAttackDeadline]);
 
   // Hub ancestry for breadcrumb
   const hub = useMemo(() => {
@@ -92,13 +131,22 @@ export function ModuleLayout({
     const score = answers.filter((a, i) => a === quiz[i].correct).length;
     submitQuiz(slug, score, quiz.length);
     const quizScore = quiz.length > 0 ? score / quiz.length : 1;
-    const r = markComplete({ slug, title, trailColor, readTime, quiz, quizScore });
+    const applyDailyBonus = isDaily && !isCompleted;
+    const timeAttackWin = timeAttack && !timeAttackFailed && score === quiz.length && !isCompleted;
+    let bonusXp = 0;
+    if (applyDailyBonus) bonusXp += DAILY_BONUS_XP;
+    if (timeAttackWin) bonusXp += TIME_ATTACK_BONUS_XP;
+    const r = markComplete({
+      slug, title, trailColor, readTime, quiz, quizScore,
+      bonusXp,
+    });
+    if (applyDailyBonus) markDailyModuleCompleted(slug);
     setResult(r);
     setSubmitted(true);
 
     // Plausible analytics — evento de conclusão de quiz
     try {
-      (window as unknown as { plausible?: (e: string, o: object) => void }).plausible?.('quiz-complete', {
+      window.plausible?.('quiz-complete', {
         props: { module: slug, score: `${score}/${quiz.length}`, perfect: score === quiz.length },
       });
     } catch { /* analytics opcional */ }
@@ -119,8 +167,44 @@ export function ModuleLayout({
   const score = submitted ? answers.filter((a, i) => a === quiz[i].correct).length : 0;
   const perfect = submitted && score === quiz.length;
 
+  // Helper pra level do módulo (usado na capa print)
+  const trail = CURRICULUM.find(t => t.modules.some(m => m.slug === slug));
+  const moduleLevel = trail?.modules.find(m => m.slug === slug)?.level ?? trail?.level;
+
+  function escapeCss(s: string): string {
+    return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  }
+
   return (
     <article className="max-w-2xl mx-auto px-6 pb-20" data-article-root>
+      {/* Print-only: capa, renderizada apenas em PDF */}
+      <PrintCover
+        title={title}
+        slug={slug}
+        icon={icon}
+        trailName={trailName}
+        trailColor={trailColor}
+        hubName={hub?.name ?? hub?.shortName}
+        readTime={readTime}
+        xp={xp}
+        level={moduleLevel}
+      />
+      {/* CSS dinâmico para cabeçalho/rodapé do PDF com trail name e título */}
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
+@media print {
+  @page {
+    @top-right { content: "${escapeCss(trailName.toUpperCase())}" !important; }
+    @bottom-left { content: "${escapeCss(title)}" !important; }
+  }
+  @page :first {
+    @top-right { content: none !important; }
+    @bottom-left { content: none !important; }
+  }
+}`,
+        }}
+      />
       {seoDesc && (
         <ArticleJsonLd
           title={title}
@@ -172,6 +256,27 @@ export function ModuleLayout({
         <span style={{ color: 'var(--foreground)' }}>{title}</span>
       </nav>
 
+      {/* Daily Module banner */}
+      {isDaily && !isCompleted && (
+        <div
+          className="mb-6 flex items-center gap-3 p-4 rounded-xl flex-wrap"
+          style={{
+            background: `color-mix(in srgb, ${trailColor} 10%, var(--ffv-bg2))`,
+            border: `1px solid ${trailColor}40`,
+          }}
+        >
+          <span className="text-xl">🌅</span>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-bold uppercase tracking-widest mb-0.5" style={{ color: trailColor }}>
+              Módulo do Dia
+            </div>
+            <div className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
+              Complete hoje e ganhe <b style={{ color: 'var(--ffv-yellow)' }}>+{DAILY_BONUS_XP} XP bônus</b>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="mb-10">
         <div className="flex items-center gap-3 mb-4">
@@ -192,6 +297,12 @@ export function ModuleLayout({
               {quizScore && <span>· Quiz: {quizScore.score}/{quizScore.total}{quizScore.perfect ? ' 🎯' : ''}</span>}
             </div>
           </div>
+        </div>
+        <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+          <div className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
+            Leve este módulo pra qualquer lugar
+          </div>
+          <ModuleActions title={title} slug={slug} accent={trailColor} trailName={trailName} />
         </div>
         <div className="h-px" style={{ background: 'var(--ffv-border)' }} />
       </header>
@@ -220,8 +331,13 @@ export function ModuleLayout({
       {/* Content */}
       <div className="prose-ffv" data-article-content>{children}</div>
 
-      {/* Quiz section */}
-      <section className="mt-14">
+      {/* Social share — antes do quiz, encoraja share mid-article */}
+      <div className="mt-10">
+        <ShareSocial slug={slug} title={title} accent={trailColor} />
+      </div>
+
+      {/* Quiz section (interativo, escondido em PDF) */}
+      <section className="mt-14 ffv-no-print" data-quiz-interactive>
         <div className="h-px mb-10" style={{ background: 'var(--ffv-border)' }} />
 
         {!quizStarted && !submitted ? (
@@ -231,20 +347,61 @@ export function ModuleLayout({
           >
             <div className="text-3xl mb-3">🧩</div>
             <h2 className="text-lg font-bold mb-2">Quiz rápido</h2>
-            <p className="text-sm mb-6" style={{ color: 'var(--ffv-muted)' }}>
+            <p className="text-sm mb-4" style={{ color: 'var(--ffv-muted)' }}>
               {quiz.length} perguntas · Acerte tudo e ganhe o badge 🎯 Gabarito
             </p>
-            <button
-              onClick={() => setQuizStarted(true)}
-              className="px-6 py-2.5 rounded-full font-semibold text-sm transition-all hover:opacity-90 active:scale-95"
-              style={{ background: trailColor, color: '#0d1117' }}
+
+            <label
+              className="inline-flex items-center gap-2 text-xs mb-5 cursor-pointer select-none"
+              style={{ color: 'var(--ffv-muted)' }}
             >
-              Começar quiz
-            </button>
+              <input
+                type="checkbox"
+                checked={timeAttack}
+                onChange={e => setTimeAttack(e.target.checked)}
+              />
+              ⚡ <b>Time Attack</b> — {TIME_ATTACK_SECONDS_PER_Q}s por pergunta · +{TIME_ATTACK_BONUS_XP} XP se 100% no tempo
+            </label>
+
+            <div>
+              <button
+                onClick={() => {
+                  if (timeAttack) {
+                    const deadline = Date.now() + quiz.length * TIME_ATTACK_SECONDS_PER_Q * 1000;
+                    setTimeAttackDeadline(deadline);
+                    setTimeLeft(quiz.length * TIME_ATTACK_SECONDS_PER_Q);
+                  }
+                  setQuizStarted(true);
+                }}
+                className="px-6 py-2.5 rounded-full font-semibold text-sm transition-all hover:opacity-90 active:scale-95"
+                style={{ background: trailColor, color: '#0d1117' }}
+              >
+                {timeAttack ? '⚡ Começar Time Attack' : 'Começar quiz'}
+              </button>
+            </div>
           </div>
         ) : !submitted ? (
           <div>
-            <h2 className="text-lg font-bold mb-6">🧩 Quiz</h2>
+            <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+              <h2 className="text-lg font-bold">🧩 Quiz</h2>
+              {timeAttack && timeLeft !== null && !timeAttackFailed && (
+                <span
+                  className="text-sm font-bold px-3 py-1 rounded-full font-mono tabular-nums"
+                  style={{
+                    background: timeLeft <= 10 ? 'rgba(247,129,102,0.18)' : 'var(--ffv-bg2)',
+                    color: timeLeft <= 10 ? 'var(--ffv-red)' : trailColor,
+                    border: `1px solid ${timeLeft <= 10 ? 'rgba(247,129,102,0.4)' : trailColor + '40'}`,
+                  }}
+                >
+                  ⚡ {Math.floor(timeLeft / 60)}:{String(timeLeft % 60).padStart(2, '0')}
+                </span>
+              )}
+              {timeAttack && timeAttackFailed && (
+                <span className="text-xs font-semibold" style={{ color: 'var(--ffv-red)' }}>
+                  ⏱ Tempo esgotado — quiz sem bônus
+                </span>
+              )}
+            </div>
             <div className="flex flex-col gap-8">
               {quiz.map((q, qi) => (
                 <div key={qi}>
@@ -296,6 +453,11 @@ export function ModuleLayout({
                 <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
                   {score}/{quiz.length} corretas · +{result.xpGained} XP ganhos
                 </p>
+                {timeAttack && !timeAttackFailed && perfect && (
+                  <p className="mt-1 text-xs font-semibold" style={{ color: 'var(--ffv-yellow)' }}>
+                    ⚡ Time Attack · +{TIME_ATTACK_BONUS_XP} XP bônus
+                  </p>
+                )}
                 {result.leveledUp && (
                   <p className="mt-2 font-semibold" style={{ color: 'var(--ffv-yellow)' }}>
                     🎉 Level up! Você é agora Nível {result.newLevel}!
@@ -322,8 +484,16 @@ export function ModuleLayout({
               </div>
             )}
 
+            {/* Wordle-style share card */}
+            <QuizWordleResult
+              slug={slug}
+              title={title}
+              results={quiz.map((q, i) => answers[i] === q.correct)}
+              accent={trailColor}
+            />
+
             {/* Answer review */}
-            <h2 className="text-base font-bold mb-4">Revisão das respostas</h2>
+            <h2 className="text-base font-bold mb-4 mt-8">Revisão das respostas</h2>
             <div className="flex flex-col gap-6">
               {quiz.map((q, qi) => {
                 const userAnswer = answers[qi];
@@ -385,6 +555,12 @@ export function ModuleLayout({
       <NextSteps slug={slug} />
       {relatedSlugs && relatedSlugs.length > 0 && <RelatedModules slugs={relatedSlugs} />}
       <RelatedArticles currentSlug={slug} />
+
+      {/* Print-only: gabarito do quiz como material de revisão */}
+      <PrintQuizAnswerKey quiz={quiz} title={title} trailColor={trailColor} />
+
+      {/* Print-only: colofão (última página do PDF) */}
+      <PrintColophon title={title} slug={slug} trailName={trailName} trailColor={trailColor} />
 
       {celebrations.length > 0 && (
         <CelebrationOverlay

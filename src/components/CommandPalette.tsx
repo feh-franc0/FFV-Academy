@@ -49,6 +49,36 @@ function buildItems(): Item[] {
     haystack: 'revisar srs spaced repetition flashcards cards',
     accent: 'var(--ffv-green)',
   });
+  items.push({
+    id: 'page-simulados',
+    kind: 'page',
+    title: 'Simulados',
+    subtitle: 'Simulados com tutor IA para certificações AWS',
+    icon: '🎯',
+    href: '/simulados',
+    haystack: 'simulados aws certificação exam prova tutor ia',
+    accent: '#f78166',
+  });
+  items.push({
+    id: 'page-news',
+    kind: 'page',
+    title: 'News',
+    subtitle: 'Curadoria editorial das notícias de IA, infra e arquitetura',
+    icon: '📰',
+    href: '/news',
+    haystack: 'news noticias ia anthropic openai claude gemini llama regulação ai act benchmarks',
+    accent: '#ff5a36',
+  });
+  items.push({
+    id: 'page-preferencias',
+    kind: 'page',
+    title: 'Preferências',
+    subtitle: 'Seus dados, consentimentos e produtos pagos',
+    icon: '⚙️',
+    href: '/preferencias',
+    haystack: 'preferencias conta perfil logout sair dados lgpd',
+    accent: 'var(--ffv-muted)',
+  });
 
   // Hubs
   for (const hub of HUBS) {

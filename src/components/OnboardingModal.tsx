@@ -43,6 +43,10 @@ export function OnboardingModal() {
 
   useEffect(() => {
     if (!state) return;
+    // Bypass para captura de screenshot / E2E — ?skipOnboarding=1
+    if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('skipOnboarding') === '1') {
+      return;
+    }
     const neverOnboarded = !state.onboardedAt;
     const noActivity = state.completedModules.length === 0 && state.xp === 0 && !state.lastArticle;
     if (neverOnboarded && noActivity) {

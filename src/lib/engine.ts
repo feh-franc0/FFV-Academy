@@ -1,10 +1,12 @@
 'use client';
 
 import LZString from 'lz-string';
-import { CURRICULUM, LEVELS, BADGES_DEF, getLevelInfo, getHubForTrail } from './curriculum';
-import { type ReviewCard, type ReviewQuality, createCard, reviewCard, getDueCards, todayISO, isoDate, daysBetween } from './srs';
-
-const ENGINE_KEY = 'ffv_academy';
+import { CURRICULUM, LEVELS, BADGES_DEF, getLevelInfo } from './curriculum';
+import { type ReviewCard, type ReviewQuality, createCard, reviewCard, getDueCards, todayISO, isoDate } from './srs';
+import { GAME_CONFIG, STORAGE_KEYS } from './constants';
+import { getRaw, setRaw, onStorageError } from './storage';
+import { GameStateSchema, safeParseJSON } from './schemas';
+import { evaluateModuleBadges, evaluateReviewBadges, evaluateQuizBadges } from './badges';
 
 export interface StudyDay {
   date: string;            // YYYY-MM-DD
@@ -50,19 +52,33 @@ export interface GameState {
   preferredHub: string | null;    // hub slug chosen at onboarding
   onboardedAt: string | null;     // ISO
   articleProgress: Record<string, number>; // slug → 0..1
+  // v2 — counters para badges avançados
+  /** Sequência atual de quizzes perfect (reseta em qualquer imperfeição). */
+  perfectQuizStreak: number;
+  /** Datas (YYYY-MM-DD) em que estudou antes das 6h — badge aurora. */
+  earlyMorningDays: string[];
+  /** Timestamp ISO do primeiro módulo de cada trilha (para badge speedrun_trail). */
+  trailStartedAt: Record<string, string>;
 }
 
-const CURRENT_SCHEMA = 1;
+const CURRENT_SCHEMA = 2;
 
 /** Migra estado antigo (sem schemaVersion) para versão atual. */
 function migrateState(parsed: Record<string, unknown>): Partial<GameState> {
   const version = typeof parsed.schemaVersion === 'number' ? parsed.schemaVersion : 0;
   let state = { ...parsed } as Record<string, unknown>;
   // v0 → v1: sem mudanças destrutivas, só adiciona schemaVersion
-  if (version < 1) {
-    state = { ...state, schemaVersion: 1 };
+  if (version < 1) state = { ...state, schemaVersion: 1 };
+  // v1 → v2: adiciona campos de tracking pra badges avançados (aurora/sniper/speedrun_trail)
+  if (version < 2) {
+    state = {
+      ...state,
+      schemaVersion: 2,
+      perfectQuizStreak: typeof state.perfectQuizStreak === 'number' ? state.perfectQuizStreak : 0,
+      earlyMorningDays: Array.isArray(state.earlyMorningDays) ? state.earlyMorningDays : [],
+      trailStartedAt: state.trailStartedAt && typeof state.trailStartedAt === 'object' ? state.trailStartedAt : {},
+    };
   }
-  // v1 → v2: adicionar aqui no futuro
   return state as Partial<GameState>;
 }
 
@@ -95,12 +111,15 @@ const DEFAULT_STATE: GameState = {
   preferredHub: null,
   onboardedAt: null,
   articleProgress: {},
+  perfectQuizStreak: 0,
+  earlyMorningDays: [],
+  trailStartedAt: {},
 };
 
 export function loadState(): GameState {
   if (typeof window === 'undefined') return { ...DEFAULT_STATE };
   try {
-    const raw = localStorage.getItem(ENGINE_KEY);
+    const raw = getRaw(STORAGE_KEYS.GAME_STATE);
     if (raw) {
       // Support both lz-string compressed (new) and plain JSON (legacy).
       // Skip decompress for plain JSON — LZString.decompress can hang on arbitrary input.
@@ -130,6 +149,9 @@ export function loadState(): GameState {
         preferredHub: typeof migrated.preferredHub === 'string' ? migrated.preferredHub : null,
         onboardedAt: typeof migrated.onboardedAt === 'string' ? migrated.onboardedAt : null,
         articleProgress: migrated.articleProgress && typeof migrated.articleProgress === 'object' ? migrated.articleProgress as Record<string, number> : {},
+        perfectQuizStreak: typeof migrated.perfectQuizStreak === 'number' ? migrated.perfectQuizStreak : 0,
+        earlyMorningDays: Array.isArray(migrated.earlyMorningDays) ? migrated.earlyMorningDays : [],
+        trailStartedAt: migrated.trailStartedAt && typeof migrated.trailStartedAt === 'object' ? migrated.trailStartedAt as Record<string, string> : {},
       };
     }
   } catch {}
@@ -163,22 +185,25 @@ function gcSRSCards(state: GameState): GameState {
 
 let _saveErrorCallback: ((msg: string) => void) | null = null;
 /** Registra callback para erros de persistência (ex: localStorage cheio). */
-export function onSaveError(cb: (msg: string) => void) { _saveErrorCallback = cb; }
+export function onSaveError(cb: (msg: string) => void) {
+  _saveErrorCallback = cb;
+  // Propaga para a camada de storage também — o adapter reporta aqui.
+  onStorageError(msg => _saveErrorCallback?.(msg));
+}
 
 function saveState(state: GameState) {
   // GC well-known SRS cards before persisting
   const gc = gcSRSCards(state);
-  try {
-    const compressed = LZString.compress(JSON.stringify(gc));
-    localStorage.setItem(ENGINE_KEY, compressed);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Erro ao salvar progresso';
-    _saveErrorCallback?.(msg);
-    // Re-tentativa com dados críticos mínimos (preserva progresso, descarta histórico pesado)
-    try {
-      const minimal = { ...gc, studyDays: gc.studyDays.slice(-30), reviewCards: gc.reviewCards.slice(-100) };
-      localStorage.setItem(ENGINE_KEY, LZString.compress(JSON.stringify(minimal)));
-    } catch {}
+  const compressed = LZString.compress(JSON.stringify(gc));
+  const ok = setRaw(STORAGE_KEYS.GAME_STATE, compressed);
+  if (!ok) {
+    // Fallback: retenta com dados mínimos (preserva progresso, descarta histórico pesado)
+    const minimal = {
+      ...gc,
+      studyDays: gc.studyDays.slice(-GAME_CONFIG.FALLBACK_STUDY_DAYS_TRIM),
+      reviewCards: gc.reviewCards.slice(-GAME_CONFIG.FALLBACK_CARDS_TRIM),
+    };
+    setRaw(STORAGE_KEYS.GAME_STATE, LZString.compress(JSON.stringify(minimal)));
   }
 }
 
@@ -188,25 +213,31 @@ export function exportState(): string {
   return JSON.stringify({ ...state, exportedAt: new Date().toISOString() }, null, 2);
 }
 
-/** Importa estado a partir de JSON exportado. Retorna true se sucesso, false se JSON inválido. */
-export function importState(json: string): boolean {
-  try {
-    const parsed = JSON.parse(json) as Record<string, unknown>;
-    if (!parsed || typeof parsed !== 'object') return false;
-    // Valida campos mínimos obrigatórios
-    if (typeof parsed.xp !== 'number' || !Array.isArray(parsed.completedModules)) return false;
-    const migrated = migrateState(parsed);
-    const next: GameState = {
-      ...DEFAULT_STATE,
-      ...migrated,
-      schemaVersion: CURRENT_SCHEMA,
-      reviewCards: Array.isArray(migrated.reviewCards) ? migrated.reviewCards : [],
-      archivedCards: Array.isArray(migrated.archivedCards) ? migrated.archivedCards : [],
-      studyDays: Array.isArray(migrated.studyDays) ? migrated.studyDays : [],
-    };
-    localStorage.setItem(ENGINE_KEY, LZString.compress(JSON.stringify(next)));
-    return true;
-  } catch { return false; }
+/**
+ * Importa estado a partir de JSON exportado.
+ *
+ * Segurança:
+ * - Validação estrutural via Zod (fail-closed) — campos com tipo errado rejeitam tudo.
+ * - Limite de tamanho (IMPORT_STATE_MAX_BYTES) previne exhaustion.
+ * - Zod `.strict()` bloqueia prototype pollution (`__proto__`, `constructor`).
+ *
+ * Retorna `{ ok: true }` em sucesso ou `{ ok: false, error }` com motivo.
+ */
+export function importState(json: string): { ok: true } | { ok: false; error: string } {
+  const result = safeParseJSON<Record<string, unknown>>(
+    GameStateSchema as unknown as { safeParse: (i: unknown) => { success: boolean; data?: Record<string, unknown>; error?: { message: string } } },
+    json,
+    GAME_CONFIG.IMPORT_STATE_MAX_BYTES,
+  );
+  if (!result.ok) return result;
+
+  const next: GameState = {
+    ...DEFAULT_STATE,
+    ...(result.data as unknown as Partial<GameState>),
+    schemaVersion: CURRENT_SCHEMA,
+  };
+  const ok = setRaw(STORAGE_KEYS.GAME_STATE, LZString.compress(JSON.stringify(next)));
+  return ok ? { ok: true } : { ok: false, error: 'falha ao persistir' };
 }
 
 function recordStudyDay(state: GameState, delta: Partial<Omit<StudyDay, 'date'>>): GameState {
@@ -288,12 +319,95 @@ function addXP(state: GameState, amount: number): { state: GameState; leveledUp:
   };
 }
 
-function unlockBadge(state: GameState, badgeId: string): { state: GameState; unlocked: boolean } {
+/**
+ * Completa um simulado — concede XP proporcional ao score + badges específicos.
+ *
+ * score é 0-100. XP = score * 0.5 (ex: 80% → +40 XP; 100% → +50 XP).
+ * Badges concedidos:
+ * - simulado_first (primeira vez completando qualquer simulado)
+ * - simulado_aws_practitioner (passou no AWS Practitioner)
+ * - simulado_aws_saa (passou no AWS SAA)
+ */
+export function completeSimulado(input: {
+  simuladoId: string;
+  score: number;
+  passed: boolean;
+}): { xpGained: number; newBadges: string[]; leveledUp: boolean; newLevel: number } {
+  let state = loadState();
+  const xpGained = Math.round(input.score * 0.5);
+  const prevLevel = state.level;
+  const addRes = addXP(state, xpGained);
+  state = addRes.state;
+
+  const newBadges: string[] = [];
+
+  // simulado_first
+  if (!state.badges.includes('simulado_first')) {
+    const firstRes = awardBadgeInState(state, 'simulado_first');
+    if (firstRes.unlocked) {
+      state = firstRes.state;
+      newBadges.push('simulado_first');
+    }
+  }
+
+  // Badges específicos por passed
+  if (input.passed) {
+    const passedMap: Record<string, string> = {
+      'simulado-aws-practitioner': 'simulado_aws_practitioner',
+      'simulado-aws-developer': 'simulado_aws_developer',
+      'simulado-aws-saa': 'simulado_aws_saa',
+    };
+    const badgeId = passedMap[input.simuladoId];
+    if (badgeId) {
+      const passRes = awardBadgeInState(state, badgeId);
+      if (passRes.unlocked) {
+        state = passRes.state;
+        newBadges.push(badgeId);
+      }
+    }
+  }
+
+  saveState(state);
+  return {
+    xpGained,
+    newBadges,
+    leveledUp: addRes.newLevel > prevLevel,
+    newLevel: addRes.newLevel,
+  };
+}
+
+/** Helper local pra awardBadge trabalhar em state (não persiste). */
+function awardBadgeInState(state: GameState, badgeId: string): { state: GameState; unlocked: boolean } {
   if (state.badges.includes(badgeId)) return { state, unlocked: false };
+  const def = BADGES_DEF.find(b => b.id === badgeId);
+  if (!def) return { state, unlocked: false };
+  return {
+    state: { ...state, badges: [...state.badges, badgeId], xp: state.xp + def.xpBonus },
+    unlocked: true,
+  };
+}
+
+/** Desbloqueia um badge direto no estado persistido. Retorna se foi novo. */
+export function awardBadge(badgeId: string): { unlocked: boolean; xpGained: number; leveledUp: boolean; newLevel: number } {
+  let state = loadState();
+  if (state.badges.includes(badgeId)) {
+    return { unlocked: false, xpGained: 0, leveledUp: false, newLevel: state.level };
+  }
   const badge = BADGES_DEF.find(b => b.id === badgeId);
-  if (!badge) return { state, unlocked: false };
-  const newState = { ...state, badges: [...state.badges, badgeId], xp: state.xp + badge.xpBonus };
-  return { state: newState, unlocked: true };
+  if (!badge) {
+    return { unlocked: false, xpGained: 0, leveledUp: false, newLevel: state.level };
+  }
+  const prevLevel = state.level;
+  state = { ...state, badges: [...state.badges, badgeId] };
+  const addRes = addXP(state, badge.xpBonus);
+  state = addRes.state;
+  saveState(state);
+  return {
+    unlocked: true,
+    xpGained: badge.xpBonus,
+    leveledUp: addRes.newLevel > prevLevel,
+    newLevel: addRes.newLevel,
+  };
 }
 
 function addCardsFromQuiz(
@@ -324,6 +438,8 @@ export interface CompleteModuleInput {
   quiz: Array<{ question: string; options: string[]; correct: number; explanation: string }>;
   /** Proporção do quiz acertada (0..1). Se omitido, assume 1 (100% base + bonus). */
   quizScore?: number;
+  /** XP bônus adicional (ex.: Módulo do Dia). Somado ao xpGained. */
+  bonusXp?: number;
 }
 
 export function completeModule(input: CompleteModuleInput): CompleteModuleResult {
@@ -355,6 +471,9 @@ export function completeModule(input: CompleteModuleInput): CompleteModuleResult
     const bonusXP = Math.round(moduleXP * 0.3 * (input.quizScore ?? 1));
     xpGained = baseXP + bonusXP;
   }
+  if (input.bonusXp && input.bonusXp > 0) {
+    xpGained += input.bonusXp;
+  }
   ({ state, leveledUp, newLevel } = addXP(state, xpGained));
 
   // Marca módulo como completo
@@ -373,214 +492,57 @@ export function completeModule(input: CompleteModuleInput): CompleteModuleResult
     modulesCompleted: isRevisit ? 0 : 1,
   });
 
-  // Badge: primeiro passo
-  if (state.completedModules.length === 1) {
-    const r = unlockBadge(state, 'first_step');
-    if (r.unlocked) { state = r.state; newBadges.push('first_step'); }
-  }
+  // Trackers específicos que exigem atualização de state ANTES da avaliação:
+  state = trackTrailStart(state, slug);
+  state = trackEarlyMorning(state);
 
-  // Badge: revisita
-  if (isRevisit) {
-    const r = unlockBadge(state, 'curious');
-    if (r.unlocked) { state = r.state; newBadges.push('curious'); }
-  }
-
-  // Badge: speed run (3 módulos no dia)
-  const todayCount = state.studyDays.find(d => d.date === todayISO())?.modulesCompleted ?? 0;
-  if (todayCount >= 3) {
-    const r = unlockBadge(state, 'speed_run');
-    if (r.unlocked) { state = r.state; newBadges.push('speed_run'); }
-  }
-
-  // Badges de streak
-  if (state.streak >= 3) {
-    const r = unlockBadge(state, 'streak_3');
-    if (r.unlocked) { state = r.state; newBadges.push('streak_3'); }
-  }
-  if (state.streak >= 7) {
-    const r = unlockBadge(state, 'streak_7');
-    if (r.unlocked) { state = r.state; newBadges.push('streak_7'); }
-  }
-  if (state.streak >= 30) {
-    const r = unlockBadge(state, 'streak_30');
-    if (r.unlocked) { state = r.state; newBadges.push('streak_30'); }
-  }
-  if (state.streak >= 60) {
-    const r = unlockBadge(state, 'streak_60');
-    if (r.unlocked) { state = r.state; newBadges.push('streak_60'); }
-  }
-
-  // Badges de volume de módulos
-  if (state.completedModules.length >= 25) {
-    const r = unlockBadge(state, 'modules_25');
-    if (r.unlocked) { state = r.state; newBadges.push('modules_25'); }
-  }
-  if (state.completedModules.length >= 75) {
-    const r = unlockBadge(state, 'modules_75');
-    if (r.unlocked) { state = r.state; newBadges.push('modules_75'); }
-  }
-
-  // Badge: maratonista (5 módulos em 1 dia)
-  const todayCountMarathon = state.studyDays.find(d => d.date === todayISO())?.modulesCompleted ?? 0;
-  if (todayCountMarathon >= 5) {
-    const r = unlockBadge(state, 'marathon');
-    if (r.unlocked) { state = r.state; newBadges.push('marathon'); }
-  }
-
-  // Badges de trilha completa
-  let completedTrailCount = 0;
-  for (const trail of CURRICULUM) {
-    const allDone = trail.modules.every(m => state.completedModules.includes(m.slug));
-    if (allDone) {
-      completedTrailCount += 1;
-      const badgeId = `${trail.id}_done`;
-      const r = unlockBadge(state, badgeId);
-      if (r.unlocked) { state = r.state; newBadges.push(badgeId); }
-    }
-  }
-
-  // Badges de maestria de trilha (≥80% média de quiz nos módulos com quiz)
-  for (const trail of CURRICULUM) {
-    const masteryBadgeId = `${trail.id}_mastery`;
-    if (state.badges.includes(masteryBadgeId)) continue;
-    const allDone = trail.modules.every(m => state.completedModules.includes(m.slug));
-    if (!allDone) continue;
-    const modulesWithQuiz = trail.modules.filter(m => state.quizScores[m.slug]);
-    if (modulesWithQuiz.length === 0) continue;
-    const avgScore = modulesWithQuiz.reduce((sum, m) => {
-      const qs = state.quizScores[m.slug];
-      return sum + (qs ? qs.score / qs.total : 0);
-    }, 0) / modulesWithQuiz.length;
-    if (avgScore >= 0.8) {
-      const r = unlockBadge(state, masteryBadgeId);
-      if (r.unlocked) { state = r.state; newBadges.push(masteryBadgeId); }
-    }
-  }
-
-  // Badges de múltiplas trilhas completas
-  if (completedTrailCount >= 2) {
-    const r = unlockBadge(state, 'two_trails_done');
-    if (r.unlocked) { state = r.state; newBadges.push('two_trails_done'); }
-  }
-  if (completedTrailCount >= 5) {
-    const r = unlockBadge(state, 'five_trails_done');
-    if (r.unlocked) { state = r.state; newBadges.push('five_trails_done'); }
-  }
-
-  // Badge: tudo completo
-  const allTrailsDone = CURRICULUM.every(trail =>
-    trail.modules.every(m => state.completedModules.includes(m.slug))
-  );
-  if (allTrailsDone) {
-    const r = unlockBadge(state, 'all_done');
-    if (r.unlocked) { state = r.state; newBadges.push('all_done'); }
-  }
-
-  // ─── Badges de comportamento ───
-
-  // Early bird: estudou antes das 8h
-  {
-    const hour = new Date().getHours();
-    if (hour < 8) {
-      const r = unlockBadge(state, 'early_bird');
-      if (r.unlocked) { state = r.state; newBadges.push('early_bird'); }
-    }
-  }
-
-  // Night owl: estudou depois das 22h
-  {
-    const hour = new Date().getHours();
-    if (hour >= 22) {
-      const r = unlockBadge(state, 'night_owl');
-      if (r.unlocked) { state = r.state; newBadges.push('night_owl'); }
-    }
-  }
-
-  // Weekend warrior: estudou sábado E domingo da mesma semana
-  {
-    const today = new Date();
-    const dayOfWeek = today.getDay(); // 0=Sun, 6=Sat
-    if (dayOfWeek === 0 || dayOfWeek === 6) {
-      // Check if the other weekend day also has study
-      const otherDay = new Date(today);
-      otherDay.setDate(today.getDate() + (dayOfWeek === 6 ? 1 : -1));
-      const otherISO = otherDay.toISOString().slice(0, 10);
-      const hasOtherDay = state.studyDays.some(d => d.date === otherISO && (d.modulesCompleted > 0 || d.cardsReviewed > 0));
-      if (hasOtherDay) {
-        const r = unlockBadge(state, 'weekend_warrior');
-        if (r.unlocked) { state = r.state; newBadges.push('weekend_warrior'); }
-      }
-    }
-  }
-
-  // Streak 14 dias
-  if (state.streak >= 14) {
-    const r = unlockBadge(state, 'streak_14');
-    if (r.unlocked) { state = r.state; newBadges.push('streak_14'); }
-  }
-
-  // Explorer: módulos de 3+ hubs diferentes
-  {
-    const hubsSeen = new Set<string>();
-    for (const slug of state.completedModules) {
-      for (const trail of CURRICULUM) {
-        if (trail.modules.some(m => m.slug === slug)) {
-          const hub = getHubForTrail(trail.id);
-          if (hub) hubsSeen.add(hub.id);
-          break;
-        }
-      }
-      if (hubsSeen.size >= 3) break;
-    }
-    if (hubsSeen.size >= 3) {
-      const r = unlockBadge(state, 'explorer');
-      if (r.unlocked) { state = r.state; newBadges.push('explorer'); }
-    }
-  }
-
-  // Comeback: retomou depois de 7+ dias parado
-  {
-    if (state.startedAt && state.studyDays.length >= 2) {
-      const sorted = [...state.studyDays].sort((a, b) => a.date.localeCompare(b.date));
-      const todayStr = todayISO();
-      const todayIdx = sorted.findIndex(d => d.date === todayStr);
-      if (todayIdx > 0) {
-        const prevDate = sorted[todayIdx - 1].date;
-        const gap = daysBetween(prevDate, todayStr);
-        if (gap >= 7) {
-          const r = unlockBadge(state, 'comeback');
-          if (r.unlocked) { state = r.state; newBadges.push('comeback'); }
-        }
-      }
-    }
-  }
+  // Delega toda a avaliação de badges para o módulo `badges.ts` (puro, testável).
+  const now = new Date();
+  const { state: stateAfterBadges, newBadges: badgesUnlocked } = evaluateModuleBadges({
+    state,
+    isRevisit,
+    hour: now.getHours(),
+    dayOfWeek: now.getDay(),
+    today: todayISO(),
+    now: now.toISOString(),
+  });
+  state = stateAfterBadges;
+  newBadges.push(...badgesUnlocked);
 
   saveState(state);
   return { xpGained, newBadges, leveledUp, newLevel, cardsAdded };
 }
 
+/** Registra o timestamp do primeiro módulo de uma trilha (para speedrun_trail). */
+function trackTrailStart(state: GameState, slug: string): GameState {
+  const trail = CURRICULUM.find(t => t.modules.some(m => m.slug === slug));
+  if (!trail) return state;
+  if (state.trailStartedAt[trail.id]) return state;
+  return {
+    ...state,
+    trailStartedAt: { ...state.trailStartedAt, [trail.id]: new Date().toISOString() },
+  };
+}
+
+/** Adiciona `today` ao array de earlyMorningDays se hora < AURORA_HOUR_MAX. */
+function trackEarlyMorning(state: GameState): GameState {
+  if (new Date().getHours() >= GAME_CONFIG.AURORA_HOUR_MAX) return state;
+  const today = todayISO();
+  if (state.earlyMorningDays.includes(today)) return state;
+  return { ...state, earlyMorningDays: [...state.earlyMorningDays, today].slice(-30) };
+}
+
 export function saveQuizScore(slug: string, score: number, total: number) {
   let state = loadState();
   const perfect = score === total;
-  state = { ...state, quizScores: { ...state.quizScores, [slug]: { score, total, perfect } } };
-
-  if (perfect) {
-    const r = unlockBadge(state, 'quiz_perfect');
-    if (r.unlocked) state = r.state;
-
-    // Contagem acumulada de quizzes perfeitos
-    const perfectCount = Object.values(state.quizScores).filter(s => s.perfect).length;
-    if (perfectCount >= 5) {
-      const r5 = unlockBadge(state, 'perfect_5');
-      if (r5.unlocked) state = r5.state;
-    }
-    if (perfectCount >= 20) {
-      const r20 = unlockBadge(state, 'perfect_20');
-      if (r20.unlocked) state = r20.state;
-    }
-  }
-
-  saveState(state);
+  state = {
+    ...state,
+    quizScores: { ...state.quizScores, [slug]: { score, total, perfect } },
+    // Sniper streak: incrementa em perfect, reseta em qualquer erro.
+    perfectQuizStreak: perfect ? state.perfectQuizStreak + 1 : 0,
+  };
+  const { state: next } = evaluateQuizBadges({ state, perfect });
+  saveState(next);
 }
 
 export interface ReviewCardResult {
@@ -623,52 +585,13 @@ export function submitCardReview(cardId: string, outcome: ReviewQuality): Review
 
   state = { ...state, lastReviewDate: todayISO() };
 
-  // Badge de streak de review (7 dias seguidos revisando)
-  if (state.streak >= 7) {
-    const r = unlockBadge(state, 'streak_7');
-    if (r.unlocked) { state = r.state; newBadges.push('streak_7'); }
-  }
-
-  // Badges de volume de cards revisados
-  const totalCardsReviewed = state.studyDays.reduce((acc, d) => acc + d.cardsReviewed, 0);
-  if (totalCardsReviewed >= 50) {
-    const r = unlockBadge(state, 'cards_50');
-    if (r.unlocked) { state = r.state; newBadges.push('cards_50'); }
-  }
-  if (totalCardsReviewed >= 200) {
-    const r = unlockBadge(state, 'cards_200');
-    if (r.unlocked) { state = r.state; newBadges.push('cards_200'); }
-  }
-
-  // Badge: perfect review (10 boas seguidas — checa os últimos 10 cards revisados hoje sem "again")
-  if (outcome !== 'again') {
-    const todayCards = state.studyDays.find(d => d.date === todayISO());
-    if (todayCards && todayCards.cardsReviewed >= 10) {
-      const r = unlockBadge(state, 'perfect_review');
-      if (r.unlocked) { state = r.state; newBadges.push('perfect_review'); }
-    }
-  }
-
-  // Badge: daily_goal_7 — bateu meta 7 dias seguidos
-  {
-    const today = todayISO();
-    let consecutiveGoalDays = 0;
-    for (let i = 0; i < 7; i++) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const dateStr = d.toISOString().slice(0, 10);
-      const day = state.studyDays.find(sd => sd.date === dateStr);
-      if (day && day.cardsReviewed >= state.dailyGoal) {
-        consecutiveGoalDays++;
-      } else {
-        break;
-      }
-    }
-    if (consecutiveGoalDays >= 7) {
-      const r = unlockBadge(state, 'daily_goal_7');
-      if (r.unlocked) { state = r.state; newBadges.push('daily_goal_7'); }
-    }
-  }
+  const { state: stateAfterBadges, newBadges: badgesUnlocked } = evaluateReviewBadges({
+    state,
+    outcome,
+    today: todayISO(),
+  });
+  state = stateAfterBadges;
+  newBadges.push(...badgesUnlocked);
 
   saveState(state);
 
@@ -731,7 +654,7 @@ export function setPreferredHub(preferredHub: string | null) {
 }
 
 // Todas as trilhas liberadas — o leitor escolhe por onde começa
-export function isTrailUnlocked(_trailId: string): boolean {
+export function isTrailUnlocked(): boolean {
   return true;
 }
 

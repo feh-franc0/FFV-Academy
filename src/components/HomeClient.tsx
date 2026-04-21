@@ -6,6 +6,10 @@ import { CURRICULUM, HUBS, LEVELS, getHubStats, getHubTrails, getTrailHref, type
 import { useGameState } from '@/hooks/useGameState';
 import { HabitDashboard } from '@/components/HabitDashboard';
 import { ContinueCard } from '@/components/ContinueCard';
+import { DailyModuleCard } from '@/components/DailyModuleCard';
+import { CommunityCard } from '@/components/CommunityCard';
+import { PLAYLISTS } from '@/lib/playlists';
+import { SimuladosHero } from '@/components/SimuladosHero';
 
 /** A flat, sortable view of every post with its trail context. */
 type PostWithTrail = Module & { trail: Trail; index: number };
@@ -37,6 +41,7 @@ export function HomeClient() {
   return (
     <div style={{ background: 'var(--ffv-bg)', color: 'var(--foreground)' }}>
       <Hero totalArticles={totalArticles} />
+      <SimuladosHero />
 
       {/* RETURN-VISIT: prioriza continuidade */}
       {isReturning && (
@@ -49,15 +54,20 @@ export function HomeClient() {
       {/* FIRST-VISIT: guia ao primeiro passo */}
       {isFirstVisit && <FirstVisitGuide />}
 
+      {/* DAILY MODULE: desafio compartilhado por todos os usuários */}
+      <DailyModuleCard />
+
       <StartingPointSection completedSlugs={state?.completedModules ?? []} />
       <FeaturedArticle post={featured} />
       <HubsSection completedSlugs={state?.completedModules ?? []} />
+      <PlaylistsSection />
       <TrailsSection completedSlugs={state?.completedModules ?? []} />
 
       {/* AllPosts com link para /explorar para não sobrecarregar a home */}
       <AllPostsSection posts={ALL_POSTS} featuredSlug={featured.slug} />
 
       <LearnGameSection />
+      <CommunityCard />
       <AuthorSection />
       <NewsletterSection />
       <FinalCta state={state} />
@@ -138,12 +148,13 @@ function Hero({ totalArticles }: { totalArticles: number }) {
         <h1
           className="font-bold"
           style={{
-            fontSize: 'clamp(2.4rem, 5.5vw, 4.4rem)',
+            fontSize: 'clamp(1.5rem, 6vw, 4.4rem)',
             fontWeight: 800,
-            lineHeight: 1.04,
-            letterSpacing: '-0.03em',
+            lineHeight: 1.1,
+            letterSpacing: '-0.02em',
             marginBottom: 24,
             maxWidth: 900,
+            overflowWrap: 'break-word',
           }}
         >
           Aprenda IA, AWS e Engenharia de Software
@@ -308,7 +319,7 @@ function FeaturedArticle({ post }: { post: PostWithTrail }) {
               }}
             />
 
-            <div className="grid md:grid-cols-[1fr_auto] gap-8 relative" style={{ padding: '40px 36px' }}>
+            <div className="grid md:grid-cols-[1fr_auto] gap-6 md:gap-8 relative" style={{ padding: 'clamp(20px, 5vw, 40px) clamp(18px, 5vw, 36px)' }}>
               <div>
                 <div className="flex items-center gap-3 flex-wrap mb-5">
                   <TrailPill trail={post.trail} />
@@ -419,7 +430,7 @@ function AllPostsSection({ posts, featuredSlug }: { posts: PostWithTrail[]; feat
 
         <div
           className="grid gap-5"
-          style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))' }}
+          style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 280px), 1fr))' }}
         >
           {list.map(post => (
             <PostCard key={post.slug} post={post} />
@@ -1636,5 +1647,46 @@ function GhostCTA({ href, children }: { href: string; children: React.ReactNode 
     >
       {children}
     </Link>
+  );
+}
+
+/* ─────────────────────────────────────────────
+   PLAYLISTS — jornadas curadas atravessando trilhas
+───────────────────────────────────────────── */
+function PlaylistsSection() {
+  const visible = PLAYLISTS.slice(0, 4);
+  return (
+    <section className="px-6 py-10 max-w-5xl mx-auto">
+      <div className="flex items-end justify-between gap-4 mb-5 flex-wrap">
+        <div>
+          <h2 className="text-xl md:text-2xl font-bold">Playlists curadas</h2>
+          <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
+            Jornadas pré-montadas atravessando trilhas — para objetivos específicos.
+          </p>
+        </div>
+        <Link href="/playlists" className="text-sm font-semibold" style={{ color: 'var(--ffv-blue)' }}>
+          Ver todas →
+        </Link>
+      </div>
+      <div className="grid md:grid-cols-2 gap-4">
+        {visible.map(pl => (
+          <Link
+            key={pl.id}
+            href="/playlists"
+            className="block p-5 rounded-xl transition-all hover:scale-[1.01]"
+            style={{ background: 'var(--ffv-bg2)', border: `1px solid ${pl.color}40` }}
+          >
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-2xl">{pl.emoji}</span>
+              <h3 className="text-base font-bold" style={{ color: pl.color }}>{pl.title}</h3>
+            </div>
+            <p className="text-xs mb-2">{pl.subtitle}</p>
+            <p className="text-[11px]" style={{ color: 'var(--ffv-muted)' }}>
+              {pl.moduleSlugs.length} módulos · {pl.audience}
+            </p>
+          </Link>
+        ))}
+      </div>
+    </section>
   );
 }

@@ -1,0 +1,137 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import type { SimuladoQuestion } from '@/lib/simulados';
+import { getTutorResponse, getFallbackResponse, type TutorResponse } from '@/lib/tutor-responses';
+
+interface Props {
+  question: SimuladoQuestion;
+  onClose: () => void;
+}
+
+type VariantKey = keyof TutorResponse;
+
+const VARIANTS: { key: VariantKey; label: string; prompt: string }[] = [
+  { key: 'defaultResponse', label: 'Por que essa é a certa?', prompt: 'Por que a resposta correta é a correta?' },
+  { key: 'analogyResponse', label: 'Explique com analogia', prompt: 'Me explique isso com uma analogia do dia a dia.' },
+  { key: 'exampleResponse', label: 'Me dá um exemplo real', prompt: 'Me dá um exemplo prático / case real.' },
+];
+
+interface Message {
+  role: 'user' | 'tutor';
+  text: string;
+  typing?: boolean;
+}
+
+/**
+ * Chat contextual pra uma questão específica. Mockado via map em
+ * `tutor-responses.ts`. Respostas "streamadas" via setTimeout pra dar
+ * sensação de chat real.
+ *
+ * TODO(backend): trocar por chamada Claude API com prompt caching.
+ * System prompt = ementa da certificação; user message = enunciado +
+ * tipo de pergunta. Streaming nativo do SDK Anthropic.
+ */
+export function TutorChat({ question, onClose }: Props) {
+  const [messages, setMessages] = useState<Message[]>([
+    {
+      role: 'tutor',
+      text: 'Sobre esta questão, o que você gostaria de entender melhor? Posso explicar por que uma alternativa é a certa, trazer uma analogia ou um exemplo real.',
+    },
+  ]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const tutorResponse = getTutorResponse(question.id) ?? getFallbackResponse(question.explanation);
+
+  function ask(variant: (typeof VARIANTS)[number]) {
+    setMessages(prev => [
+      ...prev,
+      { role: 'user', text: variant.prompt },
+      { role: 'tutor', text: '', typing: true },
+    ]);
+    setTimeout(() => {
+      setMessages(prev => {
+        const next = [...prev];
+        next[next.length - 1] = {
+          role: 'tutor',
+          text: tutorResponse[variant.key],
+        };
+        return next;
+      });
+    }, 800);
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Chat com tutor"
+      className="fixed inset-0 z-[90] flex justify-end"
+      style={{ background: 'rgba(0,0,0,0.5)' }}
+      onClick={e => e.target === e.currentTarget && onClose()}
+    >
+      <aside
+        className="w-full md:max-w-md h-full flex flex-col"
+        style={{ background: 'var(--ffv-bg)', borderLeft: '1px solid var(--ffv-border)' }}
+      >
+        <header className="flex items-center justify-between p-4" style={{ borderBottom: '1px solid var(--ffv-border)' }}>
+          <div>
+            <h3 className="text-sm font-bold">💬 Tutor IA</h3>
+            <p className="text-[10px]" style={{ color: 'var(--ffv-muted)' }}>
+              Contexto: questão {question.id} · tópico {question.topic}
+            </p>
+          </div>
+          <button onClick={onClose} className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
+            ✕
+          </button>
+        </header>
+
+        <div className="px-4 py-2 text-[10px] font-mono" style={{ background: 'rgba(255,193,7,0.08)', color: '#ffc107', borderBottom: '1px solid rgba(255,193,7,0.2)' }}>
+          🧪 Tutor em modo demo — respostas pré-escritas. Backend real virá com Claude API.
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {messages.map((m, i) => (
+            <div
+              key={i}
+              className="rounded-xl p-3 text-sm leading-relaxed"
+              style={{
+                background: m.role === 'user' ? '#f7816620' : 'var(--ffv-bg2)',
+                border: `1px solid ${m.role === 'user' ? '#f7816640' : 'var(--ffv-border)'}`,
+                alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
+                marginLeft: m.role === 'user' ? 'auto' : 0,
+                maxWidth: '92%',
+              }}
+            >
+              {m.typing ? (
+                <span style={{ color: 'var(--ffv-muted)' }}>Digitando<span className="animate-pulse">...</span></span>
+              ) : (
+                m.text
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div className="p-4 flex flex-col gap-2" style={{ borderTop: '1px solid var(--ffv-border)' }}>
+          {VARIANTS.map(v => (
+            <button
+              key={v.key}
+              onClick={() => ask(v)}
+              className="text-xs px-3 py-2 rounded-lg text-left transition-colors hover:opacity-90"
+              style={{ background: 'var(--ffv-bg2)', color: 'var(--foreground)', border: '1px solid var(--ffv-border)' }}
+            >
+              💭 {v.label}
+            </button>
+          ))}
+        </div>
+      </aside>
+    </div>
+  );
+}

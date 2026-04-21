@@ -1,11 +1,15 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Inter, Poppins, Roboto_Mono } from 'next/font/google';
 import './globals.css';
 import { GameHUD } from '@/components/GameHUD';
 import { CommandPalette } from '@/components/CommandPalette';
 import { MobileNav } from '@/components/MobileNav';
+import { SiteFooter } from '@/components/SiteFooter';
 import { OnboardingModal } from '@/components/OnboardingModal';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { ReferralCapture } from '@/components/ReferralCapture';
+import { PWARegister } from '@/components/PWARegister';
+import { AuthProvider } from '@/components/auth/AuthProvider';
 
 // Inter — corpo do texto (máxima legibilidade)
 const inter = Inter({
@@ -34,10 +38,22 @@ export const metadata: Metadata = {
   keywords: 'escola engenharia software, aprender inteligencia artificial, trilha IA, engenharia era ia, LLM aprender, machine learning devs, aws cloud practitioner, sistemas distribuidos',
   openGraph: {
     title: 'FFV Academy — Escola de Engenharia para a Era da IA',
-    description: 'IA, AWS, DevOps e Engenharia de Software explicados por dentro. Zero hype, arquitetura real. 16 trilhas gamificadas, 100% gratuito.',
+    description: 'IA, AWS, DevOps e Engenharia de Software explicados por dentro. Zero hype, arquitetura real. 17 trilhas gamificadas, 100% gratuito.',
     type: 'website',
     url: 'https://fernandofrancovalle.com',
   },
+  manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: 'FFV Academy',
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: '#0d1117',
+  width: 'device-width',
+  initialScale: 1,
 };
 
 const themeInitScript = `
@@ -66,13 +82,25 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className="min-h-screen flex flex-col" style={{ background: 'var(--ffv-bg)', color: 'var(--foreground)' }}>
         <a href="#main-content" className="skip-to-content">Pular para o conteúdo</a>
-        <TooltipProvider>
-          <GameHUD />
-          <CommandPalette />
-          <OnboardingModal />
-          <main id="main-content" className="flex-1 pt-14 pb-16 md:pb-0">{children}</main>
-          <MobileNav />
-        </TooltipProvider>
+        <ReferralCapture />
+        <PWARegister />
+        <AuthProvider>
+          <TooltipProvider>
+            <GameHUD />
+            <CommandPalette />
+            <OnboardingModal />
+            <main
+              id="main-content"
+              className="flex-1"
+              style={{ paddingTop: 'calc(56px + env(safe-area-inset-top, 0px))' }}
+            >
+              {children}
+            </main>
+            <SiteFooter />
+            <div aria-hidden className="md:hidden" style={{ height: 72 }} />
+            <MobileNav />
+          </TooltipProvider>
+        </AuthProvider>
       </body>
     </html>
   );

@@ -237,7 +237,7 @@ function HubTrails({
 
         <div
           className="grid gap-6"
-          style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))' }}
+          style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))' }}
         >
           {trails.map((trail, idx) => (
             <TrailCard

@@ -92,7 +92,7 @@ export function useGameState() {
   const trailsProgress = CURRICULUM.map(trail => ({
     ...trail,
     ...getTrailProgress(trail.modules, state?.completedModules ?? []),
-    unlocked: isTrailUnlocked(trail.id),
+    unlocked: isTrailUnlocked(),
   }));
 
   const overallPct = state

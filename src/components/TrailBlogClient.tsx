@@ -9,6 +9,8 @@ interface Props {
   trail: Trail;
 }
 
+import { TrailActions } from './TrailActions';
+
 export function TrailBlogClient({ trail }: Props) {
   const { state, trailsProgress } = useGameState();
 
@@ -91,6 +93,8 @@ export function TrailBlogClient({ trail }: Props) {
             </div>
           )}
         </div>
+
+        <TrailActions trail={trail} />
       </header>
 
       {/* ── Lista de artigos ── */}

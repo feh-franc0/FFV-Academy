@@ -1,10 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { STORAGE_KEYS } from '@/lib/constants';
+import { setRaw } from '@/lib/storage';
 
 export type Theme = 'light' | 'dark';
-
-const STORAGE_KEY = 'ffv_theme';
 
 function readTheme(): Theme {
   if (typeof document === 'undefined') return 'dark';
@@ -13,17 +13,18 @@ function readTheme(): Theme {
 }
 
 export function useTheme() {
-  const [theme, setThemeState] = useState<Theme>('dark');
+  // Lazy init: lê o tema já aplicado em <html data-theme> pelo script inline
+  // do layout.tsx, evitando setState-in-effect e FOUC.
+  const [theme, setThemeState] = useState<Theme>(() => readTheme());
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    setThemeState(readTheme());
     setMounted(true);
   }, []);
 
   const setTheme = useCallback((next: Theme) => {
     document.documentElement.setAttribute('data-theme', next);
-    try { localStorage.setItem(STORAGE_KEY, next); } catch {}
+    setRaw(STORAGE_KEYS.THEME, next);
     setThemeState(next);
   }, []);
 
