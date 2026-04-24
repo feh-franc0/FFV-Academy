@@ -11,7 +11,7 @@ import {
   getSimulado, saveAttempt, scoreAttempt, getAttempt,
   isQuestionAccessible, FREE_QUESTIONS_LIMIT,
 } from '../../lib/simulados';
-import { issueCertificate, getCertificate } from '../../lib/certificates';
+import { issueCertificate, getCertificateLocal } from '../../lib/certificates';
 import { completeSimulado, loadState } from '../../lib/engine';
 
 const SIM_ID = 'simulado-aws-practitioner';
@@ -89,7 +89,7 @@ describe('Fluxo completo de simulado', () => {
       score: 95,
     });
     expect(cert.hash).toMatch(/^[a-f0-9]{32}$/);
-    const lookup = getCertificate(cert.hash);
+    const lookup = getCertificateLocal(cert.hash);
     expect(lookup?.name).toBe('Tester');
   });
 

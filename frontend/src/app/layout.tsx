@@ -10,6 +10,7 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { ReferralCapture } from '@/components/ReferralCapture';
 import { PWARegister } from '@/components/PWARegister';
 import { AuthProvider } from '@/components/auth/AuthProvider';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 // Inter — corpo do texto (máxima legibilidade)
 const inter = Inter({
@@ -74,6 +75,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="pt-BR" className={`${inter.variable} ${poppins.variable} ${robotoMono.variable}`} suppressHydrationWarning>
       <head>
+        {/* Hardening: como site é export estático na Hostinger (sem middleware Next), headers de segurança vão via <meta>.
+            Plausible + Google Fonts + Stripe (js.stripe.com) explicitamente permitidos em script/style/frame/connect. */}
+        <meta
+          httpEquiv="Content-Security-Policy"
+          content="default-src 'self'; script-src 'self' 'unsafe-inline' https://js.stripe.com https://plausible.io; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self' https://api.fernandofrancovalle.com https://api.stripe.com https://plausible.io https://cdn.jsdelivr.net https://esm.sh; frame-src https://js.stripe.com; object-src 'none'; base-uri 'self'; form-action 'self'"
+        />
+        <meta httpEquiv="X-Content-Type-Options" content="nosniff" />
+        <meta name="referrer" content="strict-origin-when-cross-origin" />
+        <meta httpEquiv="Permissions-Policy" content="geolocation=(), microphone=(), camera=()" />
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
         {/* Google Search Console — verificação de propriedade (substituir pelo token gerado no GSC) */}
         {/* <meta name="google-site-verification" content="SEU_TOKEN_GSC_AQUI" /> */}
@@ -84,23 +94,25 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <a href="#main-content" className="skip-to-content">Pular para o conteúdo</a>
         <ReferralCapture />
         <PWARegister />
-        <AuthProvider>
-          <TooltipProvider>
-            <GameHUD />
-            <CommandPalette />
-            <OnboardingModal />
-            <main
-              id="main-content"
-              className="flex-1"
-              style={{ paddingTop: 'calc(56px + env(safe-area-inset-top, 0px))' }}
-            >
-              {children}
-            </main>
-            <SiteFooter />
-            <div aria-hidden className="md:hidden" style={{ height: 72 }} />
-            <MobileNav />
-          </TooltipProvider>
-        </AuthProvider>
+        <ErrorBoundary>
+          <AuthProvider>
+            <TooltipProvider>
+              <GameHUD />
+              <CommandPalette />
+              <OnboardingModal />
+              <main
+                id="main-content"
+                className="flex-1"
+                style={{ paddingTop: 'calc(56px + env(safe-area-inset-top, 0px))' }}
+              >
+                {children}
+              </main>
+              <SiteFooter />
+              <div aria-hidden className="md:hidden" style={{ height: 72 }} />
+              <MobileNav />
+            </TooltipProvider>
+          </AuthProvider>
+        </ErrorBoundary>
       </body>
     </html>
   );
