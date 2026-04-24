@@ -62,8 +62,18 @@ function dtoToProfile(dto: UserDTO): UserProfile {
   };
 }
 
-/** Token fixo aceito no modo mock — visível intencionalmente. */
+/**
+ * Token fixo aceito no modo mock — visível intencionalmente em desenvolvimento.
+ *
+ * SEGURANÇA: Em build de produção (NODE_ENV=production), o bloco que usa
+ * MOCK_TOKEN é dead code e o tree-shaker do webpack o remove do bundle final.
+ * A verificação dupla (!hasBackend && !isProduction) garante que mesmo um
+ * ambiente de staging sem NEXT_PUBLIC_API_BASE_URL não aceite o token mock.
+ */
 export const MOCK_TOKEN = '000000';
+
+// Flag avaliada em tempo de build pelo compilador — constante para tree-shaking efetivo.
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -81,7 +91,7 @@ export async function requestToken(email: string, phone: string): Promise<{ ok: 
   if (!phoneBRSchema.safeParse(phone).success) throw new Error('telefone inválido');
 
   if (!hasBackend()) {
-    // eslint-disable-next-line no-console
+     
     console.info(`[MOCK] token ${MOCK_TOKEN} enviado para ${email} / ${phone}`);
     await delay(400);
     return { ok: true };
@@ -113,7 +123,9 @@ export async function verifyToken(
 
   if (!hasBackend()) {
     await delay(300);
-    if (token !== MOCK_TOKEN) return { ok: false };
+    // Dupla guarda: sem backend E sem produção.
+    // Previne que staging sem NEXT_PUBLIC_API_BASE_URL aceite o token mock.
+    if (IS_PRODUCTION || token !== MOCK_TOKEN) return { ok: false };
 
     const existing = getUser();
     if (existing && existing.email === email) return { ok: true, user: existing };

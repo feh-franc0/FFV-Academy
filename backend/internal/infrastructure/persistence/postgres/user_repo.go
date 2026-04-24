@@ -24,13 +24,27 @@ func NewUserRepo(pool *pgxpool.Pool) *UserRepo {
 	return &UserRepo{pool: pool}
 }
 
+// Save persiste um novo usuário e seus produtos pagos dentro de uma única transação.
+//
+// ATOMICIDADE: Se a inserção de qualquer user_product falhar após o INSERT do usuário,
+// a transação inteira é revertida — evita o estado corrompido onde o usuário existe
+// no banco mas não tem acesso ao produto pelo qual pagou.
 func (r *UserRepo) Save(ctx context.Context, user *identity.User) error {
-	const q = `
+	const insertUser = `
 		INSERT INTO users (id, email, phone, name, marketing_consent, referral_id, role, google_id, avatar_url, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, ''), $9, $10, $10)
 	`
-	paidProducts := productIDsToStrings(user.PaidProducts())
-	_, err := r.pool.Exec(ctx, q,
+	const insertProduct = `INSERT INTO user_products (user_id, product_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`
+
+	// Abre transação — garante que usuário + produtos são inseridos atomicamente.
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("user repo: begin tx: %w", err)
+	}
+	// Rollback automático se Commit não for chamado (pânico, return antecipado, etc.).
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	_, err = tx.Exec(ctx, insertUser,
 		user.ID().String(),
 		user.Email().String(),
 		user.Phone().String(),
@@ -49,21 +63,24 @@ func (r *UserRepo) Save(ctx context.Context, user *identity.User) error {
 		return fmt.Errorf("user repo: save: %w", err)
 	}
 
-	// Insere paid_products. Falhas aqui significam que o usuário não terá acesso
-	// ao produto pelo qual pagou — portanto propagamos o erro.
-	for _, pid := range paidProducts {
-		if _, err := r.pool.Exec(ctx,
-			`INSERT INTO user_products (user_id, product_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-			user.ID().String(), pid,
-		); err != nil {
+	for _, pid := range user.PaidProducts() {
+		if _, err := tx.Exec(ctx, insertProduct, user.ID().String(), pid.String()); err != nil {
 			return fmt.Errorf("user repo: save product %s: %w", pid, err)
 		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("user repo: commit save: %w", err)
 	}
 	return nil
 }
 
+// Update persiste alterações no usuário e sincroniza produtos dentro de uma transação.
+//
+// ATOMICIDADE: Se o grant de qualquer produto falhar, a atualização do perfil é
+// revertida junto — o cliente recebe erro e pode tentar novamente de forma segura.
 func (r *UserRepo) Update(ctx context.Context, user *identity.User) error {
-	const q = `
+	const updateUser = `
 		UPDATE users SET
 			name = $2,
 			phone = $3,
@@ -73,7 +90,15 @@ func (r *UserRepo) Update(ctx context.Context, user *identity.User) error {
 			updated_at = $7
 		WHERE id = $1 AND deleted_at IS NULL
 	`
-	res, err := r.pool.Exec(ctx, q,
+	const insertProduct = `INSERT INTO user_products (user_id, product_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("user repo: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	res, err := tx.Exec(ctx, updateUser,
 		user.ID().String(),
 		user.Name(),
 		user.Phone().String(),
@@ -89,14 +114,15 @@ func (r *UserRepo) Update(ctx context.Context, user *identity.User) error {
 		return fmt.Errorf("%w: user", shared.ErrNotFound)
 	}
 
-	// Sincroniza paid_products (upsert). Erro aqui quebra grant de produto.
+	// Sincroniza paid_products dentro da mesma transação — grant e update são atômicos.
 	for _, pid := range user.PaidProducts() {
-		if _, err := r.pool.Exec(ctx,
-			`INSERT INTO user_products (user_id, product_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-			user.ID().String(), pid.String(),
-		); err != nil {
+		if _, err := tx.Exec(ctx, insertProduct, user.ID().String(), pid.String()); err != nil {
 			return fmt.Errorf("user repo: sync product %s: %w", pid, err)
 		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("user repo: commit update: %w", err)
 	}
 	return nil
 }

@@ -90,7 +90,18 @@ func (h *AuthHandler) RequestToken(w http.ResponseWriter, r *http.Request) {
 		Email string `json:"email"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// Verifica primeiro se é body too large (413) antes de retornar bad-request genérico.
+		if middleware.IsBodyTooLarge(err) {
+			WriteError(w, http.StatusRequestEntityTooLarge, "corpo da requisição muito grande", "payload-too-large")
+			return
+		}
 		WriteError(w, http.StatusBadRequest, "corpo da requisição inválido", "bad-request")
+		return
+	}
+
+	// Validação de input antes de passar ao use case — rejeita payloads malformados cedo.
+	if err := validateEmail(req.Email); err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error(), "validation-error")
 		return
 	}
 
@@ -109,14 +120,36 @@ func (h *AuthHandler) RequestToken(w http.ResponseWriter, r *http.Request) {
 // POST /api/v1/auth/verify
 func (h *AuthHandler) Verify(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Email    string `json:"email"`
-		Token    string `json:"token"`
-		Name     string `json:"name,omitempty"`
-		Phone    string `json:"phone,omitempty"`
-		Marketing bool  `json:"marketingConsent,omitempty"`
+		Email     string `json:"email"`
+		Token     string `json:"token"`
+		Name      string `json:"name,omitempty"`
+		Phone     string `json:"phone,omitempty"`
+		Marketing bool   `json:"marketingConsent,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if middleware.IsBodyTooLarge(err) {
+			WriteError(w, http.StatusRequestEntityTooLarge, "corpo da requisição muito grande", "payload-too-large")
+			return
+		}
 		WriteError(w, http.StatusBadRequest, "corpo da requisição inválido", "bad-request")
+		return
+	}
+
+	// Valida campos obrigatórios antes de acionar o use case.
+	if err := validateEmail(req.Email); err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error(), "validation-error")
+		return
+	}
+	if err := validateToken(req.Token); err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error(), "validation-error")
+		return
+	}
+	if err := validateName(req.Name); err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error(), "validation-error")
+		return
+	}
+	if err := validatePhone(req.Phone); err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error(), "validation-error")
 		return
 	}
 
@@ -236,7 +269,21 @@ func (h *AuthHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		MarketingConsent *bool  `json:"marketingConsent"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if middleware.IsBodyTooLarge(err) {
+			WriteError(w, http.StatusRequestEntityTooLarge, "corpo da requisição muito grande", "payload-too-large")
+			return
+		}
 		WriteError(w, http.StatusBadRequest, "corpo da requisição inválido", "bad-request")
+		return
+	}
+
+	// Valida campos antes de passar ao use case — falha rápida com mensagem específica.
+	if err := validateName(req.Name); err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error(), "validation-error")
+		return
+	}
+	if err := validatePhone(req.Phone); err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error(), "validation-error")
 		return
 	}
 

@@ -5,12 +5,14 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"strings"
 	"time"
 
 	"github.com/fernandofv/api/internal/domain/identity"
 	"github.com/fernandofv/api/internal/domain/shared"
+	"github.com/fernandofv/api/internal/interfaces/http/middleware"
 )
 
 // TokenIssuer é o port de emissão de JWT.
@@ -60,8 +62,11 @@ type VerifyMagicLinkUseCase struct {
 	tokenIssuer     TokenIssuer
 	clock           shared.Clock
 	refreshTokenTTL time.Duration
+	logger          *slog.Logger
 }
 
+// NewVerifyMagicLinkUseCase cria o use case com logger padrão (slog.Default).
+// Use WithLogger para substituir em produção pelo logger configurado.
 func NewVerifyMagicLinkUseCase(
 	tokenStore identity.MagicTokenStore,
 	userRepo identity.UserRepository,
@@ -77,12 +82,32 @@ func NewVerifyMagicLinkUseCase(
 		tokenIssuer:     tokenIssuer,
 		clock:           clock,
 		refreshTokenTTL: refreshTokenTTL,
+		logger:          slog.Default(),
 	}
 }
 
+// WithLogger substitui o logger — chamado em main.go após o construtor.
+func (uc *VerifyMagicLinkUseCase) WithLogger(l *slog.Logger) *VerifyMagicLinkUseCase {
+	uc.logger = l
+	return uc
+}
+
+// Execute verifica o magic link e emite tokens de sessão, logando cada etapa.
 func (uc *VerifyMagicLinkUseCase) Execute(ctx context.Context, cmd VerifyMagicLinkCommand) (VerifyMagicLinkResult, error) {
+	// Log de entrada: registra o início da verificação sem revelar o token ou email.
+	uc.logger.InfoContext(ctx, "use case iniciado",
+		"use_case", "VerifyMagicLink",
+		"request_id", middleware.RequestIDFromContext(ctx),
+		"email_hash", hashEmail(cmd.Email),
+	)
+
 	email, err := identity.NewEmail(cmd.Email)
 	if err != nil {
+		uc.logger.WarnContext(ctx, "email inválido",
+			"use_case", "VerifyMagicLink",
+			"request_id", middleware.RequestIDFromContext(ctx),
+			"error", err.Error(),
+		)
 		return VerifyMagicLinkResult{}, fmt.Errorf("verify magic link: %w", err)
 	}
 
@@ -90,33 +115,70 @@ func (uc *VerifyMagicLinkUseCase) Execute(ctx context.Context, cmd VerifyMagicLi
 	storedToken, err := uc.tokenStore.Consume(ctx, email)
 	if err != nil {
 		if errors.Is(err, shared.ErrNotFound) {
+			uc.logger.WarnContext(ctx, "token não encontrado ou expirado",
+				"use_case", "VerifyMagicLink",
+				"request_id", middleware.RequestIDFromContext(ctx),
+				"email_hash", hashEmail(cmd.Email),
+			)
 			return VerifyMagicLinkResult{}, fmt.Errorf("%w: token não encontrado ou expirado", shared.ErrUnauthorized)
 		}
+		uc.logger.ErrorContext(ctx, "falha ao consumir token do Redis",
+			"use_case", "VerifyMagicLink",
+			"request_id", middleware.RequestIDFromContext(ctx),
+			"error", err.Error(),
+		)
 		return VerifyMagicLinkResult{}, fmt.Errorf("verify magic link: consume token: %w", err)
 	}
 
 	now := uc.clock.Now()
 	if storedToken.IsExpired(now) {
+		uc.logger.WarnContext(ctx, "token expirado",
+			"use_case", "VerifyMagicLink",
+			"request_id", middleware.RequestIDFromContext(ctx),
+			"email_hash", hashEmail(cmd.Email),
+		)
 		return VerifyMagicLinkResult{}, fmt.Errorf("%w: token expirado", shared.ErrUnauthorized)
 	}
 	if !storedToken.Matches(strings.TrimSpace(cmd.Token)) {
+		uc.logger.WarnContext(ctx, "token inválido (mismatch)",
+			"use_case", "VerifyMagicLink",
+			"request_id", middleware.RequestIDFromContext(ctx),
+			"email_hash", hashEmail(cmd.Email),
+		)
 		return VerifyMagicLinkResult{}, fmt.Errorf("%w: token inválido", shared.ErrUnauthorized)
 	}
 
 	// Busca ou cria usuário.
 	user, isNew, err := uc.findOrCreate(ctx, email, cmd.Registration, now)
 	if err != nil {
+		uc.logger.ErrorContext(ctx, "falha ao buscar/criar usuário",
+			"use_case", "VerifyMagicLink",
+			"request_id", middleware.RequestIDFromContext(ctx),
+			"error", err.Error(),
+		)
 		return VerifyMagicLinkResult{}, fmt.Errorf("verify magic link: %w", err)
 	}
 
 	// Emite tokens.
 	accessToken, err := uc.tokenIssuer.IssueAccessToken(user.ID(), user.Email(), user.Role())
 	if err != nil {
+		uc.logger.ErrorContext(ctx, "falha ao emitir access token",
+			"use_case", "VerifyMagicLink",
+			"request_id", middleware.RequestIDFromContext(ctx),
+			"user_id", user.ID().String(),
+			"error", err.Error(),
+		)
 		return VerifyMagicLinkResult{}, fmt.Errorf("verify magic link: issue access token: %w", err)
 	}
 
 	rawRefresh, refreshHash, err := uc.tokenIssuer.IssueRefreshToken(user.ID())
 	if err != nil {
+		uc.logger.ErrorContext(ctx, "falha ao emitir refresh token",
+			"use_case", "VerifyMagicLink",
+			"request_id", middleware.RequestIDFromContext(ctx),
+			"user_id", user.ID().String(),
+			"error", err.Error(),
+		)
 		return VerifyMagicLinkResult{}, fmt.Errorf("verify magic link: issue refresh token: %w", err)
 	}
 
@@ -129,8 +191,23 @@ func (uc *VerifyMagicLinkUseCase) Execute(ctx context.Context, cmd VerifyMagicLi
 		CreatedAt: now,
 	}
 	if err := uc.refreshRepo.Save(ctx, rt); err != nil {
+		uc.logger.ErrorContext(ctx, "falha ao salvar refresh token",
+			"use_case", "VerifyMagicLink",
+			"request_id", middleware.RequestIDFromContext(ctx),
+			"user_id", user.ID().String(),
+			"error", err.Error(),
+		)
 		return VerifyMagicLinkResult{}, fmt.Errorf("verify magic link: save refresh token: %w", err)
 	}
+
+	// Log de saída: confirma autenticação bem-sucedida.
+	uc.logger.InfoContext(ctx, "use case concluído",
+		"use_case", "VerifyMagicLink",
+		"request_id", middleware.RequestIDFromContext(ctx),
+		"email_hash", hashEmail(cmd.Email),
+		"user_id", user.ID().String(),
+		"is_new_user", isNew,
+	)
 
 	return VerifyMagicLinkResult{
 		AccessToken:      accessToken,

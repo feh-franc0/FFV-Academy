@@ -17,17 +17,18 @@ import (
 // Config agrega toda a configuração da aplicação. Campos marcados com
 // `required:"true"` causam erro em Load() se não presentes no ambiente.
 type Config struct {
-	App      AppConfig
-	HTTP     HTTPConfig
-	DB       DBConfig
-	Redis    RedisConfig
-	JWT      JWTConfig
-	Stripe   StripeConfig
-	Resend   ResendConfig
-	Twilio   TwilioConfig
+	App       AppConfig
+	HTTP      HTTPConfig
+	DB        DBConfig
+	Redis     RedisConfig
+	JWT       JWTConfig
+	Stripe    StripeConfig
+	Resend    ResendConfig
+	Twilio    TwilioConfig
 	Anthropic AnthropicConfig
-	CORS     CORSConfig
-	Google   GoogleOAuthConfig
+	CORS      CORSConfig
+	Google    GoogleOAuthConfig
+	Telemetry TelemetryConfig
 }
 
 type AppConfig struct {
@@ -42,6 +43,10 @@ type HTTPConfig struct {
 	WriteTimeout    time.Duration `envconfig:"HTTP_WRITE_TIMEOUT" default:"30s"`
 	IdleTimeout     time.Duration `envconfig:"HTTP_IDLE_TIMEOUT" default:"60s"`
 	ShutdownTimeout time.Duration `envconfig:"HTTP_SHUTDOWN_TIMEOUT" default:"30s"`
+	// RequestTimeout é o deadline por request. Cancela o context e aborta queries DB/Redis
+	// pendentes automaticamente — evita goroutines presas durante incidentes de infra.
+	// 0 = desabilitado (útil em testes que não têm timeout de infra real).
+	RequestTimeout  time.Duration `envconfig:"HTTP_REQUEST_TIMEOUT" default:"15s"`
 }
 
 type DBConfig struct {
@@ -113,6 +118,13 @@ func (g GoogleOAuthConfig) Enabled() bool {
 	return g.ClientID != "" && g.ClientSecret != ""
 }
 
+// TelemetryConfig contém as configurações do OpenTelemetry.
+// Quando OTLPEndpoint está vazio, o tracing fica desabilitado (NoopProvider).
+type TelemetryConfig struct {
+	OTLPEndpoint string `envconfig:"OTEL_EXPORTER_OTLP_ENDPOINT"` // vazio = desabilitado
+	OTLPInsecure bool   `envconfig:"OTEL_INSECURE" default:"false"`
+}
+
 // Load lê as variáveis de ambiente e valida os campos obrigatórios.
 // Retorna erro descritivo se qualquer campo required estiver faltando.
 //
@@ -135,6 +147,7 @@ func Load() (*Config, error) {
 		{"", &cfg.Anthropic},
 		{"", &cfg.CORS},
 		{"", &cfg.Google},
+		{"", &cfg.Telemetry},
 	}
 
 	for _, g := range groups {
@@ -161,6 +174,7 @@ func LoadTest() *Config {
 			WriteTimeout:    5 * time.Second,
 			IdleTimeout:     5 * time.Second,
 			ShutdownTimeout: 5 * time.Second,
+			RequestTimeout:  0, // desabilitado em testes — sem infra real para cancelar
 		},
 		DB: DBConfig{
 			URL:             "postgres://test:test@localhost:5432/test",
@@ -204,6 +218,7 @@ func LoadTest() *Config {
 		CORS: CORSConfig{
 			AllowedOrigins: []string{"http://localhost:3000"},
 		},
+		Telemetry: TelemetryConfig{}, // desabilitado em testes
 	}
 }
 

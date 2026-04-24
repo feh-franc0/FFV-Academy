@@ -3,26 +3,54 @@ package identity
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/fernandofv/api/internal/domain/identity"
 	"github.com/fernandofv/api/internal/domain/shared"
+	"github.com/fernandofv/api/internal/interfaces/http/middleware"
 )
 
 // GetProfileUseCase retorna o perfil do usuário autenticado.
 type GetProfileUseCase struct {
 	userRepo identity.UserRepository
+	logger   *slog.Logger
 }
 
+// NewGetProfileUseCase cria o use case com logger padrão.
 func NewGetProfileUseCase(userRepo identity.UserRepository) *GetProfileUseCase {
-	return &GetProfileUseCase{userRepo: userRepo}
+	return &GetProfileUseCase{userRepo: userRepo, logger: slog.Default()}
+}
+
+// WithLogger substitui o logger — chamado em main.go após o construtor.
+func (uc *GetProfileUseCase) WithLogger(l *slog.Logger) *GetProfileUseCase {
+	uc.logger = l
+	return uc
 }
 
 func (uc *GetProfileUseCase) Execute(ctx context.Context, userID shared.UserID) (*identity.User, error) {
+	uc.logger.InfoContext(ctx, "use case iniciado",
+		"use_case", "GetProfile",
+		"request_id", middleware.RequestIDFromContext(ctx),
+		"user_id", userID.String(),
+	)
+
 	user, err := uc.userRepo.FindByID(ctx, userID)
 	if err != nil {
+		uc.logger.WarnContext(ctx, "usuário não encontrado",
+			"use_case", "GetProfile",
+			"request_id", middleware.RequestIDFromContext(ctx),
+			"user_id", userID.String(),
+			"error", err.Error(),
+		)
 		return nil, fmt.Errorf("get profile: %w", err)
 	}
+
+	uc.logger.InfoContext(ctx, "use case concluído",
+		"use_case", "GetProfile",
+		"request_id", middleware.RequestIDFromContext(ctx),
+		"user_id", userID.String(),
+	)
 	return user, nil
 }
 
@@ -37,15 +65,35 @@ type UpdateProfileCommand struct {
 // UpdateProfileUseCase atualiza o perfil do usuário.
 type UpdateProfileUseCase struct {
 	userRepo identity.UserRepository
+	logger   *slog.Logger
 }
 
+// NewUpdateProfileUseCase cria o use case com logger padrão.
 func NewUpdateProfileUseCase(userRepo identity.UserRepository) *UpdateProfileUseCase {
-	return &UpdateProfileUseCase{userRepo: userRepo}
+	return &UpdateProfileUseCase{userRepo: userRepo, logger: slog.Default()}
+}
+
+// WithLogger substitui o logger — chamado em main.go após o construtor.
+func (uc *UpdateProfileUseCase) WithLogger(l *slog.Logger) *UpdateProfileUseCase {
+	uc.logger = l
+	return uc
 }
 
 func (uc *UpdateProfileUseCase) Execute(ctx context.Context, cmd UpdateProfileCommand) (*identity.User, error) {
+	uc.logger.InfoContext(ctx, "use case iniciado",
+		"use_case", "UpdateProfile",
+		"request_id", middleware.RequestIDFromContext(ctx),
+		"user_id", cmd.UserID.String(),
+	)
+
 	user, err := uc.userRepo.FindByID(ctx, cmd.UserID)
 	if err != nil {
+		uc.logger.WarnContext(ctx, "usuário não encontrado",
+			"use_case", "UpdateProfile",
+			"request_id", middleware.RequestIDFromContext(ctx),
+			"user_id", cmd.UserID.String(),
+			"error", err.Error(),
+		)
 		return nil, fmt.Errorf("update profile: find user: %w", err)
 	}
 
@@ -53,6 +101,12 @@ func (uc *UpdateProfileUseCase) Execute(ctx context.Context, cmd UpdateProfileCo
 	if cmd.Phone != "" {
 		phone, err = identity.NewPhone(cmd.Phone)
 		if err != nil {
+			uc.logger.WarnContext(ctx, "telefone inválido",
+				"use_case", "UpdateProfile",
+				"request_id", middleware.RequestIDFromContext(ctx),
+				"user_id", cmd.UserID.String(),
+				"error", err.Error(),
+			)
 			return nil, fmt.Errorf("update profile: %w", err)
 		}
 	}
@@ -61,6 +115,12 @@ func (uc *UpdateProfileUseCase) Execute(ctx context.Context, cmd UpdateProfileCo
 		name = cmd.Name
 	}
 	if err := user.UpdateProfile(name, phone); err != nil {
+		uc.logger.WarnContext(ctx, "falha ao atualizar perfil (validação de domínio)",
+			"use_case", "UpdateProfile",
+			"request_id", middleware.RequestIDFromContext(ctx),
+			"user_id", cmd.UserID.String(),
+			"error", err.Error(),
+		)
 		return nil, fmt.Errorf("update profile: %w", err)
 	}
 
@@ -69,9 +129,20 @@ func (uc *UpdateProfileUseCase) Execute(ctx context.Context, cmd UpdateProfileCo
 	}
 
 	if err := uc.userRepo.Update(ctx, user); err != nil {
+		uc.logger.ErrorContext(ctx, "falha ao salvar perfil",
+			"use_case", "UpdateProfile",
+			"request_id", middleware.RequestIDFromContext(ctx),
+			"user_id", cmd.UserID.String(),
+			"error", err.Error(),
+		)
 		return nil, fmt.Errorf("update profile: save: %w", err)
 	}
 
+	uc.logger.InfoContext(ctx, "use case concluído",
+		"use_case", "UpdateProfile",
+		"request_id", middleware.RequestIDFromContext(ctx),
+		"user_id", cmd.UserID.String(),
+	)
 	return user, nil
 }
 
@@ -80,56 +151,143 @@ type DeleteAccountUseCase struct {
 	userRepo    identity.UserRepository
 	refreshRepo identity.RefreshTokenRepository
 	clock       shared.Clock
+	logger      *slog.Logger
 }
 
+// NewDeleteAccountUseCase cria o use case com logger padrão.
 func NewDeleteAccountUseCase(
 	userRepo identity.UserRepository,
 	refreshRepo identity.RefreshTokenRepository,
 	clock shared.Clock,
 ) *DeleteAccountUseCase {
-	return &DeleteAccountUseCase{userRepo: userRepo, refreshRepo: refreshRepo, clock: clock}
+	return &DeleteAccountUseCase{userRepo: userRepo, refreshRepo: refreshRepo, clock: clock, logger: slog.Default()}
+}
+
+// WithLogger substitui o logger — chamado em main.go após o construtor.
+func (uc *DeleteAccountUseCase) WithLogger(l *slog.Logger) *DeleteAccountUseCase {
+	uc.logger = l
+	return uc
 }
 
 func (uc *DeleteAccountUseCase) Execute(ctx context.Context, userID shared.UserID) error {
+	uc.logger.InfoContext(ctx, "use case iniciado",
+		"use_case", "DeleteAccount",
+		"request_id", middleware.RequestIDFromContext(ctx),
+		"user_id", userID.String(),
+	)
+
 	now := uc.clock.Now()
 	if err := uc.userRepo.SoftDelete(ctx, userID, now); err != nil {
+		uc.logger.ErrorContext(ctx, "falha ao deletar conta",
+			"use_case", "DeleteAccount",
+			"request_id", middleware.RequestIDFromContext(ctx),
+			"user_id", userID.String(),
+			"error", err.Error(),
+		)
 		return fmt.Errorf("delete account: %w", err)
 	}
 	if err := uc.refreshRepo.RevokeAllForUser(ctx, userID); err != nil {
+		uc.logger.ErrorContext(ctx, "falha ao revogar tokens",
+			"use_case", "DeleteAccount",
+			"request_id", middleware.RequestIDFromContext(ctx),
+			"user_id", userID.String(),
+			"error", err.Error(),
+		)
 		return fmt.Errorf("delete account: revoke tokens: %w", err)
 	}
+
+	uc.logger.InfoContext(ctx, "use case concluído — conta deletada",
+		"use_case", "DeleteAccount",
+		"request_id", middleware.RequestIDFromContext(ctx),
+		"user_id", userID.String(),
+	)
 	return nil
 }
 
 // LogoutUseCase revoga o refresh token atual (sessão única).
+// Logout é best-effort: erros são logados mas não propagados ao usuário.
 type LogoutUseCase struct {
 	refreshRepo identity.RefreshTokenRepository
+	logger      *slog.Logger
 }
 
+// NewLogoutUseCase cria o use case com logger padrão.
 func NewLogoutUseCase(refreshRepo identity.RefreshTokenRepository) *LogoutUseCase {
-	return &LogoutUseCase{refreshRepo: refreshRepo}
+	return &LogoutUseCase{refreshRepo: refreshRepo, logger: slog.Default()}
+}
+
+// WithLogger substitui o logger — chamado em main.go após o construtor.
+func (uc *LogoutUseCase) WithLogger(l *slog.Logger) *LogoutUseCase {
+	uc.logger = l
+	return uc
 }
 
 func (uc *LogoutUseCase) Execute(ctx context.Context, userID shared.UserID, tokenHash string) error {
+	uc.logger.InfoContext(ctx, "use case iniciado",
+		"use_case", "Logout",
+		"request_id", middleware.RequestIDFromContext(ctx),
+		"user_id", userID.String(),
+	)
+
 	if err := uc.refreshRepo.Revoke(ctx, userID, tokenHash); err != nil {
+		// Logout é best-effort: token pode não existir (já expirado, já revogado).
+		// Logamos como Warn (não Error) pois não impede a experiência do usuário.
+		uc.logger.WarnContext(ctx, "falha ao revogar token (best-effort)",
+			"use_case", "Logout",
+			"request_id", middleware.RequestIDFromContext(ctx),
+			"user_id", userID.String(),
+			"error", err.Error(),
+		)
 		return fmt.Errorf("logout: %w", err)
 	}
+
+	uc.logger.InfoContext(ctx, "use case concluído",
+		"use_case", "Logout",
+		"request_id", middleware.RequestIDFromContext(ctx),
+		"user_id", userID.String(),
+	)
 	return nil
 }
 
 // LogoutAllUseCase revoga todos os refresh tokens do usuário (logout global / todos os dispositivos).
 type LogoutAllUseCase struct {
 	refreshRepo identity.RefreshTokenRepository
+	logger      *slog.Logger
 }
 
+// NewLogoutAllUseCase cria o use case com logger padrão.
 func NewLogoutAllUseCase(refreshRepo identity.RefreshTokenRepository) *LogoutAllUseCase {
-	return &LogoutAllUseCase{refreshRepo: refreshRepo}
+	return &LogoutAllUseCase{refreshRepo: refreshRepo, logger: slog.Default()}
+}
+
+// WithLogger substitui o logger — chamado em main.go após o construtor.
+func (uc *LogoutAllUseCase) WithLogger(l *slog.Logger) *LogoutAllUseCase {
+	uc.logger = l
+	return uc
 }
 
 func (uc *LogoutAllUseCase) Execute(ctx context.Context, userID shared.UserID) error {
+	uc.logger.InfoContext(ctx, "use case iniciado",
+		"use_case", "LogoutAll",
+		"request_id", middleware.RequestIDFromContext(ctx),
+		"user_id", userID.String(),
+	)
+
 	if err := uc.refreshRepo.RevokeAllForUser(ctx, userID); err != nil {
+		uc.logger.WarnContext(ctx, "falha ao revogar todos os tokens (best-effort)",
+			"use_case", "LogoutAll",
+			"request_id", middleware.RequestIDFromContext(ctx),
+			"user_id", userID.String(),
+			"error", err.Error(),
+		)
 		return fmt.Errorf("logout all: %w", err)
 	}
+
+	uc.logger.InfoContext(ctx, "use case concluído",
+		"use_case", "LogoutAll",
+		"request_id", middleware.RequestIDFromContext(ctx),
+		"user_id", userID.String(),
+	)
 	return nil
 }
 

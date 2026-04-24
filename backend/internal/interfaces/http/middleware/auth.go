@@ -3,6 +3,7 @@ package middleware
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -43,10 +44,31 @@ func Authenticate(jwtSvc *auth.JWTService) func(http.Handler) http.Handler {
 }
 
 // RequireAdmin verifica se o usuário autenticado tem role=admin.
+//
+// IMPORTANTE: Este middleware DEVE ser usado após Authenticate. Se chamado sem
+// Authenticate, o contexto não terá CtxKeyRole e o acesso será negado com 403
+// (comportamento seguro — falha fechada). Mas um log de warning é emitido para
+// detectar má configuração de rota.
 func RequireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		role, _ := r.Context().Value(CtxKeyRole).(string)
-		if role != "admin" {
+		// Verificação explícita em duas etapas:
+		// 1. Checa se a chave existe no contexto (Authenticate foi chamado?).
+		// 2. Checa se o valor é "admin".
+		// Isso distingue "usuário sem role admin" de "middleware mal configurado".
+		roleVal := r.Context().Value(CtxKeyRole)
+		if roleVal == nil {
+			// Contexto sem CtxKeyRole indica que Authenticate não rodou antes deste middleware.
+			// Logar como warning — é um erro de configuração de rota, não comportamento normal.
+			slog.Warn("RequireAdmin chamado sem Authenticate ter rodado",
+				"path", r.URL.Path,
+				"method", r.Method,
+				"request_id", w.Header().Get("X-Request-ID"),
+			)
+			httputil.WriteError(w, http.StatusForbidden, "acesso negado", "forbidden")
+			return
+		}
+		role, ok := roleVal.(string)
+		if !ok || role != "admin" {
 			httputil.WriteError(w, http.StatusForbidden, "acesso negado", "forbidden")
 			return
 		}

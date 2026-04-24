@@ -3,11 +3,13 @@ package identity
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/fernandofv/api/internal/domain/identity"
 	"github.com/fernandofv/api/internal/domain/shared"
 	infraauth "github.com/fernandofv/api/internal/infrastructure/auth"
+	"github.com/fernandofv/api/internal/interfaces/http/middleware"
 )
 
 // GoogleAuthUseCase autentica ou registra um usuário via Google OAuth2.
@@ -23,8 +25,10 @@ type GoogleAuthUseCase struct {
 	tokenIssuer TokenIssuer
 	clock       shared.Clock
 	refreshTTL  time.Duration
+	logger      *slog.Logger
 }
 
+// NewGoogleAuthUseCase cria o use case com logger padrão.
 func NewGoogleAuthUseCase(
 	userRepo identity.UserRepository,
 	refreshRepo identity.RefreshTokenRepository,
@@ -38,7 +42,14 @@ func NewGoogleAuthUseCase(
 		tokenIssuer: tokenIssuer,
 		clock:       clock,
 		refreshTTL:  refreshTTL,
+		logger:      slog.Default(),
 	}
+}
+
+// WithLogger substitui o logger — chamado em main.go após o construtor.
+func (uc *GoogleAuthUseCase) WithLogger(l *slog.Logger) *GoogleAuthUseCase {
+	uc.logger = l
+	return uc
 }
 
 // GoogleAuthResult contém os tokens emitidos após autenticação Google.
@@ -50,21 +61,49 @@ type GoogleAuthResult struct {
 	IsNewUser        bool
 }
 
+// Execute autentica o usuário via Google OAuth2, logando o fluxo completo.
+// O email do Google é hasheado antes de qualquer log — nunca em texto claro.
 func (uc *GoogleAuthUseCase) Execute(ctx context.Context, info *infraauth.GoogleUserInfo) (GoogleAuthResult, error) {
+	// Log de entrada: sub do Google é opaco (não é PII diretamente utilizável).
+	uc.logger.InfoContext(ctx, "use case iniciado",
+		"use_case", "GoogleAuth",
+		"request_id", middleware.RequestIDFromContext(ctx),
+		"email_hash", hashEmail(info.Email),
+		"google_sub_prefix", safePrefix(info.Sub, 8), // prefixo do sub para correlação sem revelar tudo
+	)
+
 	now := uc.clock.Now()
 
 	user, isNew, err := uc.findOrCreate(ctx, info, now)
 	if err != nil {
+		uc.logger.ErrorContext(ctx, "falha ao buscar/criar usuário Google",
+			"use_case", "GoogleAuth",
+			"request_id", middleware.RequestIDFromContext(ctx),
+			"email_hash", hashEmail(info.Email),
+			"error", err.Error(),
+		)
 		return GoogleAuthResult{}, fmt.Errorf("google auth: %w", err)
 	}
 
 	accessToken, err := uc.tokenIssuer.IssueAccessToken(user.ID(), user.Email(), user.Role())
 	if err != nil {
+		uc.logger.ErrorContext(ctx, "falha ao emitir access token",
+			"use_case", "GoogleAuth",
+			"request_id", middleware.RequestIDFromContext(ctx),
+			"user_id", user.ID().String(),
+			"error", err.Error(),
+		)
 		return GoogleAuthResult{}, fmt.Errorf("google auth: issue access token: %w", err)
 	}
 
 	rawRefresh, refreshHash, err := uc.tokenIssuer.IssueRefreshToken(user.ID())
 	if err != nil {
+		uc.logger.ErrorContext(ctx, "falha ao emitir refresh token",
+			"use_case", "GoogleAuth",
+			"request_id", middleware.RequestIDFromContext(ctx),
+			"user_id", user.ID().String(),
+			"error", err.Error(),
+		)
 		return GoogleAuthResult{}, fmt.Errorf("google auth: issue refresh token: %w", err)
 	}
 
@@ -77,8 +116,22 @@ func (uc *GoogleAuthUseCase) Execute(ctx context.Context, info *infraauth.Google
 		CreatedAt: now,
 	}
 	if err := uc.refreshRepo.Save(ctx, rt); err != nil {
+		uc.logger.ErrorContext(ctx, "falha ao salvar refresh token",
+			"use_case", "GoogleAuth",
+			"request_id", middleware.RequestIDFromContext(ctx),
+			"user_id", user.ID().String(),
+			"error", err.Error(),
+		)
 		return GoogleAuthResult{}, fmt.Errorf("google auth: save refresh token: %w", err)
 	}
+
+	// Log de saída: confirma autenticação Google com sucesso.
+	uc.logger.InfoContext(ctx, "use case concluído",
+		"use_case", "GoogleAuth",
+		"request_id", middleware.RequestIDFromContext(ctx),
+		"user_id", user.ID().String(),
+		"is_new_user", isNew,
+	)
 
 	return GoogleAuthResult{
 		AccessToken:      accessToken,
@@ -87,6 +140,15 @@ func (uc *GoogleAuthUseCase) Execute(ctx context.Context, info *infraauth.Google
 		User:             user,
 		IsNewUser:        isNew,
 	}, nil
+}
+
+// safePrefix retorna os primeiros n caracteres de s, ou s completo se len(s) < n.
+// Usado para logar prefixos de IDs opacos sem expor o valor completo.
+func safePrefix(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }
 
 func (uc *GoogleAuthUseCase) findOrCreate(

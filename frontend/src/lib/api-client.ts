@@ -5,10 +5,42 @@
  * - Refresh token chega via cookie HttpOnly — browser gerencia automaticamente.
  * - Em caso de 401, tenta POST /api/v1/auth/refresh automaticamente e retenta.
  * - Todos os erros do backend (envelope { type, title, status, detail }) viram ApiError.
+ * - Erros inesperados (não ApiError com 4xx) são capturados pelo Sentry.
  *
  * Uso:
  *   const data = await apiFetch<UserDTO>('/api/v1/me', {}, true);
  */
+
+/**
+ * Captura exceção inesperada no Sentry, se disponível.
+ *
+ * ApiErrors com status 4xx são comportamento esperado (401 = não autenticado,
+ * 403 = sem permissão, 404 = não encontrado) e NÃO devem ser reportados.
+ * Apenas erros genuinamente inesperados vão para o Sentry: 5xx do servidor,
+ * erros de rede após esgotamento de retries e erros de código (bugs).
+ *
+ * Usa `globalThis.__sentry_capture__` quando disponível (injetado pelo
+ * sentry.client.config.ts após Sentry.init()). Desta forma evitamos
+ * import dinâmico que causaria problemas em testes e em SSR.
+ */
+function captureUnexpectedError(err: unknown): void {
+  // 4xx = comportamento esperado — não reportar ao Sentry
+  if (err instanceof ApiError) {
+    const isClientError = err.status >= 400 && err.status < 500;
+    if (isClientError) return;
+  }
+
+  // Tenta capturar via Sentry. O SDK é injetado pelo sentry.client.config.ts
+  // apenas em produção. Em dev/testes este bloco é no-op silencioso.
+  try {
+    // Acessa via globalThis para evitar import estático de @sentry/nextjs
+    // (que quebraria o build estático quando o DSN não está configurado).
+    const sentry = (globalThis as unknown as { Sentry?: { captureException: (e: unknown) => void } }).Sentry;
+    sentry?.captureException(err);
+  } catch {
+    // Sentry indisponível — ignora silenciosamente
+  }
+}
 
 function getApiBase(): string {
   return (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_API_BASE_URL) || '';
@@ -35,6 +67,11 @@ export class ApiError extends Error {
     this.detail = body.detail;
   }
 }
+
+// Timeout padrão por request — 15 segundos.
+// Requests que ultrapassem esse limite são abortadas e retornam ApiError com type 'timeout'.
+// Valor configurável por chamada via RequestInit.signal (para uploads grandes, use signal próprio).
+const DEFAULT_TIMEOUT_MS = 15_000;
 
 // ─── Token em memória ───────────────────────────────────────────────────────
 
@@ -139,12 +176,32 @@ export async function apiFetch<T = unknown>(
   }
 
   const base = getApiBase();
-  const doFetch = () =>
-    fetch(`${base}${path}`, {
+
+  // Cria AbortController por request para garantir que o timeout seja específico desta chamada.
+  // Se o caller já passou um signal próprio (ex: para upload grande), combina os dois.
+  const doFetch = () => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort('timeout'), DEFAULT_TIMEOUT_MS);
+
+    // Combina o signal do caller (se houver) com o nosso timeout.
+    // Se o caller cancelar, ambos os signals são abortados.
+    const callerSignal = (init as RequestInit & { signal?: AbortSignal }).signal;
+    if (callerSignal) {
+      callerSignal.addEventListener('abort', () => controller.abort(callerSignal.reason));
+    }
+
+    const promise = fetch(`${base}${path}`, {
       ...init,
       credentials: 'include',
       headers,
+      signal: controller.signal,
     });
+
+    // Limpa o timeout quando o fetch terminar (sucesso ou erro de rede), evitando memory leak.
+    // Retorna a promise do .finally() para que o caller awaite a cadeia completa —
+    // descartar o retorno de .finally() criaria uma rejected promise sem handler.
+    return promise.finally(() => clearTimeout(timeoutId));
+  };
 
   let res: Response | null = null;
   let lastNetworkErr: unknown = null;
@@ -154,6 +211,22 @@ export async function apiFetch<T = unknown>(
       res = await doFetch();
       lastNetworkErr = null;
     } catch (err) {
+      // AbortError com reason 'timeout' = nosso timeout de 15s estourou.
+      // Relança como ApiError tipado para que o caller possa diferenciar de erro de rede.
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        const isTimeout = (err as DOMException & { cause?: string }).cause === 'timeout' ||
+          String(err.message).includes('timeout');
+        if (isTimeout) {
+          throw new ApiError({
+            type: 'timeout',
+            title: 'Tempo limite excedido',
+            status: 0,
+            detail: 'O servidor demorou mais de 15 segundos para responder. Tente novamente.',
+          });
+        }
+        // AbortError de outro signal (caller cancelou) — relança sem retry.
+        throw err;
+      }
       // Erro de rede (TypeError / fetch rejeitou) — retry se ainda houver tentativas.
       lastNetworkErr = err;
       res = null;
@@ -161,7 +234,17 @@ export async function apiFetch<T = unknown>(
         await sleep(jitter(BASE_DELAYS_MS[attempt]));
         continue;
       }
-      throw err;
+      // Todas as tentativas falharam — converte para ApiError tipado.
+      // Captura no Sentry: erros de rede após esgotar retries são inesperados
+      // e podem indicar problemas de infraestrutura ou regressão de rede.
+      const networkApiError = new ApiError({
+        type: 'network_error',
+        title: 'Erro de rede',
+        status: 0,
+        detail: 'Não foi possível conectar ao servidor. Verifique sua conexão e tente novamente.',
+      });
+      captureUnexpectedError(networkApiError);
+      throw networkApiError;
     }
 
     // 401: tenta refresh uma única vez e refaz — não entra no loop de retry de 5xx.
@@ -194,12 +277,21 @@ export async function apiFetch<T = unknown>(
   }
 
   if (!res) {
-    // Todas as tentativas falharam em rede.
-    throw lastNetworkErr ?? new Error('Falha de rede desconhecida');
+    // Fallback — não deveria chegar aqui após o throw dentro do catch.
+    throw lastNetworkErr ?? new ApiError({
+      type: 'network_error',
+      title: 'Erro de rede',
+      status: 0,
+      detail: 'Falha de rede desconhecida.',
+    });
   }
 
   if (!res.ok) {
-    throw await parseError(res);
+    const apiErr = await parseError(res);
+    // Captura erros inesperados no Sentry (5xx e erros sem status 4xx).
+    // 4xx (401, 403, 404, 422) são comportamento esperado e não são reportados.
+    captureUnexpectedError(apiErr);
+    throw apiErr;
   }
 
   // 204 No Content — sem body
