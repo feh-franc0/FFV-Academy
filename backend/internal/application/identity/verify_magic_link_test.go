@@ -61,6 +61,9 @@ func (m *mockUserRepo) FindByEmail(_ context.Context, e domidentity.Email) (*dom
 	}
 	return u, nil
 }
+func (m *mockUserRepo) FindByGoogleID(_ context.Context, _ string) (*domidentity.User, error) {
+	return nil, shared.ErrNotFound
+}
 func (m *mockUserRepo) ExistsByEmail(_ context.Context, e domidentity.Email) (bool, error) {
 	_, ok := m.byEmail[e.String()]
 	return ok, nil

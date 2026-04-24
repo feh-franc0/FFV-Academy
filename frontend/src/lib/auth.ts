@@ -18,6 +18,7 @@ import { getUser, setUser, clearUser } from './storage';
 import { emailSchema, phoneBRSchema } from './schemas';
 import {
   hasBackend,
+  apiGet,
   apiPost,
   apiPatch,
   apiDelete,
@@ -40,21 +41,21 @@ export interface UserProfile {
 interface UserDTO {
   id: string;
   email: string;
+  phone: string;
   name: string;
   role: string;
   referralId: string;
   products: string[];
   marketingConsent: boolean;
+  avatarUrl?: string;
   createdAt: string;
 }
 
-function dtoToProfile(dto: UserDTO, existingPhone?: string): UserProfile {
-  // Backend não retorna phone — preserva do cache local ou usa placeholder válido
-  const phone = existingPhone || getUser()?.phone || '+5500000000000';
+function dtoToProfile(dto: UserDTO): UserProfile {
   return {
     name: dto.name,
     email: dto.email,
-    phone,
+    phone: dto.phone ?? '',
     createdAt: dto.createdAt,
     marketingConsent: dto.marketingConsent,
     paidProducts: dto.products,
@@ -146,6 +147,7 @@ export async function verifyToken(
     const profile = dtoToProfile(res.user);
     setUser(profile);
     return { ok: true, user: profile };
+
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return { ok: false };
     throw err;
@@ -175,6 +177,52 @@ export async function refreshSession(): Promise<UserProfile | null> {
   } catch {
     return null;
   }
+}
+
+// ─── handleGoogleCallback ──────────────────────────────────────────────────
+
+/**
+ * Lê o access token do hash da URL após o callback do Google OAuth.
+ * O backend redireciona para FRONTEND_URL/#access_token=JWT após autenticar.
+ * Retorna o perfil se o token foi encontrado e a sessão foi estabelecida.
+ */
+export async function handleGoogleCallback(): Promise<UserProfile | null> {
+  if (typeof window === 'undefined') return null;
+  const hash = window.location.hash;
+  const match = hash.match(/[#&]access_token=([^&]+)/);
+  if (!match) return null;
+
+  const token = match[1];
+  setAccessToken(token);
+
+  // Limpa o token da URL sem recarregar a página.
+  history.replaceState(null, '', window.location.pathname + window.location.search);
+
+  // Busca perfil do servidor usando o token recém-recebido.
+  if (!hasBackend()) return null;
+  try {
+    const dto = await apiGet<UserDTO>('/api/v1/me');
+    const profile = dtoToProfile(dto);
+    setUser(profile);
+    return profile;
+  } catch {
+    return null;
+  }
+}
+
+// ─── googleLogin ───────────────────────────────────────────────────────────
+
+/**
+ * Inicia o fluxo de login com Google.
+ * Redireciona o browser para o endpoint de autenticação do backend.
+ */
+export function googleLogin(): void {
+  const base = process.env.NEXT_PUBLIC_API_BASE_URL;
+  if (!base) {
+    console.warn('[auth] NEXT_PUBLIC_API_BASE_URL não configurado — Google OAuth indisponível');
+    return;
+  }
+  window.location.href = `${base}/api/v1/auth/google`;
 }
 
 // ─── getCurrentUser ────────────────────────────────────────────────────────
@@ -281,13 +329,13 @@ export async function deleteAccount(): Promise<boolean> {
 export async function syncProfileFromServer(): Promise<UserProfile | null> {
   if (!hasBackend()) return getUser();
   try {
-    const dto = await apiPost<{ accessToken: string; user: UserDTO }>(
+    const res = await apiPost<{ accessToken: string; user: UserDTO }>(
       '/api/v1/auth/refresh',
       undefined,
       false,
     );
-    setAccessToken(dto.accessToken);
-    const profile = dtoToProfile(dto.user);
+    setAccessToken(res.accessToken);
+    const profile = dtoToProfile(res.user);
     setUser(profile);
     return profile;
   } catch {

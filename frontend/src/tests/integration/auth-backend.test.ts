@@ -27,8 +27,9 @@ const VALID_PHONE = '+5511987654321';
 const MOCK_USER_DTO = {
   id: 'u_123',
   email: VALID_EMAIL,
+  phone: VALID_PHONE,
   name: 'Test User',
-  role: 'student',
+  role: 'user',
   referralId: 'testuser',
   products: ['simulado-aws-practitioner'],
   marketingConsent: false,

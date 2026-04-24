@@ -2,14 +2,17 @@
 package handlers
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	appidentity "github.com/fernandofv/api/internal/application/identity"
+	infraauth "github.com/fernandofv/api/internal/infrastructure/auth"
 	"github.com/fernandofv/api/internal/interfaces/http/middleware"
 )
 
@@ -27,11 +30,15 @@ type AuthHandler struct {
 	verifyMagicLink  *appidentity.VerifyMagicLinkUseCase
 	refreshToken     *appidentity.RefreshTokenUseCase
 	logout           *appidentity.LogoutUseCase
+	logoutAll        *appidentity.LogoutAllUseCase
 	getProfile       *appidentity.GetProfileUseCase
 	updateProfile    *appidentity.UpdateProfileUseCase
 	deleteAccount    *appidentity.DeleteAccountUseCase
 	exportData       *appidentity.ExportUserDataUseCase
 	userStats        *appidentity.UserStatsUseCase
+	googleAuth       *appidentity.GoogleAuthUseCase
+	googleAdapter    *infraauth.GoogleOAuthAdapter
+	frontendURL      string
 }
 
 func NewAuthHandler(
@@ -39,6 +46,7 @@ func NewAuthHandler(
 	verifyMagicLink *appidentity.VerifyMagicLinkUseCase,
 	refreshToken *appidentity.RefreshTokenUseCase,
 	logout *appidentity.LogoutUseCase,
+	logoutAll *appidentity.LogoutAllUseCase,
 	getProfile *appidentity.GetProfileUseCase,
 	updateProfile *appidentity.UpdateProfileUseCase,
 	deleteAccount *appidentity.DeleteAccountUseCase,
@@ -48,6 +56,7 @@ func NewAuthHandler(
 		verifyMagicLink:  verifyMagicLink,
 		refreshToken:     refreshToken,
 		logout:           logout,
+		logoutAll:        logoutAll,
 		getProfile:       getProfile,
 		updateProfile:    updateProfile,
 		deleteAccount:    deleteAccount,
@@ -63,6 +72,14 @@ func (h *AuthHandler) WithExportData(uc *appidentity.ExportUserDataUseCase) *Aut
 // WithUserStats injeta (opcionalmente) o use case de stats do usuário.
 func (h *AuthHandler) WithUserStats(uc *appidentity.UserStatsUseCase) *AuthHandler {
 	h.userStats = uc
+	return h
+}
+
+// WithGoogleOAuth injeta o use case e adapter de Google OAuth (opcional).
+func (h *AuthHandler) WithGoogleOAuth(uc *appidentity.GoogleAuthUseCase, adapter *infraauth.GoogleOAuthAdapter, frontendURL string) *AuthHandler {
+	h.googleAuth = uc
+	h.googleAdapter = adapter
+	h.frontendURL = frontendURL
 	return h
 }
 
@@ -148,9 +165,28 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 
 	setRefreshCookie(w, result.RefreshToken, result.RefreshExpiresAt)
 
-	WriteJSON(w, http.StatusOK, map[string]string{
+	WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"accessToken": result.AccessToken,
+		"user":        userToDTO(result.User),
 	})
+}
+
+// LogoutAll revoga todos os refresh tokens do usuário (logout de todos os dispositivos).
+// POST /api/v1/auth/logout-all
+func (h *AuthHandler) LogoutAll(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	_ = h.logoutAll.Execute(r.Context(), userID)
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     refreshCookieName,
+		Value:    "",
+		Path:     refreshCookiePath,
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+	})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Logout revoga o refresh token atual.
@@ -269,6 +305,61 @@ func (h *AuthHandler) UserStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	WriteJSON(w, http.StatusOK, stats)
+}
+
+// GoogleRedirect inicia o fluxo OAuth2 do Google.
+// GET /api/v1/auth/google
+func (h *AuthHandler) GoogleRedirect(w http.ResponseWriter, r *http.Request) {
+	if h.googleAdapter == nil {
+		WriteError(w, http.StatusNotImplemented, "Google OAuth não configurado", "not-implemented")
+		return
+	}
+	state := generateOAuthState()
+	url := h.googleAdapter.AuthURL(state)
+	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
+}
+
+// GoogleCallback recebe o callback do Google, emite tokens e redireciona ao frontend.
+// GET /api/v1/auth/google/callback
+func (h *AuthHandler) GoogleCallback(w http.ResponseWriter, r *http.Request) {
+	if h.googleAdapter == nil || h.googleAuth == nil {
+		WriteError(w, http.StatusNotImplemented, "Google OAuth não configurado", "not-implemented")
+		return
+	}
+
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		WriteError(w, http.StatusBadRequest, "code ausente", "bad-request")
+		return
+	}
+
+	info, err := h.googleAdapter.Exchange(r.Context(), code)
+	if err != nil {
+		HandleDomainError(w, fmt.Errorf("google callback: %w", err))
+		return
+	}
+
+	result, err := h.googleAuth.Execute(r.Context(), info)
+	if err != nil {
+		HandleDomainError(w, err)
+		return
+	}
+
+	setRefreshCookie(w, result.RefreshToken, result.RefreshExpiresAt)
+
+	// Redireciona ao frontend passando o access token no hash da URL.
+	// Hash não é enviado ao servidor em requests subsequentes — mais seguro que query param.
+	redirectURL := fmt.Sprintf("%s/#access_token=%s", h.frontendURL, result.AccessToken)
+	http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
+}
+
+// generateOAuthState gera um state aleatório para proteção CSRF no OAuth2.
+func generateOAuthState() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "fallback-state"
+	}
+	return hex.EncodeToString(b)
 }
 
 // --- helpers ---

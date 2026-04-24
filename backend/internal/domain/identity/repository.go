@@ -26,6 +26,9 @@ type UserRepository interface {
 	// FindByEmail retorna o User pelo email. Retorna ErrNotFound se não existe.
 	FindByEmail(ctx context.Context, email Email) (*User, error)
 
+	// FindByGoogleID retorna o User pelo google_id. Retorna ErrNotFound se não existe.
+	FindByGoogleID(ctx context.Context, googleID string) (*User, error)
+
 	// ExistsByEmail reporta se já existe um User com o email fornecido.
 	ExistsByEmail(ctx context.Context, email Email) (bool, error)
 

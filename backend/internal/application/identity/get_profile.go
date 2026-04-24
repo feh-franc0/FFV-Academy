@@ -101,7 +101,7 @@ func (uc *DeleteAccountUseCase) Execute(ctx context.Context, userID shared.UserI
 	return nil
 }
 
-// LogoutUseCase revoga o refresh token atual.
+// LogoutUseCase revoga o refresh token atual (sessão única).
 type LogoutUseCase struct {
 	refreshRepo identity.RefreshTokenRepository
 }
@@ -113,6 +113,22 @@ func NewLogoutUseCase(refreshRepo identity.RefreshTokenRepository) *LogoutUseCas
 func (uc *LogoutUseCase) Execute(ctx context.Context, userID shared.UserID, tokenHash string) error {
 	if err := uc.refreshRepo.Revoke(ctx, userID, tokenHash); err != nil {
 		return fmt.Errorf("logout: %w", err)
+	}
+	return nil
+}
+
+// LogoutAllUseCase revoga todos os refresh tokens do usuário (logout global / todos os dispositivos).
+type LogoutAllUseCase struct {
+	refreshRepo identity.RefreshTokenRepository
+}
+
+func NewLogoutAllUseCase(refreshRepo identity.RefreshTokenRepository) *LogoutAllUseCase {
+	return &LogoutAllUseCase{refreshRepo: refreshRepo}
+}
+
+func (uc *LogoutAllUseCase) Execute(ctx context.Context, userID shared.UserID) error {
+	if err := uc.refreshRepo.RevokeAllForUser(ctx, userID); err != nil {
+		return fmt.Errorf("logout all: %w", err)
 	}
 	return nil
 }
@@ -146,6 +162,7 @@ type RefreshTokenResult struct {
 	AccessToken      string
 	RefreshToken     string
 	RefreshExpiresAt time.Time
+	User             *identity.User
 }
 
 func (uc *RefreshTokenUseCase) Execute(ctx context.Context, tokenHash string) (RefreshTokenResult, error) {
@@ -195,5 +212,6 @@ func (uc *RefreshTokenUseCase) Execute(ctx context.Context, tokenHash string) (R
 		AccessToken:      accessToken,
 		RefreshToken:     rawRefresh,
 		RefreshExpiresAt: expiresAt,
+		User:             user,
 	}, nil
 }

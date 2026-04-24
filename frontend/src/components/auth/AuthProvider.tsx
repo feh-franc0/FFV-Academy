@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AuthContext, type AuthContextValue } from '@/hooks/useAuth';
 import {
   getCurrentUser,
+  handleGoogleCallback,
   logout as doLogout,
   refreshSession,
   type UserProfile,
@@ -26,10 +27,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     reject: (err: Error) => void;
   } | null>(null);
 
-  // Tenta restaurar sessão via refresh token (HttpOnly cookie) ou localStorage
+  // Tenta restaurar sessão: primeiro verifica callback do Google OAuth (hash),
+  // depois tenta renovar via refresh token (cookie HttpOnly) ou localStorage.
   useEffect(() => {
     let cancelled = false;
     async function restoreSession() {
+      // Callback do Google: #access_token=... presente na URL?
+      const googleUser = await handleGoogleCallback();
+      if (googleUser) {
+        if (!cancelled) setUser(googleUser);
+        return;
+      }
       const restored = await refreshSession();
       if (!cancelled) setUser(restored);
     }

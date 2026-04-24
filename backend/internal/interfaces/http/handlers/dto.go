@@ -37,11 +37,13 @@ func clientIPFromRequest(r *http.Request) string {
 type UserDTO struct {
 	ID               string   `json:"id"`
 	Email            string   `json:"email"`
+	Phone            string   `json:"phone"`
 	Name             string   `json:"name"`
 	Role             string   `json:"role"`
 	ReferralID       string   `json:"referralId"`
 	Products         []string `json:"products"`
 	MarketingConsent bool     `json:"marketingConsent"`
+	AvatarURL        string   `json:"avatarUrl,omitempty"`
 	CreatedAt        string   `json:"createdAt"`
 }
 
@@ -53,11 +55,13 @@ func userToDTO(u *domidentity.User) UserDTO {
 	return UserDTO{
 		ID:               u.ID().String(),
 		Email:            u.Email().String(),
+		Phone:            u.Phone().String(),
 		Name:             u.Name(),
 		Role:             string(u.Role()),
 		ReferralID:       u.ReferralID().String(),
 		Products:         products,
 		MarketingConsent: u.MarketingConsent(),
+		AvatarURL:        u.AvatarURL(),
 		CreatedAt:        u.CreatedAt().UTC().Format(time.RFC3339),
 	}
 }

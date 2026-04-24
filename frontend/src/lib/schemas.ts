@@ -120,7 +120,8 @@ export const phoneBRSchema = z
 export const UserProfileSchema = z.object({
   name: z.string().min(1).max(120),
   email: emailSchema,
-  phone: phoneBRSchema,
+  // Permite string vazia para usuários que fizeram login via Google sem fornecer telefone.
+  phone: phoneBRSchema.or(z.literal('')),
   createdAt: z.string(),
   marketingConsent: z.boolean(),
   paidProducts: z.array(z.string().regex(/^[a-z0-9-]{1,80}$/)),

@@ -132,9 +132,11 @@ func run() error {
 		refreshRepo, userRepo, jwtService, clock, cfg.JWT.RefreshTokenTTL,
 	)
 	logoutUC := appidentity.NewLogoutUseCase(refreshRepo)
+	logoutAllUC := appidentity.NewLogoutAllUseCase(refreshRepo)
 	getProfileUC := appidentity.NewGetProfileUseCase(userRepo)
 	updateProfileUC := appidentity.NewUpdateProfileUseCase(userRepo)
 	deleteAccountUC := appidentity.NewDeleteAccountUseCase(userRepo, refreshRepo, clock)
+	googleAuthUC := appidentity.NewGoogleAuthUseCase(userRepo, refreshRepo, jwtService, clock, cfg.JWT.RefreshTokenTTL)
 
 	startAttemptUC := appsim.NewStartAttemptUseCase(attemptRepo, catalogProvider, clock)
 	answerQUC := appsim.NewAnswerQuestionUseCase(attemptRepo, catalogProvider, clock)
@@ -176,10 +178,14 @@ func run() error {
 
 	redisPinger := &redisPingerAdapter{client: redisClient}
 	healthH := handlers.NewHealthHandler(pool, redisPinger)
+	googleAdapter := auth.NewGoogleOAuthAdapter(cfg.Google)
 	authH := handlers.NewAuthHandler(
 		requestMagicLinkUC, verifyMagicLinkUC, refreshTokenUC,
-		logoutUC, getProfileUC, updateProfileUC, deleteAccountUC,
+		logoutUC, logoutAllUC, getProfileUC, updateProfileUC, deleteAccountUC,
 	).WithExportData(exportDataUC).WithUserStats(userStatsUC)
+	if cfg.Google.Enabled() {
+		authH = authH.WithGoogleOAuth(googleAuthUC, googleAdapter, cfg.Google.FrontendURL)
+	}
 	simuladoH := handlers.NewSimuladoHandler(
 		catalogProvider, startAttemptUC, answerQUC, toggleFlagUC,
 		finishAttemptUC, resumeAttemptUC, listAttemptsUC,

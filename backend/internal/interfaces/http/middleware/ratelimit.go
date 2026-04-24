@@ -83,20 +83,49 @@ func (rl *RateLimiter) check(ctx context.Context, key string) (bool, int, int, e
 	return count <= rl.limit, remaining, int(ttl.Seconds()), nil
 }
 
-// clientIP extrai o IP real do client considerando X-Forwarded-For
-// (apenas se o servidor estiver atrás de reverse proxy confiável).
+// clientIP extrai o IP real do client.
+// X-Forwarded-For só é respeitado quando o request chega de um IP de proxy
+// privado/loopback — evita que atacantes forjem o header para bypassar rate limit.
 func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// Primeiro IP na lista é o client original.
-		parts := strings.Split(xff, ",")
-		return strings.TrimSpace(parts[0])
-	}
-	if xr := r.Header.Get("X-Real-IP"); xr != "" {
-		return xr
-	}
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		remoteIP = r.RemoteAddr
 	}
-	return ip
+	if isTrustedProxy(remoteIP) {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			return strings.TrimSpace(parts[0])
+		}
+		if xr := r.Header.Get("X-Real-IP"); xr != "" {
+			return xr
+		}
+	}
+	return remoteIP
+}
+
+// isTrustedProxy retorna true para IPs de loopback e redes privadas RFC-1918/4193.
+// Em produção o reverse proxy (nginx/Caddy) roda no mesmo host ou rede privada.
+func isTrustedProxy(ip string) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	private := []string{
+		"127.0.0.0/8",    // loopback
+		"::1/128",        // IPv6 loopback
+		"10.0.0.0/8",     // RFC-1918
+		"172.16.0.0/12",  // RFC-1918
+		"192.168.0.0/16", // RFC-1918
+		"fc00::/7",       // IPv6 ULA
+	}
+	for _, cidr := range private {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			continue
+		}
+		if network.Contains(parsed) {
+			return true
+		}
+	}
+	return false
 }

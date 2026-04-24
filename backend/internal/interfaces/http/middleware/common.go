@@ -81,6 +81,8 @@ func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 }
 
 // SecurityHeaders adiciona headers de segurança recomendados.
+// HSTS é emitido quando há TLS direto OU quando o proxy sinalizou HTTPS via
+// X-Forwarded-Proto — cobre deploys atrás de nginx/Caddy que terminam TLS.
 func SecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -88,7 +90,7 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-XSS-Protection", "1; mode=block")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("Permissions-Policy", "geolocation=(), microphone=()")
-		if r.TLS != nil {
+		if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
 		next.ServeHTTP(w, r)

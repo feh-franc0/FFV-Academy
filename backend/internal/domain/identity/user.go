@@ -33,6 +33,8 @@ type User struct {
 	referralID       shared.ReferralID
 	role             Role
 	deletedAt        *time.Time
+	googleID         string
+	avatarURL        string
 }
 
 // Role representa o papel do usuário no sistema.
@@ -128,6 +130,8 @@ func ReconstituteUser(
 	referralID shared.ReferralID,
 	role Role,
 	deletedAt *time.Time,
+	googleID string,
+	avatarURL string,
 ) *User {
 	return &User{
 		id:               id,
@@ -140,6 +144,8 @@ func ReconstituteUser(
 		referralID:       referralID,
 		role:             role,
 		deletedAt:        deletedAt,
+		googleID:         googleID,
+		avatarURL:        avatarURL,
 	}
 }
 
@@ -157,6 +163,17 @@ func (u *User) ReferralID() shared.ReferralID { return u.referralID }
 func (u *User) Role() Role                    { return u.role }
 func (u *User) IsDeleted() bool               { return u.deletedAt != nil }
 func (u *User) DeletedAt() *time.Time         { return u.deletedAt }
+func (u *User) GoogleID() string              { return u.googleID }
+func (u *User) AvatarURL() string             { return u.avatarURL }
+func (u *User) HasGoogleLinked() bool         { return u.googleID != "" }
+
+// LinkGoogle associa uma conta Google ao usuário existente.
+func (u *User) LinkGoogle(googleID, avatarURL string) {
+	u.googleID = googleID
+	if avatarURL != "" {
+		u.avatarURL = avatarURL
+	}
+}
 
 // HasProduct reporta se o usuário possui o produto.
 func (u *User) HasProduct(id shared.ProductID) bool { return u.paidProducts.Contains(id) }

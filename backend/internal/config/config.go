@@ -27,6 +27,7 @@ type Config struct {
 	Twilio   TwilioConfig
 	Anthropic AnthropicConfig
 	CORS     CORSConfig
+	Google   GoogleOAuthConfig
 }
 
 type AppConfig struct {
@@ -99,6 +100,19 @@ type CORSConfig struct {
 	AllowedOrigins []string `envconfig:"CORS_ALLOWED_ORIGINS" default:"https://fernandofrancovalle.com"`
 }
 
+// GoogleOAuthConfig contém as credenciais para o OAuth2 do Google.
+// Quando ClientID/ClientSecret estão vazios o fluxo Google fica desabilitado.
+type GoogleOAuthConfig struct {
+	ClientID     string `envconfig:"GOOGLE_CLIENT_ID"`
+	ClientSecret string `envconfig:"GOOGLE_CLIENT_SECRET"`
+	RedirectURL  string `envconfig:"GOOGLE_REDIRECT_URL" default:"https://api.fernandofrancovalle.com/api/v1/auth/google/callback"`
+	FrontendURL  string `envconfig:"FRONTEND_URL" default:"https://fernandofrancovalle.com"`
+}
+
+func (g GoogleOAuthConfig) Enabled() bool {
+	return g.ClientID != "" && g.ClientSecret != ""
+}
+
 // Load lê as variáveis de ambiente e valida os campos obrigatórios.
 // Retorna erro descritivo se qualquer campo required estiver faltando.
 //
@@ -120,6 +134,7 @@ func Load() (*Config, error) {
 		{"", &cfg.Twilio},
 		{"", &cfg.Anthropic},
 		{"", &cfg.CORS},
+		{"", &cfg.Google},
 	}
 
 	for _, g := range groups {

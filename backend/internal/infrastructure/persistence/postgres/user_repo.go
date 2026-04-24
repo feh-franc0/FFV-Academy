@@ -26,8 +26,8 @@ func NewUserRepo(pool *pgxpool.Pool) *UserRepo {
 
 func (r *UserRepo) Save(ctx context.Context, user *identity.User) error {
 	const q = `
-		INSERT INTO users (id, email, phone, name, marketing_consent, referral_id, role, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+		INSERT INTO users (id, email, phone, name, marketing_consent, referral_id, role, google_id, avatar_url, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, ''), $9, $10, $10)
 	`
 	paidProducts := productIDsToStrings(user.PaidProducts())
 	_, err := r.pool.Exec(ctx, q,
@@ -38,6 +38,8 @@ func (r *UserRepo) Save(ctx context.Context, user *identity.User) error {
 		user.MarketingConsent(),
 		user.ReferralID().String(),
 		string(user.Role()),
+		user.GoogleID(),
+		user.AvatarURL(),
 		user.CreatedAt(),
 	)
 	if err != nil {
@@ -66,7 +68,9 @@ func (r *UserRepo) Update(ctx context.Context, user *identity.User) error {
 			name = $2,
 			phone = $3,
 			marketing_consent = $4,
-			updated_at = $5
+			google_id = NULLIF($5, ''),
+			avatar_url = $6,
+			updated_at = $7
 		WHERE id = $1 AND deleted_at IS NULL
 	`
 	res, err := r.pool.Exec(ctx, q,
@@ -74,6 +78,8 @@ func (r *UserRepo) Update(ctx context.Context, user *identity.User) error {
 		user.Name(),
 		user.Phone().String(),
 		user.MarketingConsent(),
+		user.GoogleID(),
+		user.AvatarURL(),
 		time.Now().UTC(),
 	)
 	if err != nil {
@@ -101,6 +107,7 @@ func (r *UserRepo) FindByID(ctx context.Context, id shared.UserID) (*identity.Us
 	const q = `
 		SELECT u.id, u.email, u.phone, u.name, u.created_at, u.marketing_consent,
 		       u.referral_id, u.role, u.deleted_at,
+		       COALESCE(u.google_id, ''), COALESCE(u.avatar_url, ''),
 		       COALESCE(array_agg(up.product_id) FILTER (WHERE up.product_id IS NOT NULL), '{}') AS paid_products
 		FROM users u
 		LEFT JOIN user_products up ON up.user_id = u.id
@@ -114,6 +121,7 @@ func (r *UserRepo) FindByEmail(ctx context.Context, email identity.Email) (*iden
 	const q = `
 		SELECT u.id, u.email, u.phone, u.name, u.created_at, u.marketing_consent,
 		       u.referral_id, u.role, u.deleted_at,
+		       COALESCE(u.google_id, ''), COALESCE(u.avatar_url, ''),
 		       COALESCE(array_agg(up.product_id) FILTER (WHERE up.product_id IS NOT NULL), '{}') AS paid_products
 		FROM users u
 		LEFT JOIN user_products up ON up.user_id = u.id
@@ -121,6 +129,20 @@ func (r *UserRepo) FindByEmail(ctx context.Context, email identity.Email) (*iden
 		GROUP BY u.id
 	`
 	return r.scanUser(ctx, q, email.String())
+}
+
+func (r *UserRepo) FindByGoogleID(ctx context.Context, googleID string) (*identity.User, error) {
+	const q = `
+		SELECT u.id, u.email, u.phone, u.name, u.created_at, u.marketing_consent,
+		       u.referral_id, u.role, u.deleted_at,
+		       COALESCE(u.google_id, ''), COALESCE(u.avatar_url, ''),
+		       COALESCE(array_agg(up.product_id) FILTER (WHERE up.product_id IS NOT NULL), '{}') AS paid_products
+		FROM users u
+		LEFT JOIN user_products up ON up.user_id = u.id
+		WHERE u.google_id = $1 AND u.deleted_at IS NULL
+		GROUP BY u.id
+	`
+	return r.scanUser(ctx, q, googleID)
 }
 
 func (r *UserRepo) ExistsByEmail(ctx context.Context, email identity.Email) (bool, error) {
@@ -161,6 +183,7 @@ func (r *UserRepo) ListForAdmin(ctx context.Context, limit, offset int) ([]*iden
 	rows, err := r.pool.Query(ctx,
 		`SELECT u.id, u.email, u.phone, u.name, u.created_at, u.marketing_consent,
 		        u.referral_id, u.role, u.deleted_at,
+		        COALESCE(u.google_id, ''), COALESCE(u.avatar_url, ''),
 		        ARRAY(SELECT product_id FROM user_products WHERE user_id = u.id) AS paid_products,
 		        COUNT(*) OVER() AS total
 		 FROM users u WHERE u.deleted_at IS NULL
@@ -188,21 +211,24 @@ func (r *UserRepo) ListForAdmin(ctx context.Context, limit, offset int) ([]*iden
 // scanUserRowWithTotal lê a linha + coluna agregada `total` adicional.
 func scanUserRowWithTotal(row userScanner) (*identity.User, int, error) {
 	var (
-		idStr           string
-		emailStr        string
-		phoneStr        string
-		name            string
-		createdAt       time.Time
+		idStr            string
+		emailStr         string
+		phoneStr         string
+		name             string
+		createdAt        time.Time
 		marketingConsent bool
-		referralIDStr   string
-		roleStr         string
-		deletedAt       *time.Time
-		paidProductStrs []string
-		total           int
+		referralIDStr    string
+		roleStr          string
+		deletedAt        *time.Time
+		googleID         string
+		avatarURL        string
+		paidProductStrs  []string
+		total            int
 	)
 	if err := row.Scan(
 		&idStr, &emailStr, &phoneStr, &name, &createdAt,
-		&marketingConsent, &referralIDStr, &roleStr, &deletedAt, &paidProductStrs, &total,
+		&marketingConsent, &referralIDStr, &roleStr, &deletedAt,
+		&googleID, &avatarURL, &paidProductStrs, &total,
 	); err != nil {
 		return nil, 0, err
 	}
@@ -218,6 +244,7 @@ func scanUserRowWithTotal(row userScanner) (*identity.User, int, error) {
 		shared.UserID(idStr), email, phone, name, createdAt,
 		marketingConsent, stringsToProductIDs(paidProductStrs),
 		shared.ReferralID(referralIDStr), identity.Role(roleStr), deletedAt,
+		googleID, avatarURL,
 	), total, nil
 }
 
@@ -241,21 +268,24 @@ type userScanner interface {
 
 func scanUserRow(row userScanner) (*identity.User, error) {
 	var (
-		idStr           string
-		emailStr        string
-		phoneStr        string
-		name            string
-		createdAt       time.Time
+		idStr            string
+		emailStr         string
+		phoneStr         string
+		name             string
+		createdAt        time.Time
 		marketingConsent bool
-		referralIDStr   string
-		roleStr         string
-		deletedAt       *time.Time
-		paidProductStrs []string
+		referralIDStr    string
+		roleStr          string
+		deletedAt        *time.Time
+		googleID         string
+		avatarURL        string
+		paidProductStrs  []string
 	)
 
 	if err := row.Scan(
 		&idStr, &emailStr, &phoneStr, &name, &createdAt,
-		&marketingConsent, &referralIDStr, &roleStr, &deletedAt, &paidProductStrs,
+		&marketingConsent, &referralIDStr, &roleStr, &deletedAt,
+		&googleID, &avatarURL, &paidProductStrs,
 	); err != nil {
 		return nil, err
 	}
@@ -269,8 +299,6 @@ func scanUserRow(row userScanner) (*identity.User, error) {
 		return nil, fmt.Errorf("reconstruct phone: %w", err)
 	}
 
-	paidProducts := stringsToProductIDs(paidProductStrs)
-
 	return identity.ReconstituteUser(
 		shared.UserID(idStr),
 		email,
@@ -278,10 +306,12 @@ func scanUserRow(row userScanner) (*identity.User, error) {
 		name,
 		createdAt,
 		marketingConsent,
-		paidProducts,
+		stringsToProductIDs(paidProductStrs),
 		shared.ReferralID(referralIDStr),
 		identity.Role(roleStr),
 		deletedAt,
+		googleID,
+		avatarURL,
 	), nil
 }
 
