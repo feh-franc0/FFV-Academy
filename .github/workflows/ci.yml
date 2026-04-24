@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   frontend:
     name: Frontend (Next.js)
@@ -13,7 +17,6 @@ jobs:
     defaults:
       run:
         working-directory: frontend
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,6 +33,9 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+      - name: Type-check
+        run: npx tsc --noEmit
 
       - name: Test
         run: npm test
@@ -51,6 +57,36 @@ jobs:
       run:
         working-directory: backend
 
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ffv
+          POSTGRES_PASSWORD: ffv
+          POSTGRES_DB: ffv_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ffv -d ffv_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://ffv:ffv@localhost:5432/ffv_test?sslmode=disable
+      REDIS_URL: redis://localhost:6379/0
+      APP_ENV: test
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -59,6 +95,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
 
       - name: Download dependencies
         run: go mod download
@@ -66,5 +103,46 @@ jobs:
       - name: Build
         run: go build ./...
 
-      - name: Vet
-        run: go vet ./...
+      - name: Install golang-migrate
+        run: |
+          curl -L https://github.com/golang-migrate/migrate/releases/download/v4.17.1/migrate.linux-amd64.tar.gz | tar xz
+          sudo mv migrate /usr/local/bin/migrate
+          migrate -version
+
+      - name: Run migrations
+        run: make migrate
+
+      - name: Lint (golangci-lint)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          working-directory: backend
+          args: --timeout=5m
+
+      - name: Unit tests
+        run: make test-unit
+
+      - name: Contract tests
+        run: make test-contract
+
+      - name: Coverage
+        run: make test-cover
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage-${{ github.sha }}
+          path: |
+            backend/coverage.out
+            backend/coverage.html
+          retention-days: 14
+
+      - name: Integration tests (optional)
+        continue-on-error: true
+        run: |
+          if ls test/integration/*.go >/dev/null 2>&1; then
+            go test ./test/integration/... -timeout 180s -tags integration
+          else
+            echo "No integration tests found — skipping."
+          fi
