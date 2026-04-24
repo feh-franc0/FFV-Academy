@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { getCertificate, type CertificateRecord } from '@/lib/certificates';
+import { getCertificateLocal, type CertificateRecord } from '@/lib/certificates';
 import { getSimulado } from '@/lib/simulados';
 
 /**
@@ -27,7 +27,7 @@ export function VerificarClient() {
       return;
     }
     setHash(h);
-    setRecord(getCertificate(h));
+    setRecord(getCertificateLocal(h));
     setReady(true);
   }, []);
 

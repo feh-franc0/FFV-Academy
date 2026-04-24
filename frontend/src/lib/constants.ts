@@ -101,6 +101,7 @@ export const STORAGE_KEYS = {
   SIMULADO_ATTEMPTS: 'ffv_simulado_attempts',
   SIMULADO_TIMER: 'ffv_simulado_timer',
   CERTIFICATES: 'ffv_certificates',
+  PROGRESS_LAST_SYNC: 'ffv_progress_last_sync',
 } as const;
 
 export type StorageKey = typeof STORAGE_KEYS[keyof typeof STORAGE_KEYS];

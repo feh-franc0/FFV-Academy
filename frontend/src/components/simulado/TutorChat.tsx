@@ -1,37 +1,27 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { SimuladoQuestion } from '@/lib/simulados';
-import { getTutorResponse, getFallbackResponse, type TutorResponse } from '@/lib/tutor-responses';
+import { askTutor, type TutorKind } from '@/lib/tutor-api';
+import { hasBackend } from '@/lib/api-client';
 
 interface Props {
   question: SimuladoQuestion;
   onClose: () => void;
 }
 
-type VariantKey = keyof TutorResponse;
-
-const VARIANTS: { key: VariantKey; label: string; prompt: string }[] = [
-  { key: 'defaultResponse', label: 'Por que essa é a certa?', prompt: 'Por que a resposta correta é a correta?' },
-  { key: 'analogyResponse', label: 'Explique com analogia', prompt: 'Me explique isso com uma analogia do dia a dia.' },
-  { key: 'exampleResponse', label: 'Me dá um exemplo real', prompt: 'Me dá um exemplo prático / case real.' },
+const VARIANTS: { kind: TutorKind; label: string; prompt: string }[] = [
+  { kind: 'por-que', label: 'Por que essa é a certa?', prompt: 'Por que a resposta correta é a correta?' },
+  { kind: 'analogia', label: 'Explique com analogia', prompt: 'Me explique isso com uma analogia do dia a dia.' },
+  { kind: 'exemplo', label: 'Me dá um exemplo real', prompt: 'Me dá um exemplo prático / case real.' },
 ];
 
 interface Message {
   role: 'user' | 'tutor';
   text: string;
-  typing?: boolean;
+  streaming?: boolean;
 }
 
-/**
- * Chat contextual pra uma questão específica. Mockado via map em
- * `tutor-responses.ts`. Respostas "streamadas" via setTimeout pra dar
- * sensação de chat real.
- *
- * TODO(backend): trocar por chamada Claude API com prompt caching.
- * System prompt = ementa da certificação; user message = enunciado +
- * tipo de pergunta. Streaming nativo do SDK Anthropic.
- */
 export function TutorChat({ question, onClose }: Props) {
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -39,6 +29,7 @@ export function TutorChat({ question, onClose }: Props) {
       text: 'Sobre esta questão, o que você gostaria de entender melhor? Posso explicar por que uma alternativa é a certa, trazer uma analogia ou um exemplo real.',
     },
   ]);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -48,25 +39,55 @@ export function TutorChat({ question, onClose }: Props) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const tutorResponse = getTutorResponse(question.id) ?? getFallbackResponse(question.explanation);
+  const ask = useCallback(async (variant: (typeof VARIANTS)[number]) => {
+    if (loading) return;
+    setLoading(true);
 
-  function ask(variant: (typeof VARIANTS)[number]) {
     setMessages(prev => [
       ...prev,
       { role: 'user', text: variant.prompt },
-      { role: 'tutor', text: '', typing: true },
+      { role: 'tutor', text: '', streaming: true },
     ]);
-    setTimeout(() => {
+
+    try {
+      await askTutor(
+        {
+          questionId: question.id,
+          kind: variant.kind,
+          questionStem: question.stem,
+          correctOptionText: question.options.find(o => o.id === question.correctId)?.text,
+        },
+        delta => {
+          setMessages(prev => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last?.role === 'tutor') {
+              next[next.length - 1] = { ...last, text: last.text + delta, streaming: true };
+            }
+            return next;
+          });
+        },
+      );
+      // Marca como concluído (remove indicador de streaming)
+      setMessages(prev => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+        if (last?.role === 'tutor') next[next.length - 1] = { ...last, streaming: false };
+        return next;
+      });
+    } catch (err) {
       setMessages(prev => {
         const next = [...prev];
         next[next.length - 1] = {
           role: 'tutor',
-          text: tutorResponse[variant.key],
+          text: 'Não consegui gerar a resposta agora. Tente novamente.',
         };
         return next;
       });
-    }, 800);
-  }
+    } finally {
+      setLoading(false);
+    }
+  }, [loading, question]);
 
   return (
     <div
@@ -93,9 +114,11 @@ export function TutorChat({ question, onClose }: Props) {
           </button>
         </header>
 
-        <div className="px-4 py-2 text-[10px] font-mono" style={{ background: 'rgba(255,193,7,0.08)', color: '#ffc107', borderBottom: '1px solid rgba(255,193,7,0.2)' }}>
-          🧪 Tutor em modo demo — respostas pré-escritas. Backend real virá com Claude API.
-        </div>
+        {!hasBackend() && (
+          <div className="px-4 py-2 text-[10px] font-mono" style={{ background: 'rgba(255,193,7,0.08)', color: '#ffc107', borderBottom: '1px solid rgba(255,193,7,0.2)' }}>
+            🧪 Tutor em modo demo — respostas pré-escritas.
+          </div>
+        )}
 
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {messages.map((m, i) => (
@@ -105,15 +128,17 @@ export function TutorChat({ question, onClose }: Props) {
               style={{
                 background: m.role === 'user' ? '#f7816620' : 'var(--ffv-bg2)',
                 border: `1px solid ${m.role === 'user' ? '#f7816640' : 'var(--ffv-border)'}`,
-                alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
                 marginLeft: m.role === 'user' ? 'auto' : 0,
                 maxWidth: '92%',
               }}
             >
-              {m.typing ? (
-                <span style={{ color: 'var(--ffv-muted)' }}>Digitando<span className="animate-pulse">...</span></span>
+              {m.streaming && m.text === '' ? (
+                <span style={{ color: 'var(--ffv-muted)' }}>Pensando<span className="animate-pulse">...</span></span>
               ) : (
-                m.text
+                <>
+                  {m.text}
+                  {m.streaming && <span className="animate-pulse">▋</span>}
+                </>
               )}
             </div>
           ))}
@@ -122,9 +147,10 @@ export function TutorChat({ question, onClose }: Props) {
         <div className="p-4 flex flex-col gap-2" style={{ borderTop: '1px solid var(--ffv-border)' }}>
           {VARIANTS.map(v => (
             <button
-              key={v.key}
+              key={v.kind}
               onClick={() => ask(v)}
-              className="text-xs px-3 py-2 rounded-lg text-left transition-colors hover:opacity-90"
+              disabled={loading}
+              className="text-xs px-3 py-2 rounded-lg text-left transition-colors hover:opacity-90 disabled:opacity-40"
               style={{ background: 'var(--ffv-bg2)', color: 'var(--foreground)', border: '1px solid var(--ffv-border)' }}
             >
               💭 {v.label}

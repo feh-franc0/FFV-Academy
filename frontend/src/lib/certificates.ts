@@ -1,24 +1,19 @@
 'use client';
 
 /**
- * Certificados — emissão e verificação (MVP mockado client-side).
+ * Certificados — emissão e verificação.
  *
- * Fluxo:
- * 1. Usuário passa em um simulado (score >= passingScore)
- * 2. Abre CertificateModal, confirma nome
- * 3. Geramos hash determinístico (SHA-256 trunc) de userId+simuladoId+date
- * 4. Persistimos em STORAGE_KEYS.CERTIFICATES (map hash → record)
- * 5. PDF é gerado via canvas → toDataURL → download
- * 6. /verificar/[hash] procura o hash no localStorage (client-side only)
- *
- * TODO(backend): mover o registro para o servidor. Hash deve vir de endpoint
- * assinado pra impedir forjar certificado fake. Página /verificar bate em
- * /api/certificates/:hash e retorna autoridade real.
+ * Modo mock (sem backend): hash client-side + localStorage (MVP).
+ * Modo real: hash gerado no servidor + persistência no DB.
+ *   - issueCertificate → POST /api/v1/certificates
+ *   - getCertificate   → GET  /api/v1/certificates/{hash}  (público, sem auth)
+ *   - listCertificates → GET  /api/v1/me/certificates
  */
 
 import { STORAGE_KEYS } from './constants';
 import { getJSON, setJSON } from './storage';
 import { CertificatesStoredSchema } from './schemas';
+import { hasBackend, apiPost, apiGet } from './api-client';
 
 export interface CertificateRecord {
   hash: string;
@@ -28,13 +23,36 @@ export interface CertificateRecord {
   issuedAt: string;
 }
 
+// ─── DTO do backend ─────────────────────────────────────────────────────────
+
+interface CertificateDTO {
+  hash: string;
+  userId: string;
+  simuladoId: string;
+  attemptId: string;
+  holderName: string;
+  issuedAt: string;
+  verifyUrl: string;
+}
+
+function dtoToRecord(dto: CertificateDTO, score: number): CertificateRecord {
+  return {
+    hash: dto.hash,
+    name: dto.holderName,
+    simuladoId: dto.simuladoId,
+    score,
+    issuedAt: dto.issuedAt,
+  };
+}
+
+// ─── Mock helpers ───────────────────────────────────────────────────────────
+
 function loadCerts(): Record<string, CertificateRecord> {
   const raw = getJSON<unknown>(STORAGE_KEYS.CERTIFICATES, {});
   const parsed = CertificatesStoredSchema.safeParse(raw);
   return parsed.success ? parsed.data : {};
 }
 
-/** Calcula hash SHA-256 truncado (32 hex chars) de uma string. */
 async function sha256Short(input: string): Promise<string> {
   const enc = new TextEncoder();
   const buf = await crypto.subtle.digest('SHA-256', enc.encode(input));
@@ -44,7 +62,6 @@ async function sha256Short(input: string): Promise<string> {
   return hex.slice(0, 32);
 }
 
-/** Gera hash único pra um certificado (determinístico por user+simulado+date). */
 export async function buildCertificateHash(
   email: string,
   simuladoId: string,
@@ -53,12 +70,30 @@ export async function buildCertificateHash(
   return sha256Short(`${email}|${simuladoId}|${issuedAt}`);
 }
 
+// ─── issueCertificate ───────────────────────────────────────────────────────
+
 export async function issueCertificate(input: {
   email: string;
   name: string;
   simuladoId: string;
   score: number;
+  attemptId?: string;
 }): Promise<CertificateRecord> {
+  if (hasBackend() && input.attemptId) {
+    const dto = await apiPost<CertificateDTO>('/api/v1/certificates', {
+      simuladoId: input.simuladoId,
+      attemptId: input.attemptId,
+      holderName: input.name,
+    });
+    const record = dtoToRecord(dto, input.score);
+    // Cache local para acesso offline ao PDF
+    const certs = loadCerts();
+    certs[record.hash] = record;
+    setJSON(STORAGE_KEYS.CERTIFICATES, certs);
+    return record;
+  }
+
+  // Modo mock
   const issuedAt = new Date().toISOString();
   const hash = await buildCertificateHash(input.email, input.simuladoId, issuedAt);
   const record: CertificateRecord = {
@@ -74,11 +109,35 @@ export async function issueCertificate(input: {
   return record;
 }
 
-export function getCertificate(hash: string): CertificateRecord | null {
-  const certs = loadCerts();
-  return certs[hash] ?? null;
+// ─── getCertificate ─────────────────────────────────────────────────────────
+
+export async function getCertificate(hash: string): Promise<CertificateRecord | null> {
+  if (hasBackend()) {
+    try {
+      const dto = await apiGet<CertificateDTO>(`/api/v1/certificates/${hash}`, false);
+      return dtoToRecord(dto, 0);
+    } catch {
+      return null;
+    }
+  }
+  return loadCerts()[hash] ?? null;
 }
 
-export function listCertificates(): CertificateRecord[] {
+/** Versão síncrona para acesso local (PDF, modal). Não chama backend. */
+export function getCertificateLocal(hash: string): CertificateRecord | null {
+  return loadCerts()[hash] ?? null;
+}
+
+// ─── listCertificates ───────────────────────────────────────────────────────
+
+export async function listCertificates(): Promise<CertificateRecord[]> {
+  if (hasBackend()) {
+    try {
+      const dtos = await apiGet<CertificateDTO[]>('/api/v1/me/certificates');
+      return dtos.map(dto => dtoToRecord(dto, 0));
+    } catch {
+      return Object.values(loadCerts());
+    }
+  }
   return Object.values(loadCerts());
 }

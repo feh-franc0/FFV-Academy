@@ -1,22 +1,30 @@
 'use client';
 
 /**
- * Auth adapter — MVP MOCK client-side.
+ * Auth adapter — suporta modo mock (dev/testes) e modo real (backend Go).
  *
- * Em produção real, as funções `requestToken` e `verifyToken` viram chamadas
- * HTTP (POST /api/auth/request-token, POST /api/auth/verify). A interface fica
- * igual, o consumidor (LoginModal, useAuth) não precisa mudar.
+ * Modo mock:  NEXT_PUBLIC_API_BASE_URL ausente ou vazio.
+ *             Token "000000" é aceito; sem chamadas HTTP.
+ * Modo real:  NEXT_PUBLIC_API_BASE_URL definido.
+ *             Chama POST /api/v1/auth/request-token e /api/v1/auth/verify.
+ *             JWT access token guardado em memória via api-client.
+ *             Refresh token chega via cookie HttpOnly (browser gerencia).
  *
- * Contrato do mock:
- * - `requestToken(email, phone)` — simula envio (log em console, 400ms delay).
- * - `verifyToken(email, token)` — aceita apenas o token "000000" nesse modo dev.
- * - Perfil persistido em `STORAGE_KEYS.USER` via `storage.ts`.
- *
- * NUNCA chamar localStorage direto aqui — sempre via storage adapter.
+ * A interface pública é idêntica nos dois modos — consumidores (LoginModal,
+ * useAuth, AuthProvider) não precisam mudar.
  */
 
 import { getUser, setUser, clearUser } from './storage';
 import { emailSchema, phoneBRSchema } from './schemas';
+import {
+  hasBackend,
+  apiPost,
+  apiPatch,
+  apiDelete,
+  setAccessToken,
+  clearAccessToken,
+  ApiError,
+} from './api-client';
 
 export interface UserProfile {
   name: string;
@@ -28,31 +36,61 @@ export interface UserProfile {
   paidProducts: string[];
 }
 
-/** Token fixo aceito durante o experimento — visível intencionalmente. */
+/** DTO retornado pelo backend em /api/v1/me e /api/v1/auth/verify. */
+interface UserDTO {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  referralId: string;
+  products: string[];
+  marketingConsent: boolean;
+  createdAt: string;
+}
+
+function dtoToProfile(dto: UserDTO, existingPhone?: string): UserProfile {
+  // Backend não retorna phone — preserva do cache local ou usa placeholder válido
+  const phone = existingPhone || getUser()?.phone || '+5500000000000';
+  return {
+    name: dto.name,
+    email: dto.email,
+    phone,
+    createdAt: dto.createdAt,
+    marketingConsent: dto.marketingConsent,
+    paidProducts: dto.products,
+  };
+}
+
+/** Token fixo aceito no modo mock — visível intencionalmente. */
 export const MOCK_TOKEN = '000000';
 
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// ─── requestToken ──────────────────────────────────────────────────────────
+
 /**
- * Solicita o token de login. No mock, apenas loga. Em produção, chama
- * POST /api/auth/request-token que dispara email + SMS.
- *
- * TODO(backend): trocar mock por fetch real, respeitar rate-limit por IP.
+ * Solicita o token de login.
+ * Mock: simula envio (log + 400ms).
+ * Real: POST /api/v1/auth/request-token → email + SMS via Resend/Twilio.
  */
 export async function requestToken(email: string, phone: string): Promise<{ ok: true }> {
-  if (!emailSchema.safeParse(email).success) {
-    throw new Error('email inválido');
+  if (!emailSchema.safeParse(email).success) throw new Error('email inválido');
+  if (!phoneBRSchema.safeParse(phone).success) throw new Error('telefone inválido');
+
+  if (!hasBackend()) {
+    // eslint-disable-next-line no-console
+    console.info(`[MOCK] token ${MOCK_TOKEN} enviado para ${email} / ${phone}`);
+    await delay(400);
+    return { ok: true };
   }
-  if (!phoneBRSchema.safeParse(phone).success) {
-    throw new Error('telefone inválido');
-  }
-  // eslint-disable-next-line no-console
-  console.info(`[MOCK] token ${MOCK_TOKEN} enviado para ${email} / ${phone}`);
-  await delay(400);
+
+  await apiPost('/api/v1/auth/request-token', { email, phone }, false);
   return { ok: true };
 }
+
+// ─── verifyToken ───────────────────────────────────────────────────────────
 
 interface PendingRegistration {
   name: string;
@@ -61,92 +99,198 @@ interface PendingRegistration {
 }
 
 /**
- * Verifica o token. No mock, qualquer valor diferente de "000000" retorna
- * `{ ok: false }`. Se ok, cria/atualiza o UserProfile persistido.
- *
- * A assinatura exposta pelo adapter aceita email + token; o UI (LoginModal)
- * precisa ter coletado os outros campos antes. Passamos esses dados via
- * `pendingRegistration` (in-memory, não persiste até verificar).
- *
- * TODO(backend): trocar por POST /api/auth/verify; server cria sessão JWT.
+ * Verifica o token.
+ * Mock: aceita apenas "000000".
+ * Real: POST /api/v1/auth/verify → recebe accessToken + UserDTO.
  */
 export async function verifyToken(
   email: string,
   token: string,
   pendingRegistration?: PendingRegistration,
 ): Promise<{ ok: boolean; user?: UserProfile }> {
-  await delay(300);
-  if (token !== MOCK_TOKEN) return { ok: false };
   if (!emailSchema.safeParse(email).success) return { ok: false };
 
-  const existing = getUser();
-  if (existing && existing.email === email) {
-    return { ok: true, user: existing };
+  if (!hasBackend()) {
+    await delay(300);
+    if (token !== MOCK_TOKEN) return { ok: false };
+
+    const existing = getUser();
+    if (existing && existing.email === email) return { ok: true, user: existing };
+    if (!pendingRegistration) return { ok: false };
+
+    const user: UserProfile = {
+      name: pendingRegistration.name.trim(),
+      email,
+      phone: pendingRegistration.phone,
+      createdAt: new Date().toISOString(),
+      marketingConsent: pendingRegistration.marketingConsent,
+      paidProducts: [],
+    };
+    if (!setUser(user)) return { ok: false };
+    return { ok: true, user };
   }
 
-  // Primeira autenticação — precisa do cadastro pendente.
-  if (!pendingRegistration) return { ok: false };
-
-  const user: UserProfile = {
-    name: pendingRegistration.name.trim(),
-    email,
-    phone: pendingRegistration.phone,
-    createdAt: new Date().toISOString(),
-    marketingConsent: pendingRegistration.marketingConsent,
-    paidProducts: [],
-  };
-  const saved = setUser(user);
-  if (!saved) return { ok: false };
-  return { ok: true, user };
+  // Modo real
+  try {
+    const body: Record<string, unknown> = { email, token };
+    if (pendingRegistration) {
+      body.name = pendingRegistration.name.trim();
+      body.marketingConsent = pendingRegistration.marketingConsent;
+    }
+    const res = await apiPost<{ accessToken: string; user: UserDTO }>(
+      '/api/v1/auth/verify',
+      body,
+      false,
+    );
+    setAccessToken(res.accessToken);
+    const profile = dtoToProfile(res.user);
+    setUser(profile);
+    return { ok: true, user: profile };
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401) return { ok: false };
+    throw err;
+  }
 }
 
-/** Lê o user da sessão (ou null). SSR-safe. */
+// ─── refreshSession ────────────────────────────────────────────────────────
+
+/**
+ * Tenta renovar a sessão via refresh token (cookie HttpOnly).
+ * Retorna o UserProfile se sucesso, null se não há sessão.
+ */
+export async function refreshSession(): Promise<UserProfile | null> {
+  if (!hasBackend()) {
+    return getUser();
+  }
+  try {
+    const res = await apiPost<{ accessToken: string; user: UserDTO }>(
+      '/api/v1/auth/refresh',
+      undefined,
+      false,
+    );
+    setAccessToken(res.accessToken);
+    const profile = dtoToProfile(res.user);
+    setUser(profile);
+    return profile;
+  } catch {
+    return null;
+  }
+}
+
+// ─── getCurrentUser ────────────────────────────────────────────────────────
+
+/** Lê o user da sessão local (ou null). SSR-safe. */
 export function getCurrentUser(): UserProfile | null {
   return getUser();
 }
 
-/** Logout — remove o perfil do localStorage. */
-export function logout(): void {
+// ─── logout ────────────────────────────────────────────────────────────────
+
+/** Logout — invalida refresh token no servidor e limpa estado local. */
+export async function logout(): Promise<void> {
+  if (hasBackend()) {
+    try {
+      await apiPost('/api/v1/auth/logout', undefined, true);
+    } catch { /* ignora falhas de rede no logout */ }
+  }
+  clearAccessToken();
   clearUser();
 }
 
-/** Checa se o usuário pagou por um produto específico. */
+// ─── isPaidFor / grantProduct ───────────────────────────────────────────────
+
+/** Checa se o usuário pagou por um produto (lê do perfil local em cache). */
 export function isPaidFor(productId: string): boolean {
-  const user = getUser();
-  if (!user) return false;
-  return user.paidProducts.includes(productId);
+  return getUser()?.paidProducts.includes(productId) ?? false;
 }
 
 /**
- * MOCK de pagamento — marca produto como pago.
- *
- * TODO(backend): substituir por fluxo real (Stripe Checkout, webhook,
- * confirmação server-side). Nunca, jamais, confiar em grantProduct
- * client-side em produção.
+ * Mock de pagamento (usado apenas em testes / sem backend).
+ * Em produção o grant vem do webhook Stripe via servidor.
  */
 export function grantProduct(productId: string): boolean {
+  if (hasBackend()) return false;
   const user = getUser();
   if (!user) return false;
   if (user.paidProducts.includes(productId)) return true;
-  const next: UserProfile = { ...user, paidProducts: [...user.paidProducts, productId] };
-  return setUser(next);
+  return setUser({ ...user, paidProducts: [...user.paidProducts, productId] });
 }
+
+// ─── updateProfile ─────────────────────────────────────────────────────────
+
+/** Atualiza dados do usuário. Em modo real chama PATCH /api/v1/me. */
+export async function updateProfile(patch: { name?: string; phone?: string }): Promise<boolean> {
+  if (!hasBackend()) {
+    const user = getUser();
+    if (!user) return false;
+    return setUser({
+      ...user,
+      name: patch.name?.trim() || user.name,
+      phone: patch.phone || user.phone,
+    });
+  }
+  try {
+    const dto = await apiPatch<UserDTO>('/api/v1/me', {
+      name: patch.name?.trim(),
+    });
+    return setUser(dtoToProfile(dto));
+  } catch {
+    return false;
+  }
+}
+
+// ─── updateMarketingConsent ─────────────────────────────────────────────────
 
 /** Atualiza consentimento de marketing. */
-export function updateMarketingConsent(consent: boolean): boolean {
-  const user = getUser();
-  if (!user) return false;
-  return setUser({ ...user, marketingConsent: consent });
+export async function updateMarketingConsent(consent: boolean): Promise<boolean> {
+  if (!hasBackend()) {
+    const user = getUser();
+    if (!user) return false;
+    return setUser({ ...user, marketingConsent: consent });
+  }
+  try {
+    const dto = await apiPatch<UserDTO>('/api/v1/me', { marketingConsent: consent });
+    return setUser(dtoToProfile(dto));
+  } catch {
+    return false;
+  }
 }
 
-/** Atualiza dados do usuário (nome/telefone). Mantém email e paidProducts. */
-export function updateProfile(patch: { name?: string; phone?: string }): boolean {
-  const user = getUser();
-  if (!user) return false;
-  const next: UserProfile = {
-    ...user,
-    name: patch.name?.trim() || user.name,
-    phone: patch.phone || user.phone,
-  };
-  return setUser(next);
+// ─── deleteAccount ─────────────────────────────────────────────────────────
+
+/** Exclui a conta no servidor e limpa estado local (LGPD). */
+export async function deleteAccount(): Promise<boolean> {
+  if (hasBackend()) {
+    try {
+      await apiDelete('/api/v1/me');
+    } catch {
+      return false;
+    }
+  }
+  clearAccessToken();
+  clearUser();
+  return true;
+}
+
+// ─── syncProductsFromServer ────────────────────────────────────────────────
+
+/**
+ * Busca perfil atualizado do servidor e sincroniza paidProducts no cache local.
+ * Útil após retorno do Stripe Checkout.
+ */
+export async function syncProfileFromServer(): Promise<UserProfile | null> {
+  if (!hasBackend()) return getUser();
+  try {
+    const dto = await apiPost<{ accessToken: string; user: UserDTO }>(
+      '/api/v1/auth/refresh',
+      undefined,
+      false,
+    );
+    setAccessToken(dto.accessToken);
+    const profile = dtoToProfile(dto.user);
+    setUser(profile);
+    return profile;
+  } catch {
+    return null;
+  }
 }

@@ -2,31 +2,44 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AuthContext, type AuthContextValue } from '@/hooks/useAuth';
-import { getCurrentUser, logout as doLogout, type UserProfile } from '@/lib/auth';
+import {
+  getCurrentUser,
+  logout as doLogout,
+  refreshSession,
+  type UserProfile,
+} from '@/lib/auth';
 import { LoginModal } from './LoginModal';
 
 /**
- * Provider global de auth. Mantém o UserProfile em state e orquestra o
- * modal de login via promise: `requireLogin(reason)` abre o modal e resolve
- * quando o usuário conclui (ou rejeita se cancelar).
+ * Provider global de auth.
+ *
+ * On mount: tenta renovar sessão via refresh token (cookie HttpOnly).
+ * requireLogin(reason): abre modal e resolve quando usuário conclui.
  */
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [reason, setReason] = useState<string | undefined>();
 
-  // Promise pendente — resolvida quando o modal fecha com sucesso ou rejeitada se cancelar.
   const pendingResolvers = useRef<{
     resolve: (user: UserProfile) => void;
     reject: (err: Error) => void;
   } | null>(null);
 
+  // Tenta restaurar sessão via refresh token (HttpOnly cookie) ou localStorage
   useEffect(() => {
-    setUser(getCurrentUser());
+    let cancelled = false;
+    async function restoreSession() {
+      const restored = await refreshSession();
+      if (!cancelled) setUser(restored);
+    }
+    restoreSession();
+    return () => { cancelled = true; };
   }, []);
 
-  const refresh = useCallback(() => {
-    setUser(getCurrentUser());
+  const refresh = useCallback(async () => {
+    const restored = await refreshSession();
+    setUser(restored);
   }, []);
 
   const requireLogin = useCallback((why?: string): Promise<UserProfile> => {
@@ -52,8 +65,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     pendingResolvers.current = null;
   }, []);
 
-  const logout = useCallback(() => {
-    doLogout();
+  const logout = useCallback(async () => {
+    await doLogout();
     setUser(null);
   }, []);
 

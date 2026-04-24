@@ -21,8 +21,8 @@ export interface AuthContextValue {
   user: UserProfile | null;
   isLoggedIn: boolean;
   requireLogin: (reason?: string) => Promise<UserProfile>;
-  refresh: () => void;
-  logout: () => void;
+  refresh: () => Promise<void>;
+  logout: () => Promise<void>;
 }
 
 export const AuthContext = createContext<AuthContextValue | null>(null);
