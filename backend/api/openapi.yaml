@@ -1,0 +1,797 @@
+openapi: 3.1.0
+info:
+  title: FFV Academy API
+  version: 1.0.0
+  description: |
+    API REST da plataforma FFV Academy — autenticação, simulados, certificados,
+    progresso, billing, tutor de IA e ranking.
+
+    - Respostas de erro seguem RFC 7807 (Problem+JSON).
+    - Autenticação: JWT no header `Authorization: Bearer <token>` para acesso
+      protegido; refresh via cookie HttpOnly `ffv_refresh`.
+    - Datas em RFC 3339 UTC.
+  contact:
+    name: FFV Academy
+    url: https://fernandofrancovalle.com
+servers:
+  - url: https://api.fernandofrancovalle.com
+    description: Produção
+  - url: http://localhost:8080
+    description: Desenvolvimento local
+
+tags:
+  - name: health
+  - name: auth
+  - name: me
+  - name: simulados
+  - name: attempts
+  - name: certificates
+  - name: progress
+  - name: billing
+  - name: webhooks
+  - name: tutor
+  - name: leaderboard
+  - name: admin
+
+security:
+  - bearerAuth: []
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      summary: Liveness probe
+      security: []
+      responses:
+        "200":
+          description: Processo vivo.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+
+  /readyz:
+    get:
+      tags: [health]
+      summary: Readiness probe
+      description: Verifica Postgres e Redis. 503 se alguma dependência estiver degradada.
+      security: []
+      responses:
+        "200":
+          description: Tudo saudável.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReadinessResponse" }
+        "503":
+          description: Dependência degradada.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReadinessResponse" }
+
+  /api/v1/auth/request-token:
+    post:
+      tags: [auth]
+      summary: Solicita magic token por email/SMS
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "202":
+          description: Token enviado (resposta sempre 202 mesmo se email não cadastrado, para evitar enumeration).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/auth/verify:
+    post:
+      tags: [auth]
+      summary: Verifica magic token e autentica
+      description: |
+        Consome o token (GETDEL atômico em Redis). Se a conta não existe e
+        dados de registro vierem no body, cria um novo usuário.
+        Emite access token (JSON) e refresh token (cookie `ffv_refresh`).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VerifyRequest" }
+      responses:
+        "200":
+          description: Autenticado.
+          headers:
+            Set-Cookie:
+              description: ffv_refresh=<token>; HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VerifyResponse" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/auth/refresh:
+    post:
+      tags: [auth]
+      summary: Renova access token via refresh cookie
+      description: Rotação obrigatória — o refresh antigo é revogado e um novo é emitido.
+      security: []
+      parameters:
+        - in: cookie
+          name: ffv_refresh
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Novos tokens.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accessToken: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/auth/logout:
+    post:
+      tags: [auth]
+      summary: Revoga refresh token atual
+      responses:
+        "204": { description: Revogado (ou noop). Cookie limpo. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/me:
+    get:
+      tags: [me]
+      summary: Perfil do usuário autenticado
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserDTO" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [me]
+      summary: Atualiza perfil
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                phone: { type: string, description: E.164 }
+                marketingConsent: { type: boolean, nullable: true }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserDTO" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [me]
+      summary: Deleta (soft) a conta — LGPD
+      responses:
+        "204": { description: Conta marcada como deletada. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/me/certificates:
+    get:
+      tags: [me, certificates]
+      summary: Lista certificados do usuário
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  certificates:
+                    type: array
+                    items: { $ref: "#/components/schemas/CertificateDTO" }
+                  total: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/simulados:
+    get:
+      tags: [simulados]
+      summary: Lista catálogo de simulados
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  simulados:
+                    type: array
+                    items: { $ref: "#/components/schemas/SimuladoDTO" }
+                  total: { type: integer }
+
+  /api/v1/simulados/{simuladoId}:
+    get:
+      tags: [simulados]
+      summary: Detalhe de um simulado
+      security: []
+      parameters:
+        - { name: simuladoId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SimuladoDTO" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/simulados/{simuladoId}/attempts:
+    post:
+      tags: [simulados, attempts]
+      summary: Inicia (ou retoma) uma tentativa
+      description: |
+        Se já existir attempt ativa para o par (user, simulado), retorna 200
+        com a existente. Se criou uma nova, retorna 201.
+      parameters:
+        - { name: simuladoId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Attempt ativa retomada.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AttemptWithSimuladoResponse" }
+        "201":
+          description: Nova attempt criada.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AttemptWithSimuladoResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/simulados/{simuladoId}/attempts/active:
+    get:
+      tags: [simulados, attempts]
+      summary: Retorna attempt ativa (estado atual)
+      parameters:
+        - { name: simuladoId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AttemptWithSimuladoResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/attempts:
+    get:
+      tags: [attempts]
+      summary: Lista tentativas do usuário
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  attempts:
+                    type: array
+                    items: { $ref: "#/components/schemas/AttemptDTO" }
+                  total: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/attempts/{attemptId}/answers:
+    post:
+      tags: [attempts]
+      summary: Registra resposta para uma questão
+      parameters:
+        - { name: attemptId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [questionId, optionId]
+              properties:
+                questionId: { type: string }
+                optionId: { type: string }
+      responses:
+        "204": { description: Registrado. }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: Paywall — questão fora do limite gratuito.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/v1/attempts/{attemptId}/flags/{questionId}:
+    post:
+      tags: [attempts]
+      summary: Marca/desmarca questão para revisão (toggle)
+      parameters:
+        - { name: attemptId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: questionId, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Toggle aplicado. }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/attempts/{attemptId}/finish:
+    post:
+      tags: [attempts]
+      summary: Finaliza tentativa e calcula score (server-authoritative)
+      parameters:
+        - { name: attemptId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Attempt finalizada com score calculado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  attempt: { $ref: "#/components/schemas/AttemptDTO" }
+                  weakTopics:
+                    type: array
+                    items: { type: string }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/v1/progress:
+    get:
+      tags: [progress]
+      summary: Pull do GameState (cloud sync)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProgressPullResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [progress]
+      summary: Push do GameState (LWW)
+      description: |
+        `clientUpdatedAt` é comparado com `serverUpdatedAt`. Se o servidor é
+        mais recente, retorna 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProgressPushRequest" }
+      responses:
+        "204": { description: Push aplicado. }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/v1/certificates:
+    post:
+      tags: [certificates]
+      summary: Emite certificado para attempt aprovada
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [attemptId, name]
+              properties:
+                attemptId: { type: string, format: uuid }
+                name: { type: string, description: Nome a gravar no certificado. }
+      responses:
+        "201":
+          description: Emitido.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CertificateDTO" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: Attempt não foi aprovada (score < passing).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Certificado já emitido para essa attempt.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /api/v1/certificates/{hash}:
+    get:
+      tags: [certificates]
+      summary: Verificação pública de certificado
+      security: []
+      parameters:
+        - { name: hash, in: path, required: true, schema: { type: string, description: SHA-256 hex. } }
+      responses:
+        "200":
+          description: Válido.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CertificateDTO" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/billing/checkout:
+    post:
+      tags: [billing]
+      summary: Cria sessão de checkout no Stripe
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [productId]
+              properties:
+                productId: { type: string }
+      responses:
+        "201":
+          description: Sessão criada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  checkoutUrl: { type: string, format: uri }
+                  sessionId: { type: string }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/webhooks/stripe:
+    post:
+      tags: [webhooks, billing]
+      summary: Webhook do Stripe (idempotente)
+      description: |
+        Valida assinatura via `Stripe-Signature` + `STRIPE_WEBHOOK_SECRET`.
+        Idempotência garantida pela tabela `stripe_events` (PK
+        `stripe_event_id`). Body limitado a 1MB.
+      security:
+        - stripeSignature: []
+      parameters:
+        - in: header
+          name: Stripe-Signature
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, description: Evento Stripe raw. }
+      responses:
+        "200": { description: Processado (ou já processado — idempotente). }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401":
+          description: Assinatura inválida.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/tutor/ask:
+    post:
+      tags: [tutor]
+      summary: Pergunta ao Tutor de IA
+      description: |
+        `kind` válidos: `por-que`, `analogia`, `exemplo`.
+        Rate-limit por usuário/plano. Respostas cacheadas em Redis quando possível.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [simuladoId, questionId, kind]
+              properties:
+                simuladoId: { type: string }
+                questionId: { type: string }
+                kind:
+                  type: string
+                  enum: [por-que, analogia, exemplo]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  explanation: { type: string }
+                  cacheHit: { type: boolean }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/leaderboard:
+    get:
+      tags: [leaderboard]
+      summary: Ranking semanal (top 50)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  weekStart: { type: string, format: date-time }
+                  entries:
+                    type: array
+                    items: { $ref: "#/components/schemas/LeaderboardEntryDTO" }
+                  total: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/leaderboard/me:
+    get:
+      tags: [leaderboard]
+      summary: Posição do usuário autenticado
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rank: { type: integer, nullable: true }
+                  weekStart: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/admin/stats:
+    get:
+      tags: [admin]
+      summary: Métricas gerais (admin-only)
+      description: Requer JWT com `role=admin`.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: operational }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    stripeSignature:
+      type: apiKey
+      in: header
+      name: Stripe-Signature
+
+  responses:
+    ValidationError:
+      description: Requisição malformada ou dados inválidos.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Unauthorized:
+      description: Token ausente, inválido ou expirado.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Forbidden:
+      description: Autenticado mas sem permissão.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    NotFound:
+      description: Recurso não encontrado.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Conflict:
+      description: Conflito de estado (duplicidade, versão stale, etc).
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    RateLimited:
+      description: Limite de requisições excedido.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    InternalError:
+      description: Erro interno.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+
+  schemas:
+    Problem:
+      type: object
+      description: RFC 7807 Problem Details.
+      properties:
+        type: { type: string, description: Token curto do tipo de erro. }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+      required: [type, title, status]
+
+    UserDTO:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        name: { type: string }
+        role: { type: string, enum: [user, admin] }
+        referralId: { type: string }
+        products:
+          type: array
+          items: { type: string }
+        marketingConsent: { type: boolean }
+        createdAt: { type: string, format: date-time }
+      required: [id, email, name, role, referralId, products, marketingConsent, createdAt]
+
+    SimuladoDTO:
+      type: object
+      properties:
+        id: { type: string }
+        certification: { type: string }
+        title: { type: string }
+        description: { type: string }
+        priceCents: { type: integer, format: int64 }
+        questionCount: { type: integer }
+        timeLimitMin: { type: integer }
+        topics:
+          type: array
+          items: { type: string }
+        passingScore: { type: integer, minimum: 0, maximum: 100 }
+        comingSoon: { type: boolean }
+      required: [id, certification, title, description, priceCents, questionCount, timeLimitMin, topics, passingScore, comingSoon]
+
+    AttemptDTO:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        simuladoId: { type: string }
+        status: { type: string, enum: [active, finished] }
+        answers:
+          type: object
+          additionalProperties: { type: string }
+          description: Mapa questionId → optionId.
+        flagged:
+          type: array
+          items: { type: string }
+        score:
+          oneOf:
+            - $ref: "#/components/schemas/ScoreDTO"
+            - type: "null"
+        startedAt: { type: string, format: date-time }
+        deadlineAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time, nullable: true }
+        timeLeftSec: { type: integer, format: int64, minimum: 0 }
+      required: [id, simuladoId, status, answers, flagged, startedAt, deadlineAt, timeLeftSec]
+
+    ScoreDTO:
+      type: object
+      properties:
+        value: { type: integer, minimum: 0, maximum: 100 }
+        correct: { type: integer }
+        total: { type: integer }
+        passed: { type: boolean }
+        byTopic:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/TopicDTO" }
+      required: [value, correct, total, passed, byTopic]
+
+    TopicDTO:
+      type: object
+      properties:
+        correct: { type: integer }
+        total: { type: integer }
+      required: [correct, total]
+
+    CertificateDTO:
+      type: object
+      properties:
+        hash: { type: string, description: SHA-256 hex determinístico. }
+        userId: { type: string, format: uuid }
+        simuladoId: { type: string }
+        attemptId: { type: string, format: uuid }
+        holderName: { type: string }
+        issuedAt: { type: string, format: date-time }
+        verifyUrl: { type: string, format: uri }
+      required: [hash, userId, simuladoId, attemptId, holderName, issuedAt, verifyUrl]
+
+    LeaderboardEntryDTO:
+      type: object
+      properties:
+        rank: { type: integer, format: int64 }
+        userId: { type: string, format: uuid }
+        userName: { type: string }
+        score: { type: integer, description: XP ganho na semana. }
+      required: [rank, userId, userName, score]
+
+    AttemptWithSimuladoResponse:
+      type: object
+      properties:
+        attempt: { $ref: "#/components/schemas/AttemptDTO" }
+        simulado: { $ref: "#/components/schemas/SimuladoDTO" }
+      required: [attempt, simulado]
+
+    VerifyRequest:
+      type: object
+      required: [email, token]
+      properties:
+        email: { type: string, format: email }
+        token: { type: string, description: 6 dígitos numéricos. }
+        name: { type: string, description: Obrigatório em novo registro. }
+        phone: { type: string, description: E.164. Obrigatório em novo registro. }
+        marketingConsent: { type: boolean }
+
+    VerifyResponse:
+      type: object
+      properties:
+        accessToken: { type: string, description: JWT. TTL default 15min. }
+        isNewUser: { type: boolean }
+        user: { $ref: "#/components/schemas/UserDTO" }
+      required: [accessToken, isNewUser, user]
+
+    ProgressPullResponse:
+      type: object
+      properties:
+        schemaVersion: { type: integer }
+        state: { description: JSON blob do GameState. }
+        clientUpdatedAt: { type: string, format: date-time }
+        serverUpdatedAt: { type: string, format: date-time }
+      required: [schemaVersion, state, clientUpdatedAt, serverUpdatedAt]
+
+    ProgressPushRequest:
+      type: object
+      required: [schemaVersion, state, clientUpdatedAt]
+      properties:
+        schemaVersion: { type: integer }
+        state: { description: JSON blob do GameState. }
+        clientUpdatedAt: { type: string, format: date-time }
+
+    ReadinessResponse:
+      type: object
+      properties:
+        status: { type: string, enum: [ok, degraded] }
+        checks:
+          type: object
+          additionalProperties: { type: string }
+      required: [status, checks]
