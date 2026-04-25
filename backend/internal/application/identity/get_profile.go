@@ -339,11 +339,12 @@ func (uc *RefreshTokenUseCase) Execute(ctx context.Context, tokenHash string) (R
 		return RefreshTokenResult{}, fmt.Errorf("refresh token: find user: %w", err)
 	}
 
-	// Rotaciona: revoga o atual e emite novos.
-	if err := uc.refreshRepo.Revoke(ctx, rt.UserID, tokenHash); err != nil {
-		return RefreshTokenResult{}, fmt.Errorf("refresh token: revoke old: %w", err)
-	}
-
+	// Gera novos tokens antes de revogar o antigo.
+	// Ordem intencional (safe-fail): salva o novo ANTES de revogar o antigo.
+	// Se Save falhar → token antigo ainda válido → cliente pode retentar sem lockout.
+	// Se Revoke falhar após Save → o token antigo expira naturalmente (TTL = 30d);
+	//   o risco é mínimo (window de 30d com token que o cliente não vai mais usar).
+	// A ordem inversa (revoke antes de save) causaria lockout permanente se Save falhasse.
 	accessToken, err := uc.tokenIssuer.IssueAccessToken(user.ID(), user.Email(), user.Role())
 	if err != nil {
 		return RefreshTokenResult{}, fmt.Errorf("refresh token: issue access: %w", err)
@@ -364,6 +365,14 @@ func (uc *RefreshTokenUseCase) Execute(ctx context.Context, tokenHash string) (R
 	}
 	if err := uc.refreshRepo.Save(ctx, newRT); err != nil {
 		return RefreshTokenResult{}, fmt.Errorf("refresh token: save new: %w", err)
+	}
+
+	// Revoga o token antigo após persistir o novo com sucesso.
+	// Falha de revogação é loggada mas não retorna erro ao cliente —
+	// o novo token já está salvo e o antigo expira pelo TTL.
+	if err := uc.refreshRepo.Revoke(ctx, rt.UserID, tokenHash); err != nil {
+		slog.Default().WarnContext(ctx, "refresh token: falha ao revogar token antigo (será expirado via TTL)",
+			"error", err, "user_id", rt.UserID.String())
 	}
 
 	return RefreshTokenResult{

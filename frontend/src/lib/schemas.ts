@@ -110,17 +110,19 @@ export const emailSchema = z
   .regex(/^[^\s@<>"']+@[^\s@<>"']+\.[^\s@<>"']+$/, 'email inválido');
 
 /**
- * Telefone BR — aceita "+5511987654321", "5511987654321" ou "11987654321"
- * (DDI opcional, DDD obrigatório, 10 ou 11 dígitos do número).
+ * Telefone BR normalizado — aceita "+5511987654321" ou "5511987654321"
+ * (DDI 55 obrigatório, DDD 2 dígitos + 8 ou 9 dígitos do número).
+ * O LoginModal normaliza o input via normalizePhone() antes de validar,
+ * portanto o valor chegará sempre com +55.
  */
 export const phoneBRSchema = z
   .string()
-  .regex(/^\+?55?\d{10,11}$/, 'telefone BR inválido (formato: +55DDDNNNNNNNN)');
+  .regex(/^\+?55\d{10,11}$/, 'telefone BR inválido (formato: +55DDDNNNNNNNN)');
 
 export const UserProfileSchema = z.object({
   name: z.string().min(1).max(120),
   email: emailSchema,
-  // Permite string vazia para usuários que fizeram login via Google sem fornecer telefone.
+  // Permite string vazia para usuários migrados ou cadastrados sem telefone.
   phone: phoneBRSchema.or(z.literal('')),
   createdAt: z.string(),
   marketingConsent: z.boolean(),

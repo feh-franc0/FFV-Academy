@@ -62,10 +62,15 @@ func (rl *RateLimiter) Middleware() func(http.Handler) http.Handler {
 }
 
 // check incrementa o contador e retorna (allowed, remaining, reset_in_seconds).
+// ExpireNX define o TTL apenas quando a chave é criada pela primeira vez (count==1).
+// Isso implementa uma fixed-window real: a janela fecha exatamente em `window` a partir
+// do primeiro request, sem ser estendida por requests subsequentes.
+// Usar Expire em vez de ExpireNX reiniciaria o TTL a cada request, permitindo que
+// atacantes persistentes mantivessem a janela viva indefinidamente.
 func (rl *RateLimiter) check(ctx context.Context, key string) (bool, int, int, error) {
 	pipe := rl.client.TxPipeline()
 	incr := pipe.Incr(ctx, key)
-	pipe.Expire(ctx, key, rl.window)
+	pipe.ExpireNX(ctx, key, rl.window)
 	if _, err := pipe.Exec(ctx); err != nil {
 		return false, 0, 0, err
 	}

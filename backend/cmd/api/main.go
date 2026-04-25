@@ -200,7 +200,7 @@ func run() error {
 	searchCurriculumUC := appcurriculum.NewSearchCurriculumUseCase(curriculumRepo)
 
 	// ─── Handlers ───────────────────────────────────────────────────────────────
-	baseURL := "https://api.fernandofrancovalle.com/api/v1"
+	baseURL := cfg.App.APIBaseURL
 
 	redisPinger := &redisPingerAdapter{client: redisClient}
 	healthH := handlers.NewHealthHandler(pool, redisPinger)

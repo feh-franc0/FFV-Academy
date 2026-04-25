@@ -159,13 +159,12 @@ describe('phoneBRSchema', () => {
     expect(phoneBRSchema.safeParse('5511987654321').success).toBe(true);
   });
 
-  it('regex atual exige "5" ou "55" antes dos dígitos (DDI explícito)', () => {
-    // O regex do brief é ^\+?55?\d{10,11}$ — o `55?` força "5" ou "55".
-    // Phone sem DDI ("11987654321" — começa com "1") é rejeitado por isso.
+  it('exige DDI 55 completo antes dos dígitos', () => {
+    // Regex correto: ^\+?55\d{10,11}$ — DDI 55 obrigatório, não "5" sozinho.
     expect(phoneBRSchema.safeParse('11987654321').success).toBe(false);
     expect(phoneBRSchema.safeParse('5511987654321').success).toBe(true);
-    // "5" sozinho + 10-11 dígitos também passa:
-    expect(phoneBRSchema.safeParse('511987654321').success).toBe(true);
+    // "5" sozinho + dígitos NÃO deve passar (DDI incompleto):
+    expect(phoneBRSchema.safeParse('511987654321').success).toBe(false);
   });
 
   it('rejeita letras / caracteres especiais', () => {

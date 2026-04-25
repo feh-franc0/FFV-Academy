@@ -280,9 +280,11 @@ func Test_VerifyMagicLink_Execute_NewUserWithInvalidPhone_ReturnsValidation(t *t
 
 // ─── RefreshToken — caminhos adicionais ──────────────────────────────────────
 
-// Test_RefreshToken_Execute_RevokeFails_ReturnsError cobre a falha ao revogar
-// o token antigo durante a rotação.
-func Test_RefreshToken_Execute_RevokeFails_ReturnsError(t *testing.T) {
+// Test_RefreshToken_Execute_RevokeFails_StillReturnsSuccess verifica que falha ao revogar
+// o token antigo NÃO causa lockout do usuário — o novo token já foi salvo e é retornado.
+// O token antigo expirará naturalmente via TTL (30 dias).
+// Comportamento intencional: save-first, revoke-after para evitar lockout permanente.
+func Test_RefreshToken_Execute_RevokeFails_StillReturnsSuccess(t *testing.T) {
 	now := time.Now()
 	userID := shared.NewUserID()
 	email := domidentity.MustNewEmail("user@example.com")
@@ -308,9 +310,12 @@ func Test_RefreshToken_Execute_RevokeFails_ReturnsError(t *testing.T) {
 		refreshRepo, userRepo, &mockTokenIssuer{},
 		shared.FixedClock{T: now}, 24*time.Hour,
 	)
-	_, err = uc.Execute(context.Background(), oldHash)
-	if err == nil {
-		t.Fatal("esperado erro quando Revoke falha, got nil")
+	result, err := uc.Execute(context.Background(), oldHash)
+	if err != nil {
+		t.Fatalf("esperado sucesso mesmo com Revoke falhando, got erro: %v", err)
+	}
+	if result.AccessToken == "" {
+		t.Fatal("esperado access token não-vazio")
 	}
 }
 

@@ -90,7 +90,7 @@ export function LoginModal({ reason, onSuccess, onCancel }: Props) {
       if (!phoneBRSchema.safeParse(normalized).success) {
         return setError('Telefone inválido. Use formato (DD) 9 NNNN-NNNN');
       }
-      if (!consent) return setError('Você precisa aceitar os termos pra continuar');
+      // LGPD: consentimento de marketing é opcional — não pode bloquear o cadastro.
     }
 
     setLoading(true);
@@ -226,7 +226,8 @@ export function LoginModal({ reason, onSuccess, onCancel }: Props) {
                     className="mt-0.5 flex-shrink-0"
                   />
                   <span>
-                    Aceito receber comunicações por email da FFV Academy (novos simulados, conteúdos e atualizações). Posso cancelar a qualquer momento em /preferencias. Leia nossa <a href="/privacidade" style={{ color: 'var(--ffv-blue)' }}>política de privacidade</a>.
+                    <span className="text-[10px] uppercase tracking-wide mr-1" style={{ color: 'var(--ffv-muted)', opacity: 0.7 }}>(opcional)</span>
+                    Quero receber novidades por email — novos simulados, conteúdos e atualizações. Posso cancelar quando quiser em /preferencias. Leia nossa <a href="/privacidade" style={{ color: 'var(--ffv-blue)' }}>política de privacidade</a>.
                   </span>
                 </label>
               </>

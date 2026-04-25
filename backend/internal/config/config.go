@@ -31,9 +31,10 @@ type Config struct {
 }
 
 type AppConfig struct {
-	Env     string `envconfig:"APP_ENV" default:"development"`
-	Name    string `envconfig:"APP_NAME" default:"ffv-api"`
-	Version string `envconfig:"APP_VERSION" default:"dev"`
+	Env        string `envconfig:"APP_ENV" default:"development"`
+	Name       string `envconfig:"APP_NAME" default:"ffv-api"`
+	Version    string `envconfig:"APP_VERSION" default:"dev"`
+	APIBaseURL string `envconfig:"API_BASE_URL" default:"https://api.fernandofrancovalle.com/api/v1"`
 }
 
 type HTTPConfig struct {
@@ -152,7 +153,7 @@ func Load() (*Config, error) {
 // Campos required são preenchidos com valores dummy.
 func LoadTest() *Config {
 	return &Config{
-		App: AppConfig{Env: "test", Name: "ffv-api-test", Version: "test"},
+		App: AppConfig{Env: "test", Name: "ffv-api-test", Version: "test", APIBaseURL: "http://localhost:8081/api/v1"},
 		HTTP: HTTPConfig{
 			Port:            8081,
 			ReadTimeout:     5 * time.Second,
