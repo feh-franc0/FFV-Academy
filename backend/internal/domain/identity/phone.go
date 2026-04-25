@@ -8,13 +8,14 @@ import (
 	"github.com/fernandofv/api/internal/domain/shared"
 )
 
-// phoneRegex aceita formatos BR: +5511987654321, 5511987654321, 11987654321.
+// phoneRegex aceita formatos BR com DDI obrigatório: +5511987654321 ou 5511987654321.
 // Espelha phoneBRSchema do frontend (schemas.ts).
-var phoneRegex = regexp.MustCompile(`^\+?55?\d{10,11}$`)
+// NOTA: 55? (antigo) aceitava +511XXXXXXXX (DDI incompleto); 55 (fixo) exige DDI correto.
+var phoneRegex = regexp.MustCompile(`^\+?55\d{10,11}$`)
 
 // Phone é um Value Object que representa um telefone brasileiro validado.
 //
-// INVARIANTE: formato BR válido — DDI opcional, DDD obrigatório, 10-11 dígitos.
+// INVARIANTE: formato BR válido — DDI 55 obrigatório, DDD 2 dígitos, 8-9 dígitos locais.
 type Phone struct {
 	value string
 }

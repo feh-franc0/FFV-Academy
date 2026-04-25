@@ -65,11 +65,13 @@ func (uc *FinishAttemptUseCase) Execute(ctx context.Context, cmd FinishAttemptCo
 	scoreResult := uc.scorer.Calculate(sim, attempt.Answers())
 
 	// Se já finalizada, retorna resultado existente (idempotência).
+	// Usa NewScore(scoreResult) — Score{} é zero-value e WeakTopics retornaria
+	// sempre vazio, perdendo a informação para o cliente em retries.
 	if attempt.IsFinished() {
 		return FinishAttemptResult{
 			Attempt:     attempt,
 			ScoreResult: scoreResult,
-			WeakTopics:  domsimulado.Score{}.WeakTopics(0.7),
+			WeakTopics:  domsimulado.NewScore(scoreResult).WeakTopics(0.7),
 		}, nil
 	}
 

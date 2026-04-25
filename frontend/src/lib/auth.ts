@@ -173,6 +173,11 @@ export async function verifyToken(
 /**
  * Tenta renovar a sessão via refresh token (cookie HttpOnly).
  * Retorna o UserProfile se sucesso, null se não há sessão.
+ *
+ * Distingue falhas permanentes (401 = token expirado) de transitórias (5xx, rede):
+ * - 401 → token inválido → retorna null (AuthProvider fará logout)
+ * - 5xx / rede → problema temporário → retorna null MAS preserva localStorage
+ *   (AuthProvider não faz logout, próxima tentativa pode funcionar)
  */
 export async function refreshSession(): Promise<UserProfile | null> {
   if (!hasBackend()) {
@@ -188,8 +193,15 @@ export async function refreshSession(): Promise<UserProfile | null> {
     const profile = dtoToProfile(res.user);
     setUser(profile);
     return profile;
-  } catch {
-    return null;
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401) {
+      // Token de refresh expirado ou revogado — sessão encerrada legitimamente.
+      return null;
+    }
+    // Erro transitório (5xx, rede, timeout): não encerra a sessão.
+    // Retorna o usuário do cache local para manter UX consistente.
+    // O próximo request autenticado vai tentar refresh novamente via apiFetch.
+    return getUser();
   }
 }
 

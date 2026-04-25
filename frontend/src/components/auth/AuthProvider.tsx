@@ -75,6 +75,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (user === null) return;
 
     const intervalId = setInterval(async () => {
+      // Tab oculta (background): pular refresh para não logar silenciosamente o usuário
+      // quando há falha transitória de rede (ex: sleep do dispositivo).
+      // Quando a tab voltar ao foreground, o primeiro request autenticado dispara
+      // tryRefresh() via apiFetch (401 → refresh automático).
+      if (typeof document !== 'undefined' && document.hidden) return;
+
       const renewed = await refreshSession();
       if (renewed === null) {
         // Refresh token expirado ou inválido — encerra sessão

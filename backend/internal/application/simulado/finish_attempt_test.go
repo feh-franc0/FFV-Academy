@@ -129,3 +129,54 @@ func Test_FinishAttemptUseCase_Execute_WrongOwner_ReturnsForbidden(t *testing.T)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, shared.ErrForbidden)
 }
+
+// Test_FinishAttemptUseCase_Execute_AlreadyFinished_ReturnsWeakTopics verifica que
+// a chamada idempotente (attempt já finalizada) retorna WeakTopics corretos — não vazio.
+// REGRESSÃO: bug anterior usava Score{}.WeakTopics() (zero-value) que sempre retornava [].
+func Test_FinishAttemptUseCase_Execute_AlreadyFinished_ReturnsWeakTopics(t *testing.T) {
+	now := time.Now()
+	userID := shared.NewUserID()
+	simID := shared.SimuladoID("aws-clf")
+	attemptID := shared.NewAttemptID()
+
+	// 2 questões: q1 correta (Cloud), q2 errada (Security)
+	// Score = 50%, Cloud=100%, Security=0% → Security é weak topic
+	sim := &domsim.Simulado{
+		ID:           simID,
+		PassingScore: 70,
+		TimeLimitMin: 90,
+		Questions: []domsim.Question{
+			{ID: shared.QuestionID("q1"), CorrectID: "A", Topic: "Cloud"},
+			{ID: shared.QuestionID("q2"), CorrectID: "B", Topic: "Security"},
+		},
+	}
+
+	// Cria attempt e a finaliza (q1 certa, q2 errada)
+	attempt := domsim.StartAttempt(attemptID, userID, simID, 90, now)
+	_ = attempt.AnswerQuestion(shared.QuestionID("q1"), domsim.OptionID("A"), now) // certa
+	_ = attempt.AnswerQuestion(shared.QuestionID("q2"), domsim.OptionID("X"), now) // errada
+
+	scorer := domsim.Scorer{}
+	scoreResult := scorer.Calculate(sim, attempt.Answers())
+	score := domsim.NewScore(scoreResult)
+	_ = attempt.Finish(score, now)
+
+	repo := &mockAttemptRepo{
+		byID: map[shared.AttemptID]*domsim.Attempt{attemptID: attempt},
+	}
+	catalog := &mockCatalog{sim: sim}
+	clock := shared.FixedClock{T: now}
+
+	uc := appsim.NewFinishAttemptUseCase(repo, catalog, clock)
+	// Segunda chamada — idempotente
+	result, err := uc.Execute(context.Background(), appsim.FinishAttemptCommand{
+		UserID:    userID,
+		AttemptID: attemptID,
+	})
+
+	require.NoError(t, err)
+	assert.True(t, result.Attempt.IsFinished())
+	// WeakTopics NÃO deve estar vazio — Security teve 0% de acerto
+	assert.NotEmpty(t, result.WeakTopics, "idempotent call must return weak topics, not empty")
+	assert.Contains(t, result.WeakTopics, domsim.Topic("Security"))
+}
