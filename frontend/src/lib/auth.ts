@@ -149,6 +149,7 @@ export async function verifyToken(
     const body: Record<string, unknown> = { email, token };
     if (pendingRegistration) {
       body.name = pendingRegistration.name.trim();
+      body.phone = pendingRegistration.phone;
       body.marketingConsent = pendingRegistration.marketingConsent;
     }
     const res = await apiPost<{ accessToken: string; user: UserDTO }>(

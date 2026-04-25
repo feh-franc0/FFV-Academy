@@ -186,8 +186,10 @@ export async function apiFetch<T = unknown>(
     // Combina o signal do caller (se houver) com o nosso timeout.
     // Se o caller cancelar, ambos os signals são abortados.
     const callerSignal = (init as RequestInit & { signal?: AbortSignal }).signal;
+    let callerAbortHandler: (() => void) | undefined;
     if (callerSignal) {
-      callerSignal.addEventListener('abort', () => controller.abort(callerSignal.reason));
+      callerAbortHandler = () => controller.abort(callerSignal.reason);
+      callerSignal.addEventListener('abort', callerAbortHandler);
     }
 
     const promise = fetch(`${base}${path}`, {
@@ -197,10 +199,14 @@ export async function apiFetch<T = unknown>(
       signal: controller.signal,
     });
 
-    // Limpa o timeout quando o fetch terminar (sucesso ou erro de rede), evitando memory leak.
-    // Retorna a promise do .finally() para que o caller awaite a cadeia completa —
-    // descartar o retorno de .finally() criaria uma rejected promise sem handler.
-    return promise.finally(() => clearTimeout(timeoutId));
+    // Limpa timeout e o listener do caller quando o fetch terminar — evita memory leak
+    // quando o mesmo AbortSignal é reutilizado em múltiplos requests.
+    return promise.finally(() => {
+      clearTimeout(timeoutId);
+      if (callerSignal && callerAbortHandler) {
+        callerSignal.removeEventListener('abort', callerAbortHandler);
+      }
+    });
   };
 
   let res: Response | null = null;

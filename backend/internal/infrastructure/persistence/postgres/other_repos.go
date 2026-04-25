@@ -419,9 +419,10 @@ func (r *EventRepo) Save(ctx context.Context, e appevent.Event) error {
 		s := e.UserID.String()
 		userIDStr = &s
 	}
+	// Tabela analytics_events — received_at mapeado para created_at (DEFAULT NOW()).
 	_, err := r.pool.Exec(ctx,
-		`INSERT INTO events (id, user_id, type, payload, occurred_at, received_at) VALUES ($1,$2,$3,$4,$5,$6)`,
-		e.ID, userIDStr, e.Type, e.Payload, e.OccurredAt, e.ReceivedAt,
+		`INSERT INTO analytics_events (id, user_id, type, payload, occurred_at) VALUES ($1,$2,$3,$4,$5)`,
+		e.ID, userIDStr, e.Type, e.Payload, e.OccurredAt,
 	)
 	return err
 }
