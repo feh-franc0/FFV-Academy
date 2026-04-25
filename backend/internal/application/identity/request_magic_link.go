@@ -10,6 +10,7 @@ package identity
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -33,31 +34,28 @@ type EmailSender interface {
 	SendMagicLink(ctx context.Context, to identity.Email, token string, expiresIn time.Duration) error
 }
 
-// SMSSender é o port de envio de SMS.
-type SMSSender interface {
-	SendMagicToken(ctx context.Context, to identity.Phone, token string) error
-}
-
 // RequestMagicLinkCommand é o command de solicitação de magic link.
+// Aceita apenas email — telefone é coletado em /auth/verify para novos usuários.
 type RequestMagicLinkCommand struct {
 	Email string
-	Phone string
 }
 
-// RequestMagicLinkUseCase orquestra o envio de token de login.
+// RequestMagicLinkUseCase orquestra o envio de token de login por email.
 //
 // FLUXO:
-//   1. Valida email e phone (VOs).
-//   2. Verifica rate-limit (5 tentativas/10min por email).
-//   3. Gera token de 6 dígitos (crypto/rand).
-//   4. Armazena em Redis com TTL 10min.
-//   5. Envia email (Resend) e SMS (Twilio) em paralelo.
+//  1. Valida email (VO).
+//  2. Verifica rate-limit (5 tentativas/10min por email).
+//  3. Verifica se o email já tem conta (para informar o frontend: novo ou retornante).
+//  4. Gera token de 6 dígitos (crypto/rand).
+//  5. Armazena em Redis com TTL 10min.
+//  6. Envia email (Resend).
 //
-// POR QUÊ paralelo: latência de email+SMS em série seria > 2s; em paralelo < 1s.
+// Novo usuário: IsNewUser=true → frontend exibe campos de nome/telefone junto com o código.
+// Usuário retornante: IsNewUser=false → frontend exibe apenas o campo de código.
 type RequestMagicLinkUseCase struct {
 	tokenStore  identity.MagicTokenStore
+	userRepo    identity.UserRepository // consulta se o email já tem conta
 	emailer     EmailSender
-	sms         SMSSender
 	clock       shared.Clock
 	tokenTTL    time.Duration
 	maxAttempts int64
@@ -68,16 +66,16 @@ type RequestMagicLinkUseCase struct {
 // O logger é usado para registrar entrada, saída e erros com request_id correlacionado.
 func NewRequestMagicLinkUseCase(
 	tokenStore identity.MagicTokenStore,
+	userRepo identity.UserRepository,
 	emailer EmailSender,
-	sms SMSSender,
 	clock shared.Clock,
 	tokenTTL time.Duration,
 	maxAttempts int64,
 ) *RequestMagicLinkUseCase {
 	return &RequestMagicLinkUseCase{
 		tokenStore:  tokenStore,
+		userRepo:    userRepo,
 		emailer:     emailer,
-		sms:         sms,
 		clock:       clock,
 		tokenTTL:    tokenTTL,
 		maxAttempts: maxAttempts,
@@ -91,11 +89,16 @@ func (uc *RequestMagicLinkUseCase) WithLogger(l *slog.Logger) *RequestMagicLinkU
 	return uc
 }
 
+// RequestMagicLinkResult é o resultado do use case de solicitação de magic link.
 type RequestMagicLinkResult struct {
 	ExpiresIn time.Duration
+	// IsNewUser informa se o email não tem conta cadastrada.
+	// O frontend usa este campo para exibir os campos de cadastro (nome, telefone)
+	// junto com o campo de código, poupando uma tela extra para novos usuários.
+	IsNewUser bool
 }
 
-// Execute orquestra o envio do magic link, logando entrada, saída e erros.
+// Execute orquestra o envio do magic link, logando cada etapa.
 // O email é sempre hasheado antes de logar — nunca em texto claro.
 func (uc *RequestMagicLinkUseCase) Execute(ctx context.Context, cmd RequestMagicLinkCommand) (RequestMagicLinkResult, error) {
 	// Log de entrada: request_id correlaciona este log com o request HTTP.
@@ -108,16 +111,6 @@ func (uc *RequestMagicLinkUseCase) Execute(ctx context.Context, cmd RequestMagic
 	email, err := identity.NewEmail(cmd.Email)
 	if err != nil {
 		uc.logger.WarnContext(ctx, "email inválido",
-			"use_case", "RequestMagicLink",
-			"request_id", middleware.RequestIDFromContext(ctx),
-			"error", err.Error(),
-		)
-		return RequestMagicLinkResult{}, fmt.Errorf("request magic link: %w", err)
-	}
-
-	phone, err := identity.NewPhone(cmd.Phone)
-	if err != nil {
-		uc.logger.WarnContext(ctx, "telefone inválido",
 			"use_case", "RequestMagicLink",
 			"request_id", middleware.RequestIDFromContext(ctx),
 			"error", err.Error(),
@@ -143,6 +136,20 @@ func (uc *RequestMagicLinkUseCase) Execute(ctx context.Context, cmd RequestMagic
 			"attempts", attempts,
 		)
 		return RequestMagicLinkResult{}, shared.ErrRateLimited
+	}
+
+	// Verifica se o email já tem conta cadastrada.
+	// Resultado usado pelo frontend para exibir ou não os campos de registro.
+	// Falha não-crítica: se o DB estiver lento, envia o token normalmente.
+	isNewUser := false
+	if _, findErr := uc.userRepo.FindByEmail(ctx, email); errors.Is(findErr, shared.ErrNotFound) {
+		isNewUser = true
+	} else if findErr != nil {
+		uc.logger.WarnContext(ctx, "falha ao verificar existência do usuário (não crítico — token será enviado mesmo assim)",
+			"use_case", "RequestMagicLink",
+			"request_id", middleware.RequestIDFromContext(ctx),
+			"error", findErr.Error(),
+		)
 	}
 
 	now := uc.clock.Now()
@@ -173,36 +180,14 @@ func (uc *RequestMagicLinkUseCase) Execute(ctx context.Context, cmd RequestMagic
 		return RequestMagicLinkResult{}, fmt.Errorf("request magic link: incr attempts: %w", err)
 	}
 
-	// Envia email e SMS em paralelo para minimizar latência.
-	type result struct{ err error }
-	emailCh := make(chan result, 1)
-	smsCh := make(chan result, 1)
-
-	go func() {
-		emailCh <- result{err: uc.emailer.SendMagicLink(ctx, email, token.Value(), uc.tokenTTL)}
-	}()
-	go func() {
-		smsCh <- result{err: uc.sms.SendMagicToken(ctx, phone, token.Value())}
-	}()
-
-	emailRes := <-emailCh
-	smsRes := <-smsCh
-
-	if emailRes.err != nil {
+	// Envia o token por email.
+	if err := uc.emailer.SendMagicLink(ctx, email, token.Value(), uc.tokenTTL); err != nil {
 		uc.logger.ErrorContext(ctx, "falha ao enviar email",
 			"use_case", "RequestMagicLink",
 			"request_id", middleware.RequestIDFromContext(ctx),
-			"error", emailRes.err.Error(),
+			"error", err.Error(),
 		)
-		return RequestMagicLinkResult{}, fmt.Errorf("request magic link: send email: %w", emailRes.err)
-	}
-	if smsRes.err != nil {
-		uc.logger.ErrorContext(ctx, "falha ao enviar SMS",
-			"use_case", "RequestMagicLink",
-			"request_id", middleware.RequestIDFromContext(ctx),
-			"error", smsRes.err.Error(),
-		)
-		return RequestMagicLinkResult{}, fmt.Errorf("request magic link: send sms: %w", smsRes.err)
+		return RequestMagicLinkResult{}, fmt.Errorf("request magic link: send email: %w", err)
 	}
 
 	// Log de saída: confirma que o token foi enviado com sucesso.
@@ -211,6 +196,7 @@ func (uc *RequestMagicLinkUseCase) Execute(ctx context.Context, cmd RequestMagic
 		"request_id", middleware.RequestIDFromContext(ctx),
 		"email_hash", hashEmail(cmd.Email),
 		"expires_in", uc.tokenTTL.String(),
+		"is_new_user", isNewUser,
 	)
-	return RequestMagicLinkResult{ExpiresIn: uc.tokenTTL}, nil
+	return RequestMagicLinkResult{ExpiresIn: uc.tokenTTL, IsNewUser: isNewUser}, nil
 }

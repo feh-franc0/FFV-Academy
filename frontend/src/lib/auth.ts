@@ -15,7 +15,7 @@
  */
 
 import { getUser, setUser, clearUser } from './storage';
-import { emailSchema, phoneBRSchema } from './schemas';
+import { emailSchema } from './schemas';
 import {
   hasBackend,
   apiGet,
@@ -82,23 +82,25 @@ function delay(ms: number): Promise<void> {
 // ─── requestToken ──────────────────────────────────────────────────────────
 
 /**
- * Solicita o token de login.
- * Mock: simula envio (log + 400ms).
- * Real: POST /api/v1/auth/request-token → email + SMS via Resend/Twilio.
+ * Solicita o token de login por email.
+ * Mock: simula envio (log + 400ms). Retorna isNewUser=true se não houver user salvo.
+ * Real: POST /api/v1/auth/request-token → email via Resend.
  */
-export async function requestToken(email: string, phone: string): Promise<{ ok: true }> {
+export async function requestToken(email: string): Promise<{ ok: true; isNewUser: boolean }> {
   if (!emailSchema.safeParse(email).success) throw new Error('email inválido');
-  if (!phoneBRSchema.safeParse(phone).success) throw new Error('telefone inválido');
 
   if (!hasBackend()) {
-     
-    console.info(`[MOCK] token ${MOCK_TOKEN} enviado para ${email} / ${phone}`);
+    const existing = getUser();
+    const isNewUser = !existing || existing.email !== email;
+    console.info(`[MOCK] token ${MOCK_TOKEN} enviado para ${email}`);
     await delay(400);
-    return { ok: true };
+    return { ok: true, isNewUser };
   }
 
-  await apiPost('/api/v1/auth/request-token', { email, phone }, false);
-  return { ok: true };
+  const res = await apiPost<{ message: string; isNewUser: boolean }>(
+    '/api/v1/auth/request-token', { email }, false,
+  );
+  return { ok: true, isNewUser: res.isNewUser };
 }
 
 // ─── verifyToken ───────────────────────────────────────────────────────────
@@ -189,52 +191,6 @@ export async function refreshSession(): Promise<UserProfile | null> {
   } catch {
     return null;
   }
-}
-
-// ─── handleGoogleCallback ──────────────────────────────────────────────────
-
-/**
- * Lê o access token do hash da URL após o callback do Google OAuth.
- * O backend redireciona para FRONTEND_URL/#access_token=JWT após autenticar.
- * Retorna o perfil se o token foi encontrado e a sessão foi estabelecida.
- */
-export async function handleGoogleCallback(): Promise<UserProfile | null> {
-  if (typeof window === 'undefined') return null;
-  const hash = window.location.hash;
-  const match = hash.match(/[#&]access_token=([^&]+)/);
-  if (!match) return null;
-
-  const token = match[1];
-  setAccessToken(token);
-
-  // Limpa o token da URL sem recarregar a página.
-  history.replaceState(null, '', window.location.pathname + window.location.search);
-
-  // Busca perfil do servidor usando o token recém-recebido.
-  if (!hasBackend()) return null;
-  try {
-    const dto = await apiGet<UserDTO>('/api/v1/me');
-    const profile = dtoToProfile(dto);
-    setUser(profile);
-    return profile;
-  } catch {
-    return null;
-  }
-}
-
-// ─── googleLogin ───────────────────────────────────────────────────────────
-
-/**
- * Inicia o fluxo de login com Google.
- * Redireciona o browser para o endpoint de autenticação do backend.
- */
-export function googleLogin(): void {
-  const base = process.env.NEXT_PUBLIC_API_BASE_URL;
-  if (!base) {
-    console.warn('[auth] NEXT_PUBLIC_API_BASE_URL não configurado — Google OAuth indisponível');
-    return;
-  }
-  window.location.href = `${base}/api/v1/auth/google`;
 }
 
 // ─── getCurrentUser ────────────────────────────────────────────────────────

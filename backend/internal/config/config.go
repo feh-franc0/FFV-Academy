@@ -27,7 +27,6 @@ type Config struct {
 	Twilio    TwilioConfig
 	Anthropic AnthropicConfig
 	CORS      CORSConfig
-	Google    GoogleOAuthConfig
 	Telemetry TelemetryConfig
 }
 
@@ -87,9 +86,9 @@ type ResendConfig struct {
 }
 
 type TwilioConfig struct {
-	AccountSID string `envconfig:"TWILIO_ACCOUNT_SID" required:"true"`
-	AuthToken  string `envconfig:"TWILIO_AUTH_TOKEN" required:"true"`
-	FromNumber string `envconfig:"TWILIO_FROM_NUMBER" required:"true"`
+	AccountSID string `envconfig:"TWILIO_ACCOUNT_SID"`
+	AuthToken  string `envconfig:"TWILIO_AUTH_TOKEN"`
+	FromNumber string `envconfig:"TWILIO_FROM_NUMBER"`
 }
 
 type AnthropicConfig struct {
@@ -103,19 +102,6 @@ type AnthropicConfig struct {
 
 type CORSConfig struct {
 	AllowedOrigins []string `envconfig:"CORS_ALLOWED_ORIGINS" default:"https://fernandofrancovalle.com"`
-}
-
-// GoogleOAuthConfig contém as credenciais para o OAuth2 do Google.
-// Quando ClientID/ClientSecret estão vazios o fluxo Google fica desabilitado.
-type GoogleOAuthConfig struct {
-	ClientID     string `envconfig:"GOOGLE_CLIENT_ID"`
-	ClientSecret string `envconfig:"GOOGLE_CLIENT_SECRET"`
-	RedirectURL  string `envconfig:"GOOGLE_REDIRECT_URL" default:"https://api.fernandofrancovalle.com/api/v1/auth/google/callback"`
-	FrontendURL  string `envconfig:"FRONTEND_URL" default:"https://fernandofrancovalle.com"`
-}
-
-func (g GoogleOAuthConfig) Enabled() bool {
-	return g.ClientID != "" && g.ClientSecret != ""
 }
 
 // TelemetryConfig contém as configurações do OpenTelemetry.
@@ -146,7 +132,6 @@ func Load() (*Config, error) {
 		{"", &cfg.Twilio},
 		{"", &cfg.Anthropic},
 		{"", &cfg.CORS},
-		{"", &cfg.Google},
 		{"", &cfg.Telemetry},
 	}
 

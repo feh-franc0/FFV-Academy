@@ -71,13 +71,14 @@ afterEach(() => {
 describe('Modo mock (sem NEXT_PUBLIC_API_BASE_URL)', () => {
   beforeEach(setupMock);
 
-  it('requestToken aceita email e phone válidos', async () => {
-    const r = await requestToken(VALID_EMAIL, VALID_PHONE);
+  it('requestToken aceita email válido', async () => {
+    const r = await requestToken(VALID_EMAIL);
     expect(r.ok).toBe(true);
+    expect(typeof r.isNewUser).toBe('boolean');
   });
 
   it('requestToken rejeita email malformado', async () => {
-    await expect(requestToken('invalid', VALID_PHONE)).rejects.toThrow('email');
+    await expect(requestToken('invalid')).rejects.toThrow('email');
   });
 
   it('verifyToken aceita MOCK_TOKEN e cria user', async () => {
@@ -112,19 +113,20 @@ describe('Modo real (NEXT_PUBLIC_API_BASE_URL configurado)', () => {
   beforeEach(setupBackend);
 
   it('requestToken chama POST /api/v1/auth/request-token', async () => {
-    const fetchMock = mockFetchResponse({ ok: true }, 202);
+    const fetchMock = mockFetchResponse({ message: 'token enviado', isNewUser: true }, 202);
     vi.stubGlobal('fetch', fetchMock);
 
-    const r = await requestToken(VALID_EMAIL, VALID_PHONE);
+    const r = await requestToken(VALID_EMAIL);
     expect(r.ok).toBe(true);
+    expect(r.isNewUser).toBe(true);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toContain('/api/v1/auth/request-token');
     expect(init.method).toBe('POST');
-    expect(JSON.parse(init.body as string)).toMatchObject({ email: VALID_EMAIL, phone: VALID_PHONE });
+    expect(JSON.parse(init.body as string)).toMatchObject({ email: VALID_EMAIL });
   });
 
   it('requestToken ainda valida email antes de chamar HTTP', async () => {
-    await expect(requestToken('bad-email', VALID_PHONE)).rejects.toThrow('email');
+    await expect(requestToken('bad-email')).rejects.toThrow('email');
   });
 
   it('verifyToken chama POST /api/v1/auth/verify e armazena access token', async () => {

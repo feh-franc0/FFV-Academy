@@ -2,17 +2,14 @@
 package handlers
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	appidentity "github.com/fernandofv/api/internal/application/identity"
-	infraauth "github.com/fernandofv/api/internal/infrastructure/auth"
 	"github.com/fernandofv/api/internal/interfaces/http/middleware"
 )
 
@@ -36,9 +33,6 @@ type AuthHandler struct {
 	deleteAccount    *appidentity.DeleteAccountUseCase
 	exportData       *appidentity.ExportUserDataUseCase
 	userStats        *appidentity.UserStatsUseCase
-	googleAuth       *appidentity.GoogleAuthUseCase
-	googleAdapter    *infraauth.GoogleOAuthAdapter
-	frontendURL      string
 }
 
 func NewAuthHandler(
@@ -75,15 +69,7 @@ func (h *AuthHandler) WithUserStats(uc *appidentity.UserStatsUseCase) *AuthHandl
 	return h
 }
 
-// WithGoogleOAuth injeta o use case e adapter de Google OAuth (opcional).
-func (h *AuthHandler) WithGoogleOAuth(uc *appidentity.GoogleAuthUseCase, adapter *infraauth.GoogleOAuthAdapter, frontendURL string) *AuthHandler {
-	h.googleAuth = uc
-	h.googleAdapter = adapter
-	h.frontendURL = frontendURL
-	return h
-}
-
-// RequestToken envia o magic link por email e SMS.
+// RequestToken envia o magic link por email.
 // POST /api/v1/auth/request-token
 func (h *AuthHandler) RequestToken(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -108,12 +94,16 @@ func (h *AuthHandler) RequestToken(w http.ResponseWriter, r *http.Request) {
 	cmd := appidentity.RequestMagicLinkCommand{
 		Email: strings.TrimSpace(req.Email),
 	}
-	if _, err := h.requestMagicLink.Execute(r.Context(), cmd); err != nil {
+	result, err := h.requestMagicLink.Execute(r.Context(), cmd)
+	if err != nil {
 		HandleDomainError(w, err)
 		return
 	}
 
-	WriteJSON(w, http.StatusAccepted, map[string]string{"message": "token enviado"})
+	WriteJSON(w, http.StatusAccepted, map[string]interface{}{
+		"message":   "token enviado",
+		"isNewUser": result.IsNewUser,
+	})
 }
 
 // Verify autentica o usuário com o token recebido.
@@ -352,61 +342,6 @@ func (h *AuthHandler) UserStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	WriteJSON(w, http.StatusOK, stats)
-}
-
-// GoogleRedirect inicia o fluxo OAuth2 do Google.
-// GET /api/v1/auth/google
-func (h *AuthHandler) GoogleRedirect(w http.ResponseWriter, r *http.Request) {
-	if h.googleAdapter == nil {
-		WriteError(w, http.StatusNotImplemented, "Google OAuth não configurado", "not-implemented")
-		return
-	}
-	state := generateOAuthState()
-	url := h.googleAdapter.AuthURL(state)
-	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
-}
-
-// GoogleCallback recebe o callback do Google, emite tokens e redireciona ao frontend.
-// GET /api/v1/auth/google/callback
-func (h *AuthHandler) GoogleCallback(w http.ResponseWriter, r *http.Request) {
-	if h.googleAdapter == nil || h.googleAuth == nil {
-		WriteError(w, http.StatusNotImplemented, "Google OAuth não configurado", "not-implemented")
-		return
-	}
-
-	code := r.URL.Query().Get("code")
-	if code == "" {
-		WriteError(w, http.StatusBadRequest, "code ausente", "bad-request")
-		return
-	}
-
-	info, err := h.googleAdapter.Exchange(r.Context(), code)
-	if err != nil {
-		HandleDomainError(w, fmt.Errorf("google callback: %w", err))
-		return
-	}
-
-	result, err := h.googleAuth.Execute(r.Context(), info)
-	if err != nil {
-		HandleDomainError(w, err)
-		return
-	}
-
-	setRefreshCookie(w, result.RefreshToken, result.RefreshExpiresAt)
-
-	// Redireciona ao frontend passando o access token no hash da URL.
-	// Hash não é enviado ao servidor em requests subsequentes — mais seguro que query param.
-	redirectURL := fmt.Sprintf("%s/#access_token=%s", h.frontendURL, result.AccessToken)
-	http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
-}
-
-// generateOAuthState gera um state aleatório para proteção CSRF no OAuth2.
-func generateOAuthState() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "fallback-state"
-	}
-	return hex.EncodeToString(b)
 }
 
 // --- helpers ---

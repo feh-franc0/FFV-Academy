@@ -34,7 +34,6 @@ import (
 	"github.com/fernandofv/api/internal/infrastructure/payment"
 	postgresinfra "github.com/fernandofv/api/internal/infrastructure/persistence/postgres"
 	redisinfra "github.com/fernandofv/api/internal/infrastructure/persistence/redis"
-	"github.com/fernandofv/api/internal/infrastructure/sms"
 	httpserver "github.com/fernandofv/api/internal/interfaces/http"
 	"github.com/fernandofv/api/internal/interfaces/http/handlers"
 	"github.com/fernandofv/api/internal/interfaces/http/middleware"
@@ -125,7 +124,6 @@ func run() error {
 	// ─── Infra: Serviços externos ───────────────────────────────────────────────
 	jwtService := auth.NewJWTService(cfg.JWT)
 	emailClient := email.NewResendClient(cfg.Resend)
-	smsClient := sms.NewTwilioClient(cfg.Twilio)
 	stripeClient := payment.NewStripeClient(cfg.Stripe)
 	claudeClient := ai.NewClaudeClient(cfg.Anthropic, tutorCache)
 
@@ -146,7 +144,7 @@ func run() error {
 	// o request_id injetado pelo middleware. O padrão WithLogger mantém
 	// retrocompatibilidade — testes usam o construtor sem logger.
 	requestMagicLinkUC := appidentity.NewRequestMagicLinkUseCase(
-		magicTokenStore, emailClient, smsClient, clock,
+		magicTokenStore, userRepo, emailClient, clock,
 		magicTokenTTL, magicMaxAttempts,
 	).WithLogger(log)
 	verifyMagicLinkUC := appidentity.NewVerifyMagicLinkUseCase(
@@ -160,7 +158,6 @@ func run() error {
 	getProfileUC := appidentity.NewGetProfileUseCase(userRepo).WithLogger(log)
 	updateProfileUC := appidentity.NewUpdateProfileUseCase(userRepo).WithLogger(log)
 	deleteAccountUC := appidentity.NewDeleteAccountUseCase(userRepo, refreshRepo, clock).WithLogger(log)
-	googleAuthUC := appidentity.NewGoogleAuthUseCase(userRepo, refreshRepo, jwtService, clock, cfg.JWT.RefreshTokenTTL).WithLogger(log)
 
 	startAttemptUC := appsim.NewStartAttemptUseCase(attemptRepo, catalogProvider, clock)
 	answerQUC := appsim.NewAnswerQuestionUseCase(attemptRepo, catalogProvider, clock)
@@ -207,14 +204,10 @@ func run() error {
 
 	redisPinger := &redisPingerAdapter{client: redisClient}
 	healthH := handlers.NewHealthHandler(pool, redisPinger)
-	googleAdapter := auth.NewGoogleOAuthAdapter(cfg.Google)
 	authH := handlers.NewAuthHandler(
 		requestMagicLinkUC, verifyMagicLinkUC, refreshTokenUC,
 		logoutUC, logoutAllUC, getProfileUC, updateProfileUC, deleteAccountUC,
 	).WithExportData(exportDataUC).WithUserStats(userStatsUC)
-	if cfg.Google.Enabled() {
-		authH = authH.WithGoogleOAuth(googleAuthUC, googleAdapter, cfg.Google.FrontendURL)
-	}
 	simuladoH := handlers.NewSimuladoHandler(
 		catalogProvider, startAttemptUC, answerQUC, toggleFlagUC,
 		finishAttemptUC, resumeAttemptUC, listAttemptsUC,

@@ -17,17 +17,14 @@ const VALID_PHONE = '+5511987654321';
 beforeEach(() => localStorage.clear());
 
 describe('requestToken', () => {
-  it('aceita email + phone válidos e resolve { ok: true }', async () => {
-    const r = await requestToken(VALID_EMAIL, VALID_PHONE);
+  it('aceita email válido e resolve { ok: true, isNewUser }', async () => {
+    const r = await requestToken(VALID_EMAIL);
     expect(r.ok).toBe(true);
+    expect(typeof r.isNewUser).toBe('boolean');
   });
 
   it('rejeita email malformado', async () => {
-    await expect(requestToken('xxx', VALID_PHONE)).rejects.toThrow('email');
-  });
-
-  it('rejeita phone inválido', async () => {
-    await expect(requestToken(VALID_EMAIL, '12345')).rejects.toThrow('telefone');
+    await expect(requestToken('xxx')).rejects.toThrow('email');
   });
 });
 

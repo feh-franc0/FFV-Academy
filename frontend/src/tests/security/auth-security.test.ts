@@ -56,22 +56,13 @@ describe('Token brute force protection', () => {
 describe('Validation em boundaries', () => {
   it('email com XSS é rejeitado em requestToken', async () => {
     await expect(
-      requestToken('<script>alert(1)</script>@evil.com', PHONE),
+      requestToken('<script>alert(1)</script>@evil.com'),
     ).rejects.toThrow();
   });
 
   it('email com CRLF injection é rejeitado', async () => {
     await expect(
-      requestToken('fulano@exemplo.com\r\nBcc:spy@evil.com', PHONE),
-    ).rejects.toThrow();
-  });
-
-  it('phone com injection é rejeitado', async () => {
-    await expect(
-      requestToken(EMAIL, '<script>alert(1)</script>'),
-    ).rejects.toThrow();
-    await expect(
-      requestToken(EMAIL, '+55 11 DROP TABLE users'),
+      requestToken('fulano@exemplo.com\r\nBcc:spy@evil.com'),
     ).rejects.toThrow();
   });
 

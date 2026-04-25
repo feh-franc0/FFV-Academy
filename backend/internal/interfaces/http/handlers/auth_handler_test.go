@@ -128,13 +128,6 @@ func (m *mockHandlerEmailer) SendMagicLink(_ context.Context, _ domidentity.Emai
 	return m.err
 }
 
-// mockHandlerSMS — SMS que sempre retorna nil.
-type mockHandlerSMS struct{}
-
-func (m *mockHandlerSMS) SendMagicToken(_ context.Context, _ domidentity.Phone, _ string) error {
-	return nil
-}
-
 // ─── Helper: cria um AuthHandler mínimo para testes ─────────────────────────
 
 // buildAuthHandler constrói um AuthHandler com stubs de use cases.
@@ -143,10 +136,9 @@ func buildAuthHandler(requestMagicLinkErr error) *handlers.AuthHandler {
 	// Use case de RequestMagicLink com stubs.
 	tokenStore := &mockHandlerTokenStore{}
 	emailer := &mockHandlerEmailer{err: requestMagicLinkErr}
-	sms := &mockHandlerSMS{}
 
 	requestMagicLinkUC := appidentity.NewRequestMagicLinkUseCase(
-		tokenStore, emailer, sms,
+		tokenStore, &mockHandlerUserRepo{}, emailer,
 		shared.SystemClock{},
 		10*time.Minute,
 		5,

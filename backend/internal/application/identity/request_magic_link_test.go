@@ -14,14 +14,14 @@ import (
 // --- Mocks inline ---
 
 type mockTokenStore struct {
-	storeCalls   int
-	incrCalls    int
-	getAttempts  int64
-	getErr       error
-	storeErr     error
-	lastToken    domidentity.MagicToken
-	consumed     *domidentity.MagicToken
-	consumeErr   error
+	storeCalls  int
+	incrCalls   int
+	getAttempts int64
+	getErr      error
+	storeErr    error
+	lastToken   domidentity.MagicToken
+	consumed    *domidentity.MagicToken
+	consumeErr  error
 }
 
 func (m *mockTokenStore) Store(_ context.Context, _ domidentity.Email, token domidentity.MagicToken) error {
@@ -59,34 +59,28 @@ func (m *mockEmailer) SendMagicLink(_ context.Context, _ domidentity.Email, _ st
 	return m.err
 }
 
-type mockSMS struct {
-	called int
-	err    error
-}
-
-func (m *mockSMS) SendMagicToken(_ context.Context, _ domidentity.Phone, _ string) error {
-	m.called++
-	return m.err
-}
-
 // --- Tests ---
 
-func Test_RequestMagicLink_Execute_ValidEmail_Succeeds(t *testing.T) {
+func Test_RequestMagicLink_Execute_ValidEmail_NewUser_Succeeds(t *testing.T) {
 	now := time.Now()
 	store := &mockTokenStore{}
 	emailer := &mockEmailer{}
-	sms := &mockSMS{}
 
-	uc := appidentity.NewRequestMagicLinkUseCase(store, emailer, sms, shared.FixedClock{T: now}, 10*time.Minute, 5)
+	// userRepo retorna ErrNotFound → IsNewUser=true.
+	userRepo := newMockUserRepo()
+
+	uc := appidentity.NewRequestMagicLinkUseCase(store, userRepo, emailer, shared.FixedClock{T: now}, 10*time.Minute, 5)
 	res, err := uc.Execute(context.Background(), appidentity.RequestMagicLinkCommand{
-		Email: "user@example.com",
-		Phone: "+5511987654321",
+		Email: "newuser@example.com",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if res.ExpiresIn != 10*time.Minute {
 		t.Fatalf("expected ExpiresIn=10m, got %v", res.ExpiresIn)
+	}
+	if !res.IsNewUser {
+		t.Fatal("esperado IsNewUser=true para email sem conta")
 	}
 	if store.storeCalls != 1 {
 		t.Fatalf("expected Store called once, got %d", store.storeCalls)
@@ -97,17 +91,40 @@ func Test_RequestMagicLink_Execute_ValidEmail_Succeeds(t *testing.T) {
 	if emailer.called != 1 {
 		t.Fatalf("expected emailer called once, got %d", emailer.called)
 	}
-	if sms.called != 1 {
-		t.Fatalf("expected sms called once, got %d", sms.called)
+}
+
+func Test_RequestMagicLink_Execute_ValidEmail_ExistingUser_Succeeds(t *testing.T) {
+	now := time.Now()
+	store := &mockTokenStore{}
+	emailer := &mockEmailer{}
+
+	// userRepo com usuário cadastrado → IsNewUser=false.
+	userRepo := newMockUserRepo()
+	email := domidentity.MustNewEmail("existing@example.com")
+	userID := shared.NewUserID()
+	user, _, err := domidentity.NewUser(userID, email, domidentity.Phone{}, "Existing User", false, shared.ReferralID("ref0"), now)
+	if err != nil {
+		t.Fatalf("new user: %v", err)
+	}
+	userRepo.byEmail[email.String()] = user
+
+	uc := appidentity.NewRequestMagicLinkUseCase(store, userRepo, emailer, shared.FixedClock{T: now}, 10*time.Minute, 5)
+	res, err := uc.Execute(context.Background(), appidentity.RequestMagicLinkCommand{
+		Email: "existing@example.com",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsNewUser {
+		t.Fatal("esperado IsNewUser=false para email com conta cadastrada")
 	}
 }
 
 func Test_RequestMagicLink_Execute_InvalidEmail_ReturnsValidation(t *testing.T) {
-	uc := appidentity.NewRequestMagicLinkUseCase(&mockTokenStore{}, &mockEmailer{}, &mockSMS{},
+	uc := appidentity.NewRequestMagicLinkUseCase(&mockTokenStore{}, newMockUserRepo(), &mockEmailer{},
 		shared.FixedClock{T: time.Now()}, 10*time.Minute, 5)
 	_, err := uc.Execute(context.Background(), appidentity.RequestMagicLinkCommand{
 		Email: "not-an-email",
-		Phone: "+5511987654321",
 	})
 	if !errors.Is(err, shared.ErrValidation) {
 		t.Fatalf("expected ErrValidation, got %v", err)
@@ -116,11 +133,10 @@ func Test_RequestMagicLink_Execute_InvalidEmail_ReturnsValidation(t *testing.T) 
 
 func Test_RequestMagicLink_Execute_RateLimitExceeded_ReturnsRateLimited(t *testing.T) {
 	store := &mockTokenStore{getAttempts: 5}
-	uc := appidentity.NewRequestMagicLinkUseCase(store, &mockEmailer{}, &mockSMS{},
+	uc := appidentity.NewRequestMagicLinkUseCase(store, newMockUserRepo(), &mockEmailer{},
 		shared.FixedClock{T: time.Now()}, 10*time.Minute, 5)
 	_, err := uc.Execute(context.Background(), appidentity.RequestMagicLinkCommand{
 		Email: "user@example.com",
-		Phone: "+5511987654321",
 	})
 	if !errors.Is(err, shared.ErrRateLimited) {
 		t.Fatalf("expected ErrRateLimited, got %v", err)
@@ -132,11 +148,10 @@ func Test_RequestMagicLink_Execute_RateLimitExceeded_ReturnsRateLimited(t *testi
 
 func Test_RequestMagicLink_Execute_EmailerFails_ReturnsError(t *testing.T) {
 	emailErr := errors.New("resend down")
-	uc := appidentity.NewRequestMagicLinkUseCase(&mockTokenStore{}, &mockEmailer{err: emailErr}, &mockSMS{},
+	uc := appidentity.NewRequestMagicLinkUseCase(&mockTokenStore{}, newMockUserRepo(), &mockEmailer{err: emailErr},
 		shared.FixedClock{T: time.Now()}, 10*time.Minute, 5)
 	_, err := uc.Execute(context.Background(), appidentity.RequestMagicLinkCommand{
 		Email: "user@example.com",
-		Phone: "+5511987654321",
 	})
 	if err == nil || !errors.Is(err, emailErr) {
 		t.Fatalf("expected wrap of emailErr, got %v", err)

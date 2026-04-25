@@ -5,26 +5,22 @@ import userEvent from '@testing-library/user-event';
 import { LoginModal } from '@/components/auth/LoginModal';
 
 describe('<LoginModal> render', () => {
-  it('renderiza título e campos principais', () => {
+  it('renderiza título e campo de email no passo inicial', () => {
     render(<LoginModal onSuccess={vi.fn()} onCancel={vi.fn()} />);
     expect(screen.getByRole('heading', { name: /entrar ou criar conta/i })).toBeInTheDocument();
-    expect(screen.getByLabelText('Nome completo')).toBeInTheDocument();
     expect(screen.getByLabelText('Email')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /receber código/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /continuar/i })).toBeInTheDocument();
+    // Nome e celular não aparecem no passo inicial
+    expect(screen.queryByLabelText('Nome completo')).not.toBeInTheDocument();
   });
 
-  it('mostra erro quando nome é muito curto', async () => {
-    const user = userEvent.setup();
+  it('mostra erro para email vazio ao submeter', async () => {
     render(<LoginModal onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    await user.type(screen.getByLabelText('Nome completo'), 'X');
-    await user.type(screen.getByLabelText('Email'), 'teste@exemplo.com');
-    await user.type(screen.getByLabelText(/celular/i), '11987654321');
-    await user.click(screen.getByRole('checkbox'));
-    // fireEvent.submit ignora validação HTML5 e dispara handleSubmitForm direto
-    fireEvent.submit(screen.getByRole('button', { name: /receber código/i }).closest('form')!);
+    // fireEvent.submit bypassa validação HTML5 do input[type=email]
+    fireEvent.submit(screen.getByRole('button', { name: /continuar/i }).closest('form')!);
 
-    expect(await screen.findByText(/nome muito curto/i)).toBeInTheDocument();
+    expect(await screen.findByText(/email inválido/i)).toBeInTheDocument();
   });
 
   it('cancela ao clicar no botão cancelar', async () => {

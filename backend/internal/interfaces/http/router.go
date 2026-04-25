@@ -129,9 +129,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Post("/request-token", cfg.Auth.RequestToken)
 		r.Post("/verify", cfg.Auth.Verify)
 		r.Post("/refresh", cfg.Auth.Refresh)
-		// Google OAuth — sem rate-limit próprio, usa o authLimit do grupo.
-		r.Get("/google", cfg.Auth.GoogleRedirect)
-		r.Get("/google/callback", cfg.Auth.GoogleCallback)
 		// Logout usa auth para revogar o refresh token correto.
 		r.With(middleware.Authenticate(cfg.JWTService)).Post("/logout", cfg.Auth.Logout)
 		r.With(middleware.Authenticate(cfg.JWTService)).Post("/logout-all", cfg.Auth.LogoutAll)

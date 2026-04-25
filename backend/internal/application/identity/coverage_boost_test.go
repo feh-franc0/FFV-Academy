@@ -3,11 +3,10 @@
 //
 // Foco:
 //   - WithLogger (triviais mas contam para cobertura).
-//   - Caminhos de erro em RequestMagicLink: SMS falha, IncrAttempts falha, Store falha.
+//   - Caminhos de erro em RequestMagicLink: email falha, IncrAttempts falha, Store falha.
 //   - Caminhos de erro em VerifyMagicLink: FindByEmail retorna erro genérico,
 //     Save do refresh token falha, IssueRefreshToken falha.
 //   - RefreshToken: falha ao salvar novo token, falha ao revogar token antigo.
-//   - GoogleAuth: findOrCreate com erro genérico.
 package identity_test
 
 import (
@@ -20,7 +19,6 @@ import (
 	appidentity "github.com/fernandofv/api/internal/application/identity"
 	domidentity "github.com/fernandofv/api/internal/domain/identity"
 	"github.com/fernandofv/api/internal/domain/shared"
-	infraauth "github.com/fernandofv/api/internal/infrastructure/auth"
 )
 
 // ─── WithLogger ───────────────────────────────────────────────────────────────
@@ -29,7 +27,7 @@ import (
 
 func Test_RequestMagicLinkUseCase_WithLogger_ReturnsUC(t *testing.T) {
 	uc := appidentity.NewRequestMagicLinkUseCase(
-		&mockTokenStore{}, &mockEmailer{}, &mockSMS{},
+		&mockTokenStore{}, newMockUserRepo(), &mockEmailer{},
 		shared.FixedClock{T: time.Now()}, 10*time.Minute, 5,
 	)
 	// WithLogger deve retornar o mesmo use case (para chaining).
@@ -90,36 +88,7 @@ func Test_LogoutAllUseCase_WithLogger_ReturnsUC(t *testing.T) {
 	}
 }
 
-func Test_GoogleAuthUseCase_WithLogger_ReturnsUC(t *testing.T) {
-	uc := appidentity.NewGoogleAuthUseCase(
-		newMockUserRepo(), newMockRefreshRepo(), &mockTokenIssuer{},
-		shared.FixedClock{T: time.Now()}, time.Hour,
-	)
-	got := uc.WithLogger(slog.Default())
-	if got == nil {
-		t.Fatal("esperado ponteiro não-nil")
-	}
-}
-
 // ─── RequestMagicLink — caminhos de erro adicionais ──────────────────────────
-
-// Test_RequestMagicLink_Execute_SMSFails_ReturnsError cobre o branch de falha do SMS.
-func Test_RequestMagicLink_Execute_SMSFails_ReturnsError(t *testing.T) {
-	smsErr := errors.New("twilio down")
-	sms := &mockSMS{err: smsErr}
-
-	uc := appidentity.NewRequestMagicLinkUseCase(
-		&mockTokenStore{}, &mockEmailer{}, sms,
-		shared.FixedClock{T: time.Now()}, 10*time.Minute, 5,
-	)
-	_, err := uc.Execute(context.Background(), appidentity.RequestMagicLinkCommand{
-		Email: "user@example.com",
-		Phone: "+5511987654321",
-	})
-	if err == nil || !errors.Is(err, smsErr) {
-		t.Fatalf("esperado wrap de smsErr, got %v", err)
-	}
-}
 
 // Test_RequestMagicLink_Execute_GetAttemptsFails_ReturnsError cobre falha no Redis.
 func Test_RequestMagicLink_Execute_GetAttemptsFails_ReturnsError(t *testing.T) {
@@ -127,12 +96,11 @@ func Test_RequestMagicLink_Execute_GetAttemptsFails_ReturnsError(t *testing.T) {
 	store := &mockTokenStore{getErr: redisErr}
 
 	uc := appidentity.NewRequestMagicLinkUseCase(
-		store, &mockEmailer{}, &mockSMS{},
+		store, newMockUserRepo(), &mockEmailer{},
 		shared.FixedClock{T: time.Now()}, 10*time.Minute, 5,
 	)
 	_, err := uc.Execute(context.Background(), appidentity.RequestMagicLinkCommand{
 		Email: "user@example.com",
-		Phone: "+5511987654321",
 	})
 	if err == nil {
 		t.Fatal("esperado erro quando GetAttempts falha, got nil")
@@ -145,31 +113,14 @@ func Test_RequestMagicLink_Execute_StoreFails_ReturnsError(t *testing.T) {
 	store := &mockTokenStore{storeErr: storeErr}
 
 	uc := appidentity.NewRequestMagicLinkUseCase(
-		store, &mockEmailer{}, &mockSMS{},
+		store, newMockUserRepo(), &mockEmailer{},
 		shared.FixedClock{T: time.Now()}, 10*time.Minute, 5,
 	)
 	_, err := uc.Execute(context.Background(), appidentity.RequestMagicLinkCommand{
 		Email: "user@example.com",
-		Phone: "+5511987654321",
 	})
 	if err == nil || !errors.Is(err, storeErr) {
 		t.Fatalf("esperado wrap de storeErr, got %v", err)
-	}
-}
-
-// Test_RequestMagicLink_Execute_InvalidPhone_ReturnsValidation cobre o branch
-// de telefone inválido (após o email ser válido).
-func Test_RequestMagicLink_Execute_InvalidPhone_ReturnsValidation(t *testing.T) {
-	uc := appidentity.NewRequestMagicLinkUseCase(
-		&mockTokenStore{}, &mockEmailer{}, &mockSMS{},
-		shared.FixedClock{T: time.Now()}, 10*time.Minute, 5,
-	)
-	_, err := uc.Execute(context.Background(), appidentity.RequestMagicLinkCommand{
-		Email: "user@example.com",
-		Phone: "invalid-phone",
-	})
-	if !errors.Is(err, shared.ErrValidation) {
-		t.Fatalf("esperado ErrValidation para phone inválido, got %v", err)
 	}
 }
 
@@ -191,12 +142,11 @@ func Test_RequestMagicLink_Execute_IncrAttemptsFails_ReturnsError(t *testing.T) 
 	store := &mockIncrFailStore{incrErr: incrErr}
 
 	uc := appidentity.NewRequestMagicLinkUseCase(
-		store, &mockEmailer{}, &mockSMS{},
+		store, newMockUserRepo(), &mockEmailer{},
 		shared.FixedClock{T: time.Now()}, 10*time.Minute, 5,
 	)
 	_, err := uc.Execute(context.Background(), appidentity.RequestMagicLinkCommand{
 		Email: "user@example.com",
-		Phone: "+5511987654321",
 	})
 	if err == nil || !errors.Is(err, incrErr) {
 		t.Fatalf("esperado wrap de incrErr, got %v", err)
@@ -325,65 +275,6 @@ func Test_VerifyMagicLink_Execute_NewUserWithInvalidPhone_ReturnsValidation(t *t
 	})
 	if !errors.Is(err, shared.ErrValidation) {
 		t.Fatalf("esperado ErrValidation para phone inválido no registro, got %v", err)
-	}
-}
-
-// ─── GoogleAuth — caminhos adicionais ─────────────────────────────────────────
-
-// Test_GoogleAuth_Execute_RefreshTokenSaveFails_ReturnsError cobre falha ao salvar
-// o refresh token após autenticação Google.
-func Test_GoogleAuth_Execute_RefreshTokenSaveFails_ReturnsError(t *testing.T) {
-	now := time.Now()
-	userRepo := newMockGoogleUserRepo()
-	refreshRepo := newMockRefreshRepo()
-	refreshRepo.saveErr = errors.New("db down on save")
-
-	uc := appidentity.NewGoogleAuthUseCase(
-		userRepo, refreshRepo, &mockTokenIssuer{},
-		shared.FixedClock{T: now}, 30*24*time.Hour,
-	)
-
-	info := &infraauth.GoogleUserInfo{
-		Sub:      "sub-save-fail",
-		Email:    "savefail@example.com",
-		Name:     "Save Fail",
-		Verified: true,
-	}
-
-	_, err := uc.Execute(context.Background(), info)
-	if err == nil {
-		t.Fatal("esperado erro quando Save do refresh token falha, got nil")
-	}
-}
-
-// Test_GoogleAuth_Execute_NewUserWithEmptyName_FallbackToEmail verifica que
-// quando o Google não fornece um name, o email é usado como nome.
-func Test_GoogleAuth_Execute_NewUserWithEmptyName_FallbackToEmail(t *testing.T) {
-	now := time.Now()
-	userRepo := newMockGoogleUserRepo()
-
-	uc := appidentity.NewGoogleAuthUseCase(
-		userRepo, newMockRefreshRepo(), &mockTokenIssuer{},
-		shared.FixedClock{T: now}, 30*24*time.Hour,
-	)
-
-	info := &infraauth.GoogleUserInfo{
-		Sub:      "sub-no-name",
-		Email:    "noname@example.com",
-		Name:     "", // Google não forneceu o nome
-		Verified: true,
-	}
-
-	result, err := uc.Execute(context.Background(), info)
-	if err != nil {
-		t.Fatalf("inesperado: %v", err)
-	}
-	if !result.IsNewUser {
-		t.Fatal("esperado IsNewUser=true")
-	}
-	// O use case usa o email como nome fallback.
-	if len(userRepo.savedUsers) != 1 {
-		t.Fatalf("esperado 1 usuário salvo, got %d", len(userRepo.savedUsers))
 	}
 }
 
