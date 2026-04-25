@@ -18,7 +18,6 @@ import { getUser, setUser, clearUser } from './storage';
 import { emailSchema } from './schemas';
 import {
   hasBackend,
-  apiGet,
   apiPost,
   apiPatch,
   apiDelete,
