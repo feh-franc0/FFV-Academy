@@ -1,0 +1,101 @@
+name: ffv-prod
+
+services:
+  # ─── Nginx: proxy reverso + SSL ────────────────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /opt/ffv/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - /opt/ffv/nginx/conf.d:/etc/nginx/conf.d:ro
+      # Certificados Let's Encrypt (gerenciados pelo certbot no host)
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      # Webroot para renovação automática do certbot
+      - certbot_webroot:/var/www/certbot:ro
+    networks:
+      - proxy
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # ─── Go API ────────────────────────────────────────────────────────────────
+  api:
+    image: ghcr.io/feh-franc0/ffv-api:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    # Segredos e config vêm de /opt/ffv/.env (criado manualmente na VPS, nunca no repositório)
+    env_file: /opt/ffv/.env
+    expose:
+      - "8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Distroless não tem shell/curl: usa o próprio binário com flag --healthcheck
+    healthcheck:
+      test: ["CMD", "/api", "--healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    networks:
+      - proxy
+      - data
+
+  # ─── PostgreSQL ────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ffv
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ffv_prod
+    # Expõe apenas no loopback do host (para o migrate CLI rodar sem entrar no container)
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ffv -d ffv_prod"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - data
+
+  # ─── Redis ─────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD}
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - data
+
+volumes:
+  postgres_data:
+  redis_data:
+  certbot_webroot:
+
+networks:
+  # nginx ↔ api (com acesso externo via ports)
+  proxy:
+  # api ↔ postgres ↔ redis (sem acesso externo)
+  data:
+    internal: true
