@@ -56,9 +56,16 @@ export async function writeFileSafe(filePath: string, content: string): Promise<
 }
 
 export async function writeFiles(rootPath: string, files: GeneratedFile[]): Promise<string[]> {
+  const normalRoot = path.resolve(rootPath);
   const written: string[] = [];
   for (const f of files) {
-    const absolute = path.isAbsolute(f.path) ? f.path : path.join(rootPath, f.path);
+    const absolute = path.resolve(
+      path.isAbsolute(f.path) ? f.path : path.join(normalRoot, f.path)
+    );
+    // Reject any path that escapes the workspace root
+    if (!absolute.startsWith(normalRoot + path.sep) && absolute !== normalRoot) {
+      throw new Error(`Path traversal detected: "${f.path}" resolves outside workspace.`);
+    }
     await writeFileSafe(absolute, f.content);
     written.push(absolute);
   }
@@ -89,6 +96,7 @@ export async function walk(
     for (const entry of entries) {
       if (ignored.has(entry.name) || entry.name.startsWith('.')) continue;
       const full = path.join(dir, entry.name);
+      if (entry.isSymbolicLink()) continue; // skip symlinks to avoid infinite loops
       if (entry.isDirectory()) {
         await recur(full, depth + 1);
       } else if (entry.isFile()) {

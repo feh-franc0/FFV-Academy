@@ -21,15 +21,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(cmd);
   }
 
+  // logger is disposed via context.subscriptions — deactivate() must NOT call it again
   context.subscriptions.push({ dispose: () => logger.dispose() });
 
-  // Background scan + drift check on activation.
   void scanInBackground();
 
-  // Watch for project changes and warn when AI files drift.
   startDriftWatcher(context, (drifted) => updateDrift(drifted));
 
-  // First-run welcome.
   await maybeShowWelcome(context);
 
   logger.info('AI Codebase Toolkit ready');
@@ -45,7 +43,14 @@ async function scanInBackground(): Promise<void> {
     const drift = await detectDrift(scan);
     updateDrift(drift.staleCount);
   } catch (err) {
-    logger.warn('Background scan failed', err);
+    logger.error('Background scan failed', err);
+    logger.show();
+    void vscode.window.showWarningMessage(
+      'AI Toolkit: project scan failed. Check the Output panel for details.',
+      'Show Output'
+    ).then((choice) => {
+      if (choice === 'Show Output') logger.show();
+    });
   }
 }
 
@@ -64,12 +69,14 @@ async function maybeShowWelcome(context: vscode.ExtensionContext): Promise<void>
   } else if (choice === 'Show Walkthrough') {
     await vscode.commands.executeCommand(
       'workbench.action.openWalkthrough',
-      'your-publisher.ai-codebase-toolkit#aiToolkit.gettingStarted',
+      'feh-franc0.ai-codebase-toolkit#aiToolkit.gettingStarted',
       false
     );
   }
 }
 
+// deactivate() is called AFTER context.subscriptions are disposed.
+// logger is already disposed there — do NOT call logger.dispose() here again.
 export function deactivate(): void {
-  logger.dispose();
+  // intentionally empty: all cleanup is via context.subscriptions
 }

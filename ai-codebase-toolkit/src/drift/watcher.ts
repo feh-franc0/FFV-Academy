@@ -23,38 +23,48 @@ export function startDriftWatcher(
   const cfg = vscode.workspace.getConfiguration('aiToolkit');
   if (!cfg.get<boolean>('autoSync', true)) return;
 
+  // lastNotifiedCount is scoped to this watcher instance, not global.
+  // Prevents state bleed if startDriftWatcher is called more than once.
+  let lastNotifiedCount = -1;
   let timer: NodeJS.Timeout | undefined;
+  let pendingScan = false;
+
   const trigger = (): void => {
     if (timer) clearTimeout(timer);
     timer = setTimeout(async () => {
+      // Prevent concurrent scans from the same watcher
+      if (pendingScan) return;
+      pendingScan = true;
       try {
         const scan = await scanProject(root);
         const report = await detectDrift(scan);
         const drifted = report.staleCount;
         onDriftChange(drifted);
-        if (drifted > 0) {
-          notifyDrift(drifted);
+        if (drifted > 0 && drifted !== lastNotifiedCount) {
+          lastNotifiedCount = drifted;
+          await notifyDrift(drifted);
+        } else if (drifted === 0) {
+          // reset so next drift triggers a notification again
+          lastNotifiedCount = -1;
         }
       } catch (err) {
         logger.warn('Drift check failed', err);
+      } finally {
+        pendingScan = false;
       }
     }, DEBOUNCE_MS);
   };
 
   for (const pattern of WATCH_PATTERNS) {
     const watcher = vscode.workspace.createFileSystemWatcher(pattern);
-    watcher.onDidChange(trigger);
-    watcher.onDidCreate(trigger);
-    watcher.onDidDelete(trigger);
+    watcher.onDidChange(trigger, undefined, context.subscriptions);
+    watcher.onDidCreate(trigger, undefined, context.subscriptions);
+    watcher.onDidDelete(trigger, undefined, context.subscriptions);
     context.subscriptions.push(watcher);
   }
 }
 
-let lastNotifiedCount = -1;
-
 async function notifyDrift(count: number): Promise<void> {
-  if (count === lastNotifiedCount) return;
-  lastNotifiedCount = count;
   const choice = await vscode.window.showWarningMessage(
     `${count} AI instruction file${count === 1 ? ' is' : 's are'} out of sync with your project.`,
     'Regenerate',

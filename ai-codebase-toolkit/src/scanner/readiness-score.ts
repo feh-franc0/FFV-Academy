@@ -50,15 +50,15 @@ const RULES: Rule[] = [
     }),
   },
   {
-    id: 'typescript-strict',
+    id: 'has-typescript',
     weight: 10,
     evaluate: (s) => ({
       passed: s.stack.hasTypeScript,
       issue: {
-        id: 'typescript-strict',
+        id: 'has-typescript',
         severity: 'info',
-        title: 'TypeScript not detected (or strict mode unknown)',
-        description: 'Strong types help AI generate correct code.',
+        title: 'TypeScript not detected',
+        description: 'Strong types reduce AI hallucinations — generated code matches real interfaces instead of guessing shapes.',
       },
     }),
   },

@@ -11,14 +11,18 @@ interface PackageJson {
 
 const FRAMEWORK_MAP: Array<{ dep: string; framework: Framework }> = [
   { dep: 'next', framework: 'next' },
+  { dep: '@remix-run/node', framework: 'next' },
+  { dep: '@remix-run/react', framework: 'react' },
   { dep: 'react-native', framework: 'react-native' },
   { dep: 'expo', framework: 'expo' },
   { dep: 'react', framework: 'react' },
   { dep: 'vue', framework: 'vue' },
   { dep: 'svelte', framework: 'svelte' },
+  { dep: '@sveltejs/kit', framework: 'svelte' },
   { dep: '@nestjs/core', framework: 'nest' },
   { dep: 'fastify', framework: 'fastify' },
   { dep: 'express', framework: 'express' },
+  { dep: 'hono', framework: 'express' },
 ];
 
 const TEST_FRAMEWORKS = ['vitest', 'jest', 'mocha', 'ava', '@playwright/test', 'cypress'];

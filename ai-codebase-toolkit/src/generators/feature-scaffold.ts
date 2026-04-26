@@ -58,7 +58,7 @@ function tsScaffold(root: string, name: string): GeneratedFile[] {
 
 function pyScaffold(root: string, name: string): GeneratedFile[] {
   return [
-    { path: path.join(root, '__init__.py'), content: `from .service import ${name.replace(/-/g, '_')}_service\n` },
+    { path: path.join(root, '__init__.py'), content: `from .service import ${cap(name)}Service\n` },
     { path: path.join(root, 'types.py'), content: `# TODO(ai): define ${name} domain types\n` },
     {
       path: path.join(root, 'service.py'),
