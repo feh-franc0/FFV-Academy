@@ -61,25 +61,32 @@ Cada métrica tem: **definição operacional**, **fonte**, **alvo**, **cadência
 
 Estes são os gates que **bloqueiam** uma release. Se algum falhar, release é segurada.
 
+### Gate v0.2.0 — ✅ entregue (2026-04-26)
+
+| Critério | Como medir | Status |
+|---|---|---|
+| `list_hubs` / `list_trails` listam pelo menos os hubs em uso | Inspeção | ✅ |
+| `find_duplicates` renomeada para `find_similar_titles` | Code review | ✅ |
+| `preview_article_update` retorna diff válido | Teste automático (handlers.test.ts) | ✅ |
+| Cobertura ≥ 70% linhas | `vitest --coverage` → **100% linhas** | ✅ |
+| Logs estruturados em stderr | Testados em handlers.test.ts | ✅ |
+| `delete_article` com confirmação real | `confirm_slug` deve ser idêntico ao `slug` | ✅ |
+| 401 com instruções de renovação acionáveis | URL real (não variável de shell) | ✅ |
+| Documentação atualizada | Revisão | ✅ |
+
 ### Gate v1.1
 
 | Critério | Como medir | Bloqueia? |
 |---|---|---|
 | Refresh automático funciona ≥ 24h sem reinício | Uso real, observação | sim |
-| `preview_article_update` retorna diff válido em 5 cenários | Teste manual scriptado | sim |
 | Backup de Postgres testado em restore | Simulação restore | sim |
-| `list_hubs` / `list_trails` listam pelo menos os hubs em uso | Inspeção | não |
-| `find_duplicates` renomeada | Code review | não |
-| Documentação atualizada | Revisão | sim |
+| `friction-log.md` revisado pós-primeiros 10 artigos | Revisão | sim |
 
 ### Gate v2.0
 
 | Critério | Como medir | Bloqueia? |
 |---|---|---|
-| Cobertura ≥ 70% linhas | `vitest --coverage` | sim |
-| Logs estruturados verificados em uso | Inspeção stderr | sim |
 | OpenAPI completa + tipos gerados + CI rodando | Build CI | sim |
-| `delete_article` com elicitation OU removida | Code review | sim |
 | ≥ 1 Resource e 1 Prompt funcionais | Demo manual | sim |
 | 30 dias de uso solo sem precisar do painel | Diário de uso | sim |
 | M1, M2 atingidos e registrados | Planilha | sim |

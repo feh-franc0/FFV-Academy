@@ -8,19 +8,19 @@
 
 ```
             ┌──────────────┐
-            │  E2E manual  │   ← v2: protocolo MCP real
+            │  E2E manual  │   ← v2: protocolo MCP real (roteiro em README)
             │   (poucos)   │
             └──────────────┘
         ┌─────────────────────┐
-        │  Contract tests     │   ← v2: schema das tools
-        │  (alguns)           │
+        │  Handler tests      │   ← ✅ v0.2: InMemoryTransport + Client SDK
+        │  (alguns)           │      12 testes, todos os 10 handlers cobertos
         └─────────────────────┘
     ┌─────────────────────────────┐
-    │  Unit tests (muitos)        │   ← v2: cliente, config, utils
+    │  Unit tests (muitos)        │   ← ✅ v0.2: 65 testes puros
     └─────────────────────────────┘
 ```
 
-**Estado atual (v0.1):** zero testes. **Bloqueante pra v2** (ver `02-ROADMAP` R2.1).
+**Estado atual (v0.2):** 77 testes passando. Cobertura: **100% linhas/funções, 94% branches.**
 
 ---
 
@@ -28,11 +28,12 @@
 
 ### Unit (Vitest) — cobre ≥70% linhas
 
-| Módulo | O que testa |
-|---|---|
-| `config.ts` | Parsing de env, defaults, rejeição de valores inválidos |
-| `client.ts` | Construção de URLs, headers, parsing de erros (Problem+JSON), timeout, propagação de ApiError |
-| `tools.ts` | Validação Zod (entrada inválida rejeitada), formatação de output, tratamento de exceção em `safe()` |
+| Arquivo | Testes | O que cobre |
+|---|---|---|
+| `config.test.ts` | 10 | Parsing de env, defaults, trailing slash, token vazio, timeout inválido |
+| `client.test.ts` | 27 | URLs, headers, 401 acionável, timeout/AbortError, auth obrigatória, Problem+JSON, rethrow de rede |
+| `tools.test.ts` | 28 | HUBS_STATIC, TRAILS_STATIC, referências cruzadas, getTrails, groupByTrail, buildDiff (incluindo content_md undefined) |
+| `handlers.test.ts` | 12 | Todos os 10 handlers via InMemoryTransport + Client SDK — path feliz + erros + log em stderr |
 
 **Mock estratégia:** `globalThis.fetch = vi.fn(...)`. Não usa MSW — simplicidade > poder.
 
@@ -81,7 +82,7 @@ Aplicado antes de merge em main:
 | Ameaça | Vetor | Severidade | Mitigação atual | Gap |
 |---|---|---|---|---|
 | Vazamento de admin token | env var em config | 🔴 | Arquivo de config local (não commitado) | Não há expiração curta — token vaza = vaza por TTL inteiro |
-| Mutação não autorizada via MCP | Claude alucina mutation | 🟡 | Confirmação `confirm:true` (teatro), backend exige role=admin | Elicitation real (v2) |
+| Mutação não autorizada via MCP | Claude alucina mutation | 🟡 | `confirm_slug` deve ser idêntico ao `slug` (fricção semântica real), backend exige role=admin | Elicitation formal (v2) |
 | Replay de chamada | Atacante intercepta | 🟢 | HTTPS no backend; em local não importa | n/a |
 | Injection no SQL | Via `slug` parametrizado | 🟢 | Backend usa prepared statements (verificado) | n/a |
 | Path traversal em slug | `../something` | 🟢 | `encodeURIComponent` no client; backend valida | n/a |

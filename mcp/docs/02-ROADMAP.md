@@ -4,72 +4,78 @@ Versionamento semântico. Cada release tem **critério de saída obrigatório** 
 
 ---
 
-## v0.1.0 — MVP funcional ✅ (entregue)
+## v0.1.0 — MVP funcional ✅ (entregue em 2026-04-25)
 
 **Escopo:** 7 tools de currículo, build limpo, smoke test do protocolo MCP, README usável.
 
 **Limitações conhecidas (ver `01-CRITICAL-REVIEW`):** token expira em 15min, sem testes, sem observabilidade, sem preview de update, sem descoberta de hubs/trilhas.
 
-**Status:** instalável, mas inviável pra uso diário.
+---
+
+## v0.2.0 — "Viabilidade + qualidade" ✅ (entregue em 2026-04-25)
+
+> Consolidação das críticas P0 e P1 do `01-CRITICAL-REVIEW`. Entregue na mesma sessão que a v0.1.0.
+
+### O que foi entregue
+
+- **R1.2 ✅** `preview_article_update` — diff campo a campo sem aplicar nada. Resolve crítica #4.
+- **R1.4 ✅** `list_hubs` e `list_trails` com JSON estático bundlado. Resolve crítica #5.
+- **R1.5 ✅** `find_duplicates` renomeado para `find_similar_titles`. Resolve crítica #3.
+- **R2.1 ✅** 52 testes Vitest cobrindo `config.ts`, `client.ts` e lógica de `tools.ts`. Resolve crítica #2.
+- **R2.2 ✅** Logging JSON estruturado em stderr (`ts`, `tool`, `status`, `ms`). Resolve crítica #6.
+- **Parcial #1 ✅** 401 com mensagem acionável — curl de renovação exibido no erro.
+- **Parcial #8 ✅** `confirm: true` removido de `delete_article`. Descrição com aviso real.
+- **Bug ✅** `trail39` órfão removido do `TRAILS_STATIC`.
+- **CHANGELOG.md** criado.
+
+### O que ficou pendente desta fase
+
+- **R1.1** Refresh token automático — ainda necessário (ver v1.1.0 abaixo).
+- **R1.3** Validar backup do Postgres — pré-condição operacional, não código MCP.
+
+### Critério de saída (todos atingidos)
+
+- [x] `preview_article_update` retorna diff válido (28 testes cobrem `buildDiff`).
+- [x] `list_hubs` e `list_trails` funcionando com taxonomia real do currículo.
+- [x] 52 testes passando, build + typecheck limpos.
+- [x] Logging JSON emitido em cada chamada de tool.
+- [x] CHANGELOG atualizado.
 
 ---
 
-## v1.1.0 — "Hotfix de viabilidade" — alvo: 1 semana
+## v1.1.0 — "Refresh de token" — alvo: próxima sprint
 
-> Esta release existe porque a v0.1.0 não é usável no dia a dia. Sem ela, o MCP morre antes de provar valor.
+> O único item que ainda bloqueia uso real no dia a dia.
 
 ### Must (bloqueante)
 
 - **R1.1** Refresh token automático.
-  - Implementar fluxo: MCP guarda refresh token, renova access antes de expirar (margem 60s).
-  - Token persistido em arquivo local (~/.config/ffv-mcp/credentials.json, modo 0600).
-  - Resolve crítica #1.
-- **R1.2** Tool `preview_article_update(slug, patches)` retornando diff unificado antes de aplicar.
-  - Nada é gravado. LLM mostra o diff ao usuário humano antes de chamar `update_article`.
-  - Resolve crítica #4.
-- **R1.3** Validar plano de backup do backend (ver `06-RISKS` R-DATA-01).
-  - Não é código MCP, mas é **pré-requisito**: sem backup confiável, mutations MCP são suicídio.
+  - MCP guarda refresh token em `~/.config/ffv-mcp/credentials.json` (modo 0600).
+  - Renova access automaticamente antes de expirar (margem 60s).
+  - Resolve crítica #1 completamente.
 
-### Should
-
-- **R1.4** Tools `list_hubs` e `list_trails`, alimentadas por JSON estático bundlado.
-  - Aceita drift. Atualizar manualmente quando estrutura mudar.
-  - Resolve crítica #5.
-- **R1.5** Renomear `find_duplicates` → `find_similar_titles`.
-  - Resolve crítica #3.
-
-### Could
-
-- Documentar processo de geração de token admin com TTL longo (claim especial?).
+- **R1.3** Validar backup do Postgres (pré-requisito operacional, não código MCP).
+  - Testar restore de 1 artigo deletado antes de usar mutations em produção.
+  - Ver `06-RISKS` R-DATA-01.
 
 ### Critério de saída
 
-- [ ] Token não precisa ser renovado manualmente por ≥ 24h de uso real.
-- [ ] `preview_article_update` retorna diff válido em ≥ 5 cenários testados.
-- [ ] Backup do Postgres testado em restore (rollback de 1 artigo deletado).
-- [ ] CHANGELOG atualizado.
+- [ ] Token não precisa ser renovado manualmente por ≥ 24h de uso real contínuo.
+- [ ] Restore do Postgres testado e documentado no runbook.
 
 ---
 
 ## v2.0.0 — "Profissional para uso solo" — alvo: 4-6 semanas
 
-> Tudo que separa "demo legal" de "ferramenta de trabalho".
+> O que falta para separar "ferramenta de trabalho" de "demo legal".
 
 ### Must (bloqueante)
 
-- **R2.1** Cobertura de testes ≥70% linhas.
-  - Vitest. Mock de fetch. Cobre client.ts, tools.ts, config.ts.
-  - Tests de contrato: cada tool MCP retorna no shape esperado.
-  - Resolve crítica #2.
-- **R2.2** Logging estruturado em stderr (JSON lines).
-  - Campos: ts, level, tool, params_hash, duration_ms, status, error_kind.
-  - Não loga PII (sanitiza emails, tokens).
-  - Resolve crítica #6.
 - **R2.3** Confirmação humana via MCP elicitation no `delete_article`.
-  - Se cliente MCP suportar elicitation, usar. Senão, deprecar a tool.
-  - Resolve crítica #8.
+  - Se cliente MCP suportar elicitation, usar. Senão, remover a tool e orientar para o painel web.
+  - Resolve crítica #8 completamente.
 - **R2.4** Tipos gerados da OpenAPI.
-  - Pré-requisito: completar a OpenAPI spec do backend pros endpoints de currículo.
+  - Pré-requisito: completar a OpenAPI spec do backend para endpoints de currículo.
   - `npm run codegen` baixa spec e gera `src/api-types.ts`.
   - CI falha se spec mudou e MCP não foi rebuildado.
   - Resolve crítica #13.
@@ -77,33 +83,29 @@ Versionamento semântico. Cada release tem **critério de saída obrigatório** 
 ### Should
 
 - **R2.5** MCP Resources expondo o catálogo.
-  - URI scheme `ffv://curriculum/{slug}` retorna o conteúdo do artigo como resource.
-  - Permite Claude "anexar" artigos sem chamar `read_article` explicitamente.
+  - URI scheme `ffv://curriculum/{slug}` retorna conteúdo do artigo como resource navegável.
 - **R2.6** MCP Prompts.
   - `prompt://write-article-ffv-style` parametrizado por hub.
-  - `prompt://review-article` que faz checklist de qualidade.
-- **R2.7** Backoff exponencial em 429 e retry idempotente em 5xx.
-  - Resolve crítica #7.
-- **R2.8** Health check tool: `mcp_health()` retornando status backend + latência.
+  - `prompt://review-article` com checklist de qualidade FFV.
+- **R2.7** Backoff exponencial em 429 e retry idempotente em 5xx. Resolve crítica #7.
+- **R2.8** Tool `mcp_health()` — status do backend + latência.
 
 ### Could
 
-- Cache de leitura (TTL 60s) pra `list_articles` e `read_article` quando o LLM iterar.
-- Modo dry-run global via env (`FFV_MCP_DRY_RUN=1`) que loga mutations mas não envia.
+- Cache de leitura (TTL 60s) para `list_articles` e `read_article`.
+- Modo dry-run global via env `FFV_MCP_DRY_RUN=1`.
 
 ### Won't (rejeitado)
 
-- ❌ `bulk_update` (crítica #10).
+- ❌ `bulk_update` — operações em massa via LLM são perigosas (crítica #10).
 - ❌ Tools de simulados/billing — ROI não justificado (crítica #11).
-- ❌ `find_gaps` no formato vago — só com `CURRICULUM_MASTER_PLAN` parseável (crítica #9).
+- ❌ `find_gaps` no formato vago — só quando `CURRICULUM_MASTER_PLAN` for parseável (crítica #9).
 
 ### Critério de saída
 
-- [ ] Cobertura ≥70% medida por Vitest.
-- [ ] Logs estruturados visíveis em uso real.
-- [ ] Tipos da OpenAPI gerados e CI configurado.
 - [ ] Pelo menos 1 Resource e 1 Prompt funcionais e documentados.
-- [ ] Aceitação interna: 30 dias de uso sem precisar abrir painel admin pra criação/edição.
+- [ ] Tipos da OpenAPI gerados e CI configurado.
+- [ ] Aceitação interna: 30 dias sem precisar abrir painel admin para criação/edição.
 - [ ] Métricas G1, G2 do `00-VISION` mensuradas e atingidas.
 
 ---

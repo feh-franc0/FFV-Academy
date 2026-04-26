@@ -34,24 +34,24 @@ Severidade = Impacto × Probabilidade. Escala 1-5 cada → score 1-25.
 
 - **Categoria:** Dados
 - **Impacto:** 4 (revert exige restore do banco inteiro)
-- **Probabilidade:** 4 (LLM erra com frequência > 0)
-- **Score:** 16 🔴 ALTO
-- **Status:** ativo
-- **Mitigação:** v1.1 R1.2 — `preview_article_update` obrigatório antes
+- **Probabilidade:** 2 (reduzida — `preview_article_update` disponível desde v0.2.0)
+- **Score:** 8 🟡 MÉDIO (era 16 🔴)
+- **Status:** mitigado parcialmente (v0.2.0)
+- **Mitigação aplicada:** `preview_article_update` entregue — diff antes de aplicar. Workflow documentado no README.
 - **Mitigação longa:** backend precisa versionar artigos (separado do MCP)
 - **Owner:** mantenedor
-- **Prazo:** v1.1 (preview), v3 (versionamento)
+- **Prazo:** versionamento de artigos → v3
 
 ### R-LLM-01 — LLM gera metadados inválidos (slug, hub, trail)
 
 - **Categoria:** Qualidade / Conteúdo
 - **Impacto:** 2 (rejeição do backend retorna erro útil)
-- **Probabilidade:** 4 (sem `list_hubs/trails`, é chute)
-- **Score:** 8 🟡 MÉDIO
-- **Status:** ativo
-- **Mitigação:** v1.1 R1.4 — tools de descoberta
+- **Probabilidade:** 2 (reduzida — `list_hubs` e `list_trails` disponíveis desde v0.2.0)
+- **Score:** 4 🟢 BAIXO (era 8 🟡)
+- **Status:** mitigado (v0.2.0)
+- **Mitigação aplicada:** `list_hubs` e `list_trails` entregues. `create_article` instrui explicitamente a usá-las.
 - **Owner:** mantenedor
-- **Prazo:** v1.1
+- **Prazo:** fechado — monitorar drift de taxonomia
 
 ### R-LLM-02 — LLM gera conteúdo factualmente errado e publica
 
@@ -115,12 +115,12 @@ Severidade = Impacto × Probabilidade. Escala 1-5 cada → score 1-25.
 
 - **Categoria:** Operacional
 - **Impacto:** 3
-- **Probabilidade:** 4 (já é o caso)
-- **Score:** 12 🟡 MÉDIO
-- **Status:** ativo
-- **Mitigação:** v2 R2.2 — logging estruturado
+- **Probabilidade:** 2 (reduzida — logging JSON em stderr desde v0.2.0)
+- **Score:** 6 🟢 BAIXO (era 12 🟡)
+- **Status:** mitigado (v0.2.0)
+- **Mitigação aplicada:** logging JSON estruturado em stderr para cada chamada de tool (`ts`, `tool`, `status`, `ms`, `httpStatus`/`error`).
 - **Owner:** mantenedor
-- **Prazo:** v2
+- **Prazo:** fechado — métricas OpenTelemetry ficam para v2 se necessário
 
 ### R-PROD-01 — MCP não é adotado, vira código morto
 

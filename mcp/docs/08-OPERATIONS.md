@@ -108,28 +108,49 @@ npm run build
 
 E reinicie o cliente Claude pra recarregar.
 
+### Rodar testes
+
+```bash
+cd mcp
+npm test               # roda 52 testes (config, client, tools)
+npm run test:watch     # modo watch para desenvolvimento
+```
+
+Todos os testes devem passar antes de qualquer release.
+
 ---
 
 ## Observabilidade
 
-### v1 (atual)
+### v0.2.0+ (atual)
 
-- **stderr:** linha única na inicialização (`[ffv-mcp] conectado. base=... admin=yes/no`).
-- **Não tem:** logs estruturados, métricas, audit.
+Cada chamada de tool emite uma linha JSON em stderr:
 
-### v2 (planejado)
+```json
+{"ts":"2026-04-25T17:00:01.234Z","tool":"list_articles","status":"ok","ms":42}
+{"ts":"2026-04-25T17:00:05.001Z","tool":"update_article","status":"error","httpStatus":401,"ms":11}
+{"ts":"2026-04-25T17:00:06.500Z","tool":"read_article","status":"error","error":"Timeout (15000ms) em GET /api/v1/curriculum/slug","ms":15001}
+```
 
-- **stderr JSON lines:**
-  ```json
-  {"ts":"2026-04-25T19:30:01Z","level":"info","tool":"list_articles","duration_ms":42,"status":"ok"}
-  ```
-- **Sanitização:** `Authorization`, `content_md` (resumido a length), email/phone sempre redactados.
-- **Métricas (opcional):** se `OTEL_EXPORTER_OTLP_ENDPOINT` setado, exporta latência por tool e contagem de erro.
+**Campos:**
+- `ts` — timestamp ISO 8601
+- `tool` — nome da tool chamada
+- `status` — `ok` ou `error`
+- `ms` — duração total da chamada em milissegundos
+- `httpStatus` — código HTTP (apenas em erros de API)
+- `error` — mensagem de erro (apenas em erros não-HTTP)
+
+**Sanitização:** params de entrada não são logados — nenhum `content_md`, email ou token aparece nos logs.
 
 ### Onde ler os logs
 
-- **Claude Desktop:** stderr do MCP é capturado pelo cliente. Caminho macOS: `~/Library/Logs/Claude/mcp*.log`.
-- **Claude Code:** `~/.claude/logs/mcp-ffv-academy.log` (verificar caminho exato com `claude mcp logs ffv-academy` se existir).
+- **Claude Desktop macOS:** `~/Library/Logs/Claude/mcp*.log`
+- **Claude Code:** `claude mcp logs ffv-academy` (verificar disponibilidade)
+- **Dev manual:** `node dist/index.js 2>mcp.log` — stderr vai para arquivo
+
+### v2 (planejado)
+
+- Métricas OpenTelemetry opcionais se `OTEL_EXPORTER_OTLP_ENDPOINT` setado.
 
 ---
 

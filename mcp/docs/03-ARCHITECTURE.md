@@ -52,10 +52,20 @@ flowchart TB
 |---|---|---|
 | `index.ts` | Inicializar config + client + server, conectar transport stdio | Lógica de negócio, parsing de input |
 | `config.ts` | Carregar env vars, validar tipos, fornecer defaults | Persistência, IO de rede |
-| `client.ts` | Falar HTTP com o backend, mapear erros, expor tipos do domínio | Decisão sobre quando chamar (isso é da tool) |
-| `tools.ts` | Definir schemas de input (Zod), registrar tools no MCP, formatar output | Lógica HTTP, parsing de env |
+| `client.ts` | Falar HTTP com o backend, mapear erros (incl. 401 acionável), expor tipos do domínio | Decisão sobre quando chamar (isso é da tool) |
+| `tools.ts` | Definir schemas de input (Zod), registrar tools no MCP, formatar output, emitir logs JSON | Lógica HTTP, parsing de env |
 
-Esta separação importa porque ela permite **mockar `client.ts` em testes** sem subir o backend, e **trocar o transport** (stdio → HTTP) mexendo só no `index.ts`.
+`tools.ts` também exporta **funções puras** usadas tanto pelos handlers como pelos testes:
+
+| Função exportada | O que faz |
+|---|---|
+| `HUBS_STATIC` | Array const com todos os hubs (id, slug, name, trailIds) |
+| `TRAILS_STATIC` | Array const com todas as trilhas (id, hubId, name) |
+| `getTrails(hubId?)` | Filtra TRAILS_STATIC por hub — lógica de `list_trails` |
+| `groupByTrail(data, topic)` | Agrupa ArticleListItems por trail_id — lógica de `find_similar_titles` |
+| `buildDiff(current, patches)` | Compara artigo atual vs patches — lógica de `preview_article_update` |
+
+Esta separação importa porque ela permite **mockar `client.ts` em testes** sem subir o backend, **testar lógica de tools sem McpServer**, e **trocar o transport** (stdio → HTTP) mexendo só no `index.ts`.
 
 ---
 

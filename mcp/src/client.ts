@@ -1,5 +1,7 @@
 import type { Config } from "./config.js";
 
+export type Difficulty = "beginner" | "intermediate" | "advanced";
+
 export interface Article {
   id: string;
   slug: string;
@@ -9,7 +11,7 @@ export interface Article {
   content_md?: string;
   xp: number;
   read_time: number;
-  difficulty: string;
+  difficulty: Difficulty;
   order: number;
   published: boolean;
   created_at?: string;
@@ -42,7 +44,7 @@ export interface CreateArticleInput {
   trail_id: string;
   hub_id: string;
   content_md: string;
-  difficulty: string;
+  difficulty: Difficulty;
   xp?: number;
   read_time?: number;
   order?: number;
@@ -52,7 +54,7 @@ export interface CreateArticleInput {
 export interface UpdateArticleInput {
   title?: string;
   content_md?: string;
-  difficulty?: string;
+  difficulty?: Difficulty;
   xp?: number;
   read_time?: number;
   order?: number;
@@ -171,6 +173,18 @@ export class FFVClient {
       const parsed: unknown = text ? safeJson(text) : null;
 
       if (!res.ok) {
+        if (res.status === 401) {
+          const base = this.cfg.baseUrl;
+          throw new ApiError(
+            401,
+            parsed,
+            `Token expirado ou inválido (401). Para renovar:\n` +
+              `1. curl -X POST ${base}/api/v1/auth/request-token -H 'Content-Type: application/json' -d '{"email":"seu-email-admin"}'\n` +
+              `2. Pegue o código de 6 dígitos no email e:\n` +
+              `   curl -X POST ${base}/api/v1/auth/verify -H 'Content-Type: application/json' -d '{"email":"seu-email","token":"CODIGO"}'\n` +
+              `3. Copie o accessToken e atualize FFV_ADMIN_TOKEN na config do MCP.`,
+          );
+        }
         const detail = isProblem(parsed) ? `${parsed.title}: ${parsed.detail ?? ""}` : text;
         throw new ApiError(res.status, parsed, `${method} ${path} → ${res.status} ${detail}`);
       }

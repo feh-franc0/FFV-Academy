@@ -4,7 +4,7 @@ Suite de documentos para planejar, validar e operar o MCP server da FFV Academy 
 
 **Audiência:** você (mantenedor solo hoje), e qualquer pessoa que entrar amanhã.
 
-**Estado atual:** v0.1.0 implementada (gestão de currículo). v2 em planejamento.
+**Estado atual:** v0.2.0 implementada — 10 tools, 52 testes, logging JSON, preview de update. Próximo: v1.1.0 (refresh de token automático).
 
 ---
 
