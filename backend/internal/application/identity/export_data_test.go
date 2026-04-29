@@ -32,9 +32,6 @@ func (r *exportUserRepo) FindByID(_ context.Context, _ shared.UserID) (*identity
 func (r *exportUserRepo) FindByEmail(_ context.Context, _ identity.Email) (*identity.User, error) {
 	return nil, shared.ErrNotFound
 }
-func (r *exportUserRepo) FindByGoogleID(_ context.Context, _ string) (*identity.User, error) {
-	return nil, shared.ErrNotFound
-}
 func (r *exportUserRepo) ExistsByEmail(_ context.Context, _ identity.Email) (bool, error) {
 	return false, nil
 }

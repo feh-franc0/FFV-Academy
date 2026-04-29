@@ -141,7 +141,7 @@ func buildAuthHandler(requestMagicLinkErr error) *handlers.AuthHandler {
 		tokenStore, &mockHandlerUserRepo{}, emailer,
 		shared.SystemClock{},
 		10*time.Minute,
-		5,
+		5, false,
 	)
 
 	// Para verify, usamos um user repo que retorna ErrNotFound — handler testa validação antes.
@@ -151,7 +151,7 @@ func buildAuthHandler(requestMagicLinkErr error) *handlers.AuthHandler {
 
 	verifyUC := appidentity.NewVerifyMagicLinkUseCase(
 		tokenStore, userRepo, refreshRepo, issuer,
-		shared.SystemClock{}, 30*24*time.Hour,
+		shared.SystemClock{}, 30*24*time.Hour, false,
 	)
 	refreshUC := appidentity.NewRefreshTokenUseCase(
 		refreshRepo, userRepo, issuer,
@@ -182,9 +182,6 @@ func (m *mockHandlerUserRepo) FindByID(_ context.Context, _ shared.UserID) (*dom
 	return nil, shared.ErrNotFound
 }
 func (m *mockHandlerUserRepo) FindByEmail(_ context.Context, _ domidentity.Email) (*domidentity.User, error) {
-	return nil, shared.ErrNotFound
-}
-func (m *mockHandlerUserRepo) FindByGoogleID(_ context.Context, _ string) (*domidentity.User, error) {
 	return nil, shared.ErrNotFound
 }
 func (m *mockHandlerUserRepo) ExistsByEmail(_ context.Context, _ domidentity.Email) (bool, error) {

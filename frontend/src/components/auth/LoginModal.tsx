@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { requestToken, verifyToken, MOCK_TOKEN, type UserProfile } from '@/lib/auth';
 import { emailSchema, phoneBRSchema } from '@/lib/schemas';
 
@@ -56,6 +56,16 @@ export function LoginModal({ reason, onSuccess, onCancel }: Props) {
     if (digits.startsWith('55') && digits.length >= 12) return '+' + digits;
     if (digits.length >= 10 && digits.length <= 11) return '+55' + digits;
     return '+' + digits;
+  }, []);
+
+  const formatPhone = useCallback((e: ChangeEvent<HTMLInputElement>): void => {
+    const digits = e.target.value.replace(/\D/g, '').slice(0, 11);
+    let formatted = '';
+    if (digits.length <= 2) formatted = digits.length ? `(${digits}` : '';
+    else if (digits.length <= 6) formatted = `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
+    else if (digits.length <= 10) formatted = `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`;
+    else formatted = `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
+    setPhone(formatted);
   }, []);
 
   async function handleSubmitEmail(e: React.FormEvent) {
@@ -205,17 +215,24 @@ export function LoginModal({ reason, onSuccess, onCancel }: Props) {
                 </label>
 
                 <label className="text-xs font-semibold" style={{ color: 'var(--ffv-muted)' }}>
-                  Celular (com DDD)
-                  <input
-                    type="tel"
-                    autoComplete="tel"
-                    required
-                    value={phone}
-                    onChange={e => setPhone(e.target.value)}
-                    placeholder="(11) 98765-4321"
-                    className="mt-1 w-full px-3 py-2.5 rounded-lg text-sm font-normal"
-                    style={{ background: 'var(--ffv-bg)', border: '1px solid var(--ffv-border)', color: 'var(--foreground)' }}
-                  />
+                  Celular
+                  <div className="mt-1 flex items-center rounded-lg overflow-hidden text-sm"
+                    style={{ border: '1px solid var(--ffv-border)', background: 'var(--ffv-bg)' }}>
+                    <span className="px-3 py-2.5 font-mono font-semibold select-none border-r shrink-0"
+                      style={{ color: 'var(--ffv-blue)', borderColor: 'var(--ffv-border)', background: 'rgba(88,166,255,0.06)' }}>
+                      +55
+                    </span>
+                    <input
+                      type="tel"
+                      autoComplete="tel-national"
+                      required
+                      value={phone}
+                      onChange={formatPhone}
+                      placeholder="(11) 98765-4321"
+                      className="flex-1 px-3 py-2.5 bg-transparent outline-none font-normal"
+                      style={{ color: 'var(--foreground)' }}
+                    />
+                  </div>
                 </label>
 
                 <label className="flex items-start gap-2 text-xs mt-1 cursor-pointer" style={{ color: 'var(--ffv-muted)' }}>

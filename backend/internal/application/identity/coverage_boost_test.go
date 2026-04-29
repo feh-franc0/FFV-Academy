@@ -28,7 +28,7 @@ import (
 func Test_RequestMagicLinkUseCase_WithLogger_ReturnsUC(t *testing.T) {
 	uc := appidentity.NewRequestMagicLinkUseCase(
 		&mockTokenStore{}, newMockUserRepo(), &mockEmailer{},
-		shared.FixedClock{T: time.Now()}, 10*time.Minute, 5,
+		shared.FixedClock{T: time.Now()}, 10*time.Minute, 5, false,
 	)
 	// WithLogger deve retornar o mesmo use case (para chaining).
 	got := uc.WithLogger(slog.Default())
@@ -40,7 +40,7 @@ func Test_RequestMagicLinkUseCase_WithLogger_ReturnsUC(t *testing.T) {
 func Test_VerifyMagicLinkUseCase_WithLogger_ReturnsUC(t *testing.T) {
 	uc := appidentity.NewVerifyMagicLinkUseCase(
 		&mockTokenStore{}, newMockUserRepo(), newMockRefreshRepo(),
-		&mockTokenIssuer{}, shared.FixedClock{T: time.Now()}, time.Hour,
+		&mockTokenIssuer{}, shared.FixedClock{T: time.Now()}, time.Hour, false,
 	)
 	got := uc.WithLogger(slog.Default())
 	if got == nil {
@@ -97,7 +97,7 @@ func Test_RequestMagicLink_Execute_GetAttemptsFails_ReturnsError(t *testing.T) {
 
 	uc := appidentity.NewRequestMagicLinkUseCase(
 		store, newMockUserRepo(), &mockEmailer{},
-		shared.FixedClock{T: time.Now()}, 10*time.Minute, 5,
+		shared.FixedClock{T: time.Now()}, 10*time.Minute, 5, false,
 	)
 	_, err := uc.Execute(context.Background(), appidentity.RequestMagicLinkCommand{
 		Email: "user@example.com",
@@ -114,7 +114,7 @@ func Test_RequestMagicLink_Execute_StoreFails_ReturnsError(t *testing.T) {
 
 	uc := appidentity.NewRequestMagicLinkUseCase(
 		store, newMockUserRepo(), &mockEmailer{},
-		shared.FixedClock{T: time.Now()}, 10*time.Minute, 5,
+		shared.FixedClock{T: time.Now()}, 10*time.Minute, 5, false,
 	)
 	_, err := uc.Execute(context.Background(), appidentity.RequestMagicLinkCommand{
 		Email: "user@example.com",
@@ -143,7 +143,7 @@ func Test_RequestMagicLink_Execute_IncrAttemptsFails_ReturnsError(t *testing.T) 
 
 	uc := appidentity.NewRequestMagicLinkUseCase(
 		store, newMockUserRepo(), &mockEmailer{},
-		shared.FixedClock{T: time.Now()}, 10*time.Minute, 5,
+		shared.FixedClock{T: time.Now()}, 10*time.Minute, 5, false,
 	)
 	_, err := uc.Execute(context.Background(), appidentity.RequestMagicLinkCommand{
 		Email: "user@example.com",
@@ -178,7 +178,7 @@ func Test_VerifyMagicLink_Execute_FindByEmailFails_ReturnsError(t *testing.T) {
 
 	uc := appidentity.NewVerifyMagicLinkUseCase(
 		tokenStore, userRepo, newMockRefreshRepo(),
-		&mockTokenIssuer{}, shared.FixedClock{T: now}, time.Hour,
+		&mockTokenIssuer{}, shared.FixedClock{T: now}, time.Hour, false,
 	)
 	_, err := uc.Execute(context.Background(), appidentity.VerifyMagicLinkCommand{
 		Email: "user@example.com",
@@ -210,7 +210,7 @@ func Test_VerifyMagicLink_Execute_IssueRefreshTokenFails_ReturnsError(t *testing
 
 	uc := appidentity.NewVerifyMagicLinkUseCase(
 		tokenStore, userRepo, newMockRefreshRepo(),
-		issuer, shared.FixedClock{T: now}, time.Hour,
+		issuer, shared.FixedClock{T: now}, time.Hour, false,
 	)
 	_, err = uc.Execute(context.Background(), appidentity.VerifyMagicLinkCommand{
 		Email: email.String(),
@@ -243,7 +243,7 @@ func Test_VerifyMagicLink_Execute_SaveRefreshTokenFails_ReturnsError(t *testing.
 
 	uc := appidentity.NewVerifyMagicLinkUseCase(
 		tokenStore, userRepo, refreshRepo,
-		&mockTokenIssuer{}, shared.FixedClock{T: now}, time.Hour,
+		&mockTokenIssuer{}, shared.FixedClock{T: now}, time.Hour, false,
 	)
 	_, err = uc.Execute(context.Background(), appidentity.VerifyMagicLinkCommand{
 		Email: email.String(),
@@ -263,7 +263,7 @@ func Test_VerifyMagicLink_Execute_NewUserWithInvalidPhone_ReturnsValidation(t *t
 
 	uc := appidentity.NewVerifyMagicLinkUseCase(
 		tokenStore, newMockUserRepo(), newMockRefreshRepo(),
-		&mockTokenIssuer{}, shared.FixedClock{T: now}, time.Hour,
+		&mockTokenIssuer{}, shared.FixedClock{T: now}, time.Hour, false,
 	)
 	_, err := uc.Execute(context.Background(), appidentity.VerifyMagicLinkCommand{
 		Email: "new@example.com",

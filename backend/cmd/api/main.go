@@ -123,7 +123,12 @@ func run() error {
 
 	// ─── Infra: Serviços externos ───────────────────────────────────────────────
 	jwtService := auth.NewJWTService(cfg.JWT)
-	emailClient := email.NewResendClient(cfg.Resend)
+	var emailClient appidentity.EmailSender
+	if cfg.App.Env == "development" {
+		emailClient = email.NewMailhogClient("localhost:1025", "dev@ffv.local")
+	} else {
+		emailClient = email.NewResendClient(cfg.Resend)
+	}
 	stripeClient := payment.NewStripeClient(cfg.Stripe)
 	claudeClient := ai.NewClaudeClient(cfg.Anthropic, tutorCache)
 
@@ -145,10 +150,11 @@ func run() error {
 	// retrocompatibilidade — testes usam o construtor sem logger.
 	requestMagicLinkUC := appidentity.NewRequestMagicLinkUseCase(
 		magicTokenStore, userRepo, emailClient, clock,
-		magicTokenTTL, magicMaxAttempts,
+		magicTokenTTL, magicMaxAttempts, cfg.App.Env == "development",
 	).WithLogger(log)
 	verifyMagicLinkUC := appidentity.NewVerifyMagicLinkUseCase(
 		magicTokenStore, userRepo, refreshRepo, jwtService, clock, cfg.JWT.RefreshTokenTTL,
+		cfg.App.Env == "development",
 	).WithLogger(log)
 	refreshTokenUC := appidentity.NewRefreshTokenUseCase(
 		refreshRepo, userRepo, jwtService, clock, cfg.JWT.RefreshTokenTTL,

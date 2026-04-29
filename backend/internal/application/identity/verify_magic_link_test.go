@@ -61,9 +61,6 @@ func (m *mockUserRepo) FindByEmail(_ context.Context, e domidentity.Email) (*dom
 	}
 	return u, nil
 }
-func (m *mockUserRepo) FindByGoogleID(_ context.Context, _ string) (*domidentity.User, error) {
-	return nil, shared.ErrNotFound
-}
 func (m *mockUserRepo) ExistsByEmail(_ context.Context, e domidentity.Email) (bool, error) {
 	_, ok := m.byEmail[e.String()]
 	return ok, nil
@@ -189,7 +186,7 @@ func Test_VerifyMagicLink_Execute_ValidLoginExistingUser_ReturnsTokens(t *testin
 	issuer := &mockTokenIssuer{}
 
 	uc := appidentity.NewVerifyMagicLinkUseCase(tokenStore, userRepo, refreshRepo, issuer,
-		shared.FixedClock{T: now}, 30*24*time.Hour)
+		shared.FixedClock{T: now}, 30*24*time.Hour, false)
 	res, err := uc.Execute(context.Background(), appidentity.VerifyMagicLinkCommand{
 		Email: email.String(),
 		Token: token.Value(),
@@ -212,7 +209,7 @@ func Test_VerifyMagicLink_Execute_TokenNotFound_ReturnsUnauthorized(t *testing.T
 	now := time.Now()
 	tokenStore := &mockTokenStore{} // no token stored
 	uc := appidentity.NewVerifyMagicLinkUseCase(tokenStore, newMockUserRepo(), newMockRefreshRepo(),
-		&mockTokenIssuer{}, shared.FixedClock{T: now}, time.Hour)
+		&mockTokenIssuer{}, shared.FixedClock{T: now}, time.Hour, false)
 	_, err := uc.Execute(context.Background(), appidentity.VerifyMagicLinkCommand{
 		Email: "user@example.com",
 		Token: "123456",
@@ -227,7 +224,7 @@ func Test_VerifyMagicLink_Execute_TokenExpired_ReturnsUnauthorized(t *testing.T)
 	expired := domidentity.Reconstitute("123456", now.Add(-time.Minute))
 	tokenStore := makeTokenStoreWithToken(expired)
 	uc := appidentity.NewVerifyMagicLinkUseCase(tokenStore, newMockUserRepo(), newMockRefreshRepo(),
-		&mockTokenIssuer{}, shared.FixedClock{T: now}, time.Hour)
+		&mockTokenIssuer{}, shared.FixedClock{T: now}, time.Hour, false)
 	_, err := uc.Execute(context.Background(), appidentity.VerifyMagicLinkCommand{
 		Email: "user@example.com",
 		Token: "123456",
@@ -242,7 +239,7 @@ func Test_VerifyMagicLink_Execute_TokenMismatch_ReturnsUnauthorized(t *testing.T
 	stored := domidentity.Reconstitute("123456", now.Add(5*time.Minute))
 	tokenStore := makeTokenStoreWithToken(stored)
 	uc := appidentity.NewVerifyMagicLinkUseCase(tokenStore, newMockUserRepo(), newMockRefreshRepo(),
-		&mockTokenIssuer{}, shared.FixedClock{T: now}, time.Hour)
+		&mockTokenIssuer{}, shared.FixedClock{T: now}, time.Hour, false)
 	_, err := uc.Execute(context.Background(), appidentity.VerifyMagicLinkCommand{
 		Email: "user@example.com",
 		Token: "999999",
@@ -257,7 +254,7 @@ func Test_VerifyMagicLink_Execute_NewUserWithoutRegistration_ReturnsValidation(t
 	stored := domidentity.Reconstitute("123456", now.Add(5*time.Minute))
 	tokenStore := makeTokenStoreWithToken(stored)
 	uc := appidentity.NewVerifyMagicLinkUseCase(tokenStore, newMockUserRepo(), newMockRefreshRepo(),
-		&mockTokenIssuer{}, shared.FixedClock{T: now}, time.Hour)
+		&mockTokenIssuer{}, shared.FixedClock{T: now}, time.Hour, false)
 	_, err := uc.Execute(context.Background(), appidentity.VerifyMagicLinkCommand{
 		Email:        "new@example.com",
 		Token:        "123456",
@@ -275,7 +272,7 @@ func Test_VerifyMagicLink_Execute_NewUserWithRegistration_CreatesUser(t *testing
 	userRepo := newMockUserRepo()
 	refreshRepo := newMockRefreshRepo()
 	uc := appidentity.NewVerifyMagicLinkUseCase(tokenStore, userRepo, refreshRepo, &mockTokenIssuer{},
-		shared.FixedClock{T: now}, time.Hour)
+		shared.FixedClock{T: now}, time.Hour, false)
 
 	res, err := uc.Execute(context.Background(), appidentity.VerifyMagicLinkCommand{
 		Email: "new@example.com",

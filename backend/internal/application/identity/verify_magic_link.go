@@ -63,6 +63,7 @@ type VerifyMagicLinkUseCase struct {
 	clock           shared.Clock
 	refreshTokenTTL time.Duration
 	logger          *slog.Logger
+	devMode         bool
 }
 
 // NewVerifyMagicLinkUseCase cria o use case com logger padrão (slog.Default).
@@ -74,6 +75,7 @@ func NewVerifyMagicLinkUseCase(
 	tokenIssuer TokenIssuer,
 	clock shared.Clock,
 	refreshTokenTTL time.Duration,
+	devMode bool,
 ) *VerifyMagicLinkUseCase {
 	return &VerifyMagicLinkUseCase{
 		tokenStore:      tokenStore,
@@ -83,6 +85,7 @@ func NewVerifyMagicLinkUseCase(
 		clock:           clock,
 		refreshTokenTTL: refreshTokenTTL,
 		logger:          slog.Default(),
+		devMode:         devMode,
 	}
 }
 
@@ -111,41 +114,45 @@ func (uc *VerifyMagicLinkUseCase) Execute(ctx context.Context, cmd VerifyMagicLi
 		return VerifyMagicLinkResult{}, fmt.Errorf("verify magic link: %w", err)
 	}
 
-	// Consome token do Redis (atômico: GETDEL — garante uso único).
-	storedToken, err := uc.tokenStore.Consume(ctx, email)
-	if err != nil {
-		if errors.Is(err, shared.ErrNotFound) {
-			uc.logger.WarnContext(ctx, "token não encontrado ou expirado",
+	now := uc.clock.Now()
+
+	// Dev bypass: em desenvolvimento, o código 000000 autentica qualquer email sem Redis.
+	if !(uc.devMode && strings.TrimSpace(cmd.Token) == "000000") {
+		// Consome token do Redis (atômico: GETDEL — garante uso único).
+		storedToken, err := uc.tokenStore.Consume(ctx, email)
+		if err != nil {
+			if errors.Is(err, shared.ErrNotFound) {
+				uc.logger.WarnContext(ctx, "token não encontrado ou expirado",
+					"use_case", "VerifyMagicLink",
+					"request_id", middleware.RequestIDFromContext(ctx),
+					"email_hash", hashEmail(cmd.Email),
+				)
+				return VerifyMagicLinkResult{}, fmt.Errorf("%w: token não encontrado ou expirado", shared.ErrUnauthorized)
+			}
+			uc.logger.ErrorContext(ctx, "falha ao consumir token do Redis",
+				"use_case", "VerifyMagicLink",
+				"request_id", middleware.RequestIDFromContext(ctx),
+				"error", err.Error(),
+			)
+			return VerifyMagicLinkResult{}, fmt.Errorf("verify magic link: consume token: %w", err)
+		}
+
+		if storedToken.IsExpired(now) {
+			uc.logger.WarnContext(ctx, "token expirado",
 				"use_case", "VerifyMagicLink",
 				"request_id", middleware.RequestIDFromContext(ctx),
 				"email_hash", hashEmail(cmd.Email),
 			)
-			return VerifyMagicLinkResult{}, fmt.Errorf("%w: token não encontrado ou expirado", shared.ErrUnauthorized)
+			return VerifyMagicLinkResult{}, fmt.Errorf("%w: token expirado", shared.ErrUnauthorized)
 		}
-		uc.logger.ErrorContext(ctx, "falha ao consumir token do Redis",
-			"use_case", "VerifyMagicLink",
-			"request_id", middleware.RequestIDFromContext(ctx),
-			"error", err.Error(),
-		)
-		return VerifyMagicLinkResult{}, fmt.Errorf("verify magic link: consume token: %w", err)
-	}
-
-	now := uc.clock.Now()
-	if storedToken.IsExpired(now) {
-		uc.logger.WarnContext(ctx, "token expirado",
-			"use_case", "VerifyMagicLink",
-			"request_id", middleware.RequestIDFromContext(ctx),
-			"email_hash", hashEmail(cmd.Email),
-		)
-		return VerifyMagicLinkResult{}, fmt.Errorf("%w: token expirado", shared.ErrUnauthorized)
-	}
-	if !storedToken.Matches(strings.TrimSpace(cmd.Token)) {
-		uc.logger.WarnContext(ctx, "token inválido (mismatch)",
-			"use_case", "VerifyMagicLink",
-			"request_id", middleware.RequestIDFromContext(ctx),
-			"email_hash", hashEmail(cmd.Email),
-		)
-		return VerifyMagicLinkResult{}, fmt.Errorf("%w: token inválido", shared.ErrUnauthorized)
+		if !storedToken.Matches(strings.TrimSpace(cmd.Token)) {
+			uc.logger.WarnContext(ctx, "token inválido (mismatch)",
+				"use_case", "VerifyMagicLink",
+				"request_id", middleware.RequestIDFromContext(ctx),
+				"email_hash", hashEmail(cmd.Email),
+			)
+			return VerifyMagicLinkResult{}, fmt.Errorf("%w: token inválido", shared.ErrUnauthorized)
+		}
 	}
 
 	// Busca ou cria usuário.

@@ -60,6 +60,7 @@ type RequestMagicLinkUseCase struct {
 	tokenTTL    time.Duration
 	maxAttempts int64
 	logger      *slog.Logger
+	devMode     bool
 }
 
 // NewRequestMagicLinkUseCase cria o use case injetando o logger para rastreabilidade.
@@ -71,6 +72,7 @@ func NewRequestMagicLinkUseCase(
 	clock shared.Clock,
 	tokenTTL time.Duration,
 	maxAttempts int64,
+	devMode bool,
 ) *RequestMagicLinkUseCase {
 	return &RequestMagicLinkUseCase{
 		tokenStore:  tokenStore,
@@ -80,6 +82,7 @@ func NewRequestMagicLinkUseCase(
 		tokenTTL:    tokenTTL,
 		maxAttempts: maxAttempts,
 		logger:      slog.Default(),
+		devMode:     devMode,
 	}
 }
 
@@ -180,7 +183,17 @@ func (uc *RequestMagicLinkUseCase) Execute(ctx context.Context, cmd RequestMagic
 		return RequestMagicLinkResult{}, fmt.Errorf("request magic link: incr attempts: %w", err)
 	}
 
-	// Envia o token por email.
+	// Em dev, loga o token para facilitar testes sem abrir o MailHog.
+	if uc.devMode {
+		uc.logger.InfoContext(ctx, "DEV MODE — token gerado",
+			"use_case", "RequestMagicLink",
+			"request_id", middleware.RequestIDFromContext(ctx),
+			"email_hash", hashEmail(cmd.Email),
+			"token", token.Value(),
+			"hint", "verifique o email no MailHog (localhost:8025) ou use 000000 como bypass",
+		)
+	}
+
 	if err := uc.emailer.SendMagicLink(ctx, email, token.Value(), uc.tokenTTL); err != nil {
 		uc.logger.ErrorContext(ctx, "falha ao enviar email",
 			"use_case", "RequestMagicLink",

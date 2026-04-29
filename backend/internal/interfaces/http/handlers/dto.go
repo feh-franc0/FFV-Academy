@@ -43,7 +43,6 @@ type UserDTO struct {
 	ReferralID       string   `json:"referralId"`
 	Products         []string `json:"products"`
 	MarketingConsent bool     `json:"marketingConsent"`
-	AvatarURL        string   `json:"avatarUrl,omitempty"`
 	CreatedAt        string   `json:"createdAt"`
 }
 
@@ -61,7 +60,6 @@ func userToDTO(u *domidentity.User) UserDTO {
 		ReferralID:       u.ReferralID().String(),
 		Products:         products,
 		MarketingConsent: u.MarketingConsent(),
-		AvatarURL:        u.AvatarURL(),
 		CreatedAt:        u.CreatedAt().UTC().Format(time.RFC3339),
 	}
 }
