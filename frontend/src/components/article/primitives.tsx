@@ -1,5 +1,6 @@
 import { Fragment, type ReactNode } from 'react';
-import { highlight } from 'sugar-high';
+import { codeToHtml } from 'shiki';
+import { CopyButton } from './CopyButton';
 
 type Tone = 'info' | 'warn' | 'danger' | 'success' | 'neutral';
 
@@ -55,19 +56,44 @@ export function Callout({ tone = 'info', icon, children }: {
   );
 }
 
-export function CodeBlock({ lang, children }: { lang?: string; children: ReactNode }) {
+/** Shiki-powered syntax-highlighted code block (async Server Component). */
+export async function CodeBlock({ lang = 'text', filename, children }: {
+  lang?: string;
+  filename?: string;
+  children?: ReactNode;
+}) {
   const code = typeof children === 'string' ? children : String(children ?? '');
-  const highlighted = highlight(code);
+
+  // Map common aliases that Shiki may not recognise to supported language IDs
+  const langMap: Record<string, string> = { text: 'plaintext', sh: 'bash', shell: 'bash' };
+  const resolvedLang = langMap[lang] ?? lang;
+
+  let html: string;
+  try {
+    html = await codeToHtml(code, {
+      lang: resolvedLang,
+      theme: 'github-dark',
+    });
+  } catch {
+    // Fallback: render without highlighting if language is unsupported
+    html = await codeToHtml(code, { lang: 'plaintext', theme: 'github-dark' });
+  }
+
   return (
-    <div className="rounded-lg overflow-hidden sh-codeblock" style={{ border: '1px solid var(--ffv-border)' }}>
-      {lang && (
-        <div className="text-[10px] px-3 py-1 uppercase tracking-wider" style={{ background: 'var(--ffv-bg3)', color: 'var(--ffv-muted)', fontFamily: 'var(--font-roboto-mono)' }}>
-          {lang}
-        </div>
-      )}
-      <pre className="p-4 text-xs overflow-x-auto whitespace-pre-wrap" style={{ background: 'var(--ffv-bg2)', fontFamily: 'var(--font-roboto-mono)' }}>
-        <code dangerouslySetInnerHTML={{ __html: highlighted }} />
-      </pre>
+    <div className="group/code rounded-lg overflow-hidden relative" style={{ border: '1px solid var(--ffv-border)' }}>
+      <div
+        className="flex items-center justify-between"
+        style={{ background: 'var(--ffv-bg3)', borderBottom: (lang || filename) ? '1px solid var(--ffv-border)' : 'none' }}
+      >
+        <span className="text-[10px] px-3 py-1 uppercase tracking-wider" style={{ color: 'var(--ffv-muted)', fontFamily: 'var(--font-roboto-mono)' }}>
+          {filename ?? (lang !== 'text' ? lang : '')}
+        </span>
+        <CopyButton text={code} />
+      </div>
+      <div
+        dangerouslySetInnerHTML={{ __html: html }}
+        className="[&>pre]:p-4 [&>pre]:text-xs [&>pre]:overflow-x-auto [&>pre]:whitespace-pre-wrap [&>pre]:m-0 [&>pre]:!bg-[var(--ffv-bg2)] [&>pre]:font-[var(--font-roboto-mono)]"
+      />
     </div>
   );
 }
