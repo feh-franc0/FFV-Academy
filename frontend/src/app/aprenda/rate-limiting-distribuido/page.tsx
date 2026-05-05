@@ -6,7 +6,7 @@ import {
   CodeBlock,
   ComparisonTable,
   DecisionBox,
-  ArchDiagram,
+  StackFlow,
   InlineCode,
 } from '@/components/article/primitives';
 
@@ -172,20 +172,15 @@ function Content() {
       </Section>
 
       <Section title="Fixed Window Counter" accent={ACCENT}>
-        <ArchDiagram>
-{`Limite: 100 req/minuto
-Janela: minuto atual (ex: 14:23:00-14:23:59)
-
-Cliente faz req:
-  1. key = "rate:\${client_id}:14:23"   (truncado ao minuto)
-  2. n = INCR key
-  3. se primeira vez: EXPIRE key 60s
-  4. se n > 100: reject
-  5. else: allow
-
-Pro: simplíssimo
-Contra: boundary bug — 100 reqs em 14:23:59 + 100 em 14:24:01 = 200 em 2s`}
-        </ArchDiagram>
+        <StackFlow
+          items={[
+            { label: 'Limite: 100 req/minuto', sub: 'Janela: minuto atual (ex: 14:23:00–14:23:59)' },
+            { label: 'key = "rate:${client_id}:14:23"', sub: 'truncado ao minuto' },
+            { label: 'n = INCR key', sub: 'se primeira vez: EXPIRE key 60s' },
+            { label: 'n > 100 → reject', sub: 'senão: allow' },
+            { label: 'Pro: simplíssimo', sub: 'Contra: boundary bug — 100 reqs em 14:23:59 + 100 em 14:24:01 = 200 em 2s' },
+          ]}
+        />
 
         <CodeBlock lang="python">{`# fixed_window.py
 import time
@@ -244,21 +239,13 @@ async def allow(client_id: str, limit: int = 100, window_s: int = 60) -> bool:
           domains</em>, 2017): <strong>interpola entre 2 janelas fixas</strong> pra aproximar uma
           janela deslizante sem armazenar cada timestamp.
         </p>
-        <ArchDiagram>
-{`Limite: 100/min
-Janela anterior (14:23): 80 reqs
-Janela atual (14:24):    50 reqs
-Time: 14:24:30 → 50% da janela atual passou
-
-Estimativa deslizante:
-  = (reqs janela anterior * % remanescente anterior) + reqs janela atual
-  = 80 * 0.5 + 50
-  = 90
-
-90 < 100 → ALLOW
-
-Janela anterior "contribui" menos conforme avança o tempo`}
-        </ArchDiagram>
+        <StackFlow
+          items={[
+            { label: 'Janela anterior (14:23): 80 reqs', sub: 'Janela atual (14:24): 50 reqs · Time: 14:24:30 (50% passou)' },
+            { label: 'Estimativa = prev × (1 − % decorrido) + atual', sub: '= 80 × 0.5 + 50 = 90' },
+            { label: '90 < 100 → ALLOW', sub: 'Janela anterior contribui menos conforme o tempo avança' },
+          ]}
+        />
 
         <CodeBlock lang="python">{`# sliding_window_counter.py
 import time
@@ -296,21 +283,15 @@ async def allow(client_id: str, limit: int = 100, window_s: int = 60) -> bool:
           Balde com capacidade C tokens. Refill a R tokens/segundo (até C). Cada req consome 1 token.
           Se o balde está vazio: reject. Permite bursts até C, mantendo taxa média R.
         </p>
-        <ArchDiagram>
-{`Capacidade C = 10 tokens
-Refill R = 5 tokens/s
-Balde inicial: cheio (10)
-
-t=0s:  requisição → toma 1 token → balde = 9
-t=0.1: 5 requisições rápidas → balde = 4 (burst!)
-t=0.5: requisição → balde = 3, mas refill: +2.5 = 5.5 → 5 (cap inteiro)
-t=1s:  requisição → balde = 4, refill: +2.5 = 6.5 → 6
-...
-
-Cliente bem-comportado: sempre tem tokens
-Cliente em burst controlado: funciona até estourar
-Cliente em loop infinito: pega C, esvazia, fica bloqueado aguardando refill`}
-        </ArchDiagram>
+        <StackFlow
+          items={[
+            { label: 'Capacidade C = 10 tokens · Refill R = 5 tok/s', sub: 'Balde inicial: cheio (10)' },
+            { label: 't=0s: req → toma 1 token → balde = 9', sub: '' },
+            { label: 't=0.1s: 5 reqs rápidas → balde = 4 (burst!)', sub: '' },
+            { label: 't=0.5s: req + refill (+2.5) → balde = 5', sub: 'cap inteiro em C' },
+            { label: 'Cliente bem-comportado: sempre tem tokens', sub: 'Cliente em loop infinito: esvazia, fica bloqueado aguardando refill' },
+          ]}
+        />
 
         <CodeBlock lang="lua">{`-- token_bucket.lua — atômico via EVAL no Redis
 -- KEYS[1] = chave do bucket

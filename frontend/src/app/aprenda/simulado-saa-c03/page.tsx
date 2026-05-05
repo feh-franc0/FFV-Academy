@@ -3,7 +3,6 @@ import { ModuleLayout, type QuizQuestion } from '@/components/ModuleLayout';
 import {
   Section,
   Callout,
-  InlineCode,
   ExamDomainBadge,
 } from '@/components/article/primitives';
 import type { ReactNode } from 'react';

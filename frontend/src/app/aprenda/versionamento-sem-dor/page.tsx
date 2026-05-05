@@ -1,7 +1,7 @@
 import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, CodeBlock, InlineCode, ComparisonTable } from '@/components/article/primitives';
+import { Section, Callout, CodeBlock, ComparisonTable } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('versionamento-sem-dor');
 

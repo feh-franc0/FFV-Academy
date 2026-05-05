@@ -4,7 +4,6 @@ import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
   Section,
   Callout,
-  InlineCode,
   ComparisonTable,
   DecisionBox,
   QAItem,

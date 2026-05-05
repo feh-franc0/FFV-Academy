@@ -6,7 +6,8 @@ import {
   CodeBlock,
   ComparisonTable,
   DecisionBox,
-  ArchDiagram,
+  FlowDiagram,
+  NodeGraph,
   InlineCode,
 } from '@/components/article/primitives';
 
@@ -182,19 +183,19 @@ function Content() {
           e ainda assim é difícil.
         </p>
         <p><strong>Intuição em 3 fases</strong>:</p>
-        <ArchDiagram>
-{`Cliente ──► PROPONER ──► ACCEPTORS (2F+1 nós, tolera F falhas)
-                │             │
-                │  1. PREPARE(n)                     ──► todos os acceptors
-                │                                    ◄── PROMISE(n, maior valor já aceito)
-                │
-                │  2. ACCEPT(n, v)  (v = valor escolhido)  ──► todos
-                │                                    ◄── ACCEPTED(n, v) de quórum
-                │
-                │  3. LEARN(v)                       ──► LEARNERS aplicam v
-                ▼
-            Valor decidido`}
-        </ArchDiagram>
+        <FlowDiagram
+          title="Paxos — 3 fases"
+          accent={ACCENT}
+          orientation="vertical"
+          steps={[
+            { icon: '👤', label: 'Cliente → Proposer', desc: 'Proposer recebe valor a propor' },
+            { icon: '1️⃣', label: 'PREPARE(n)', desc: 'Proposer envia PREPARE com número n para todos os Acceptors' },
+            { icon: '🤝', label: 'PROMISE(n, valor anterior)', desc: 'Acceptors prometem não aceitar propostas < n, devolvem maior valor já aceito' },
+            { icon: '2️⃣', label: 'ACCEPT(n, v)', desc: 'Proposer envia ACCEPT com valor v (maior prometido ou próprio) para quórum' },
+            { icon: '✅', label: 'ACCEPTED(n, v) de quórum', desc: 'Quórum de Acceptors confirma' },
+            { icon: '3️⃣', label: 'LEARN(v) → Valor decidido', desc: 'Learners aplicam o valor v na state machine' },
+          ]}
+        />
         <p>
           A <strong>complexidade real</strong> do Paxos vem de Multi-Paxos (sequência de decisões),
           reconfigurações dinâmicas e otimizações. Ninguém implementa Paxos do paper — todas
@@ -223,22 +224,16 @@ function Content() {
         />
 
         <p><strong>Estados de um nó Raft</strong>:</p>
-        <ArchDiagram>
-{`               timeout, start election
-     ┌──────────────────────────────────────────┐
-     ▼                                           │
-┌─────────┐   discovers leader/        ┌──────────────┐
-│FOLLOWER │──── higher term ──────────►│  CANDIDATE   │
-│         │◄───────────────────────────│              │
-└─────────┘                            └──────────────┘
-     ▲                                         │
-     │                                         │ wins election
-     │     discovers higher term               │ (maioria de votos)
-     │                                         ▼
-     │                                 ┌──────────────┐
-     └─────────────────────────────────│    LEADER    │
-                                        └──────────────┘`}
-        </ArchDiagram>
+        <FlowDiagram
+          title="Estados de um nó Raft"
+          accent={ACCENT}
+          orientation="horizontal"
+          steps={[
+            { icon: '👥', label: 'FOLLOWER', desc: 'Estado inicial. Recebe heartbeats do leader. Se timeout → vira Candidate' },
+            { icon: '🗳️', label: 'CANDIDATE', desc: 'Incrementa term, pede votos. Se maioria → LEADER. Se recebe heartbeat válido → FOLLOWER' },
+            { icon: '👑', label: 'LEADER', desc: 'Envia heartbeats, replica log. Se descobre term maior → FOLLOWER' },
+          ]}
+        />
 
         <p>
           A vida inteira do cluster é dividida em <strong>terms</strong> (períodos numerados monotonicamente).
@@ -340,29 +335,38 @@ class RaftNode:
           Uma vez eleito, o leader começa a atender clientes. Cada comando vira uma
           <strong> log entry</strong> (term + índice + comando). O protocolo é:
         </p>
-        <ArchDiagram>
-{`CLIENTE              LEADER                  FOLLOWERS (2+ em cluster de 5)
-   │                    │                          │
-   ├─ command ─────────►│                          │
-   │                    │  1. Append ao seu log   │
-   │                    │     (term=T, idx=I)      │
-   │                    │                          │
-   │                    ├─ AppendEntries(T,I,cmd) ►│  (em paralelo pra todos)
-   │                    │                          ├─ Valida log consistency
-   │                    │                          ├─ Append ao próprio log
-   │                    │◄─── ACK ─────────────────┤
-   │                    │                          │
-   │                    │  2. Recebe ACK de maioria (quórum)
-   │                    │                          │
-   │                    │  3. commitIndex = I      │
-   │                    │     aplica na state machine
-   │                    │                          │
-   │◄─ result ──────────┤                          │
-   │                    │                          │
-   │                    ├─ heartbeat (com commitIdx)►│
-   │                    │                          ├─ followers aplicam entries
-   │                    │                          │   committed na state machine`}
-        </ArchDiagram>
+        <NodeGraph
+          title="Log Replication: como o leader replica entries"
+          accent={ACCENT}
+          legend="Entry só é committed após ACK de maioria (quórum). Followers aplicam entries committed ao receber heartbeat com commitIndex atualizado."
+          columns={[
+            {
+              label: 'Cliente',
+              nodes: [
+                { icon: '👤', label: 'Envia command', tone: 'default' },
+                { icon: '✅', label: 'Recebe result', sub: 'após commit confirmado', tone: 'success' },
+              ],
+            },
+            {
+              label: 'Leader',
+              nodes: [
+                { icon: '1️⃣', label: 'Append ao próprio log', sub: 'term=T, idx=I', tone: 'emphasis' },
+                { icon: '📡', label: 'AppendEntries → Followers', sub: 'em paralelo para todos', tone: 'emphasis' },
+                { icon: '2️⃣', label: 'Recebe ACK de quórum', sub: 'maioria confirma', tone: 'emphasis' },
+                { icon: '3️⃣', label: 'commitIndex = I', sub: 'aplica na state machine → responde cliente', tone: 'emphasis' },
+              ],
+            },
+            {
+              label: 'Followers (2+ em cluster de 5)',
+              nodes: [
+                { label: 'Valida log consistency', sub: 'prevLogIndex + prevLogTerm devem bater', tone: 'default' },
+                { label: 'Append ao próprio log', tone: 'default' },
+                { label: 'Envia ACK', tone: 'default' },
+                { label: 'Aplica entries committed', sub: 'ao receber heartbeat com commitIdx', tone: 'default' },
+              ],
+            },
+          ]}
+        />
 
         <p><strong>A RPC <InlineCode>AppendEntries</InlineCode></strong> carrega (entre outros):</p>
         <ul className="list-disc space-y-1 pl-6">

@@ -1,6 +1,6 @@
 import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
-import { Section, Callout, CodeBlock, ComparisonTable, DecisionBox, ArchDiagram } from '@/components/article/primitives';
+import { Section, Callout, CodeBlock, ComparisonTable, DecisionBox, NodeGraph } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('logs-estruturados');
 
@@ -141,30 +141,32 @@ function Content() {
           Uma requisição de checkout passa por 5 serviços. Sem um identificador comum, você tem 5 grupos
           de logs desconexos. Com <code>trace_id</code>, você tem a jornada completa.
         </p>
-        <ArchDiagram>{`
-  Cliente
-    │
-    ▼ POST /checkout
-  ┌─────────────────────────────────────────────────────────┐
-  │  API Gateway                                            │
-  │  Gera trace_id: "4bf92f3577b34da6a3ce929d0e0e4736"     │
-  │  Injeta header: traceparent: 00-4bf9...-00f0...-01      │
-  └─────────────┬───────────────────────────────────────────┘
-                │ HTTP + traceparent header
-    ┌───────────▼───────────┐   ┌──────────────────────┐
-    │  order-service        │──▶│  payment-service      │
-    │  trace_id: 4bf9...    │   │  trace_id: 4bf9...    │
-    │  span_id:  00f0...    │   │  span_id:  a3ce...    │
-    └───────────────────────┘   └──────────────────────┘
-                │
-    ┌───────────▼───────────┐   ┌──────────────────────┐
-    │  inventory-service    │   │  notification-service │
-    │  trace_id: 4bf9...    │   │  trace_id: 4bf9...    │
-    └───────────────────────┘   └──────────────────────┘
-
-  Resultado: filtrar trace_id="4bf9..." retorna TODOS os logs
-  de TODOS os serviços para essa requisição específica
-`}</ArchDiagram>
+        <NodeGraph
+          columns={[
+            {
+              label: 'Origem',
+              nodes: [
+                { label: 'Cliente', sub: 'POST /checkout' },
+                { label: 'API Gateway', sub: 'gera trace_id · injeta traceparent header' },
+              ],
+            },
+            {
+              label: 'Serviços (mesmo trace_id)',
+              nodes: [
+                { label: 'order-service', sub: 'trace_id: 4bf9… · span: 00f0…' },
+                { label: 'payment-service', sub: 'trace_id: 4bf9… · span: a3ce…' },
+                { label: 'inventory-service', sub: 'trace_id: 4bf9…' },
+                { label: 'notification-service', sub: 'trace_id: 4bf9…' },
+              ],
+            },
+            {
+              label: 'Resultado',
+              nodes: [
+                { label: 'filtrar trace_id="4bf9…"', sub: 'retorna logs de TODOS os serviços para essa request' },
+              ],
+            },
+          ]}
+        />
         <p className="text-base leading-8" style={{ color: 'var(--ffv-muted)' }}>
           O OpenTelemetry propaga isso automaticamente via W3C Trace Context (visto no módulo anterior).
           O que importa aqui é que o log exija que o trace_id seja <em>injetado no contexto de logging</em>
@@ -214,7 +216,6 @@ class OtelJsonFormatter(logging.Formatter):
             log_entry["exception"] = self.formatException(record.exc_info)
 
         return json.dumps(log_entry, default=str)
-
 
 # Setup — uma vez no startup
 handler = logging.StreamHandler()
@@ -473,34 +474,33 @@ class RateLimitedLogger:
       </Section>
 
       <Section title="Pipeline de logs: do serviço ao storage">
-        <ArchDiagram>{`
-  ┌─────────────────────────────────────────────────────────────────┐
-  │  Serviços (qualquer linguagem)                                  │
-  │  Emitem JSON para stdout                                        │
-  │  ← padrão 12-factor app: log vai para stdout, infra coleta     │
-  └──────┬──────────────┬──────────────────┬────────────────────────┘
-         │              │                  │
-         ▼              ▼                  ▼
-  ┌────────────┐ ┌────────────┐ ┌────────────────────┐
-  │  Fluent    │ │  Promtail  │ │  OTel Collector     │
-  │  Bit/D     │ │  (Grafana) │ │  (logs pipeline)    │
-  │ DaemonSet  │ │ DaemonSet  │ │  Deployment         │
-  └─────┬──────┘ └─────┬──────┘ └────────┬────────────┘
-        │              │                  │
-        ▼              ▼                  ▼
-  ┌─────────────────────────────────────────────────────┐
-  │  Log Backend                                        │
-  │                                                     │
-  │  Self-hosted: Grafana Loki (labels + LogQL)         │
-  │  Managed: Datadog Logs, CloudWatch Logs Insights    │
-  │  Enterprise: Elastic/OpenSearch                     │
-  │                                                     │
-  │  Retenção:                                          │
-  │  • ERROR/WARN: 90 dias                              │
-  │  • INFO: 30 dias                                    │
-  │  • DEBUG: 7 dias (se coletado)                      │
-  └─────────────────────────────────────────────────────┘
-`}</ArchDiagram>
+        <NodeGraph
+          columns={[
+            {
+              label: 'Produtores',
+              nodes: [
+                { label: 'Serviços (qualquer linguagem)', sub: 'emitem JSON para stdout — padrão 12-factor' },
+              ],
+            },
+            {
+              label: 'Coletores (DaemonSet / Deployment)',
+              nodes: [
+                { label: 'Fluent Bit / Fluentd', sub: 'DaemonSet' },
+                { label: 'Promtail (Grafana)', sub: 'DaemonSet' },
+                { label: 'OTel Collector', sub: 'logs pipeline · Deployment' },
+              ],
+            },
+            {
+              label: 'Log Backend',
+              nodes: [
+                { label: 'Grafana Loki', sub: 'self-hosted · labels + LogQL' },
+                { label: 'Datadog / CloudWatch', sub: 'managed · Logs Insights' },
+                { label: 'Elastic / OpenSearch', sub: 'enterprise' },
+                { label: 'Retenção', sub: 'ERROR/WARN: 90d · INFO: 30d · DEBUG: 7d' },
+              ],
+            },
+          ]}
+        />
         <Callout tone="info">
           <strong>Loki labels vs fields:</strong> No Grafana Loki, <em>labels</em> são indexados (baixa cardinalidade:
           service, env, level). <em>Campos</em> dentro do JSON são consultados via parser (<code>| json</code>)

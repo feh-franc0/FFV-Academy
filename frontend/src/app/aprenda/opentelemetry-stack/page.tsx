@@ -6,7 +6,7 @@ import {
   CodeBlock,
   ComparisonTable,
   DecisionBox,
-  ArchDiagram,
+  FlowDiagram,
   InlineCode,
 } from '@/components/article/primitives';
 
@@ -105,23 +105,14 @@ function Content() {
       </p>
 
       <Section title="Arquitetura OTel: os 3 componentes" accent={ACCENT}>
-        <ArchDiagram>
-{`┌──────────────┐          ┌───────────────────┐          ┌─────────────────┐
-│   SDK        │   OTLP   │   Collector       │   OTLP   │    Backend(s)   │
-│ (na sua app) │ ───────► │ (proxy/transform) │ ───────► │ Jaeger / Tempo  │
-│              │  grpc/   │                   │  grpc/   │ Prometheus /    │
-│ auto+manual  │  http    │ receivers         │  http    │ Datadog / ...   │
-│ instrumenta- │          │ processors        │          │                 │
-│ ção          │          │ exporters         │          │                 │
-└──────────────┘          └───────────────────┘          └─────────────────┘
-   3 signals:                                                     │
-     ├─ Traces (spans)                                             │
-     ├─ Metrics (counter, gauge, histogram)                        │
-     └─ Logs (opcional via OTel Logs SDK, ainda beta em alguns langs)
-                                                                   │
-                                                       Query / Dashboard
-                                                       (Grafana, etc.)`}
-        </ArchDiagram>
+        <FlowDiagram
+          orientation="horizontal"
+          steps={[
+            { label: 'SDK (na sua app)', desc: 'auto + manual instrumentation · 3 signals: traces, metrics, logs' },
+            { label: 'OTel Collector', desc: 'OTLP grpc/http · receivers → processors → exporters' },
+            { label: 'Backend(s)', desc: 'Jaeger / Tempo · Prometheus · Datadog / … → Query / Dashboard (Grafana)' },
+          ]}
+        />
 
         <ComparisonTable
           headers={['Componente', 'O que faz', 'Onde roda']}

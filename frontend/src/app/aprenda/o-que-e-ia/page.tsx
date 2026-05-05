@@ -2,8 +2,14 @@ import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
-  Section, Callout, ComparisonTable, DecisionBox,
-  HierarchyDiagram, ComparisonFlow, QAItem, Timeline, CodeBlock,
+  Section,
+  Callout,
+  ComparisonTable,
+  HierarchyDiagram,
+  ComparisonFlow,
+  QAItem,
+  Timeline,
+  CodeBlock,
 } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('o-que-e-ia');

@@ -9,7 +9,7 @@ import {
   ComparisonTable,
   DecisionBox,
   QAItem,
-  ArchDiagram,
+  FlowDiagram,
 } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('rag-fundamentos');
@@ -114,30 +114,17 @@ function Content() {
           de uma base indexada. Depois, <strong>gera</strong> a resposta usando esses trechos como contexto. O modelo vira
           um raciocinador sobre evidência fornecida, não uma enciclopédia.
         </p>
-        <ArchDiagram title="Pipeline RAG básico" accent={ACCENT}>{`
-            ┌──────────────────────┐
-            │  Pergunta do usuário │
-            └─────────┬────────────┘
-                      │
-                      ▼
-           ┌──────────────────────┐
-           │  1. Retrieve         │
-           │  embed → vector DB   │
-           │  top-k trechos       │
-           └─────────┬────────────┘
-                     │
-                     ▼
-           ┌──────────────────────┐
-           │  2. Augment Prompt   │
-           │  [pergunta + trechos]│
-           └─────────┬────────────┘
-                     │
-                     ▼
-           ┌──────────────────────┐
-           │  3. Generate (LLM)   │
-           │  resposta + citações │
-           └──────────────────────┘
-`}</ArchDiagram>
+        <FlowDiagram
+          title="Pipeline RAG básico"
+          accent={ACCENT}
+          orientation="vertical"
+          steps={[
+            { label: 'Pergunta do usuário', desc: '' },
+            { label: '1. Retrieve', desc: 'embed → vector DB → top-k trechos' },
+            { label: '2. Augment Prompt', desc: '[pergunta + trechos recuperados]' },
+            { label: '3. Generate (LLM)', desc: 'resposta + citações baseadas no contexto' },
+          ]}
+        />
       </Section>
 
       <Section title="Pipeline de indexação (offline)" accent={ACCENT}>
@@ -145,13 +132,18 @@ function Content() {
           Antes que qualquer pergunta seja feita, a base precisa ser preparada. Isso roda em batch — hora em hora,
           diário, ou via event-driven quando documentos mudam.
         </p>
-        <ArchDiagram title="Indexing pipeline" accent={ACCENT}>{`
-  Documento  →  Parser  →  Chunker  →  Embedding  →  Vector DB
-   (.pdf,        (texto     (pedaços    (modelo        (pgvector,
-   .md, html)    limpo)     com overlap) de embedding)  Pinecone,
-                                                         Qdrant,
-                                                         Weaviate)
-`}</ArchDiagram>
+        <FlowDiagram
+          title="Indexing pipeline"
+          accent={ACCENT}
+          orientation="horizontal"
+          steps={[
+            { label: 'Documento', desc: '.pdf, .md, html' },
+            { label: 'Parser', desc: 'texto limpo' },
+            { label: 'Chunker', desc: 'pedaços com overlap' },
+            { label: 'Embedding', desc: 'modelo de embedding' },
+            { label: 'Vector DB', desc: 'pgvector, Pinecone, Qdrant, Weaviate' },
+          ]}
+        />
         <Callout tone="warn">
           <strong>80% do resultado vem do pipeline de ingestão.</strong> Parser ruim (PDF mal extraído), chunks do
           tamanho errado (muito grande dilui sinal, muito pequeno corta contexto), embedding fraco (genérico para

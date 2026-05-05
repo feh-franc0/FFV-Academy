@@ -223,6 +223,7 @@ func run() error {
 	billingH := handlers.NewBillingHandler(createCheckoutUC, handleWebhookUC, stripeClient)
 	tutorH := handlers.NewTutorHandler(askTutorUC)
 	leaderboardH := handlers.NewLeaderboardHandler(leaderboardRepo)
+	statsH := handlers.NewStatsHandler(&pgxStatsRepo{pool: pool})
 	adminH := handlers.NewAdminHandler(userRepo, attemptRepo, eventUC).
 		WithAuditLog(auditLogRepo)
 	curriculumH := handlers.NewCurriculumHandler(getArticleUC, listCurriculumUC, searchCurriculumUC, curriculumRepo)
@@ -250,6 +251,7 @@ func run() error {
 		Billing:        billingH,
 		Tutor:          tutorH,
 		Leaderboard:    leaderboardH,
+		Stats:          statsH,
 		Admin:          adminH,
 		Curriculum:     curriculumH,
 		Metrics:        metricsH,

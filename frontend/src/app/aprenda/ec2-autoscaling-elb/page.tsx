@@ -1,7 +1,7 @@
 import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, ArchDiagram, QAItem, ExamDomainBadge } from '@/components/article/primitives';
+import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, NodeGraph, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('ec2-autoscaling-elb');
 
@@ -128,22 +128,34 @@ function Content() {
       </Section>
 
       <Section title="Auto Scaling Groups (ASG)" accent={ACCENT}>
-        <ArchDiagram title="Auto Scaling Group conectado a ALB" accent={ACCENT}>{`
-           Internet
-              │
-              ▼
-         ┌────────┐
-         │  ALB   │
-         └───┬────┘
-             │ health check
-             ▼
-   ┌─────────────────────────┐
-   │ Target Group             │
-   └──┬──────┬──────┬─────┬──┘
-      │      │      │     │
-   EC2-1  EC2-2  EC2-3  EC2-4  ◄── ASG mantém min/desired/max
-   AZ-a   AZ-a   AZ-b   AZ-b       com health checks + scaling policy
-`}</ArchDiagram>
+        <NodeGraph
+          title="Auto Scaling Group conectado a ALB"
+          accent={ACCENT}
+          legend="ASG mantém min/desired/max instâncias, distribuídas entre AZs, com health checks via ALB"
+          columns={[
+            {
+              label: 'Internet → ALB',
+              nodes: [
+                { icon: '⚖️', label: 'Application Load Balancer', sub: 'health check + routing', tone: 'emphasis' },
+                { icon: '🎯', label: 'Target Group', sub: 'instâncias registradas', tone: 'default' },
+              ],
+            },
+            {
+              label: 'AZ-a',
+              nodes: [
+                { label: 'EC2-1', sub: 'Auto Scaling', tone: 'default' },
+                { label: 'EC2-2', sub: 'Auto Scaling', tone: 'default' },
+              ],
+            },
+            {
+              label: 'AZ-b',
+              nodes: [
+                { label: 'EC2-3', sub: 'Auto Scaling', tone: 'default' },
+                { label: 'EC2-4', sub: 'Auto Scaling', tone: 'default' },
+              ],
+            },
+          ]}
+        />
         <p><strong>Componentes:</strong></p>
         <ul className="flex flex-col gap-1 text-xs pl-4">
           <li>• <strong>Launch Template</strong> (preferido) ou Launch Configuration (legacy) — template da instância</li>

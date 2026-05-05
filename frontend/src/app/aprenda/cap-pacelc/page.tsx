@@ -9,7 +9,8 @@ import {
   ComparisonTable,
   DecisionBox,
   QAItem,
-  ArchDiagram,
+  NodeGraph,
+  ComparisonFlow,
 } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('cap-pacelc');
@@ -119,20 +120,27 @@ function Content() {
       </Section>
 
       <Section title="PACELC: o trade-off sem falha" accent={ACCENT}>
-        <ArchDiagram title="PACELC visualizado" accent={ACCENT}>{`
-                ┌───────────────┐
-                │  Há partição? │
-                └───────┬───────┘
-                        │
-            ┌──────────────┬──────────────┐
-            │ SIM          │ NÃO (Else)   │
-            ▼              ▼              ▼
-    ┌───────────────┐  ┌─────────────────────────┐
-    │  Escolha:     │  │  Escolha:               │
-    │   P(A)        │  │   L (Latency)           │
-    │   P(C)        │  │   C (Consistency)       │
-    └───────────────┘  └─────────────────────────┘
-`}</ArchDiagram>
+        <NodeGraph
+          title="PACELC visualizado"
+          accent={ACCENT}
+          legend="Se Partição → escolha entre A (disponibilidade) e C (consistência). Else (sem falha) → escolha entre L (latência) e C (consistência)"
+          columns={[
+            {
+              label: 'SIM — Há Partição',
+              nodes: [
+                { label: 'P(A) — Availability', sub: 'aceita escritas em ambos os lados; divergência resolvida depois. Ex: Dynamo, Cassandra', tone: 'default' },
+                { label: 'P(C) — Consistency', sub: 'lado minoritário fica indisponível; mantém linearizabilidade. Ex: Spanner, Postgres', tone: 'emphasis' },
+              ],
+            },
+            {
+              label: 'NÃO — Else (Operação Normal)',
+              nodes: [
+                { label: 'E(L) — Low Latency', sub: 'commit local rápido, replicação assíncrona. Ex: Cassandra PA/EL, DynamoDB PA/EL', tone: 'default' },
+                { label: 'E(C) — Consistency', sub: 'commit síncrono em quórum, maior latência. Ex: Spanner PC/EC, etcd PC/EC', tone: 'emphasis' },
+              ],
+            },
+          ]}
+        />
         <p style={{ color: 'var(--ffv-muted)' }}>
           PACELC (Daniel Abadi, 2012) estende CAP observando que, <strong>mesmo sem partição</strong>, sistemas
           distribuídos enfrentam trade-off entre <em>latência</em> e <em>consistência</em>. Commit síncrono em
@@ -155,44 +163,34 @@ function Content() {
       </Section>
 
       <Section title="CP e AP na prática: quem é quem" accent={ACCENT}>
-        <ArchDiagram title="CP (Consistency under Partition)" accent={ACCENT}>{`
-                 ┌────────────────┐
-                 │  Client writes │
-                 └────────┬───────┘
-                          │
-             ┌────────────┼────────────┐
-             ▼            ▼            ▼
-         Replica A    Replica B    Replica C
-         (leader)    (follower)   (follower)
-             │            │            │
-             │  majority ack required  │
-             └────────────┴────────────┘
-                          │
-                          ▼
-                   Commit sucedeu
-
- Durante partição: minoria rejeita escritas (vira indisponível);
- maioria segue funcionando e mantém consistência.
-`}</ArchDiagram>
-        <ArchDiagram title="AP (Availability under Partition)" accent={ACCENT}>{`
-                 ┌────────────────┐
-                 │  Client writes │
-                 └────────┬───────┘
-                          │
-             ┌────────────┼────────────┐
-             ▼            ▼            ▼
-         Replica A    Replica B    Replica C
-             │            │            │
-             │  qualquer ack serve     │
-             └────────────┴────────────┘
-                          │
-                          ▼
-                   Commit local sucedeu
-                   (replicação async)
-
- Durante partição: todos lados aceitam escritas;
- depois da partição, faz resolução (last-write-wins, CRDT, vector clocks).
-`}</ArchDiagram>
+        <ComparisonFlow
+          title="CP vs AP em partição de rede"
+          accent={ACCENT}
+          left={{
+            label: '🔒 CP — Consistency under Partition',
+            steps: [
+              'Client escreve',
+              'Leader (Replica A) recebe escrita',
+              'Propaga para Replicas B e C',
+              'Aguarda ACK de maioria (quórum)',
+              'Commit confirmado — dados consistentes',
+              'Durante partição: minoria rejeita escritas → indisponível',
+              '✅ Dados nunca divergem · ❌ Pode recusar escritas',
+            ],
+          }}
+          right={{
+            label: '🌐 AP — Availability under Partition',
+            steps: [
+              'Client escreve',
+              'Qualquer réplica aceita',
+              'Commit local imediato',
+              'Replicação assíncrona para demais',
+              'Durante partição: ambos os lados aceitam escritas',
+              'Após partição: resolução com LWW / CRDT / vector clocks',
+              '✅ Sempre responde · ❌ Divergência temporária possível',
+            ],
+          }}
+        />
         <ComparisonTable
           accent={ACCENT}
           headers={['Categoria', 'CP', 'AP']}

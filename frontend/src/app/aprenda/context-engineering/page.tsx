@@ -9,7 +9,7 @@ import {
   ComparisonTable,
   DecisionBox,
   QAItem,
-  ArchDiagram,
+  LayerStack,
 } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('context-engineering');
@@ -104,26 +104,20 @@ function Content() {
           produto com 10k usuários/mês → US$30k/mês só de input. Cortar 50% do contexto = US$15k economizados.
           Context engineering paga salário.
         </Callout>
-        <ArchDiagram title="Anatomia de uma chamada LLM em agent" accent={ACCENT}>{`
- ┌──────────────────────────────────────────────────────────┐
- │ INPUT (janela)                                           │
- │ ┌────────────────────┐                                   │
- │ │ System prompt      │   ← estável, CACHEÁVEL            │
- │ │ Tool definitions   │   ← estável, CACHEÁVEL            │
- │ │ Few-shot examples  │   ← estável, CACHEÁVEL            │
- │ ├────────────────────┤                                   │
- │ │ RAG context        │   ← volátil por query             │
- │ │ Conversation hist. │   ← volátil, cresce               │
- │ │ Tool results       │   ← volátil, podem ser grandes    │
- │ └────────────────────┘                                   │
- └──────────────────────────────────────────────────────────┘
-                           │
-                           ▼
- ┌──────────────────────────────────────────────────────────┐
- │ OUTPUT (tokens gerados)                                  │
- │ + thought / tool_use / final answer                      │
- └──────────────────────────────────────────────────────────┘
-`}</ArchDiagram>
+        <LayerStack
+          title="Anatomia de uma chamada LLM em agent"
+          accent={ACCENT}
+          separatorLabel="INPUT → OUTPUT"
+          layers={[
+            { label: 'System prompt', content: 'Instruções globais do agent', note: '← estável, CACHEÁVEL', tone: 'default', separatorAfter: false },
+            { label: 'Tool definitions', content: 'Schemas de todas as ferramentas disponíveis', note: '← estável, CACHEÁVEL', tone: 'default' },
+            { label: 'Few-shot examples', content: 'Exemplos de comportamento esperado', note: '← estável, CACHEÁVEL', tone: 'default', separatorAfter: true },
+            { label: 'RAG context', content: 'Chunks recuperados para esta query', note: '← volátil por query', tone: 'writable' },
+            { label: 'Conversation hist.', content: 'Histórico de mensagens da sessão', note: '← volátil, cresce', tone: 'writable' },
+            { label: 'Tool results', content: 'Outputs das ferramentas chamadas', note: '← volátil, podem ser grandes', tone: 'writable', separatorAfter: true },
+            { label: 'OUTPUT', content: 'thought / tool_use / final answer', tone: 'success' },
+          ]}
+        />
         <Callout tone="success">
           Ordem importa: coloque o <strong>estável primeiro</strong>. Prompt caching só funciona em prefixos
           idênticos — qualquer mudança invalida o cache dali pra frente.

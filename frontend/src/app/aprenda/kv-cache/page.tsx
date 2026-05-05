@@ -2,8 +2,15 @@ import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
-  Section, Callout, ComparisonTable, DecisionBox,
-  FlowDiagram, ArchFlow, ComparisonFlow, QAItem, CodeBlock, StackFlow,
+  Section,
+  Callout,
+  ComparisonTable,
+  DecisionBox,
+  FlowDiagram,
+  ArchFlow,
+  ComparisonFlow,
+  QAItem,
+  StackFlow,
 } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('kv-cache');

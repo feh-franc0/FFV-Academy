@@ -1,7 +1,7 @@
 import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, QAItem, ExamDomainBadge, ArchDiagram } from '@/components/article/primitives';
+import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, QAItem, ExamDomainBadge, NodeGraph } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('rede-hibrida-saa');
 
@@ -92,19 +92,33 @@ function Content() {
           Link físico dedicado entre seu datacenter e um AWS Direct Connect Location (colo) via parceiro (Equinix, DigitalRealty). Capacidades padrão:
           50/100/200/300/400/500 Mbps (via partner) ou 1/10/100 Gbps (dedicado).
         </p>
-        <ArchDiagram title="Topologia Direct Connect" accent={ACCENT}>{`
-  On-prem Router ←───── Colo (DX Location) ─────→ AWS
-       │                     │                      │
-       │ Cross-connect        │                      │
-       └─────────────────────┼───── DX Connection ───┘
-                             │
-                 Virtual Interfaces (VIFs)
-                       │
-          ┌────────────┼──────────────┐
-          ▼            ▼              ▼
-       Private VIF  Public VIF     Transit VIF
-       (1 VPC)      (AWS públicos) (TGW = muitas VPCs)
-        `}</ArchDiagram>
+        <NodeGraph
+          title="Topologia Direct Connect"
+          accent={ACCENT}
+          columns={[
+            {
+              label: 'On-prem',
+              nodes: [
+                { label: 'On-prem Router', sub: 'cross-connect físico' },
+              ],
+            },
+            {
+              label: 'DX Location (Colo)',
+              nodes: [
+                { label: 'Colo (DX Location)', sub: 'DX Connection → AWS' },
+                { label: 'Virtual Interfaces (VIFs)', sub: 'ponto de bifurcação' },
+              ],
+            },
+            {
+              label: 'AWS',
+              nodes: [
+                { label: 'Private VIF', sub: '1 VPC via VGW' },
+                { label: 'Public VIF', sub: 'endpoints públicos AWS (S3, EC2 API…)' },
+                { label: 'Transit VIF', sub: 'Transit Gateway = muitas VPCs' },
+              ],
+            },
+          ]}
+        />
         <ComparisonTable
           accent={ACCENT}
           headers={['Tipo de VIF', 'Acessa']}
@@ -170,20 +184,27 @@ function Content() {
         <p>
           Mecanismo por baixo dos Interface Endpoints — também usado para <strong>expor seu próprio serviço</strong> a outras VPCs/contas:
         </p>
-        <ArchDiagram title="PrivateLink: expor serviço entre contas" accent={ACCENT}>{`
-  Conta Produtor (VPC-B)                       Conta Consumidor (VPC-A)
-  ┌─────────────────────┐                      ┌─────────────────────┐
-  │  Serviço (EC2/ECS)  │                      │  App precisa consumir│
-  │         ▲            │                      │         │            │
-  │         │ (TCP)      │                      │         ▼            │
-  │  Network Load        │                      │  Interface Endpoint  │
-  │  Balancer (privado)  │                      │  (ENI com IP privado)│
-  │         ▲            │                      │         │            │
-  │  Endpoint Service    │←─────── cross-account ───────┘            │
-  └─────────────────────┘     comunicação privada  └─────────────────────┘
-
-  Vantagem: sem peering, sem CIDR compartilhado, só o endpoint enxerga.
-        `}</ArchDiagram>
+        <NodeGraph
+          title="PrivateLink: expor serviço entre contas"
+          accent={ACCENT}
+          columns={[
+            {
+              label: 'Conta Consumidor (VPC-A)',
+              nodes: [
+                { label: 'App', sub: 'precisa consumir o serviço' },
+                { label: 'Interface Endpoint', sub: 'ENI com IP privado' },
+              ],
+            },
+            {
+              label: 'Conta Produtor (VPC-B)',
+              nodes: [
+                { label: 'Endpoint Service', sub: 'cross-account · comunicação privada' },
+                { label: 'Network Load Balancer', sub: 'privado' },
+                { label: 'Serviço (EC2/ECS)', sub: '' },
+              ],
+            },
+          ]}
+        />
         <p>
           Alternativa a VPC Peering quando você <strong>não quer</strong> compartilhar o CIDR inteiro — só um serviço específico. Marketplace privado de
           APIs entre contas.

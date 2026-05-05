@@ -138,9 +138,9 @@ zellij    # abre com status bar de atalhos visível
 # Layouts declarativos (KDL)
 # ~/.config/zellij/layouts/dev.kdl
 # layout {
-#   pane split_direction="vertical" {
+#   pane split_orientation="vertical" {
 #     pane command="nvim"
-#     pane split_direction="horizontal" {
+#     pane split_orientation="horizontal" {
 #       pane command="npm" { args "run" "dev" }
 #       pane
 #     }

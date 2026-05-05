@@ -9,6 +9,8 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './e2e',
+  // In the e2e job in CI, exclude visual.spec.ts until baselines are committed:
+  testIgnore: process.env.CI && !process.env.VISUAL_REGRESSION ? ['**/visual.spec.ts'] : [],
   timeout: 30_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,

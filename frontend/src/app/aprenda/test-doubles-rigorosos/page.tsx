@@ -101,7 +101,7 @@ class InMemoryUserRepo implements UserRepo {
 
 // Teste usa fake — comportamento real, zero infra
 const repo = new InMemoryUserRepo();
-await repo.save({ id: '1', name: 'Ana' });
+await repo.save({ name: 'Ana' });
 const found = await repo.findById('1');
 expect(found?.name).toBe('Ana');`}</CodeBlock>
       </Section>

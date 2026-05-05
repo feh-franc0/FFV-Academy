@@ -1,6 +1,6 @@
 import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
-import { Section, Callout, CodeBlock, ComparisonTable, DecisionBox, ArchDiagram } from '@/components/article/primitives';
+import { Section, Callout, CodeBlock, ComparisonTable, DecisionBox, NodeGraph, ComparisonFlow } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('distributed-tracing');
 
@@ -94,34 +94,35 @@ function Content() {
           em que entra no sistema até a resposta. É composto de <strong>spans</strong>: unidades de trabalho
           com duração, atributos e relação parent-child.
         </p>
-        <ArchDiagram>{`
-  Trace ID: 4bf92f3577b34da6a3ce929d0e0e4736
-  ────────────────────────────────────────────────────────────────
-  ─────── HTTP POST /checkout (api-gateway)            450ms ────
-   span_id: a1b2  parent: -  status: OK
-    │
-    ├─── validate-order (order-service)                 20ms ──
-    │    span_id: c3d4  parent: a1b2  status: OK
-    │
-    ├─── reserve-inventory (inventory-service)          80ms ──────
-    │    span_id: e5f6  parent: a1b2  status: OK
-    │     │
-    │     └─── db.query SELECT inventory (postgres)     75ms ──────
-    │          span_id: g7h8  parent: e5f6  db.system=postgresql
-    │
-    └─── process-payment (payment-service)             340ms ───────────────
-         span_id: i9j0  parent: a1b2  status: ERROR
-          │
-          ├─── stripe-api-call (http.client)            300ms ─────────────
-          │    span_id: k1l2  parent: i9j0  http.status=408
-          │
-          └─── payment-service.compensate               35ms ───
-               span_id: m3n4  parent: i9j0  status: OK
-
-  ────────────────────────────────────────────────────────────────
-  0ms                                                        450ms
-  Waterfall: cada span mostra onde o tempo foi gasto
-`}</ArchDiagram>
+        <NodeGraph
+          title="Trace: POST /checkout — 450ms total"
+          accent={ACCENT}
+          legend="Waterfall: cada coluna representa um nível da hierarquia parent→child. payment-service é o gargalo (340ms) com ERROR no Stripe."
+          columns={[
+            {
+              label: 'Root',
+              nodes: [
+                { icon: '🌐', label: 'HTTP POST /checkout', sub: 'api-gateway · 450ms · OK', tone: 'emphasis' },
+              ],
+            },
+            {
+              label: 'Services',
+              nodes: [
+                { label: 'validate-order', sub: 'order-service · 20ms · OK', tone: 'default' },
+                { label: 'reserve-inventory', sub: 'inventory-service · 80ms · OK', tone: 'default' },
+                { label: 'process-payment', sub: 'payment-service · 340ms · ERROR', tone: 'danger' },
+              ],
+            },
+            {
+              label: 'Downstream',
+              nodes: [
+                { label: 'db.query SELECT', sub: 'postgres · 75ms · db.system=postgresql', tone: 'muted' },
+                { label: 'stripe-api-call', sub: 'http.client · 300ms · HTTP 408', tone: 'danger' },
+                { label: 'payment-service.compensate', sub: '35ms · OK', tone: 'default' },
+              ],
+            },
+          ]}
+        />
         <p className="text-base leading-8" style={{ color: 'var(--ffv-muted)' }}>
           Cada span contém:
         </p>
@@ -328,36 +329,34 @@ async function processCheckout(cartId: string, userId: string): Promise<Order> {
           Em produção, coletar 100% dos traces é inviável (custo, storage, ingestão). Sampling define
           quais traces guardar. Existem duas estratégias fundamentais:
         </p>
-        <ArchDiagram>{`
-  HEAD SAMPLING (decisão no início)
-  ─────────────────────────────────
-  Request chega
-       │
-       ▼
-  ┌──────────────────────────────┐
-  │  Root Span criado            │
-  │  Sorteia aleatório: 10%      │──── 10% YES ──→ coleta TODOS os spans
-  │  sampled flag = 0/1          │──── 90% NO  ──→ descarta TODOS os spans
-  └──────────────────────────────┘
-  ✅ Zero overhead para 90% dos requests
-  ❌ Pode descartar traces com erro ou lentos
-
-  TAIL SAMPLING (decisão após completar)
-  ───────────────────────────────────────
-  Request chega
-       │
-       ▼ todos os spans são coletados e bufferizados
-  ┌─────────────────────────────────────────────────────┐
-  │  OTel Collector aguarda o trace completar (~30s)    │
-  │  Avalia políticas:                                  │
-  │    ─ status == ERROR?          → guardar sempre     │
-  │    ─ duration > 2s?            → guardar sempre     │
-  │    ─ tem atributo "debug"?     → guardar sempre     │
-  │    ─ caso contrário: 5% random → guardar            │
-  └─────────────────────────────────────────────────────┘
-  ✅ Garante captura de traces problemáticos
-  ❌ Requer buffer de memória no Collector (custo)
-`}</ArchDiagram>
+        <ComparisonFlow
+          title="Head Sampling vs Tail Sampling"
+          accent={ACCENT}
+          left={{
+            label: '⚡ HEAD SAMPLING',
+            steps: [
+              'Request chega',
+              'Root Span criado',
+              'Sorteia aleatório (ex: 10%)',
+              '10% → coleta todos os spans',
+              '90% → descarta todos os spans',
+              '✅ Zero overhead para 90% dos requests',
+              '❌ Pode descartar traces com erro ou lentos',
+            ],
+          }}
+          right={{
+            label: '🧠 TAIL SAMPLING',
+            steps: [
+              'Request chega',
+              'Todos os spans bufferizados no Collector',
+              'Aguarda trace completar (~30s)',
+              'Avalia: ERROR? latência > 2s? debug?',
+              'Guarda sempre os problemáticos',
+              '✅ Garante captura de traces problemáticos',
+              '❌ Requer buffer de memória no Collector',
+            ],
+          }}
+        />
         <CodeBlock lang="yaml">{`# Tail sampling no OTel Collector
 processors:
   tail_sampling:

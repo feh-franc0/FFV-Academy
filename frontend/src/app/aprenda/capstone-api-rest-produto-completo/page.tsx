@@ -1,7 +1,7 @@
 import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, CodeBlock, InlineCode } from '@/components/article/primitives';
+import { Section, Callout, CodeBlock } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('capstone-api-rest-produto-completo');
 

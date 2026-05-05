@@ -4,11 +4,10 @@ import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
   Section,
   Callout,
-  InlineCode,
   ComparisonTable,
   DecisionBox,
   QAItem,
-  ArchDiagram,
+  HierarchyDiagram,
   CodeBlock,
 } from '@/components/article/primitives';
 
@@ -98,25 +97,18 @@ function Content() {
       </p>
 
       <Section title="A escada de consistência (do mais forte ao mais fraco)" accent={ACCENT}>
-        <ArchDiagram title="Hierarquia de consistência" accent={ACCENT}>{`
-  Strict / Linearizability           ← mais forte, mais caro
-         │
-         ▼
-  Sequential consistency
-         │
-         ▼
-  Causal consistency
-         │
-         ▼
-  PRAM / FIFO consistency
-         │
-         ▼
-  Session guarantees                 ← prático e suficiente em 80%
-  (read-your-writes, monotonic r/w)
-         │
-         ▼
-  Eventual consistency               ← mais fraco, mais rápido
-`}</ArchDiagram>
+        <HierarchyDiagram
+          title="Hierarquia de consistência"
+          accent={ACCENT}
+          levels={[
+            { label: 'Strict / Linearizability', desc: 'mais forte, mais caro — ordem global + tempo real' },
+            { label: 'Sequential Consistency', desc: 'ordem total coerente com cada processo' },
+            { label: 'Causal Consistency', desc: 'preserva happens-before; concorrentes livres' },
+            { label: 'PRAM / FIFO Consistency', desc: 'cada escritor visto em ordem por todos' },
+            { label: 'Session Guarantees', desc: 'prático, suficiente em 80% — read-your-writes, monotonic r/w' },
+            { label: 'Eventual Consistency', desc: 'mais fraco, mais rápido — converge sem novas escritas' },
+          ]}
+        />
         <ComparisonTable
           accent={ACCENT}
           headers={['Modelo', 'Garantia', 'Preço típico']}

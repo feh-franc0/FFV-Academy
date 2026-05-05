@@ -9,7 +9,7 @@ import {
   ComparisonTable,
   DecisionBox,
   QAItem,
-  ArchDiagram,
+  NodeGraph,
 } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('hybrid-search-reranking');
@@ -97,31 +97,39 @@ function Content() {
       </p>
 
       <Section title="A anatomia de um retrieval de produção" accent={ACCENT}>
-        <ArchDiagram title="Pipeline RAG 2025-2026 (three-stage retrieval)" accent={ACCENT}>{`
-   Query
-     │
-     ├────────────┬────────────────┬─────────────┐
-     ▼            ▼                ▼             ▼
-  BM25       Dense vector     Sparse (SPLADE)   Metadata filter
-  (lexical)  (semantic)       (learned sparse)  (date, type, acl)
-     │            │                │             │
-     └────────────┴────────────────┴─────────────┘
-                     │
-                     ▼
-           ┌──────────────────────┐
-           │  Rank fusion (RRF)   │   → top-50/100
-           └──────────┬───────────┘
-                      │
-                      ▼
-           ┌──────────────────────┐
-           │  Cross-encoder       │   → top-5/10
-           │  rerank (Cohere/Jina)│
-           └──────────┬───────────┘
-                      │
-                      ▼
-              Contexto final
-              p/ LLM gerar
-`}</ArchDiagram>
+        <NodeGraph
+          title="Pipeline RAG 2025-2026 (three-stage retrieval)"
+          accent={ACCENT}
+          columns={[
+            {
+              label: 'Recuperação',
+              nodes: [
+                { label: 'BM25', sub: 'lexical' },
+                { label: 'Dense vector', sub: 'semantic' },
+                { label: 'SPLADE', sub: 'learned sparse' },
+                { label: 'Metadata filter', sub: 'date, type, acl' },
+              ],
+            },
+            {
+              label: 'Fusão RRF',
+              nodes: [
+                { label: 'Rank Fusion (RRF)', sub: 'top-50/100' },
+              ],
+            },
+            {
+              label: 'Reranking',
+              nodes: [
+                { label: 'Cross-encoder', sub: 'Cohere / Jina · top-5/10' },
+              ],
+            },
+            {
+              label: 'Contexto Final',
+              nodes: [
+                { label: 'Contexto p/ LLM', sub: 'prompt pronto' },
+              ],
+            },
+          ]}
+        />
         <Callout tone="info">
           Três estágios não é overkill — é o que separa "funciona na demo" de "funciona no cliente". Cada estágio tem
           um trade-off claro: recall (BM25+vector), diversidade (MMR/RRF), precisão (rerank).

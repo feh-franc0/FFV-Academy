@@ -1,7 +1,7 @@
 import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, QAItem, ExamDomainBadge } from '@/components/article/primitives';
+import { Section, Callout, ComparisonTable, DecisionBox, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('ai-ml-aws-servicos');
 

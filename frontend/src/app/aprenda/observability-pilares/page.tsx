@@ -6,7 +6,8 @@ import {
   CodeBlock,
   ComparisonTable,
   DecisionBox,
-  ArchDiagram,
+  StackFlow,
+  NodeGraph,
   InlineCode,
 } from '@/components/article/primitives';
 
@@ -140,12 +141,13 @@ function Content() {
       </Section>
 
       <Section title="Os 3 pilares clássicos" accent={ACCENT}>
-        <ArchDiagram>
-{`OBSERVABILITY
-   ├─ LOGS     ──── "o que aconteceu" (evento textual/JSON por linha)
-   ├─ METRICS  ──── "quanto" (números agregados no tempo: rate, latência, count)
-   └─ TRACES   ──── "como" (path de uma request atravessando N serviços)`}
-        </ArchDiagram>
+        <StackFlow
+          items={[
+            { label: 'Logs', sub: '"o que aconteceu" — evento textual/JSON por linha' },
+            { label: 'Metrics', sub: '"quanto" — números agregados no tempo: rate, latência, count' },
+            { label: 'Traces', sub: '"como" — path de uma request atravessando N serviços' },
+          ]}
+        />
 
         <ComparisonTable
           headers={['Pilar', 'Granularidade', 'Uso típico', 'Custo']}
@@ -173,27 +175,32 @@ function Content() {
 
         <p><strong>Exemplo: mesmo incidente visto pelos 3 pilares</strong>.</p>
 
-        <ArchDiagram>
-{`Problema: usuário reporta que checkout tá lento
-
-MÉTRICAS (Prometheus):
-  http_request_duration_seconds{path="/checkout"} p99 = 4.2s
-  (era 200ms ontem — anomalia clara)
-  → mas por quê? métricas não sabem.
-
-LOGS (JSON):
-  {"level":"warn","msg":"slow query","query":"SELECT * FROM carts...","dur_ms":3800}
-  {"level":"info","msg":"checkout completed","user":"u42","dur_ms":4100}
-  → hipótese: query lenta. Mas qual cart? Quantos usuários afetados?
-
-TRACES (Jaeger):
-  span: POST /checkout (4.1s)
-   ├─ span: CartService.getCart (3.8s)  ← gargalo!
-   │   └─ span: db.query (3.7s, query_type="cart_items_join")
-   ├─ span: PaymentService.charge (150ms)
-   └─ span: ShippingService.schedule (40ms)
-  → conclusão: join no cart_items explodiu. Correlacionar com deploy de hoje.`}
-        </ArchDiagram>
+        <NodeGraph
+          columns={[
+            {
+              label: 'Métricas (Prometheus)',
+              nodes: [
+                { label: 'p99 checkout = 4.2s', sub: 'era 200ms ontem → anomalia clara' },
+                { label: 'Pergunta não respondida', sub: '"por quê?" — métricas não sabem' },
+              ],
+            },
+            {
+              label: 'Logs (JSON)',
+              nodes: [
+                { label: 'slow query warn', sub: 'SELECT * FROM carts · dur_ms: 3800' },
+                { label: 'Hipótese', sub: 'query lenta — mas qual cart? Quantos afetados?' },
+              ],
+            },
+            {
+              label: 'Traces (Jaeger)',
+              nodes: [
+                { label: 'POST /checkout (4.1s)', sub: '' },
+                { label: 'CartService.getCart (3.8s)', sub: '← gargalo!' },
+                { label: 'db.query (3.7s)', sub: 'cart_items_join → conclusão: N+1 no join' },
+              ],
+            },
+          ]}
+        />
 
         <p>
           Os 3 pilares são complementares. Sozinhos, cada um é limitado. Juntos, permitem ir do
@@ -286,17 +293,17 @@ http_requests_total{method, status, path, user_id} 1
           gerando flamegraphs sempre disponíveis.
         </p>
 
-        <ArchDiagram>
-{`CPU flamegraph do momento do incidente:
-
-|████████████████████████████████| 100% CPU  (root)
-|████████████████████████| 65% checkout_handler
-|████████████| 42% getCartItems
-|█████| 28% db.query (N+1 detectado!)
-|██| 8% json.serialize
-|███| 13% paymentClient.charge
-|██████| 25% rateLimiter.check`}
-        </ArchDiagram>
+        <StackFlow
+          items={[
+            { label: '100% CPU — root', sub: 'processo inteiro' },
+            { label: '65% — checkout_handler', sub: 'maior consumidor' },
+            { label: '42% — getCartItems', sub: 'função chamada dentro do handler' },
+            { label: '28% — db.query', sub: 'N+1 detectado!' },
+            { label: '13% — paymentClient.charge', sub: '' },
+            { label: '8% — json.serialize', sub: '' },
+            { label: '25% — rateLimiter.check', sub: 'chamado fora do handler' },
+          ]}
+        />
 
         <ComparisonTable
           headers={['Ferramenta', 'Tech', 'Uso']}

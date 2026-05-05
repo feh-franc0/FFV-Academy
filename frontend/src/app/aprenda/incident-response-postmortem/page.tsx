@@ -1,6 +1,6 @@
 import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
-import { Section, Callout, CodeBlock, ComparisonTable, DecisionBox, ArchDiagram } from '@/components/article/primitives';
+import { Section, Callout, CodeBlock, ComparisonTable, DecisionBox, FlowDiagram, StackFlow, ComparisonFlow } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('incident-response-postmortem');
 
@@ -85,23 +85,24 @@ function Content() {
       </p>
 
       <Section title="Ciclo de vida de um incidente">
-        <ArchDiagram>{`
-  DETECÇÃO           RESPOSTA              RESOLUÇÃO        APRENDIZADO
-  ─────────────────────────────────────────────────────────────────────
-  Alerta dispara   → Triage: P1/P2/P3? → Mitigação       → Postmortem
-  Usuário reporta  → Declarar incidente → Root cause      → Action items
-  Monitoramento    → Mobilizar equipe   → Fix ou rollback → Review 30d
-       │                  │                    │                │
-       ▼                  ▼                    ▼                ▼
-  [00:00]          [00:05-00:15]         [00:30-2:00+]   [24-48h depois]
-
-  Severidades:
-  ─────────────────────────────────────────────────────────────────────
-  P1  │ Produção down ou dados corrompidos │ Resposta: 5min  │ PD
-  P2  │ Funcionalidade crítica degradada   │ Resposta: 15min │ Slack
-  P3  │ Funcionalidade não-crítica afetada │ Resposta: 2h    │ Ticket
-  P4  │ Issue sem impacto a usuário        │ Resposta: 1 dia │ Backlog
-`}</ArchDiagram>
+        <FlowDiagram
+          orientation="horizontal"
+          steps={[
+            { label: 'Detecção', desc: 'Alerta · usuário reporta · monitoramento · T+00:00' },
+            { label: 'Resposta', desc: 'Triage P1–P4 · declarar incidente · mobilizar equipe · T+05–15min' },
+            { label: 'Resolução', desc: 'Mitigação · root cause · fix ou rollback · T+30min–2h' },
+            { label: 'Aprendizado', desc: 'Postmortem · action items · review 30d · T+24–48h' },
+          ]}
+        />
+        <ComparisonTable
+          headers={['Severidade', 'Impacto', 'Tempo de resposta', 'Canal']}
+          rows={[
+            ['P1', 'Produção down ou dados corrompidos', '5 min', 'PagerDuty'],
+            ['P2', 'Funcionalidade crítica degradada', '15 min', 'Slack'],
+            ['P3', 'Funcionalidade não-crítica afetada', '2 h', 'Ticket'],
+            ['P4', 'Issue sem impacto a usuário', '1 dia', 'Backlog'],
+          ]}
+        />
       </Section>
 
       <Section title="Roles em incidentes P1/P2">
@@ -182,40 +183,16 @@ function Content() {
       </Section>
 
       <Section title="Durante o incidente: disciplina de comunicação">
-        <ArchDiagram>{`
-  Canal Slack do Incidente — fluxo ideal
-  ─────────────────────────────────────────────────────────
-  [14:05] @ic:     🚨 Incidente declarado. Checkout com 40% erro rate.
-                   IC: @joao. Tech Lead: @maria. Comms: @ana.
-                   Hipótese inicial: deploy de 13:50 pode ser causa.
-
-  [14:07] @maria:  Confirmado: payment-service com 429 do Stripe.
-                   Checando se é rate limit ou falha da nossa parte.
-
-  [14:09] @pedro:  Stripe status page: verde. É nosso rate limiting.
-                   Vendo configuração de retry.
-
-  [14:11] @ic:     UPDATE: causa provável = config de retry agressiva
-                   no deploy 13:50. Avaliando rollback vs hotfix.
-
-  [14:12] @maria:  Rollback é mais seguro. Preparo PR agora.
-
-  [14:13] @ic:     Aprovado. @maria executa rollback. @ana: atualiza
-                   status page para "mitigação em andamento".
-
-  [14:18] @maria:  Rollback concluído. Error rate: 2%. Observando.
-
-  [14:22] @ic:     Error rate estável < 1%. Incidente RESOLVIDO.
-                   Impacto total: ~17min de degradação no checkout.
-                   Postmortem em 24h. /incident close
-
-  ─────────────────────────────────────────────────────────
-  O que funciona:
-  ✅ IC comanda sem resolver tecnicamente
-  ✅ Updates frequentes e factuais
-  ✅ Decisão explícita (rollback vs fix) com dono claro
-  ✅ Timeline clara para postmortem
-`}</ArchDiagram>
+        <StackFlow
+          items={[
+            { label: '14:05 — IC declara incidente', sub: 'Checkout 40% erro rate · IC: @joao · Tech Lead: @maria · Comms: @ana · hipótese: deploy 13:50' },
+            { label: '14:07 — Maria confirma', sub: 'payment-service com 429 do Stripe · verificando se é rate limit nosso' },
+            { label: '14:09 — Pedro analisa', sub: 'Stripe status page: verde · problema é nosso · vendo config de retry' },
+            { label: '14:11 — IC atualiza', sub: 'Causa provável: retry agressivo no deploy 13:50 · avaliando rollback vs hotfix' },
+            { label: '14:13 — Decisão: rollback', sub: 'IC aprova · Maria executa · Ana atualiza status page para "mitigação em andamento"' },
+            { label: '14:22 — Incidente RESOLVIDO', sub: 'Error rate estável < 1% · impacto total ~17min · postmortem em 24h' },
+          ]}
+        />
         <Callout tone="info">
           <strong>Status page é obrigatório em P1/P2:</strong> Clientes que sabem que você está trabalhando
           no problema são mais pacientes. Status page desatualizada (ou inexistente) gera mais tickets de
@@ -320,34 +297,28 @@ com sistema externo — considerar linter de código para detectar.`}</CodeBlock
         <p className="text-base leading-8" style={{ color: 'var(--ffv-muted)' }}>
           Os 5 Whys é poderoso mas tem uma armadilha comum: parar no "erro humano" como causa raiz.
         </p>
-        <ArchDiagram>{`
-  ❌ Análise ruim (para no erro humano)        ✅ Análise correta (vai ao sistema)
-  ─────────────────────────────────────────   ──────────────────────────────────
-  Por quê o sistema falhou?                   Por quê o sistema falhou?
-  → Engenheiro configurou retry errado        → Retry sem backoff causou storm
-
-  Por quê o engenheiro errou?                 Por quê o retry não tinha backoff?
-  → "Falta de atenção"                        → Padrão de retry da lib não tem
-                                                backoff por default
-
-  FIM DA ANÁLISE — CONCLUSÃO ERRADA:          Por quê a lib não tem backoff por default?
-  "Treinar engenheiro para ser mais           → Escolhemos a lib sem avaliar esse critério
-   cuidadoso"
-                                              Por quê não avaliamos esse critério?
-  Resultado: nada muda. Próximo               → Não há checklist de avaliação de libs
-  engenheiro comete o mesmo erro.               para integrações externas
-
-                                              Por quê não há checklist?
-                                              → Processo de adoção de libs não tem
-                                                guia de rate limiting externo
-
-                                              CONCLUSÃO CORRETA:
-                                              "Criar guia + checklist de rate limits
-                                               no processo de adoção de libs"
-
-                                              Resultado: sistema é melhorado,
-                                              próximo engenheiro é protegido.
-`}</ArchDiagram>
+        <ComparisonFlow
+          left={{
+            label: 'Análise ruim — para no erro humano',
+            steps: [
+              'Por quê o sistema falhou? → Engenheiro configurou retry errado',
+              'Por quê o engenheiro errou? → "Falta de atenção"',
+              'FIM DA ANÁLISE — "Treinar engenheiro para ser mais cuidadoso"',
+              'Resultado: nada muda. Próximo engenheiro comete o mesmo erro.',
+            ],
+          }}
+          right={{
+            label: 'Análise correta — vai ao sistema',
+            steps: [
+              'Por quê o sistema falhou? → Retry sem backoff causou storm',
+              'Por quê não tinha backoff? → Padrão da lib não tem backoff por default',
+              'Por quê escolhemos essa lib? → Sem checklist de avaliação para integrações',
+              'Por quê não há checklist? → Processo de adoção de libs sem guia de rate limiting',
+              'CONCLUSÃO: "Criar guia + checklist de rate limits no processo de adoção de libs"',
+              'Resultado: sistema melhorado, próximo engenheiro protegido.',
+            ],
+          }}
+        />
         <Callout tone="warn">
           <strong>Regra do blameless postmortem:</strong> Se a análise termina em "pessoa X deveria ter
           feito Y diferente", você não chegou na causa raiz. Pergunte: "Qual sistema, processo ou

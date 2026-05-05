@@ -6,7 +6,9 @@ import {
   CodeBlock,
   ComparisonTable,
   DecisionBox,
-  ArchDiagram,
+  NodeGraph,
+  FlowDiagram,
+  StackFlow,
   InlineCode,
 } from '@/components/article/primitives';
 
@@ -144,30 +146,36 @@ function Content() {
           <li>Se não existe: executa a operação, <strong>grava a resposta</strong> com a key, retorna</li>
         </ol>
 
-        <ArchDiagram>
-{`CLIENTE                    SERVER                 DB
-   │                          │                     │
-   ├─ POST /payments ────────►│                     │
-   │  Idempotency-Key: abc123 │                     │
-   │                          ├─ SELECT ... WHERE key='abc123'  ──►
-   │                          │◄─ not found        ◄──
-   │                          │                     │
-   │                          ├─ BEGIN TX           │
-   │                          ├─ Insert payment     ─►
-   │                          ├─ Insert idempotency ─► (key, response_json)
-   │                          ├─ COMMIT             │
-   │                          │                     │
-   │◄─ 201 Created ───────────┤                     │
-   │                          │                     │
-
---- RETRY (rede caiu, cliente não recebeu ACK) ---
-
-   ├─ POST /payments ────────►│                     │
-   │  Idempotency-Key: abc123 │                     │
-   │                          ├─ SELECT ... WHERE key='abc123'  ──►
-   │                          │◄─ found: 201 + body ◄──
-   │◄─ 201 Created (mesma!) ──┤  (sem reprocessar)  │`}
-        </ArchDiagram>
+        <NodeGraph
+          accent={ACCENT}
+          columns={[
+            {
+              label: 'Cliente',
+              nodes: [
+                { label: 'POST /payments', sub: 'Idempotency-Key: abc123' },
+                { label: '201 Created', sub: 'resposta recebida' },
+                { label: 'POST /payments (retry)', sub: 'mesma Key: abc123' },
+                { label: '201 Created (mesma!)', sub: 'sem reprocessar' },
+              ],
+            },
+            {
+              label: 'Server',
+              nodes: [
+                { label: 'SELECT key', sub: 'not found → executa' },
+                { label: 'BEGIN TX', sub: 'Insert payment + key → COMMIT' },
+                { label: 'SELECT key', sub: 'found: 201 + body' },
+              ],
+            },
+            {
+              label: 'DB',
+              nodes: [
+                { label: 'payments', sub: 'INSERT' },
+                { label: 'idempotency_keys', sub: 'INSERT (key, response_json)' },
+                { label: 'idempotency_keys', sub: 'SELECT → retorna cached' },
+              ],
+            },
+          ]}
+        />
 
         <p><strong>Implementação Postgres + FastAPI</strong> (enxuta mas production-shaped):</p>
         <CodeBlock lang="python">{`# idempotency.py — pattern completo com locking e TTL
@@ -327,25 +335,15 @@ function isRetryable(err: unknown): boolean {
           Circuit breaker quebra esse ciclo.
         </p>
 
-        <ArchDiagram>
-{`              falhas > threshold
-   ┌─────────────────────────────────────────┐
-   ▼                                          │
-┌─────────┐    recuperou?        ┌─────────────────┐
-│ CLOSED  │◄─────────────────────│   HALF-OPEN     │
-│(normal) │                      │(deixa 1 passar) │
-└─────────┘─────────────────────►└─────────────────┘
-     ▲                                          ▲
-     │                                          │
-     │            timeout decorre               │
-     │         (ex: 60s sem tentar)             │
-     │                                          │
-     └──────────► ┌─────────┐ ─────────────────┘
-                  │  OPEN   │
-                  │(rejeita │
-                  │ tudo)   │
-                  └─────────┘`}
-        </ArchDiagram>
+        <FlowDiagram
+          accent={ACCENT}
+          orientation="horizontal"
+          steps={[
+            { label: 'CLOSED', desc: 'operação normal' },
+            { label: 'OPEN', desc: 'rejeita tudo · aguarda timeout (60s)' },
+            { label: 'HALF-OPEN', desc: 'deixa 1 request passar · se ok → CLOSED' },
+          ]}
+        />
 
         <p><strong>Implementação básica em Python</strong>:</p>
         <CodeBlock lang="python">{`# circuit_breaker.py — versão educativa
@@ -469,31 +467,15 @@ async def process_message(msg: dict):
           Se faz em duas etapas (INSERT + publish), pode crashar no meio — DB tem o pedido,
           o evento nunca saiu (ou vice-versa).
         </p>
-        <ArchDiagram>
-{`┌──────────────────────────────────────────┐
-│ Transação ATÔMICA no banco               │
-│                                          │
-│  1. INSERT INTO orders (...)             │
-│  2. INSERT INTO outbox (event, payload)  │
-│                                          │
-│  COMMIT                                  │
-└──────────────────────────────────────────┘
-              │
-              ▼
-    ┌──────────────────────┐
-    │   RELAY (worker)     │  ← polling ou CDC (Debezium)
-    │                      │
-    │ SELECT * FROM outbox │
-    │ WHERE sent=false     │
-    │   ORDER BY id        │
-    └──────────────────────┘
-              │
-              ▼
-          Kafka / SQS / RabbitMQ
-              │
-              ▼
-       UPDATE outbox SET sent=true`}
-        </ArchDiagram>
+        <StackFlow
+          accent={ACCENT}
+          items={[
+            { label: 'Transação ATÔMICA', sub: 'INSERT INTO orders + INSERT INTO outbox → COMMIT' },
+            { label: 'Relay Worker', sub: 'SELECT * FROM outbox WHERE sent=false · polling ou CDC (Debezium)' },
+            { label: 'Broker', sub: 'Kafka / SQS / RabbitMQ — publica evento' },
+            { label: 'Marcar enviado', sub: 'UPDATE outbox SET sent=true' },
+          ]}
+        />
         <p>
           Por que funciona: a transação é atômica (ACID do banco garante). O relay é idempotente
           (se crashar entre publicar e marcar como sent, apenas republica — consumer fará dedup).

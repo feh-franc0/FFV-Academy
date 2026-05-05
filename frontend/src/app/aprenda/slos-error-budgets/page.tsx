@@ -1,6 +1,6 @@
 import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
-import { Section, Callout, CodeBlock, ComparisonTable, DecisionBox, ArchDiagram } from '@/components/article/primitives';
+import { Section, Callout, CodeBlock, ComparisonTable, DecisionBox, StackFlow, HierarchyDiagram } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('slos-error-budgets');
 
@@ -88,35 +88,13 @@ function Content() {
       </p>
 
       <Section title="SLI → SLO → SLA: a hierarquia">
-        <ArchDiagram>{`
-  ┌─────────────────────────────────────────────────────────────────┐
-  │  SLI — Service Level Indicator                                  │
-  │  "O que eu meço"                                                │
-  │                                                                 │
-  │  Ex: proportion of requests where latency < 300ms               │
-  │      = successful_requests / total_requests                     │
-  └────────────────────┬────────────────────────────────────────────┘
-                       │ define alvo para
-  ┌────────────────────▼────────────────────────────────────────────┐
-  │  SLO — Service Level Objective                                  │
-  │  "O alvo interno de confiabilidade"                             │
-  │                                                                 │
-  │  Ex: SLI ≥ 99.5% medido em janela rolling de 30 dias           │
-  │      (= máx 0.5% de requests lentas ou com erro)               │
-  └────────────────────┬────────────────────────────────────────────┘
-                       │ base para (sempre mais frouxo)
-  ┌────────────────────▼────────────────────────────────────────────┐
-  │  SLA — Service Level Agreement                                  │
-  │  "O contrato com penalidades"                                   │
-  │                                                                 │
-  │  Ex: ≥ 99.0% (folga de 0.5% em relação ao SLO)                │
-  │      Se violar: crédito de 10% na fatura do cliente            │
-  └─────────────────────────────────────────────────────────────────┘
-
-  Regra: SLA < SLO < 100%
-  Por quê: se o SLO = SLA, qualquer pequena falha interna gera
-  penalidade financeira sem buffer de aviso.
-`}</ArchDiagram>
+        <HierarchyDiagram
+          levels={[
+            { label: 'SLI — Service Level Indicator', desc: '"O que eu meço" · ex: % requests com latência < 300ms' },
+            { label: 'SLO — Service Level Objective', desc: '"O alvo interno" · ex: SLI ≥ 99.5% em janela rolling de 30 dias' },
+            { label: 'SLA — Service Level Agreement', desc: '"O contrato com penalidades" · ex: ≥ 99.0% · violação = crédito 10%' },
+          ]}
+        />
       </Section>
 
       <Section title="Como definir um bom SLI">
@@ -176,34 +154,14 @@ latency_sli = """
         <p className="text-base leading-8" style={{ color: 'var(--ffv-muted)' }}>
           Se o SLO é 99.5% em 30 dias, o error budget é os 0.5% restantes — convertido em tempo absoluto:
         </p>
-        <ArchDiagram>{`
-  SLO = 99.5%  →  Error budget = 0.5%
-
-  Janela de 30 dias = 43.200 minutos
-  Error budget = 0.5% × 43.200 = 216 minutos = 3h36min
-
-  ┌─────────────────────────────────────────────────────────┐
-  │ ERROR BUDGET TRACKER — Checkout Service — Jan 2024      │
-  │                                                         │
-  │ Budget total: 216 min                                   │
-  │ ████████████████████░░░░░░░░░░░░░░░░░░░░  45% usado    │
-  │                                                         │
-  │ Consumido: 97 min                                       │
-  │  • Incidente DB 03/Jan: 45 min                          │
-  │  • Deploy canário com bug 11/Jan: 32 min                │
-  │  • Degradação CDN 18/Jan: 20 min                        │
-  │                                                         │
-  │ Restante: 119 min (55%)                                 │
-  │ Dias restantes no mês: 13                               │
-  │                                                         │
-  │ ✅ Budget disponível — time pode fazer releases         │
-  └─────────────────────────────────────────────────────────┘
-
-  Se budget esgota antes do fim do mês:
-  → Feature freeze: sem novos deploys de features
-  → Time foca 100% em confiabilidade
-  → Investigar o que está causando consumo anormal
-`}</ArchDiagram>
+        <StackFlow
+          items={[
+            { label: 'SLO = 99.5% → Error budget = 0.5%', sub: '30 dias = 43.200 min · budget = 216 min (3h36min)' },
+            { label: 'Consumido: 97 min (45%)', sub: 'Incidente DB 03/Jan: 45min · Deploy bugado 11/Jan: 32min · Degradação CDN 18/Jan: 20min' },
+            { label: 'Restante: 119 min (55%) · 13 dias no mês', sub: 'Budget disponível — time pode fazer releases' },
+            { label: 'Se budget esgota antes do fim do mês', sub: 'Feature freeze · time foca 100% em confiabilidade · investigar consumo anormal' },
+          ]}
+        />
         <Callout tone="info">
           <strong>Error budget como ferramenta de decisão:</strong> O budget não é punitivo — é um contrato
           entre produto e engenharia. Produto quer lançar features rápido (consome budget). Engenharia
@@ -222,28 +180,15 @@ latency_sli = """
           Burn rate de 1 = consome o budget exatamente na janela. Burn rate de 2 = esgota o budget em
           metade do tempo.
         </p>
-        <ArchDiagram>{`
-  SLO = 99.5%  →  error rate alvo = 0.5%
-
-  Burn rate = current_error_rate / target_error_rate
-  Ex: error rate atual = 5%  →  burn rate = 5% / 0.5% = 10×
-
-  TABELA DE ALERTAS (Google SRE Workbook):
-  ─────────────────────────────────────────────────────────────────
-  Alerta  │ Burn Rate │ Janela Curta │ Janela Longa │ Severidade
-  ─────────┼───────────┼──────────────┼──────────────┼───────────
-  P1       │ 14.4×     │ 1h           │ 5min         │ PagerDuty
-  P2       │ 6×        │ 6h           │ 30min        │ Slack urgente
-  P3       │ 3×        │ 3 dias       │ 6h           │ Ticket/email
-  P4       │ 1×        │ 30 dias      │ -            │ Weekly review
-  ─────────────────────────────────────────────────────────────────
-
-  P1 (14.4×): burn rate de 14.4 esgota budget em 30d/14.4 = 2 dias
-  → Requer resposta imediata (pager)
-
-  P3 (3×): burn rate de 3 esgota budget em 10 dias
-  → Degradação silenciosa — ticket para investigar
-`}</ArchDiagram>
+        <ComparisonTable
+          headers={['Alerta', 'Burn Rate', 'Janela Curta', 'Janela Longa', 'Severidade', 'Esgota budget em']}
+          rows={[
+            ['P1', '14.4×', '1h', '5min', 'PagerDuty', '2 dias'],
+            ['P2', '6×', '6h', '30min', 'Slack urgente', '5 dias'],
+            ['P3', '3×', '3 dias', '6h', 'Ticket/email', '10 dias'],
+            ['P4', '1×', '30 dias', '—', 'Weekly review', '30 dias (normal)'],
+          ]}
+        />
         <CodeBlock lang="yaml">{`# Prometheus alerting rules — multi-window multi-burn rate
 # SLO: 99.5% availability no checkout em janela de 30 dias
 

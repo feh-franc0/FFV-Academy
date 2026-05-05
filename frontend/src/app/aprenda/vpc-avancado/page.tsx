@@ -1,7 +1,7 @@
 import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, ArchDiagram, QAItem, ExamDomainBadge } from '@/components/article/primitives';
+import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, NodeGraph, FlowDiagram, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('vpc-avancado');
 
@@ -77,35 +77,35 @@ function Content() {
       </Section>
 
       <Section title="Anatomia de uma VPC" accent={ACCENT}>
-        <ArchDiagram title="VPC padrão com subnets pública e privada em 2 AZs" accent={ACCENT}>{`
-           VPC  10.0.0.0/16
-  ┌──────────────────────────────────────────┐
-  │                                          │
-  │   AZ us-east-1a         AZ us-east-1b    │
-  │   ┌──────────┐          ┌──────────┐     │
-  │   │ Public   │          │ Public   │ ← IGW
-  │   │ Subnet   │          │ Subnet   │     │
-  │   │ 10.0.1.0 │          │ 10.0.2.0 │     │
-  │   │ /24      │          │ /24      │     │
-  │   │          │          │          │     │
-  │   │ NAT-GW ──┼──────────┤ ALB      │     │
-  │   └─────┬────┘          └─────┬────┘     │
-  │         │                     │          │
-  │   ┌─────▼────┐          ┌─────▼────┐     │
-  │   │ Private  │          │ Private  │     │
-  │   │ Subnet   │          │ Subnet   │     │
-  │   │ 10.0.10.0│          │ 10.0.11.0│     │
-  │   │ /24      │          │ /24      │     │
-  │   │ EC2 app  │          │ EC2 app  │     │
-  │   └──────────┘          └──────────┘     │
-  │                                          │
-  │   ┌─────────────┐     ┌─────────────┐    │
-  │   │ DB Subnet   │     │ DB Subnet   │    │
-  │   │ 10.0.20.0/24│     │ 10.0.21.0/24│    │
-  │   │  RDS primary│     │ RDS standby │    │
-  │   └─────────────┘     └─────────────┘    │
-  └──────────────────────────────────────────┘
-`}</ArchDiagram>
+        <NodeGraph
+          title="VPC padrão com subnets pública e privada em 2 AZs"
+          accent={ACCENT}
+          columns={[
+            {
+              label: 'Internet',
+              nodes: [
+                { label: 'Internet', sub: '' },
+                { label: 'Internet Gateway', sub: 'VPC 10.0.0.0/16' },
+              ],
+            },
+            {
+              label: 'AZ us-east-1a',
+              nodes: [
+                { label: 'Public Subnet 10.0.1.0/24', sub: 'NAT-GW · IGW route' },
+                { label: 'Private Subnet 10.0.10.0/24', sub: 'EC2 app → saída via NAT-GW' },
+                { label: 'DB Subnet 10.0.20.0/24', sub: 'RDS primary' },
+              ],
+            },
+            {
+              label: 'AZ us-east-1b',
+              nodes: [
+                { label: 'Public Subnet 10.0.2.0/24', sub: 'ALB · IGW route' },
+                { label: 'Private Subnet 10.0.11.0/24', sub: 'EC2 app' },
+                { label: 'DB Subnet 10.0.21.0/24', sub: 'RDS standby' },
+              ],
+            },
+          ]}
+        />
         <p><strong>Componentes essenciais:</strong></p>
         <ul className="flex flex-col gap-1 text-xs pl-4">
           <li>• <strong>CIDR block</strong> — range IPv4 privado (ex: 10.0.0.0/16 = 65k IPs)</li>
@@ -187,14 +187,26 @@ function Content() {
       </Section>
 
       <Section title="VPC Peering — detalhes" accent={ACCENT}>
-        <ArchDiagram title="VPC Peering é 1-a-1, não-transitivo" accent={ACCENT}>{`
-   VPC-A ══peer══ VPC-B ══peer══ VPC-C
-     │              │              │
-     └──────── ❌ não fala ────────┘
-   (A e C NÃO se conectam via B)
-
-   Para A ↔ C: crie peering A↔C também (full mesh)
-`}</ArchDiagram>
+        <NodeGraph
+          title="VPC Peering é 1-a-1, não-transitivo"
+          accent={ACCENT}
+          columns={[
+            {
+              label: 'Peerings existentes',
+              nodes: [
+                { label: 'VPC-A ↔ VPC-B', sub: 'peering direto' },
+                { label: 'VPC-B ↔ VPC-C', sub: 'peering direto' },
+              ],
+            },
+            {
+              label: 'Resultado',
+              nodes: [
+                { label: 'VPC-A NÃO fala com VPC-C', sub: 'não-transitivo — tráfego não passa por B' },
+                { label: 'Para A ↔ C: crie peering A↔C', sub: 'full mesh — cada par precisa peering próprio' },
+              ],
+            },
+          ]}
+        />
         <ul className="flex flex-col gap-1 text-xs pl-4">
           <li>• Conexão lógica entre 2 VPCs (mesma conta ou cross-account)</li>
           <li>• Funciona cross-region desde 2018 (Inter-Region Peering)</li>
@@ -206,15 +218,28 @@ function Content() {
       </Section>
 
       <Section title="Transit Gateway — a solução moderna" accent={ACCENT}>
-        <ArchDiagram title="Transit Gateway centraliza roteamento" accent={ACCENT}>{`
-                    ┌────────────────┐
-                    │ Transit Gateway│
-                    └────┬───────────┘
-         ┌───────────────┼───────────────┐
-         │        │      │       │       │
-      VPC-A    VPC-B  VPC-C   VPN      Direct
-      (prod)  (dev)  (shared) on-prem  Connect
-`}</ArchDiagram>
+        <NodeGraph
+          title="Transit Gateway centraliza roteamento"
+          accent={ACCENT}
+          columns={[
+            {
+              label: 'Hub',
+              nodes: [
+                { label: 'Transit Gateway', sub: 'roteamento central' },
+              ],
+            },
+            {
+              label: 'Spoke (attachments)',
+              nodes: [
+                { label: 'VPC-A (prod)', sub: '' },
+                { label: 'VPC-B (dev)', sub: '' },
+                { label: 'VPC-C (shared)', sub: '' },
+                { label: 'VPN (on-prem)', sub: '' },
+                { label: 'Direct Connect', sub: '' },
+              ],
+            },
+          ]}
+        />
         <ul className="flex flex-col gap-1 text-xs pl-4">
           <li>• Hub central que conecta VPCs + VPNs + Direct Connect</li>
           <li>• Suporta <strong>milhares</strong> de VPCs</li>
@@ -237,16 +262,16 @@ function Content() {
             ['Interface Endpoint (PrivateLink)', 'Todos os outros (SQS, SNS, KMS, API GW, ECS, etc.)', '$0,01/h + $0,01/GB', 'ENI criada na subnet com DNS privado'],
           ]}
         />
-        <ArchDiagram title="Gateway Endpoint (S3)" accent={ACCENT}>{`
-   Private Subnet              ┌─────────────┐
-   ┌────────────┐              │ S3 Service  │
-   │    EC2     │─────tráfego──┤ (AWS)       │
-   └────────────┘   via rota    └─────────────┘
-                    para
-                    Gateway
-                    Endpoint
-   (sem IGW, sem NAT, sem passar na internet)
-`}</ArchDiagram>
+        <FlowDiagram
+          title="Gateway Endpoint (S3)"
+          accent={ACCENT}
+          orientation="horizontal"
+          steps={[
+            { label: 'EC2 (Private Subnet)', desc: '' },
+            { label: 'Gateway Endpoint', desc: 'rota adicionada à route table' },
+            { label: 'S3 Service (AWS)', desc: 'sem IGW · sem NAT · sem internet' },
+          ]}
+        />
         <Callout tone="success">
           <strong>Economia concreta:</strong> se sua app em subnet privada faz muito S3/DynamoDB, troque NAT Gateway por Gateway Endpoint. Elimina $0,045/GB de data transfer do NAT — pode economizar milhares/mês.
         </Callout>
@@ -256,18 +281,25 @@ function Content() {
         <p>
           PrivateLink permite expor um serviço (atrás de NLB) em uma VPC para consumidores em outras VPCs/contas, via Interface Endpoint. Unidirecional: consumer chama provider, provider não enxerga consumer de volta.
         </p>
-        <ArchDiagram title="PrivateLink pattern SaaS" accent={ACCENT}>{`
-   VPC Consumer A         VPC Consumer B
-   ┌──────────┐           ┌──────────┐
-   │ EC2      │           │ EC2      │
-   └────┬─────┘           └────┬─────┘
-        │                      │
-   [VPC Endpoint]         [VPC Endpoint]
-        │                      │
-        └──────► NLB ◄─────────┘
-                │
-          VPC Provider (SaaS)
-`}</ArchDiagram>
+        <NodeGraph
+          title="PrivateLink pattern SaaS"
+          accent={ACCENT}
+          columns={[
+            {
+              label: 'Consumidores',
+              nodes: [
+                { label: 'VPC Consumer A — EC2', sub: 'VPC Endpoint (Interface)' },
+                { label: 'VPC Consumer B — EC2', sub: 'VPC Endpoint (Interface)' },
+              ],
+            },
+            {
+              label: 'Provider',
+              nodes: [
+                { label: 'NLB (VPC Provider SaaS)', sub: 'Endpoint Service · unidirecional' },
+              ],
+            },
+          ]}
+        />
       </Section>
 
       <Section title="VPN vs Direct Connect" accent={ACCENT}>

@@ -2,8 +2,15 @@ import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
-  Section, Callout, ComparisonTable, DecisionBox,
-  ArchFlow, LayerStack, QAItem, CodeBlock, StackFlow, FlowDiagram,
+  Section,
+  Callout,
+  ComparisonTable,
+  DecisionBox,
+  ArchFlow,
+  LayerStack,
+  QAItem,
+  StackFlow,
+  FlowDiagram,
 } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('ia-alem-do-llm');

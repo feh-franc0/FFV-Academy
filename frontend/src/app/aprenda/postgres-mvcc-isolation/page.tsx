@@ -6,7 +6,7 @@ import {
   CodeBlock,
   ComparisonTable,
   DecisionBox,
-  ArchDiagram,
+  StackFlow,
   InlineCode,
 } from '@/components/article/primitives';
 
@@ -112,24 +112,14 @@ function Content() {
           apenas pras transações cuja "visão" do mundo inclui essa versão.
         </p>
 
-        <ArchDiagram>
-{`Toda tupla no Postgres tem campos de controle:
-
-┌────────────────────────────────────────────────────────────┐
-│ ctid     │ xmin    │ xmax    │ ... dados da linha ...      │
-│ (ptr)    │ (criou) │ (deletou│                              │
-│          │         │  /null) │                              │
-└────────────────────────────────────────────────────────────┘
-
-UPDATE user SET balance = 150 WHERE id = 42;
-  → marca tupla antiga com xmax = txid (me)
-  → INSERE nova tupla com xmin = txid (me), xmax = null
-  → resultado: DUAS tuplas no mesmo id, com xmin/xmax diferentes
-
-Outra tx (txid menor) lendo:
-  → vê a tupla antiga (a nova foi criada por txid maior que o snapshot dela)
-  → resultado: não vê a mudança até commit + refresh do seu snapshot`}
-        </ArchDiagram>
+        <StackFlow
+          items={[
+            { label: 'Toda tupla tem: ctid · xmin · xmax · dados', sub: 'ctid = ponteiro · xmin = tx que criou · xmax = tx que deletou (ou null)' },
+            { label: 'UPDATE balance=150 WHERE id=42', sub: 'marca tupla antiga: xmax = txid · insere nova tupla: xmin = txid, xmax = null' },
+            { label: 'Resultado: DUAS tuplas para o mesmo id', sub: 'cada versão visível apenas para tx cujo snapshot inclui aquele xmin/xmax' },
+            { label: 'Outra tx com txid menor lendo', sub: 'vê a tupla antiga — a nova foi criada por txid maior que o snapshot dela' },
+          ]}
+        />
 
         <p><strong>Visibility rule simplificada</strong>: uma tupla é visível pra uma tx se:</p>
         <ol className="list-decimal space-y-1 pl-6">
@@ -360,27 +350,14 @@ SELECT pg_try_advisory_xact_lock(12345);
           MVCC cobra preço: cada UPDATE/DELETE deixa tuplas mortas. Sem recuperação, disco
           enche e queries degradam.
         </p>
-        <ArchDiagram>
-{`Tabela com 1000 rows, todos recebem UPDATE 10x sem VACUUM:
-
-Disco:
-  ┌─────┐┌─────┐┌─────┐┌─────┐┌─────┐ ... 10000 tuplas
-  │live ││dead ││dead ││dead ││live │     (1000 vivas + 9000 mortas)
-  └─────┘└─────┘└─────┘└─────┘└─────┘
-
-SELECT * FROM t WHERE ... → varre 10000 tuplas, filtra dead ones, retorna live
-→ 10x mais lento que tabela limpa (scan fica caro, cache miss, etc.)
-
-VACUUM (normal):
-  → Marca tuplas mortas como reutilizáveis pra novos INSERTs
-  → NÃO devolve espaço ao SO (arquivo não encolhe)
-  → Não segura ACCESS EXCLUSIVE — concorrência OK
-
-VACUUM FULL:
-  → Reescreve a tabela inteira, elimina espaço morto
-  → Segura ACCESS EXCLUSIVE — tabela inacessível até terminar
-  → DON'T em produção em tabelas grandes. Use pg_repack.`}
-        </ArchDiagram>
+        <StackFlow
+          items={[
+            { label: '1000 rows × 10 UPDATEs sem VACUUM = 10000 tuplas no disco', sub: '1000 vivas + 9000 mortas (dead tuples)' },
+            { label: 'SELECT varre 10000 tuplas', sub: 'filtra dead ones, retorna 1000 — 10× mais lento que tabela limpa' },
+            { label: 'VACUUM (normal)', sub: 'marca mortas como reutilizáveis · NÃO devolve espaço ao SO · sem ACCESS EXCLUSIVE' },
+            { label: 'VACUUM FULL', sub: 'reescreve tabela inteira · elimina espaço morto · segura ACCESS EXCLUSIVE — evitar em produção. Use pg_repack.' },
+          ]}
+        />
 
         <p><strong>Autovacuum</strong>: daemon que roda VACUUM automaticamente. Por default, ativado. Mas configurado conservadoramente demais pra muitas workloads.</p>
 

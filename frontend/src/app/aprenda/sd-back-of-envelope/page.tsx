@@ -1,7 +1,7 @@
 import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, CodeBlock, ComparisonTable, KeyValue } from '@/components/article/primitives';
+import { Section, Callout, ComparisonTable, KeyValue } from '@/components/article/primitives';
 import { CodePlayground } from '@/components/article/CodePlayground';
 
 export const metadata = getModuleMetadata('sd-back-of-envelope');

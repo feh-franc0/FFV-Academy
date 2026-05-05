@@ -1,7 +1,7 @@
 import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, ArchDiagram, QAItem, ExamDomainBadge } from '@/components/article/primitives';
+import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, NodeGraph, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('networking-vpc-route53');
 
@@ -77,32 +77,33 @@ function Content() {
       </Section>
 
       <Section title="Anatomia de uma VPC" accent={ACCENT}>
-        <ArchDiagram title="VPC típica com subnets pública e privada" accent={ACCENT}>{`
-┌──────────────────────────────────────────────────────────────┐
-│                   VPC 10.0.0.0/16                            │
-│                                                              │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │   Subnet Pública  10.0.1.0/24  (AZ-a)                │   │
-│  │   ┌──────────┐       ┌──────────┐                    │   │
-│  │   │ EC2 web  │       │ NAT GW   │                    │   │
-│  │   └──────────┘       └──────────┘                    │   │
-│  │        │                  │                          │   │
-│  │        └──────┬───────────┘                          │   │
-│  └───────────────┼──────────────────────────────────────┘   │
-│                  │                                           │
-│                  ▼                                           │
-│          ┌──────────────┐        ┌──────────────────┐       │
-│          │Internet GW   │◀─────▶│     INTERNET     │       │
-│          └──────────────┘        └──────────────────┘       │
-│                                                              │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │   Subnet Privada  10.0.2.0/24  (AZ-a)                │   │
-│  │   ┌──────────┐       ┌──────────┐                    │   │
-│  │   │EC2 app   │       │  RDS     │                    │   │
-│  │   └──────────┘       └──────────┘                    │   │
-│  └──────────────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────────────┘
-`}</ArchDiagram>
+        <NodeGraph
+          title="VPC típica com subnets pública e privada"
+          accent={ACCENT}
+          columns={[
+            {
+              label: 'Internet',
+              nodes: [
+                { label: 'Internet', sub: 'tráfego externo' },
+                { label: 'Internet Gateway', sub: 'VPC 10.0.0.0/16' },
+              ],
+            },
+            {
+              label: 'Subnet Pública 10.0.1.0/24 (AZ-a)',
+              nodes: [
+                { label: 'EC2 web', sub: 'instância pública' },
+                { label: 'NAT Gateway', sub: 'saída p/ subnets privadas' },
+              ],
+            },
+            {
+              label: 'Subnet Privada 10.0.2.0/24 (AZ-a)',
+              nodes: [
+                { label: 'EC2 app', sub: 'sem IP público' },
+                { label: 'RDS', sub: 'banco de dados' },
+              ],
+            },
+          ]}
+        />
       </Section>
 
       <Section title="Componentes de uma VPC" accent={ACCENT}>

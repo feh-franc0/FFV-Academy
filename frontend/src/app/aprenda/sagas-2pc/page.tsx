@@ -6,7 +6,8 @@ import {
   CodeBlock,
   ComparisonTable,
   DecisionBox,
-  ArchDiagram,
+  NodeGraph,
+  StackFlow,
   InlineCode,
 } from '@/components/article/primitives';
 
@@ -131,26 +132,31 @@ function Content() {
           2PC é o protocolo clássico, usado por XA (X/Open), bancos Oracle/SQL Server com DTC,
           JTA em Java. Dois papéis: <strong>coordinator</strong> e <strong>participants</strong>.
         </p>
-        <ArchDiagram>
-{`                     ┌─────────────┐
-                     │ COORDINATOR │
-                     └─────────────┘
-                            │
-           ┌────────────────┼────────────────┐
-           ▼                ▼                ▼
-    ┌───────────┐   ┌───────────┐   ┌───────────┐
-    │ Payment DB│   │ Order DB  │   │ Stock DB  │
-    │(participant)│ │(participant)│ │(participant)│
-    └───────────┘   └───────────┘   └───────────┘
-
-FASE 1: PREPARE
-  coordinator ──► participants: "podem commitar?"
-  participants ──► executam local, seguram locks, fsync WAL, respondem "YES" ou "NO"
-
-FASE 2: COMMIT (se todos disseram YES) ou ABORT (se algum disse NO)
-  coordinator ──► participants: "commit!" (ou "abort!")
-  participants: aplicam ou descartam, soltam locks`}
-        </ArchDiagram>
+        <NodeGraph
+          columns={[
+            {
+              label: 'Coordinator',
+              nodes: [
+                { label: 'COORDINATOR', sub: 'gerencia o protocolo' },
+              ],
+            },
+            {
+              label: 'Participants',
+              nodes: [
+                { label: 'Payment DB', sub: 'participant' },
+                { label: 'Order DB', sub: 'participant' },
+                { label: 'Stock DB', sub: 'participant' },
+              ],
+            },
+            {
+              label: 'Fases',
+              nodes: [
+                { label: 'Fase 1: PREPARE', sub: '"Podem commitar?" → executam local, seguram locks, respondem YES/NO' },
+                { label: 'Fase 2: COMMIT/ABORT', sub: 'todos YES → commit · qualquer NO → abort · soltam locks' },
+              ],
+            },
+          ]}
+        />
 
         <p><strong>Problemas do 2PC em sistemas modernos</strong>:</p>
         <ComparisonTable
@@ -202,22 +208,15 @@ FASE 2: COMMIT (se todos disseram YES) ou ABORT (se algum disse NO)
         <p>Em vez de locks globais, você aceita que os dados <em>temporariamente inconsistentes</em> e desfaz
         com ações compensatórias. Não é rollback — é uma <em>nova operação</em> que anula a anterior.</p>
 
-        <ArchDiagram>
-{`PEDIDO FELIZ:
- 1. Reservar estoque     ✓
- 2. Cobrar cartão         ✓
- 3. Agendar entrega       ✓   → ok, pedido confirmado
-
-PEDIDO QUE FALHA NO STEP 3:
- 1. Reservar estoque     ✓
- 2. Cobrar cartão         ✓
- 3. Agendar entrega       ✗   → começa compensação
-
- COMPENSAÇÃO (ordem inversa):
- 3'. (nada a desfazer de agendar — nunca aconteceu)
- 2'. Reembolsar cartão   ✓
- 1'. Liberar estoque     ✓   → pedido cancelado, sistema consistente`}
-        </ArchDiagram>
+        <StackFlow
+          items={[
+            { label: '1. Reservar estoque ✓', sub: '' },
+            { label: '2. Cobrar cartão ✓', sub: '' },
+            { label: '3. Agendar entrega — falha ✗', sub: 'inicia compensação em ordem inversa' },
+            { label: "2'. Reembolsar cartão ✓", sub: 'compensação do step 2' },
+            { label: "1'. Liberar estoque ✓", sub: 'compensação do step 1 → pedido cancelado, sistema consistente' },
+          ]}
+        />
 
         <Callout tone="warn">
           <strong>Cuidado</strong>: a Saga <em>não</em> é ACID. Durante a saga, outras operações
@@ -232,27 +231,32 @@ PEDIDO QUE FALHA NO STEP 3:
           Um serviço central (o <strong>orchestrator</strong>) conhece o workflow completo
           e comanda cada step explicitamente. É uma state machine.
         </p>
-        <ArchDiagram>
-{`┌──────────────────────────────┐
-│  Order Saga Orchestrator     │
-│  (state machine + persist)   │
-└──────────────────────────────┘
-   │    ↑    │    ↑    │    ↑
-   │ ok │    │ ok │    │ ok │
-   ▼    │    ▼    │    ▼    │
-  ┌─────────┐  ┌─────────┐  ┌─────────┐
-  │ Stock   │  │ Payment │  │Shipping │
-  │ Service │  │ Service │  │ Service │
-  └─────────┘  └─────────┘  └─────────┘
-
-Fluxo:
-  - Orchestrator chama Stock.reserve → ok
-  - chama Payment.charge → ok
-  - chama Shipping.schedule → FALHA
-  - chama Payment.refund (compensação)
-  - chama Stock.release (compensação)
-  - marca saga FAILED, notifica cliente`}
-        </ArchDiagram>
+        <NodeGraph
+          columns={[
+            {
+              label: 'Orchestrator',
+              nodes: [
+                { label: 'Order Saga Orchestrator', sub: 'state machine + persist' },
+              ],
+            },
+            {
+              label: 'Serviços',
+              nodes: [
+                { label: 'Stock Service', sub: 'reserve / release' },
+                { label: 'Payment Service', sub: 'charge / refund' },
+                { label: 'Shipping Service', sub: 'schedule' },
+              ],
+            },
+            {
+              label: 'Fluxo (falha no shipping)',
+              nodes: [
+                { label: 'Stock.reserve → ok', sub: '' },
+                { label: 'Payment.charge → ok', sub: '' },
+                { label: 'Shipping.schedule → FALHA', sub: 'Payment.refund + Stock.release → saga FAILED' },
+              ],
+            },
+          ]}
+        />
 
         <p><strong>Implementação com Temporal (workflow engine)</strong>:</p>
         <CodeBlock lang="python">{`# order_saga_workflow.py — orchestration com Temporal (temporal.io)
@@ -310,26 +314,32 @@ class OrderSagaWorkflow:
           Cada serviço publica um evento após concluir sua parte. Outros serviços escutam
           e reagem. Não há um coordinator central — a "lógica do workflow" está distribuída.
         </p>
-        <ArchDiagram>
-{`┌─────────────┐     OrderCreated      ┌───────────┐
-│ Order API   │──────────────────────►│  Kafka    │
-└─────────────┘                       │ (events)  │
-                                      └───────────┘
-                                          │  │  │
-           ┌──────────────────────────────┘  │  └─────────────────────────┐
-           ▼                                 ▼                            ▼
-┌─────────────────────┐        ┌────────────────────────┐      ┌───────────────────┐
-│ Stock Service       │        │ Payment Service        │      │ Shipping Service  │
-│ on(OrderCreated):   │        │ on(StockReserved):     │      │ on(PaymentOK):    │
-│  reserve + publish  │        │  charge + publish      │      │  schedule+publish │
-│  StockReserved      │        │  PaymentSucceeded      │      │  ShipmentScheduled│
-└─────────────────────┘        └────────────────────────┘      └───────────────────┘
-
-Se Payment falhar:
-  publica PaymentFailed
-     ├─► Stock Service reage: on(PaymentFailed) → release reservation
-     └─► Order Service reage: on(PaymentFailed) → mark order FAILED`}
-        </ArchDiagram>
+        <NodeGraph
+          columns={[
+            {
+              label: 'Produtor',
+              nodes: [
+                { label: 'Order API', sub: 'publica OrderCreated → Kafka' },
+              ],
+            },
+            {
+              label: 'Consumidores (reagem a eventos)',
+              nodes: [
+                { label: 'Stock Service', sub: 'on(OrderCreated) → reserve → publica StockReserved' },
+                { label: 'Payment Service', sub: 'on(StockReserved) → charge → publica PaymentSucceeded' },
+                { label: 'Shipping Service', sub: 'on(PaymentOK) → schedule → publica ShipmentScheduled' },
+              ],
+            },
+            {
+              label: 'Compensação (se Payment falhar)',
+              nodes: [
+                { label: 'publica PaymentFailed', sub: '' },
+                { label: 'Stock Service on(PaymentFailed)', sub: 'release reservation' },
+                { label: 'Order Service on(PaymentFailed)', sub: 'mark order FAILED' },
+              ],
+            },
+          ]}
+        />
 
         <ComparisonTable
           headers={['Aspecto', 'Orchestration', 'Choreography']}
@@ -405,17 +415,16 @@ Se Payment falhar:
           ]}
         />
 
-        <ArchDiagram>
-{`  [C] Reservar estoque     ← compensable (pode liberar)
-  [C] Cobrar cartão        ← compensable (pode reembolsar)
-  ──── PIVOT ────────────────
-  [P] Despachar pro carrier ← pivot: depois daqui, sem retorno
-  [R] Gerar nota fiscal    ← retriable (precisa acontecer sempre)
-  [R] Notificar cliente    ← retriable
-
-Se step [P] falhar: compensa [C]'s.
-Se [R] falhar: retria infinitamente (pedido já foi).`}
-        </ArchDiagram>
+        <StackFlow
+          items={[
+            { label: '[C] Reservar estoque', sub: 'compensable — pode liberar' },
+            { label: '[C] Cobrar cartão', sub: 'compensable — pode reembolsar' },
+            { label: '─── PIVOT ───', sub: 'ponto de não-retorno' },
+            { label: '[P] Despachar pro carrier', sub: 'pivot: depois daqui, sem retorno · se falhar: compensa os [C]s anteriores' },
+            { label: '[R] Gerar nota fiscal', sub: 'retriable — precisa acontecer sempre' },
+            { label: '[R] Notificar cliente', sub: 'retriable — retria infinitamente se falhar (pedido já foi)' },
+          ]}
+        />
       </Section>
 
       <Section title="Outbox pattern: garantindo que eventos saem" accent={ACCENT}>

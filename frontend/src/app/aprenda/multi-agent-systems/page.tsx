@@ -5,11 +5,11 @@ import {
   Section,
   Callout,
   CodeBlock,
-  InlineCode,
   ComparisonTable,
   DecisionBox,
   QAItem,
-  ArchDiagram,
+  NodeGraph,
+  FlowDiagram,
 } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('multi-agent-systems');
@@ -123,27 +123,34 @@ function Content() {
           resultados. Workers não se comunicam entre si. Topologia simples, auditável, boa para pesquisa, análise
           multi-fonte e geração multi-secção.
         </p>
-        <ArchDiagram title="Orchestrator-Worker" accent={ACCENT}>{`
-                ┌─────────────────┐
-                │  Orchestrator   │
-                │  (plan + merge) │
-                └────────┬────────┘
-                         │ delega sub-tasks em paralelo
-          ┌──────────────┼───────────────┐
-          ▼              ▼               ▼
-    ┌──────────┐   ┌──────────┐    ┌──────────┐
-    │ Worker 1 │   │ Worker 2 │    │ Worker 3 │
-    │ research │   │ research │    │ summariz │
-    └────┬─────┘   └────┬─────┘    └────┬─────┘
-         │              │                │
-         └──────────────┼────────────────┘
-                        │ retornos
-                        ▼
-                 Orchestrator agrega
-                        │
-                        ▼
-                   Resposta final
-`}</ArchDiagram>
+        <NodeGraph
+          title="Orchestrator-Worker"
+          accent={ACCENT}
+          columns={[
+            {
+              label: 'Entrada',
+              nodes: [
+                { label: 'User query', sub: '' },
+                { label: 'Orchestrator', sub: 'plan + delega em paralelo' },
+              ],
+            },
+            {
+              label: 'Workers (paralelo)',
+              nodes: [
+                { label: 'Worker 1', sub: 'research' },
+                { label: 'Worker 2', sub: 'research' },
+                { label: 'Worker 3', sub: 'summarize' },
+              ],
+            },
+            {
+              label: 'Saída',
+              nodes: [
+                { label: 'Orchestrator agrega', sub: 'merge dos retornos' },
+                { label: 'Resposta final', sub: '' },
+              ],
+            },
+          ]}
+        />
         <CodeBlock lang="python">{`# Orchestrator-worker — versão minimal em Python
 import asyncio
 from anthropic import AsyncAnthropic
@@ -205,27 +212,17 @@ async def orchestrate(user_query: str) -> str:
           detecta que a próxima ação está fora do seu escopo. É o padrão de atendimento: triage → specialist →
           billing → escalation.
         </p>
-        <ArchDiagram title="Swarm com handoffs" accent={ACCENT}>{`
-  User
-   │
-   ▼
- ┌──────────────┐   handoff:
- │  Triage      │──► "é billing"
- │  agent       │
- └──────┬───────┘
-        │ (usuário claramente pergunta conta)
-        ▼
- ┌──────────────┐   handoff:
- │  Billing     │──► "precisa de human"
- │  agent       │
- └──────┬───────┘
-        │
-        ▼
- ┌──────────────┐
- │  Human       │
- │  agent (HITL)│
- └──────────────┘
-`}</ArchDiagram>
+        <FlowDiagram
+          title="Swarm com handoffs"
+          accent={ACCENT}
+          orientation="vertical"
+          steps={[
+            { label: 'User', desc: '"Meu cartão não passou na renovação"' },
+            { label: 'Triage agent', desc: 'identifica intenção → handoff: "é billing"' },
+            { label: 'Billing agent', desc: 'get_invoice, update_payment → handoff se refund > $50: "precisa de human"' },
+            { label: 'Human agent (HITL)', desc: 'open_ticket → atendimento humano' },
+          ]}
+        />
         <CodeBlock lang="python">{`# OpenAI Agents SDK — handoffs nativos
 from agents import Agent, Runner, handoff
 
@@ -277,21 +274,34 @@ result = await Runner.run(triage_agent, "Meu cartão não passou na renovação"
           Em tarefas grandes (escrever relatório de 50 páginas, auditar codebase inteiro), uma camada só de workers
           não basta. Orchestrator delega a sub-orchestrators, cada um coordenando workers em seu domínio.
         </p>
-        <ArchDiagram title="Hierarquia de 3 níveis" accent={ACCENT}>{`
-                    ┌──────────────────┐
-                    │  Top orchestrator│
-                    │  (plano macro)   │
-                    └────────┬─────────┘
-                             │
-               ┌─────────────┼─────────────┐
-               ▼             ▼             ▼
-        ┌──────────┐  ┌──────────┐  ┌──────────┐
-        │ Research │  │ Analysis │  │ Writing  │
-        │  coord.  │  │  coord.  │  │  coord.  │
-        └────┬─────┘  └────┬─────┘  └────┬─────┘
-             │             │             │
-        [W][W][W]      [W][W][W]    [W][W][W]
-`}</ArchDiagram>
+        <NodeGraph
+          title="Hierarquia de 3 níveis"
+          accent={ACCENT}
+          columns={[
+            {
+              label: 'Nível 1',
+              nodes: [
+                { label: 'Top Orchestrator', sub: 'plano macro' },
+              ],
+            },
+            {
+              label: 'Nível 2 — Sub-coordinators',
+              nodes: [
+                { label: 'Research coord.', sub: '' },
+                { label: 'Analysis coord.', sub: '' },
+                { label: 'Writing coord.', sub: '' },
+              ],
+            },
+            {
+              label: 'Nível 3 — Workers',
+              nodes: [
+                { label: 'Research workers', sub: 'W · W · W' },
+                { label: 'Analysis workers', sub: 'W · W · W' },
+                { label: 'Writing workers', sub: 'W · W · W' },
+              ],
+            },
+          ]}
+        />
         <Callout tone="warn">
           Hierarquia &gt; 2 níveis multiplica custo de handoff e erros de compressão. Em 95% dos produtos, 2 níveis
           (orchestrator → workers) é suficiente. Hierarquias profundas são território de deep-research agents e

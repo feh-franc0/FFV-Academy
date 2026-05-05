@@ -9,7 +9,8 @@ import {
   ComparisonTable,
   DecisionBox,
   QAItem,
-  ArchDiagram,
+  StackFlow,
+  FlowDiagram,
 } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('agentes-padroes');
@@ -130,31 +131,19 @@ function Content() {
           alterna <strong>Thought</strong> (raciocínio em NL), <strong>Action</strong> (tool call) e{' '}
           <strong>Observation</strong> (resultado da tool).
         </p>
-        <ArchDiagram title="ReAct loop" accent={ACCENT}>{`
- User query
-    │
-    ▼
- ┌────────────────────────────────────┐
- │ Thought: "Preciso do preço atual.  │
- │  Vou buscar no sistema de cotação."│
- │ Action: get_price(ticker="PETR4")  │
- └──────────────┬─────────────────────┘
-                │ (call tool)
-                ▼
- ┌────────────────────────────────────┐
- │ Observation: 38.21                 │
- └──────────────┬─────────────────────┘
-                │
-                ▼
- ┌────────────────────────────────────┐
- │ Thought: "Tenho o preço. Falta o   │
- │  histórico. Vou chamar hist_price."│
- │ Action: hist_price(ticker, days=30)│
- └──────────────┬─────────────────────┘
-                │
-                ▼
-      (Observation → Thought → ... → Final Answer)
-`}</ArchDiagram>
+        <StackFlow
+          title="ReAct loop"
+          accent={ACCENT}
+          items={[
+            { icon: '💬', label: 'User Query', sub: 'entrada do usuário' },
+            { icon: '🧠', label: 'Thought', sub: '"Preciso do preço atual. Vou buscar no sistema de cotação."', connector: 'raciocínio' },
+            { icon: '🔧', label: 'Action', sub: 'get_price(ticker="PETR4")', connector: 'tool call' },
+            { icon: '👁️', label: 'Observation', sub: '38.21 — resultado da ferramenta', connector: 'observação' },
+            { icon: '🧠', label: 'Thought', sub: '"Tenho o preço. Falta o histórico. Vou chamar hist_price."', connector: 'raciocínio' },
+            { icon: '🔧', label: 'Action', sub: 'hist_price(ticker="PETR4", days=30)', connector: 'tool call' },
+            { icon: '✅', label: 'Final Answer', sub: 'Observation → Thought → … → resposta ao usuário' },
+          ]}
+        />
         <CodeBlock lang="python">{`# ReAct canônico com tool_use do Anthropic (estrutura idêntica em OpenAI)
 from anthropic import Anthropic
 
@@ -264,26 +253,18 @@ def reflexion_solve(task: str, oracle, max_attempts: int = 3) -> str:
           divide: um LLM (forte) cria o plano, um LLM (barato) executa passo a passo. Reduz custo e melhora
           robustez em tarefas de 5+ passos.
         </p>
-        <ArchDiagram title="Plan-and-Execute" accent={ACCENT}>{`
-  User query
-      │
-      ▼
- ┌─────────────────┐
- │  Planner LLM    │  (Opus/GPT-5 — caro, alta qualidade)
- │  → plan[1..N]   │
- └────────┬────────┘
-          │
-          ├───► Step 1: executor_llm + tools
-          ├───► Step 2: executor_llm + tools
-          ├───► Step 3: executor_llm + tools
-          │
-          ▼
- ┌─────────────────┐
- │ Replan on fail? │  ← se passo falha, planner volta
- └────────┬────────┘
-          ▼
-     Final answer
-`}</ArchDiagram>
+        <FlowDiagram
+          title="Plan-and-Execute"
+          accent={ACCENT}
+          orientation="vertical"
+          steps={[
+            { icon: '💬', label: 'User Query', desc: 'entrada do usuário' },
+            { icon: '🧠', label: 'Planner LLM', desc: 'Opus/GPT-5 — caro, alta qualidade. Cria plan[1..N]' },
+            { icon: '⚡', label: 'Executor LLM + Tools', desc: 'Haiku/menor — barato. Executa step 1, 2, 3… com tools específicas' },
+            { icon: '🔄', label: 'Replan on Fail?', desc: 'Se passo falha, planner revisita com contexto do erro' },
+            { icon: '✅', label: 'Final Answer', desc: 'resposta consolidada ao usuário' },
+          ]}
+        />
         <Callout tone="info">
           Plano explícito é auditável: você pode mostrar ao usuário o que o agente vai fazer antes de executar. Em
           fluxos com ações irreversíveis (enviar email, fechar ticket), plan + approval humano antes de execute é

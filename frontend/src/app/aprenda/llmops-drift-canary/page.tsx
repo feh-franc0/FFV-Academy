@@ -5,11 +5,10 @@ import {
   Section,
   Callout,
   CodeBlock,
-  InlineCode,
   ComparisonTable,
   DecisionBox,
   QAItem,
-  ArchDiagram,
+  StackFlow,
 } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('llmops-drift-canary');
@@ -115,34 +114,16 @@ function Content() {
       </Section>
 
       <Section title="Arquitetura de plataforma LLMOps" accent={ACCENT}>
-        <ArchDiagram title="Stack mínima de LLMOps" accent={ACCENT}>{`
-  ┌────────────────────────────────────────────────────┐
-  │ PROMPT / CONFIG REGISTRY                           │
-  │ Git + versionado: system, tools, rag_version       │
-  └────────────────────┬───────────────────────────────┘
-                       │ referência por hash
-  ┌────────────────────▼───────────────────────────────┐
-  │ EVAL HARNESS (CI)                                  │
-  │ golden set (100-500) · retrieval + gen metrics     │
-  │ bloqueia PR se regressão > threshold               │
-  └────────────────────┬───────────────────────────────┘
-                       │ passa → deploy
-  ┌────────────────────▼───────────────────────────────┐
-  │ CANARY ROUTER                                      │
-  │ 1% → 10% → 50% → 100%    rollback automático       │
-  └────────────────────┬───────────────────────────────┘
-                       │
-  ┌────────────────────▼───────────────────────────────┐
-  │ OBSERVABILITY                                      │
-  │ traces (Langfuse/LangSmith) · metrics (p50/p95,    │
-  │ tokens, cost, cache ratio) · online signals        │
-  └────────────────────┬───────────────────────────────┘
-                       │ feedback → golden set
-  ┌────────────────────▼───────────────────────────────┐
-  │ DRIFT MONITORS                                     │
-  │ modelo · distribuição de queries · RAG staleness   │
-  └────────────────────────────────────────────────────┘
-`}</ArchDiagram>
+        <StackFlow
+          accent={ACCENT}
+          items={[
+            { label: 'Prompt / Config Registry', sub: 'Git + versionado: system prompt, tools, rag_version — referência por hash' },
+            { label: 'Eval Harness (CI)', sub: 'golden set (100–500) · métricas de retrieval + geração · bloqueia PR se regressão > threshold' },
+            { label: 'Canary Router', sub: '1% → 10% → 50% → 100% — rollback automático por SLO' },
+            { label: 'Observability', sub: 'traces (Langfuse/LangSmith) · p50/p95 · tokens, cost, cache ratio · online signals' },
+            { label: 'Drift Monitors', sub: 'drift de modelo · distribuição de queries · RAG staleness → feedback para golden set' },
+          ]}
+        />
       </Section>
 
       <Section title="Prompt registry: versionar prompts como código" accent={ACCENT}>

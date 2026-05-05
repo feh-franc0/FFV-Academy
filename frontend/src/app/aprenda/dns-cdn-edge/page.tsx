@@ -1,7 +1,7 @@
 import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, ArchDiagram, StackFlow, QAItem, ExamDomainBadge } from '@/components/article/primitives';
+import { Section, Callout, InlineCode, ComparisonTable, DecisionBox, FlowDiagram, StackFlow, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('dns-cdn-edge');
 
@@ -124,18 +124,16 @@ function Content() {
       </Section>
 
       <Section title="Amazon CloudFront — CDN da AWS" accent={ACCENT}>
-        <ArchDiagram title="CloudFront: conteúdo cacheado perto do usuário" accent={ACCENT}>{`
-   Usuário (São Paulo)         Usuário (Londres)
-        │                           │
-        ▼                           ▼
-   Edge Location (GRU)        Edge Location (LHR)
-        │  cache hit?              │  cache hit?
-        │  sim → responde          │  sim → responde
-        │  não → busca origin      │  não → busca origin
-        │                          │
-        └─────────► Origin ◄───────┘
-              (S3 bucket, ALB, EC2, on-prem)
-`}</ArchDiagram>
+        <FlowDiagram
+          title="CloudFront: conteúdo cacheado perto do usuário"
+          accent={ACCENT}
+          orientation="horizontal"
+          steps={[
+            { icon: '👤', label: 'Usuário', desc: 'São Paulo · Londres · qualquer região' },
+            { icon: '⚡', label: 'Edge Location', desc: 'GRU, LHR… Cache hit → responde. Miss → busca origin' },
+            { icon: '🏠', label: 'Origin', desc: 'S3 bucket · ALB · EC2 · on-prem' },
+          ]}
+        />
         <p><strong>Conceitos-chave:</strong></p>
         <ul className="flex flex-col gap-1 text-xs pl-4">
           <li>• <strong>Distribution</strong> — configuração central (domínio, origin, behaviors)</li>
@@ -166,10 +164,18 @@ function Content() {
       </Section>
 
       <Section title="AWS Global Accelerator" accent={ACCENT}>
-        <ArchDiagram title="Global Accelerator: 2 IPs anycast globais" accent={ACCENT}>{`
-   Usuário em ────► IP estático anycast ───► Edge AWS ───► Backbone AWS ───► ALB/NLB/EC2
-   qualquer lugar    (2 IPs globais)        (mais próximo)                  (em região específica)
-`}</ArchDiagram>
+        <FlowDiagram
+          title="Global Accelerator: 2 IPs anycast globais"
+          accent={ACCENT}
+          orientation="horizontal"
+          steps={[
+            { icon: '🌍', label: 'Usuário', desc: 'qualquer lugar do mundo' },
+            { icon: '📡', label: 'IP Anycast estático', desc: '2 IPs globais fixos' },
+            { icon: '⚡', label: 'Edge AWS', desc: 'ponto de entrada mais próximo' },
+            { icon: '🛤️', label: 'Backbone AWS', desc: 'rede privada de baixa latência' },
+            { icon: '🎯', label: 'ALB / NLB / EC2', desc: 'endpoint na região específica' },
+          ]}
+        />
         <ul className="flex flex-col gap-1 text-xs pl-4">
           <li>• Fornece 2 <strong>IPs anycast estáticos</strong> — mesmos IPs globalmente</li>
           <li>• Tráfego entra no Edge mais próximo, atravessa a backbone AWS até o endpoint</li>

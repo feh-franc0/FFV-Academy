@@ -9,7 +9,7 @@ import {
   ComparisonTable,
   DecisionBox,
   QAItem,
-  ArchDiagram,
+  ComparisonFlow,
 } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('mcp-servers');
@@ -98,27 +98,28 @@ function Content() {
       </p>
 
       <Section title="Por que MCP virou padrão" accent={ACCENT}>
-        <ArchDiagram title="Antes do MCP: N × M integrações" accent={ACCENT}>{`
-     Claude       Cursor      VSCode+Copilot
-       │            │               │
-    ┌──┴──┐      ┌──┴──┐         ┌──┴──┐
-    │ GH  │      │ GH  │         │ GH  │   ← cada host
-    │ int │      │ int │         │ int │     reimplementa
-    └─────┘      └─────┘         └─────┘     integrações
-    ┌─────┐      ┌─────┐         ┌─────┐
-    │Slack│      │Slack│         │Slack│
-    └─────┘      └─────┘         └─────┘
-`}</ArchDiagram>
-        <ArchDiagram title="Com MCP: um servidor para muitos hosts" accent={ACCENT}>{`
-     Claude   Cursor   VSCode   ChatGPT   IDEs/CI
-       └──┬──────┬───────┬────────┬─────────┬───┘
-          │ (fala MCP: JSON-RPC stdio ou HTTP/SSE)
-          ▼
-   ┌────────────────────────────────────────────┐
-   │        MCP servers (escolhidos pelo user)  │
-   │  github   slack   postgres   linear   fs   │
-   └────────────────────────────────────────────┘
-`}</ArchDiagram>
+        <ComparisonFlow
+          accent={ACCENT}
+          left={{
+            label: 'Antes do MCP: N × M integrações',
+            steps: [
+              'Claude tem integração própria com GitHub',
+              'Cursor tem integração própria com GitHub',
+              'VSCode+Copilot tem integração própria com GitHub',
+              'Cada host reimplementa Slack, Postgres, etc.',
+              'N hosts × M ferramentas = N×M integrações paralelas',
+            ],
+          }}
+          right={{
+            label: 'Com MCP: um protocolo para todos',
+            steps: [
+              'Claude, Cursor, VSCode, ChatGPT, IDEs/CI',
+              'Todos falam MCP (JSON-RPC stdio ou HTTP/SSE)',
+              'MCP Server: github · slack · postgres · linear · fs',
+              'Um servidor, todos os hosts — M integrações no total',
+            ],
+          }}
+        />
         <Callout tone="info">
           MCP criou um marketplace real: servidores oficiais (github, slack, postgres, fetch, filesystem), community
           (linear, sentry, figma), corporativos (acesso privado a sistemas internos). Em 2026, qualquer dev-host

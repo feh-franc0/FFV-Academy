@@ -1,7 +1,7 @@
 import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
-import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, ArchDiagram, QAItem, ExamDomainBadge } from '@/components/article/primitives';
+import { Section, Callout, CodeBlock, InlineCode, ComparisonTable, DecisionBox, NodeGraph, QAItem, ExamDomainBadge } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('databases-aws-basico');
 
@@ -119,22 +119,34 @@ function Content() {
         <p>
           Proprietário AWS, compatível com PostgreSQL e MySQL. Arquitetura de storage distribuído em <strong>6 cópias em 3 AZs</strong>. Auto-scale de storage até 128 TB. Failover &lt;30s.
         </p>
-        <ArchDiagram title="Aurora storage layer" accent={ACCENT}>{`
-           ┌─────────────────────────────────────────┐
-           │          Aurora Writer (primary)        │
-           └─────────────────────────────────────────┘
-                              │
-           ┌──────────────────┼──────────────────────┐
-           │                  │                      │
-    AZ-a   ▼          AZ-b    ▼              AZ-c    ▼
-     ┌──────────┐      ┌──────────┐         ┌──────────┐
-     │ storage  │      │ storage  │         │ storage  │
-     │ copy 1/2 │      │ copy 3/4 │         │ copy 5/6 │
-     └──────────┘      └──────────┘         └──────────┘
-     ┌──────────┐      ┌──────────┐         ┌──────────┐
-     │ reader 1 │      │ reader 2 │         │ reader 3 │
-     └──────────┘      └──────────┘         └──────────┘
-`}</ArchDiagram>
+        <NodeGraph
+          title="Aurora storage layer — 6 cópias em 3 AZs"
+          accent={ACCENT}
+          legend="Aurora Writer (primary) escreve em paralelo para todas as 6 cópias de storage, distribuídas entre 3 Availability Zones"
+          columns={[
+            {
+              label: 'AZ-a',
+              nodes: [
+                { label: 'Storage cópia 1/2', sub: 'replicação síncrona', tone: 'emphasis' },
+                { label: 'Reader 1', sub: 'réplica de leitura', tone: 'default' },
+              ],
+            },
+            {
+              label: 'AZ-b',
+              nodes: [
+                { label: 'Storage cópia 3/4', sub: 'replicação síncrona', tone: 'emphasis' },
+                { label: 'Reader 2', sub: 'réplica de leitura', tone: 'default' },
+              ],
+            },
+            {
+              label: 'AZ-c',
+              nodes: [
+                { label: 'Storage cópia 5/6', sub: 'replicação síncrona', tone: 'emphasis' },
+                { label: 'Reader 3', sub: 'réplica de leitura', tone: 'default' },
+              ],
+            },
+          ]}
+        />
         <p><strong>Benefícios vs RDS vanilla:</strong></p>
         <ul className="flex flex-col gap-1 text-xs pl-4">
           <li>• Até 5x throughput de MySQL, 3x de PostgreSQL</li>

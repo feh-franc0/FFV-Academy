@@ -6,7 +6,7 @@ import {
   CodeBlock,
   ComparisonTable,
   DecisionBox,
-  ArchDiagram,
+  StackFlow,
 } from '@/components/article/primitives';
 
 const ACCENT = '#79c0ff';
@@ -117,22 +117,15 @@ function Content() {
           ]}
         />
 
-        <ArchDiagram>
-{`Cada endpoint/serviço:
-
- Rate     ───►  http_requests_total{service, endpoint, status} (Counter)
- Errors   ───►  derivado do Rate: filtro por status 5xx / total
- Duration ───►  http_request_duration_seconds{service, endpoint} (Histogram)
-
-Dashboard por serviço:
-  ┌──────────────────────────────────────────┐
-  │ Rate (req/s):   ████▇▆▅▅▄▃▃▃▃      200    │
-  │ Error rate:     ──────────            0.2% │
-  │ Duration p50:   ──────────            45ms │
-  │ Duration p95:   ▅───────              180ms│
-  │ Duration p99:   ▇▅──                  320ms│
-  └──────────────────────────────────────────┘`}
-        </ArchDiagram>
+        <StackFlow
+          items={[
+            { label: 'Rate', sub: 'http_requests_total{service, endpoint, status} — Counter' },
+            { label: 'Errors', sub: 'derivado do Rate: filtro status 5xx / total' },
+            { label: 'Duration p50', sub: 'http_request_duration_seconds{service, endpoint} — Histogram · ex: 45ms' },
+            { label: 'Duration p95', sub: 'mesmo histogram, bucket 95 · ex: 180ms' },
+            { label: 'Duration p99', sub: 'mesmo histogram, bucket 99 · ex: 320ms' },
+          ]}
+        />
 
         <CodeBlock lang="python">{`# app.py — instrumentação RED com prometheus_client
 from prometheus_client import Counter, Histogram

@@ -2,8 +2,14 @@ import { getModuleMetadata } from '@/lib/metadata';
 import { ModuleLayout } from '@/components/ModuleLayout';
 import type { QuizQuestion } from '@/components/ModuleLayout';
 import {
-  Section, Callout, ComparisonTable, DecisionBox,
-  ComparisonFlow, FlowDiagram, QAItem, CodeBlock, StackFlow,
+  Section,
+  Callout,
+  ComparisonTable,
+  ComparisonFlow,
+  FlowDiagram,
+  QAItem,
+  CodeBlock,
+  StackFlow,
 } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('tool-calling');

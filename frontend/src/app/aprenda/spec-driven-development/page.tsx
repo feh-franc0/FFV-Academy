@@ -5,7 +5,6 @@ import {
   Section,
   Callout,
   CodeBlock,
-  InlineCode,
   ComparisonTable,
   DecisionBox,
   QAItem,

@@ -8,7 +8,7 @@ import {
   InlineCode,
   ComparisonTable,
   QAItem,
-  ArchDiagram,
+  ComparisonFlow,
 } from '@/components/article/primitives';
 
 export const metadata = getModuleMetadata('rag-evaluation');
@@ -96,31 +96,30 @@ function Content() {
       </p>
 
       <Section title="As duas dimensões que importam" accent={ACCENT}>
-        <ArchDiagram title="Eval de RAG: retrieval + generation" accent={ACCENT}>{`
-                   ┌─────────────────────┐
-                   │  Query              │
-                   └─────────┬───────────┘
-                             │
-                  ┌──────────┴──────────┐
-                  ▼                     ▼
-         ╔════════════════╗    ╔════════════════╗
-         ║   Retrieval    ║    ║   Generation   ║
-         ║   métricas     ║    ║   métricas     ║
-         ╠════════════════╣    ╠════════════════╣
-         ║ recall@k       ║    ║ faithfulness   ║
-         ║ MRR            ║    ║ context prec.  ║
-         ║ nDCG@k         ║    ║ answer rel.    ║
-         ║ hit rate       ║    ║ hallucination  ║
-         ║ context recall ║    ║ completeness   ║
-         ╚════════════════╝    ╚════════════════╝
-                  │                     │
-                  └─────────┬───────────┘
-                            ▼
-                ┌──────────────────────┐
-                │  Score agregado +    │
-                │  drill-down por tipo │
-                └──────────────────────┘
-`}</ArchDiagram>
+        <ComparisonFlow
+          title="Eval de RAG: retrieval + generation"
+          accent={ACCENT}
+          left={{
+            label: 'Retrieval métricas',
+            steps: [
+              'recall@k — quantos relevantes foram recuperados',
+              'MRR — Mean Reciprocal Rank',
+              'nDCG@k — posição ponderada dos relevantes',
+              'hit rate — pelo menos 1 relevante no top-k',
+              'context recall — cobertura do contexto necessário',
+            ],
+          }}
+          right={{
+            label: 'Generation métricas',
+            steps: [
+              'faithfulness — resposta condizente com o contexto',
+              'context precision — contexto recuperado é relevante',
+              'answer relevance — resposta responde a query',
+              'hallucination rate — informações inventadas',
+              'completeness — resposta cobre tudo o que deveria',
+            ],
+          }}
+        />
         <Callout tone="info">
           <strong>Regra ouro:</strong> só meça agregado depois de conseguir separar retrieval de generation. Quando
           a resposta final sai errada, você precisa saber qual dos dois elos quebrou.

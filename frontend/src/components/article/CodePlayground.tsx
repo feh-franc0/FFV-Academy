@@ -5,14 +5,21 @@
  *
  * Linguagens suportadas: 'python' (via Pyodide CDN), 'ts' e 'js' (via esbuild-wasm CDN para TS → JS, eval nativo para JS).
  * Runtime é carregado sob demanda no primeiro Run e cacheado em `window` pra sessão.
- * Nenhuma dep npm nova: `<textarea>` editável com Tab-aware + syntax display via sugar-high.
+ * Nenhuma dep npm nova: `<textarea>` editável com Tab-aware + syntax display via escapeHtml inline.
  *
  * Uso em artigo:
  *   <CodePlayground lang="python" initial={`print(sum([1,2,3]))`} />
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { highlight } from 'sugar-high';
+/** Escape HTML entities for safe dangerouslySetInnerHTML usage (replaces sugar-high). */
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 import { Play, Loader2, RotateCcw, Terminal } from 'lucide-react';
 
 type Lang = 'python' | 'ts' | 'js';
@@ -210,7 +217,7 @@ export function CodePlayground({
     }
   }
 
-  const highlighted = lang === 'python' ? code : highlight(code);
+  const highlighted = escapeHtml(code);
 
   return (
     <div

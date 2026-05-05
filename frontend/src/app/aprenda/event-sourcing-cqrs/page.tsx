@@ -6,7 +6,8 @@ import {
   CodeBlock,
   ComparisonTable,
   DecisionBox,
-  ArchDiagram,
+  ComparisonFlow,
+  NodeGraph,
   InlineCode,
 } from '@/components/article/primitives';
 
@@ -106,26 +107,31 @@ function Content() {
       </p>
 
       <Section title="Event Sourcing: eventos como fonte da verdade" accent={ACCENT}>
-        <ArchDiagram>
-{`CRUD tradicional:
-  ┌──────────────────────────────┐
-  │ accounts                      │
-  │ id | balance | updated_at    │
-  │ 42 |  150.00 | 2026-04-16    │    ← só o estado atual
-  └──────────────────────────────┘
-
-Event Sourcing:
-  ┌──────────────────────────────────────────────────────────────┐
-  │ events (append-only)                                           │
-  │ id | aggregate_id | type         | payload       | timestamp  │
-  │ 1  | 42           | AccountOpened| {owner:"Ana"} | 2026-01-10 │
-  │ 2  | 42           | Credited     | {amount:200}  | 2026-02-03 │
-  │ 3  | 42           | Debited      | {amount:50}   | 2026-03-18 │
-  │ 4  | 42           | Debited      | {amount:0.01} | 2026-04-16 │
-  └──────────────────────────────────────────────────────────────┘
-  → estado atual = somar eventos: balance = 149.99
-  → história completa, imutável, auditável`}
-        </ArchDiagram>
+        <ComparisonFlow
+          title="CRUD tradicional vs Event Sourcing"
+          accent={ACCENT}
+          left={{
+            label: '⚠️ CRUD — estado atual',
+            steps: [
+              'accounts table',
+              'id: 42 | balance: 150.00 | updated: 2026-04-16',
+              'Uma linha, sobrescreve na atualização',
+              '❌ História perdida — por que virou 150?',
+              '❌ Auditoria exige tabela separada (propensa a falhas)',
+            ],
+          }}
+          right={{
+            label: '✅ EVENT SOURCING — sequência de eventos',
+            steps: [
+              'events table (append-only)',
+              'AccountOpened → owner: "Ana" (2026-01-10)',
+              'Credited → amount: 200 (2026-02-03)',
+              'Debited → amount: 50 (2026-03-18)',
+              'Debited → amount: 0.01 (2026-04-16)',
+              'balance = 0 + 200 − 50 − 0.01 = 149.99',
+            ],
+          }}
+        />
 
         <p><strong>Propriedades</strong>:</p>
         <ul className="list-disc space-y-1 pl-6">
@@ -137,25 +143,35 @@ Event Sourcing:
       </Section>
 
       <Section title="Command → Event → Aggregate: o ciclo básico" accent={ACCENT}>
-        <ArchDiagram>
-{`┌─────────┐     command     ┌──────────────┐     validate + produce    ┌──────────────┐
-│ Cliente │ ──────────────► │  Command     │ ────────────────────────► │   Event(s)   │
-└─────────┘                 │  Handler     │                            └──────────────┘
-                            └──────────────┘                                   │
-                                    ▲                                          │ append
-                                    │ load                                     ▼
-                                    │                                 ┌────────────────┐
-                            ┌──────────────┐   apply events           │  EVENT STORE   │
-                            │  Aggregate   │◄─────────────────────────│ (append-only)  │
-                            │  (in memory) │                          └────────────────┘
-                            └──────────────┘
-                                                                              │ stream
-                                                                              ▼
-                                                                    ┌─────────────────┐
-                                                                    │   PROJECTIONS   │
-                                                                    │  (read models)  │
-                                                                    └─────────────────┘`}
-        </ArchDiagram>
+        <NodeGraph
+          title="Command → Event → Aggregate: o ciclo básico"
+          accent={ACCENT}
+          legend="Aggregate carrega histórico do Event Store → recebe command → valida → produz eventos → Event Store → Projections atualizam read models"
+          columns={[
+            {
+              label: 'Entrada',
+              nodes: [
+                { icon: '👤', label: 'Cliente', sub: 'envia command', tone: 'default' },
+                { icon: '⚡', label: 'Command Handler', sub: 'valida + produz eventos', tone: 'emphasis' },
+              ],
+            },
+            {
+              label: 'Core',
+              nodes: [
+                { icon: '🧩', label: 'Aggregate (in memory)', sub: 'carrega histórico, aplica eventos', tone: 'emphasis' },
+                { icon: '📚', label: 'Event Store', sub: 'append-only, source of truth', tone: 'emphasis' },
+              ],
+            },
+            {
+              label: 'Saída',
+              nodes: [
+                { icon: '📊', label: 'Projection: ledger', sub: 'read model de saldo', tone: 'default' },
+                { icon: '🔍', label: 'Projection: search', sub: 'read model para busca', tone: 'default' },
+                { icon: '⚡', label: 'Projection: cache', sub: 'read model para cache', tone: 'default' },
+              ],
+            },
+          ]}
+        />
 
         <p><strong>Exemplo: BankAccount em Python</strong>:</p>
         <CodeBlock lang="python">{`# bank_account.py — agregado em Event Sourcing
@@ -180,7 +196,6 @@ class Debited:
     amount: float
 
 Event = AccountOpened | Credited | Debited
-
 
 # ─── Aggregate ───
 @dataclass
@@ -231,7 +246,6 @@ class BankAccount:
         self._uncommitted.append(e)
         self.version += 1
 
-
 # ─── Repository ───
 class AccountRepository:
     def __init__(self, event_store):
@@ -263,28 +277,42 @@ class AccountRepository:
           de escrita (command side) é <em>otimizado pra invariantes</em>; o modelo de leitura
           (query side) é <em>otimizado pra consultas</em>. Podem morar em bancos diferentes.
         </p>
-        <ArchDiagram>
-{`CLIENTE
-  ├─ POST /accounts/42/debit  ────► ┌─────────────┐
-  │   (command)                     │  Command    │ ─► event store (Postgres/EventStoreDB)
-  │                                 │  Handler    │       │
-  │                                 └─────────────┘       │ stream
-  │                                                       ▼
-  │                                             ┌───────────────────┐
-  │                                             │   PROJECTORS      │
-  │                                             │   (consumers)     │
-  │                                             └───────────────────┘
-  │                                                ▲       ▲      ▲
-  │                                                │       │      │
-  │                                                ▼       ▼      ▼
-  │                                        ┌──────────┬────────┬────────┐
-  │                                        │Read DB #1│ ES#2   │Redis   │
-  │                                        │(ledger)  │(search)│(cache) │
-  │                                        └──────────┴────────┴────────┘
-  │                                                ▲       ▲      ▲
-  └─ GET /accounts/42  ───────────────────────────┤       │      │
-     (query)                             cada view serve queries específicas`}
-        </ArchDiagram>
+        <NodeGraph
+          title="CQRS: separar escrita e leitura"
+          accent={ACCENT}
+          legend="Command side e Query side são modelos independentes — podem ter bancos, escala e otimizações separadas"
+          columns={[
+            {
+              label: 'Command Side (Write)',
+              nodes: [
+                { icon: '📝', label: 'POST /accounts/42/debit', sub: 'command do cliente', tone: 'emphasis' },
+                { icon: '⚡', label: 'Command Handler', sub: 'validate + append ao event store', tone: 'default' },
+              ],
+            },
+            {
+              label: 'Event Store',
+              nodes: [
+                { icon: '📚', label: 'events table (append-only)', sub: 'Postgres / EventStoreDB / Kafka', tone: 'emphasis' },
+                { icon: '📡', label: 'stream para projectors', sub: 'async, eventual consistency', tone: 'default' },
+              ],
+            },
+            {
+              label: 'Projectors → Read Models',
+              nodes: [
+                { icon: '📊', label: 'Read DB #1 — ledger', sub: 'Postgres, otimizado para extrato', tone: 'default' },
+                { icon: '🔍', label: 'ES #2 — search', sub: 'Elasticsearch, busca full-text', tone: 'default' },
+                { icon: '⚡', label: 'Redis — cache', sub: 'saldo atual em memória', tone: 'default' },
+              ],
+            },
+            {
+              label: 'Query Side (Read)',
+              nodes: [
+                { icon: '🔎', label: 'GET /accounts/42', sub: 'query do cliente', tone: 'emphasis' },
+                { icon: '📈', label: 'cada view serve queries específicas', sub: 'sem JOINs pesados, denormalizado', tone: 'default' },
+              ],
+            },
+          ]}
+        />
 
         <ComparisonTable
           headers={['Lado', 'Otimizado para', 'Modelos']}
@@ -332,7 +360,6 @@ async def account_balance_projector(event_stream):
                 text("UPDATE projection_offsets SET last_event_id = :id WHERE name = 'balance'"),
                 {"id": event.id},
             )
-
 
 async def transactions_history_projector(event_stream):
     """Outra projeção do MESMO stream: histórico de operações."""
@@ -388,7 +415,6 @@ async def load_with_snapshot(account_id: str) -> BankAccount:
         acc.version += 1
 
     return acc
-
 
 async def save_snapshot_if_needed(acc: BankAccount):
     # A cada 100 eventos, persiste snapshot
