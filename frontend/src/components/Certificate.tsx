@@ -270,6 +270,7 @@ export function Certificate({ trailId, onClose }: CertificateProps) {
         />
 
         {imageUrl && (
+          // eslint-disable-next-line @next/next/no-img-element -- src is a data URL from canvas, next/image doesn't support data URIs
           <img
             src={imageUrl}
             alt={`Certificado: ${trail.name}`}

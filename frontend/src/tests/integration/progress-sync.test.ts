@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { pullProgress, pushProgress, schedulePush, GAME_STATE_SCHEMA_VERSION } from '../../lib/progress-sync';
+import { pullProgress, pushProgress, GAME_STATE_SCHEMA_VERSION } from '../../lib/progress-sync';
 import { setAccessToken } from '../../lib/api-client';
 
 const MINIMAL_STATE = {
@@ -50,15 +50,6 @@ function mockFetch204() {
     ok: true,
     status: 204,
     json: () => Promise.resolve(null),
-  } as unknown as Response);
-}
-
-function mockFetchError(status: number) {
-  return vi.fn().mockResolvedValue({
-    ok: false,
-    status,
-    statusText: 'Error',
-    json: () => Promise.resolve({ type: 'conflict', title: 'Conflict', status, detail: '' }),
   } as unknown as Response);
 }
 

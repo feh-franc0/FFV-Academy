@@ -37,7 +37,7 @@ export function CelebrationOverlay({ events, onDismiss }: Props) {
     return () => clearTimeout(t);
   }, [idx, events.length, current, onDismiss]);
 
-  // Confetti with varied shapes
+  // Deps on `current` intentionally re-rolls randoms on each new celebration event
   const confetti = useMemo(
     () =>
       Array.from({ length: 40 }, (_, i) => ({
@@ -49,12 +49,12 @@ export function CelebrationOverlay({ events, onDismiss }: Props) {
         size: 5 + Math.random() * 9,
         drift: (Math.random() - 0.5) * 180,
         rotate: Math.random() * 900,
-        shape: i % 3, // 0 = rect, 1 = circle, 2 = diamond
+        shape: i % 3,
       })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [current],
   );
 
-  // Burst particles from center
   const burst = useMemo(
     () =>
       Array.from({ length: 12 }, (_, i) => ({
@@ -65,6 +65,7 @@ export function CelebrationOverlay({ events, onDismiss }: Props) {
         color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
         size: 4 + Math.random() * 4,
       })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [current],
   );
 

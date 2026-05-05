@@ -75,7 +75,7 @@ export function TutorChat({ question, onClose }: Props) {
         if (last?.role === 'tutor') next[next.length - 1] = { ...last, streaming: false };
         return next;
       });
-    } catch (err) {
+    } catch {
       setMessages(prev => {
         const next = [...prev];
         next[next.length - 1] = {

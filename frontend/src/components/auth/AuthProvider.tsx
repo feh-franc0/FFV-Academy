@@ -68,7 +68,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
    * O intervalo só roda quando o usuário está logado (user !== null).
    * Ao deslogar, o cleanup cancela o interval automaticamente.
    */
-  const TOKEN_REFRESH_INTERVAL_MS = 12 * 60 * 1000; // 12 minutos
+  const TOKEN_REFRESH_INTERVAL_MS = 12 * 60 * 1000; // stable literal, not a reactive dep
 
   useEffect(() => {
     // Não agender refresh se não há usuário logado
@@ -93,6 +93,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }, TOKEN_REFRESH_INTERVAL_MS);
 
     return () => clearInterval(intervalId);
+  // TOKEN_REFRESH_INTERVAL_MS is a stable literal — intentionally omitted from deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   const refresh = useCallback(async () => {
@@ -110,11 +112,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const handleSuccess = useCallback((u: UserProfile) => {
+  const handleSuccess = useCallback(async (u: UserProfile) => {
     setUser(u);
     setModalOpen(false);
     pendingResolvers.current?.resolve(u);
     pendingResolvers.current = null;
+    // Pull progresso na nuvem após login — substitui localStorage se servidor
+    // tem estado mais recente. Falha silenciosa em static export.
+    try {
+      const { pullProgress } = await import('@/lib/progress-sync');
+      await pullProgress();
+    } catch {
+      // backend indisponível
+    }
   }, []);
 
   const handleCancel = useCallback(() => {
