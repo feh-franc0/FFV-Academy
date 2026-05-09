@@ -16,7 +16,7 @@ Monorepo full-stack com frontend estático (Next.js 16), API em Go 1.25, pipelin
 [![Tests](https://img.shields.io/badge/tests-504%20passing-brightgreen)]()
 [![Coverage](https://img.shields.io/badge/coverage-80%25%2B-brightgreen)]()
 
-[Demo](https://fernandofrancovalle.com) · [Documentação](./CLAUDE.md) · [Roadmap](./BACKEND_ROADMAP.md) · [Currículo](./CURRICULUM_MASTER_PLAN.md)
+[Demo](https://fernandofrancovalle.com) · [Documentação](./CLAUDE.md) · [Roadmap](./BACKEND_ROADMAP.md) · [Currículo](./CURRICULUM_MASTER_PLAN.md) · [Changelog mai/2026](./CHANGELOG_PLATFORM_2026-05.md)
 
 </div>
 
@@ -50,7 +50,7 @@ Monorepo full-stack com frontend estático (Next.js 16), API em Go 1.25, pipelin
 
 ## Sobre o projeto
 
-**FFV Academy** é uma plataforma de educação técnica em português para desenvolvedores e profissionais de tecnologia, organizada em **8 hubs temáticos** (IA, AWS, Engenharia de Software, Claude/Anthropic, Fundamentos, Programação, Dados e Construção & Clientes), **66 trilhas** e mais de **570 artigos** — todos gratuitos, sem cadastro obrigatório.
+**FFV Academy** é uma plataforma de educação técnica em português para profissionais de tecnologia, organizada em **8 hubs temáticos** (IA, AWS, Engenharia de Software, Claude/Anthropic, Fundamentos, Programação, Dados e Construção & Clientes) + 5 trilhas de **Profissional Digital** (Comunicação Humana, Carreira Digital, Criação de Conteúdo, Marketing Digital, Empreendedorismo Digital), com mais de **70 trilhas** e **600+ artigos** — todos gratuitos, sem cadastro obrigatório.
 
 A plataforma combina um **blog técnico denso e pedagógico** com uma camada de **aprendizagem gamificada** (XP, streak, badges, repetição espaçada e certificados verificáveis) e **simulados pagos** com correção server-authoritative.
 
@@ -262,7 +262,8 @@ Blog técnico + plataforma de aprendizagem **100% estático** (`output: "export"
 | `/simulados`       | Catálogo + runner + paywall + resultado + certificado   |
 | `/preferencias`    | Perfil + export LGPD + soft-delete de conta             |
 | `/verificar`       | Lookup público de certificado por hash SHA-256          |
-| `/playlists` · `/roadmaps` · `/mapa` · `/cheatsheets` · `/news` | Conteúdo curado |
+| `/playlists` · `/roadmaps` · `/mapa` · `/cheatsheets` | Conteúdo curado |
+| `/news` | Curadoria editorial de IA — 56 notícias verificadas (jan–mai 2026), organizadas por fonte, categoria e tags, com filtros de período e destaque |
 
 **Scripts:**
 
