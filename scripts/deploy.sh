@@ -41,13 +41,28 @@ for i in $(seq 1 12); do
 done
 
 # ─── 5. Rodar migrations ──────────────────────────────────────────────────────
-# postgres fica exposto em 127.0.0.1:5432; migrate CLI conecta pelo loopback do host.
-# IMPORTANTE: usamos 127.0.0.1 explícito (não 'localhost'). Em sistemas com IPv6
-# habilitado, 'localhost' resolve para [::1] primeiro, mas o postgres docker faz
-# bind IPv4-only — falha com "dial tcp [::1]:5432: connect: connection refused".
-log "Rodando migrations..."
-DATABASE_URL=$(grep '^DATABASE_URL=' "$ENV_FILE" | cut -d= -f2- | sed 's/@postgres:/@127.0.0.1:/')
-migrate -path "$MIGRATIONS_DIR" -database "$DATABASE_URL" up \
+# Estratégia: container temporário na rede `data` do compose, conectando ao
+# postgres pelo hostname interno (sem depender de port binding do host).
+# Vantagens:
+#   - imune a IPv4/IPv6 resolution issues
+#   - imune a containers postgres pré-existentes sem ports: configurado
+#   - migrate roda exatamente como a API roda (mesma rede, mesmas regras)
+log "Rodando migrations (container ephemeral na rede interna)..."
+
+# Rede vem do `name: ffv-prod` declarado no docker-compose.prod.yml + nome da
+# network `data:` (internal). Compose junta em "{name}_{network}".
+NETWORK_NAME="ffv-prod_data"
+
+# DATABASE_URL usa @postgres: (hostname interno do compose) — sem reescrever.
+DATABASE_URL_INTERNAL=$(grep '^DATABASE_URL=' "$ENV_FILE" | cut -d= -f2-)
+
+docker run --rm \
+  --network "$NETWORK_NAME" \
+  -v "$MIGRATIONS_DIR:/migrations:ro" \
+  migrate/migrate:v4.17.1 \
+  -path /migrations \
+  -database "$DATABASE_URL_INTERNAL" \
+  up \
   || die "Migrations falharam. Deploy abortado."
 
 # ─── 6. Deploy da nova imagem da API (2 réplicas) ────────────────────────────
