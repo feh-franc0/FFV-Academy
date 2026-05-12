@@ -1,13 +1,15 @@
+//go:build security
+
 // Package security — helpers compartilhados pela bateria de testes de segurança.
 //
 // Esses helpers permitem construir JWTs válidos, montar uma instância mínima do
 // router de produção, e expor stubs de handlers/repositórios que satisfazem as
 // interfaces do projeto sem depender de banco/Redis/Stripe/Anthropic reais.
 //
-// Importante: este arquivo NÃO usa build tag para que possa ser referenciado
-// pelos arquivos `_test.go` com `//go:build security` (eles importam o mesmo
-// package `security`). Como o arquivo contém apenas helpers puros (não testes
-// `Test*`), sua compilação no build normal é inerte — não roda nada.
+// Build tag `security` garante que estes helpers só sejam compilados quando os
+// testes da suite forem executados (`go test -tags security ./test/security/...`).
+// Sem o tag, golangci-lint enxerga as funções como "unused" porque não vê os
+// _test.go que as consomem.
 package security
 
 import (
