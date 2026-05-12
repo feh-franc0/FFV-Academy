@@ -3,16 +3,24 @@ name: Security
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
   schedule:
-    # Toda segunda-feira às 04:00 UTC
+    # Toda segunda-feira às 04:00 UTC — pega CVEs novos mesmo sem commits.
     - cron: '0 4 * * 1'
   workflow_dispatch:
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
   security-events: write
+  actions: read
 
 jobs:
+  # ─── gosec + govulncheck (backend) ────────────────────────────────────────
   backend-security:
     name: Backend security scans
     runs-on: ubuntu-latest
@@ -20,14 +28,13 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Go + caches
+        uses: ./.github/actions/setup-go
         with:
-          go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
+          working-directory: backend
+          cache-key-suffix: security
 
       - name: Install gosec
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest
@@ -37,7 +44,7 @@ jobs:
         run: gosec -fmt sarif -out gosec.sarif -exclude=G401,G501 ./...
 
       - name: Upload gosec SARIF
-        if: always()
+        if: always() && hashFiles('backend/gosec.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: backend/gosec.sarif
@@ -49,6 +56,7 @@ jobs:
       - name: Run govulncheck
         run: govulncheck ./...
 
+  # ─── npm audit (frontend) ─────────────────────────────────────────────────
   frontend-security:
     name: Frontend security scans
     runs-on: ubuntu-latest
@@ -56,19 +64,77 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Node + caches
+        uses: ./.github/actions/setup-node
         with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
+          working-directory: frontend
 
       - name: npm audit (high+)
         continue-on-error: true
         run: npm audit --audit-level=high
+
+  # ─── Gitleaks: detecta secrets commitados acidentalmente ──────────────────
+  # Free tier para repos públicos. Para repos privados, requer GITLEAKS_LICENSE.
+  gitleaks:
+    name: Gitleaks (secret scanning)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}  # ativar se repo virar privado
+
+  # ─── OSV-Scanner: vulnerabilidades em Go + npm em um único scan ───────────
+  # Complementa govulncheck/npm audit usando a base de dados OSV (Google).
+  osv-scanner:
+    name: OSV-Scanner
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    # Workflow reusable oficial — já formata SARIF e faz upload.
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v1.9.2
+    with:
+      scan-args: |-
+        --recursive
+        --skip-git
+        ./
+
+  # ─── CodeQL: SAST para Go e JavaScript/TypeScript ─────────────────────────
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            build-mode: autobuild
+          - language: javascript-typescript
+            build-mode: none
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Autobuild
+        if: matrix.build-mode == 'autobuild'
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

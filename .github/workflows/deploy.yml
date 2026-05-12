@@ -51,6 +51,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      security-events: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -75,6 +76,7 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Build e push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: ./backend
@@ -86,6 +88,36 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: true
+
+      # ─── Trivy: scan da imagem final por CVEs ────────────────────────────
+      # Falha o deploy se houver CRITICAL não-fixado. HIGH é apenas warning.
+      # Sai grátis (Trivy é open source) e roda em ~30s para imagens pequenas.
+      - name: Trivy image scan (CRITICAL bloqueia)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ghcr.io/${{ github.repository_owner }}/ffv-api:${{ steps.meta.outputs.version }}
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: 'CRITICAL'
+          vuln-type: 'os,library'
+
+      - name: Trivy image scan (HIGH apenas warning, upload SARIF)
+        uses: aquasecurity/trivy-action@0.28.0
+        if: always()
+        with:
+          image-ref: ghcr.io/${{ github.repository_owner }}/ffv-api:${{ steps.meta.outputs.version }}
+          format: 'sarif'
+          output: 'trivy-image.sarif'
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
+
+      - name: Upload Trivy SARIF
+        if: always() && hashFiles('trivy-image.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-image.sarif'
+          category: trivy-image
 
   # ─── Deploy: Backend na VPS ────────────────────────────────────────────────
   deploy-backend:
@@ -192,13 +224,10 @@ jobs:
         with:
           ref: ${{ needs.check.outputs.commit_sha }}
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node + caches
+        uses: ./.github/actions/setup-node
         with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-
-      - run: npm ci
+          working-directory: frontend
 
       - name: Build export estático com URL da API de produção
         env:
@@ -222,3 +251,65 @@ jobs:
             **/node_modules/**
             **/.DS_Store
             **/Thumbs.db
+
+  # ─── Notificação pós-deploy (Discord/Slack) ───────────────────────────────
+  # Roda mesmo se algum job anterior falhou — assim o usuário sabe se deu errado.
+  # Se DEPLOY_NOTIFY_WEBHOOK_URL não estiver setada, só loga e termina OK.
+  notify:
+    needs: [check, build-push, deploy-backend, smoke-test-backend, deploy-frontend]
+    if: always() && needs.check.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Calcular status agregado
+        id: status
+        env:
+          BUILD: ${{ needs.build-push.result }}
+          BACK: ${{ needs.deploy-backend.result }}
+          SMOKE: ${{ needs.smoke-test-backend.result }}
+          FRONT: ${{ needs.deploy-frontend.result }}
+        run: |
+          if [[ "$BUILD" == "success" && "$BACK" == "success" && "$SMOKE" == "success" && "$FRONT" == "success" ]]; then
+            echo "status=success" >> "$GITHUB_OUTPUT"
+            echo "emoji=:white_check_mark:" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=failure" >> "$GITHUB_OUTPUT"
+            echo "emoji=:x:" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Enviar webhook (se configurado)
+        env:
+          WEBHOOK: ${{ secrets.DEPLOY_NOTIFY_WEBHOOK_URL }}
+          STATUS: ${{ steps.status.outputs.status }}
+          EMOJI: ${{ steps.status.outputs.emoji }}
+          SHA: ${{ needs.check.outputs.commit_sha }}
+          ACTOR: ${{ github.actor }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [[ -z "${WEBHOOK}" ]]; then
+            echo "DEPLOY_NOTIFY_WEBHOOK_URL não configurado — pulando notificação."
+            exit 0
+          fi
+          # Payload genérico compatível com Discord e Slack via content/text.
+          payload=$(jq -n \
+            --arg msg "${EMOJI} Deploy **${STATUS}** | sha=\`${SHA:0:7}\` | autor=${ACTOR} | <${RUN_URL}|ver run>" \
+            '{content: $msg, text: $msg}')
+          curl -fsSL -X POST -H "Content-Type: application/json" -d "${payload}" "${WEBHOOK}" \
+            || echo "::warning::Falha ao enviar webhook (não falha o deploy)"
+
+      - name: Deploy summary
+        if: always()
+        run: |
+          {
+            echo "## Deploy"
+            echo ""
+            echo "- Status: ${{ steps.status.outputs.status }}"
+            echo "- Commit: \`${{ needs.check.outputs.commit_sha }}\`"
+            echo "- Image: \`${{ needs.build-push.outputs.image_tag }}\`"
+            echo ""
+            echo "| Job | Resultado |"
+            echo "|-----|-----------|"
+            echo "| build-push | ${{ needs.build-push.result }} |"
+            echo "| deploy-backend | ${{ needs.deploy-backend.result }} |"
+            echo "| smoke-test-backend | ${{ needs.smoke-test-backend.result }} |"
+            echo "| deploy-frontend | ${{ needs.deploy-frontend.result }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

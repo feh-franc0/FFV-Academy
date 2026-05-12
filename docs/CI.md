@@ -7,11 +7,63 @@ depurar cada etapa localmente.
 
 | Workflow | Arquivo | Gatilhos | O que roda |
 |----------|---------|----------|------------|
-| CI | `.github/workflows/ci.yml` | `push` em `main`, `pull_request` para `main` | Lint, type-check, testes unit+contract+coverage, build |
-| Security | `.github/workflows/security.yml` | `pull_request`, cron semanal (seg 04:00 UTC), `workflow_dispatch` | gosec (SARIF → Code Scanning), govulncheck, npm audit |
+| CI | `.github/workflows/ci.yml` | `push` em `main`, `pull_request` para `main` | Path-filter → frontend, e2e, backend (matrix Go 1.26), gate `ci-success` |
+| Deploy | `.github/workflows/deploy.yml` | `workflow_run` de CI verde em `main`, `workflow_dispatch` | Build Docker → GHCR → Trivy scan → SSH deploy → smoke tests → notify |
+| PR Checks | `.github/workflows/pr-checks.yml` | `pull_request` | Auto-label, coverage diff (comment), bundle size |
+| Security | `.github/workflows/security.yml` | PR, push em main, cron semanal (seg 04:00 UTC), `workflow_dispatch` | gosec, govulncheck, npm audit, gitleaks, OSV-Scanner, CodeQL (Go + JS/TS) |
+| Lighthouse | `.github/workflows/lighthouse.yml` | `pull_request` | Audit do frontend buildado |
 | Dependabot | `.github/dependabot.yml` | Semanal (seg 04:00 UTC) | Bumps de gomod, npm, github-actions, docker |
 
 Tudo roda em `ubuntu-latest` (free tier). Nenhum runner self-hosted necessário.
+
+## Composite actions reusáveis
+
+| Action | Path | O que faz |
+|--------|------|-----------|
+| `setup-go` | `.github/actions/setup-go/action.yml` | Setup Go via `go.mod`, restaura cache de `~/.cache/go-build` e `go mod download` |
+| `setup-node` | `.github/actions/setup-node/action.yml` | Setup Node, `npm ci`, cache de Vite/Vitest, opcionalmente Playwright browsers |
+
+Usadas em ci.yml, deploy.yml, security.yml, pr-checks.yml. Mudou setup → muda
+em um lugar só.
+
+## Diagrama do pipeline
+
+```
+push/PR ─► ci.yml ───────────────────────────────────────────────────► ci-success (gate)
+            │                                                                  │
+            ├─ changes (paths-filter)                                          │
+            ├─ frontend (lint+test+build)  ──┐                                 │
+            ├─ e2e (playwright) ◄────────────┘                                 │
+            └─ backend (Go matrix [1.26], coverage gate 25%)                   │
+                                                                               │
+PR ─► pr-checks.yml ─► labeler + coverage-diff (sticky comment) + bundle-size  │
+PR ─► security.yml ──► gosec + govulncheck + gitleaks + osv + codeql           │
+PR ─► lighthouse.yml ► audit frontend                                          │
+                                                                               ▼
+                                                          (merge → main) ──► deploy.yml
+                                                                               │
+                                                          check (DEPLOY_ENABLED)
+                                                                               │
+                                                          build-push (GHCR + Trivy)
+                                                                               │
+                                                ┌──────────────┴──────────────┐
+                                                ▼                              ▼
+                                         deploy-backend                deploy-frontend
+                                         (SCP+SSH→VPS)                 (FTP→Hostinger)
+                                                │
+                                                ▼
+                                        smoke-test-backend
+                                                │
+                                                ▼
+                                              notify (webhook opcional)
+```
+
+## Required checks (branch protection)
+
+Marcar **apenas** `ci-success` como required check. Ver `docs/BRANCH_PROTECTION.md`
+para detalhes — em resumo, jobs gateados por path filter podem ficar "skipped"
+e GitHub trata isso como "pendente"; o gate `ci-success` roda com `if: always()`
+e consolida o resultado.
 
 ## Job: Frontend (Next.js)
 
@@ -118,8 +170,32 @@ houver time.
 
 ## Validação local dos YAMLs
 
+YAML básico (sintaxe):
 ```bash
-python3 -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml')); print('ok')"
-python3 -c "import yaml; yaml.safe_load(open('.github/workflows/security.yml')); print('ok')"
-python3 -c "import yaml; yaml.safe_load(open('.github/dependabot.yml')); print('ok')"
+for f in .github/workflows/*.yml .github/dependabot.yml; do
+  python3 -c "import yaml; yaml.safe_load(open('$f')); print('ok: $f')"
+done
 ```
+
+Validação semântica completa (recomendado antes de push):
+```bash
+# Instalar uma vez
+go install github.com/rhysd/actionlint/cmd/actionlint@latest
+
+# Lint dos workflows (composite actions são detectadas como "não-workflow"
+# e dão falso-positivo; lint só os workflows reais)
+~/go/bin/actionlint .github/workflows/*.yml
+```
+
+## Debugar uma falha de CI
+
+1. Abra o run em `Actions` tab.
+2. O job que falhou tem expand step + log. Procure `::error::` (anotações).
+3. Se for backend: baixe o artifact `backend-coverage-<sha>-go<ver>` e abra
+   `coverage.html` para ver onde o teste passa/falha.
+4. Se for frontend: baixe `ffv-academy-build-<sha>` (ou `playwright-report-<sha>`
+   se foi e2e) para inspeção local.
+5. Para reproduzir: `bash scripts/pre-push-validate.sh` espelha a maior parte
+   do que a CI roda.
+6. Para rodar a action localmente, [act](https://github.com/nektos/act) suporta
+   maior parte (não suporta service containers nem secrets reais).

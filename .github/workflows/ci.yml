@@ -7,29 +7,60 @@ on:
     branches: [main]
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # Em PR, cancela runs anteriores do MESMO PR.
+  # Em push para main, cada commit gera um run independente.
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
+  # ─── Detector de mudanças ─────────────────────────────────────────────────
+  # Decide quais jobs devem rodar. Jobs gateados por isso usam `if`, mas o
+  # status final fica consolidado em `ci-success` (sempre executa) — assim
+  # path filters NÃO transformam required checks em "skipped" no GitHub.
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      backend: ${{ steps.filter.outputs.backend }}
+      workflows: ${{ steps.filter.outputs.workflows }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            frontend:
+              - 'frontend/**'
+              - '.github/workflows/ci.yml'
+              - '.github/actions/setup-node/**'
+            backend:
+              - 'backend/**'
+              - '.github/workflows/ci.yml'
+              - '.github/actions/setup-go/**'
+            workflows:
+              - '.github/workflows/**'
+              - '.github/actions/**'
+
+  # ─── Frontend ─────────────────────────────────────────────────────────────
   frontend:
     name: Frontend (Next.js)
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     defaults:
       run:
         working-directory: frontend
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: ./.github/actions/setup-node
         with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
+          working-directory: frontend
 
       - name: Lint
         run: npm run lint
@@ -54,34 +85,40 @@ jobs:
           path: frontend/out/
           retention-days: 7
 
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## Frontend"
+            echo ""
+            echo "- Node: \`$(node --version)\`"
+            echo "- Lint: \`npm run lint\`"
+            echo "- Tests: \`npm test\`"
+            echo "- Build artifact: \`ffv-academy-build-${{ github.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ─── E2E (Playwright) ─────────────────────────────────────────────────────
   e2e:
     name: E2E (Playwright)
     runs-on: ubuntu-latest
-    needs: frontend
+    needs: [changes, frontend]
+    if: needs.changes.outputs.frontend == 'true'
     defaults:
       run:
         working-directory: frontend
     env:
       CI: true
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Node + Playwright
+        uses: ./.github/actions/setup-node
         with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
+          working-directory: frontend
+          install-playwright: 'true'
 
       - name: Build
         run: npm run build
-
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
 
       - name: Run E2E tests
         run: npm run e2e:ci
@@ -94,9 +131,18 @@ jobs:
           path: frontend/playwright-report/
           retention-days: 7
 
+  # ─── Backend ──────────────────────────────────────────────────────────────
   backend:
     name: Backend (Go)
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    strategy:
+      # Quando Go 1.27 sair, adicionar aqui sem mexer em mais nada.
+      # fail-fast: false garante que veremos falhas em todas as versões.
+      fail-fast: false
+      matrix:
+        go: ['1.26']
     defaults:
       run:
         working-directory: backend
@@ -132,17 +178,13 @@ jobs:
       APP_ENV: test
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Go (matrix ${{ matrix.go }}) + caches
+        uses: ./.github/actions/setup-go
         with:
-          go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
-
-      - name: Download dependencies
-        run: go mod download
+          working-directory: backend
+          cache-key-suffix: ci-${{ matrix.go }}
 
       - name: Build
         run: go build ./...
@@ -201,32 +243,82 @@ jobs:
         run: make test-cover
 
       - name: Coverage gate (ratchet — não permite regressão)
+        id: coverage
         run: |
-          # Baseline atual: 25% (mai/2026). Esta é uma "ratchet": o gate
-          # impede que o coverage CAIA abaixo do mínimo. À medida que novos
-          # testes são adicionados, o threshold sobe gradualmente (sem
-          # bloquear PRs que adicionam features hoje).
-          #
-          # Plano de evolução:
-          #   - mai/2026: 25%  (atual — pentest suite + unit/contract/integration)
-          #   - jul/2026: 40%  (após testes de handlers HTTP completos)
-          #   - set/2026: 60%  (após testes de infrastructure layer)
-          #   - dez/2026: 75%  (target final para code que importa)
+          # Ratchet pattern: gate impede regressao, sobe gradual.
+          # Plano: mai/2026 25% → jul 45% → set 60% → dez 70% → mai/2027 75%.
           MIN_COVERAGE=25
           COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+          echo "coverage=${COVERAGE}" >> "$GITHUB_OUTPUT"
           echo "Coverage total: ${COVERAGE}% (mínimo atual: ${MIN_COVERAGE}%)"
           if (( $(echo "$COVERAGE < $MIN_COVERAGE" | bc -l) )); then
             echo "::error::Coverage ${COVERAGE}% abaixo do baseline (${MIN_COVERAGE}%) — regressão detectada"
             exit 1
           fi
-          echo "✓ Coverage gate OK"
+          echo "Coverage gate OK"
 
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: backend-coverage-${{ github.sha }}
+          name: backend-coverage-${{ github.sha }}-go${{ matrix.go }}
           path: |
             backend/coverage.out
             backend/coverage.html
           retention-days: 14
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## Backend (Go ${{ matrix.go }})"
+            echo ""
+            echo "- Coverage: **${{ steps.coverage.outputs.coverage }}%** (gate: 25%)"
+            echo "- Lint: golangci-lint v2.12.2"
+            echo "- Tests: unit + contract + security + integration"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ─── Gate consolidado (required check estável) ────────────────────────────
+  # Este é o ÚNICO job que deve ser marcado como "required" no GitHub UI.
+  # Como sempre roda (`if: always()`) e checa `result` dos dependentes, ele
+  # nunca fica em "skipped" — então path filters não bloqueiam merge.
+  ci-success:
+    name: CI success
+    runs-on: ubuntu-latest
+    needs: [changes, frontend, e2e, backend]
+    if: always()
+    steps:
+      - name: Verificar resultados
+        env:
+          FRONTEND: ${{ needs.frontend.result }}
+          E2E: ${{ needs.e2e.result }}
+          BACKEND: ${{ needs.backend.result }}
+        run: |
+          fail=0
+          # "success" e "skipped" são OK; "failure" e "cancelled" reprovam.
+          for name in FRONTEND E2E BACKEND; do
+            val="${!name}"
+            case "$val" in
+              success|skipped) echo "✓ $name: $val" ;;
+              *) echo "✗ $name: $val"; fail=1 ;;
+            esac
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::Um ou mais jobs falharam ou foram cancelados."
+            exit 1
+          fi
+          echo "Todos os jobs requeridos passaram."
+
+      - name: Pipeline summary
+        if: always()
+        run: |
+          {
+            echo "## CI Pipeline"
+            echo ""
+            echo "| Job | Resultado |"
+            echo "|-----|-----------|"
+            echo "| changes | ${{ needs.changes.result }} |"
+            echo "| frontend | ${{ needs.frontend.result }} |"
+            echo "| e2e | ${{ needs.e2e.result }} |"
+            echo "| backend | ${{ needs.backend.result }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
