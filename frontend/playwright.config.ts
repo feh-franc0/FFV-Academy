@@ -31,7 +31,11 @@ export default defineConfig({
   ],
   webServer: process.env.CI
     ? {
-        command: 'npx serve out -l 3000 --single',
+        // SEM --single: Next.js com `output: export` gera arquivo por rota
+        // (out/explorar.html, out/search.html, …). A flag --single faz SPA
+        // fallback e qualquer rota cai em index.html — fazendo os testes
+        // baterem na HOME em vez da página alvo.
+        command: 'npx serve out -l 3000',
         url: 'http://localhost:3000',
         timeout: 120_000,
       }
