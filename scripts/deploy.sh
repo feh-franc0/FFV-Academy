@@ -42,8 +42,11 @@ done
 
 # ─── 5. Rodar migrations ──────────────────────────────────────────────────────
 # postgres fica exposto em 127.0.0.1:5432; migrate CLI conecta pelo loopback do host.
+# IMPORTANTE: usamos 127.0.0.1 explícito (não 'localhost'). Em sistemas com IPv6
+# habilitado, 'localhost' resolve para [::1] primeiro, mas o postgres docker faz
+# bind IPv4-only — falha com "dial tcp [::1]:5432: connect: connection refused".
 log "Rodando migrations..."
-DATABASE_URL=$(grep '^DATABASE_URL=' "$ENV_FILE" | cut -d= -f2- | sed 's/@postgres:/@localhost:/')
+DATABASE_URL=$(grep '^DATABASE_URL=' "$ENV_FILE" | cut -d= -f2- | sed 's/@postgres:/@127.0.0.1:/')
 migrate -path "$MIGRATIONS_DIR" -database "$DATABASE_URL" up \
   || die "Migrations falharam. Deploy abortado."
 
