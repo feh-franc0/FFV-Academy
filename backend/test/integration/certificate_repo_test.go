@@ -121,4 +121,3 @@ func Test_CertificateRepo_ListByUser_OrderedByIssuedAtDesc(t *testing.T) {
 		t.Errorf("expected DESC: %v !> %v", certs[1].IssuedAt(), certs[2].IssuedAt())
 	}
 }
-

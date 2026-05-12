@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+
 	appcert "github.com/fernandofv/api/internal/application/certificate"
 	"github.com/fernandofv/api/internal/domain/shared"
 	"github.com/fernandofv/api/internal/interfaces/http/middleware"
@@ -12,10 +13,10 @@ import (
 
 // CertificateHandler expõe os endpoints de certificados.
 type CertificateHandler struct {
-	issue    *appcert.IssueCertificateUseCase
-	verify   *appcert.VerifyCertificateUseCase
-	list     *appcert.ListUserCertificatesUseCase
-	baseURL  string
+	issue   *appcert.IssueCertificateUseCase
+	verify  *appcert.VerifyCertificateUseCase
+	list    *appcert.ListUserCertificatesUseCase
+	baseURL string
 }
 
 func NewCertificateHandler(

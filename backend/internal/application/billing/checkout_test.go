@@ -73,8 +73,10 @@ func (m *mockPaymentProvider) CreateCheckoutSession(_ context.Context, _ dombill
 
 type mockProductCatalog struct{}
 
-func (mockProductCatalog) GetStripePriceID(_ shared.ProductID) (string, error) { return "price_123", nil }
-func (mockProductCatalog) GetAmountCents(_ shared.ProductID) (int64, error)    { return 4990, nil }
+func (mockProductCatalog) GetStripePriceID(_ shared.ProductID) (string, error) {
+	return "price_123", nil
+}
+func (mockProductCatalog) GetAmountCents(_ shared.ProductID) (int64, error) { return 4990, nil }
 
 // mockUserRepoBilling: minimal UserRepository for billing tests
 type mockUserRepoBilling struct {

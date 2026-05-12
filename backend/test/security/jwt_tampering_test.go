@@ -7,11 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
+
 	"github.com/fernandofv/api/internal/config"
 	"github.com/fernandofv/api/internal/domain/identity"
 	"github.com/fernandofv/api/internal/domain/shared"
 	"github.com/fernandofv/api/internal/infrastructure/auth"
-	"github.com/golang-jwt/jwt/v5"
 )
 
 func newJWT(t *testing.T) (*auth.JWTService, config.JWTConfig) {

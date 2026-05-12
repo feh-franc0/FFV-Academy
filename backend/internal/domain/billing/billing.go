@@ -26,8 +26,8 @@ const (
 // Purchase é o aggregate root do bounded context billing.
 //
 // INVARIANTES:
-//   1. paid_at só existe quando status == paid.
-//   2. Transição de status é unidirecional: pending → paid | failed, paid → refunded.
+//  1. paid_at só existe quando status == paid.
+//  2. Transição de status é unidirecional: pending → paid | failed, paid → refunded.
 type Purchase struct {
 	id                  shared.PurchaseID
 	userID              shared.UserID
@@ -61,12 +61,12 @@ func NewPurchase(
 	}
 }
 
-func (p *Purchase) ID() shared.PurchaseID        { return p.id }
-func (p *Purchase) UserID() shared.UserID         { return p.userID }
-func (p *Purchase) ProductID() shared.ProductID   { return p.productID }
-func (p *Purchase) AmountCents() int64            { return p.amountCents }
-func (p *Purchase) Status() PurchaseStatus        { return p.status }
-func (p *Purchase) StripeSessionID() string       { return p.stripeSessionID }
+func (p *Purchase) ID() shared.PurchaseID       { return p.id }
+func (p *Purchase) UserID() shared.UserID       { return p.userID }
+func (p *Purchase) ProductID() shared.ProductID { return p.productID }
+func (p *Purchase) AmountCents() int64          { return p.amountCents }
+func (p *Purchase) Status() PurchaseStatus      { return p.status }
+func (p *Purchase) StripeSessionID() string     { return p.stripeSessionID }
 
 // MarkPaid transiciona o status para paid.
 func (p *Purchase) MarkPaid(paymentIntent string, now time.Time) error {

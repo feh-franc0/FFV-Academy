@@ -59,14 +59,9 @@ func (h *StatsHandler) GetPublic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dto := PlatformStatsDTO{
-		TotalUsers:     stats.TotalUsers,
-		ActiveWeekly:   stats.ActiveWeekly,
-		TotalXPAwarded: stats.TotalXPAwarded,
-	}
+	dto := PlatformStatsDTO(stats)
 
 	// Cache 60s no edge/CDN — números agregados não precisam ser real-time.
 	w.Header().Set("Cache-Control", "public, max-age=60, s-maxage=60")
 	WriteJSON(w, http.StatusOK, dto)
 }
-

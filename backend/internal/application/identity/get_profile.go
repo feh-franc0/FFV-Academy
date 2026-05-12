@@ -340,7 +340,7 @@ func (uc *RefreshTokenUseCase) Execute(ctx context.Context, tokenHash string) (R
 	}
 
 	// Gera novos tokens antes de revogar o antigo.
-	// Ordem intencional (safe-fail): salva o novo ANTES de revogar o antigo.
+	// Ordem intentional (safe-fail): salva o novo ANTES de revogar o antigo.
 	// Se Save falhar → token antigo ainda válido → cliente pode retentar sem lockout.
 	// Se Revoke falhar após Save → o token antigo expira naturalmente (TTL = 30d);
 	//   o risco é mínimo (window de 30d com token que o cliente não vai mais usar).

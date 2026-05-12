@@ -24,69 +24,6 @@ import (
 	"github.com/fernandofv/api/internal/interfaces/http/middleware"
 )
 
-// ─── Stubs dos use cases ─────────────────────────────────────────────────────
-//
-// Cada stub implementa a interface que o handler usa (via chamada ao método Execute).
-// Os stubs são definidos como structs locais — sem gomock, sem geração de código.
-
-// stubRequestMagicLink simula o use case de solicitação de magic link.
-// Pode ser configurado para retornar sucesso ou erro.
-type stubRequestMagicLink struct {
-	err error
-}
-
-func (s *stubRequestMagicLink) Execute(_ context.Context, _ appidentity.RequestMagicLinkCommand) (appidentity.RequestMagicLinkResult, error) {
-	if s.err != nil {
-		return appidentity.RequestMagicLinkResult{}, s.err
-	}
-	return appidentity.RequestMagicLinkResult{ExpiresIn: 10 * time.Minute}, nil
-}
-
-// stubVerifyMagicLink simula o use case de verificação do token.
-type stubVerifyMagicLink struct {
-	err  error
-	user *domidentity.User
-}
-
-func (s *stubVerifyMagicLink) Execute(_ context.Context, _ appidentity.VerifyMagicLinkCommand) (appidentity.VerifyMagicLinkResult, error) {
-	if s.err != nil {
-		return appidentity.VerifyMagicLinkResult{}, s.err
-	}
-	return appidentity.VerifyMagicLinkResult{
-		AccessToken:      "access-token",
-		RefreshToken:     "refresh-token",
-		RefreshExpiresAt: time.Now().Add(30 * 24 * time.Hour),
-		User:             s.user,
-		IsNewUser:        false,
-	}, nil
-}
-
-// stubUpdateProfile simula o use case de atualização de perfil.
-type stubUpdateProfile struct {
-	err  error
-	user *domidentity.User
-}
-
-func (s *stubUpdateProfile) Execute(_ context.Context, _ appidentity.UpdateProfileCommand) (*domidentity.User, error) {
-	if s.err != nil {
-		return nil, s.err
-	}
-	return s.user, nil
-}
-
-// stubGetProfile simula o use case de busca de perfil.
-type stubGetProfile struct {
-	err  error
-	user *domidentity.User
-}
-
-func (s *stubGetProfile) Execute(_ context.Context, _ shared.UserID) (*domidentity.User, error) {
-	if s.err != nil {
-		return nil, s.err
-	}
-	return s.user, nil
-}
-
 // ─── Adaptadores de stub para *UseCase concreto ───────────────────────────────
 //
 // O AuthHandler aceita *appidentity.RequestMagicLinkUseCase (struct concreto),
@@ -324,7 +261,7 @@ func Test_AuthHandler_GetProfile_NoAuth_Returns401ViaMiddleware(t *testing.T) {
 	//
 	// Simulamos o comportamento: sem header Authorization → middleware retorna 401.
 	// Isso é verificado inspecionando que o middleware bloqueia antes do handler.
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", http.NoBody)
 	// Sem Authorization header.
 	rec := httptest.NewRecorder()
 

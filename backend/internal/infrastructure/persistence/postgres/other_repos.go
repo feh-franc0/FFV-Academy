@@ -7,16 +7,17 @@ import (
 	"fmt"
 	"time"
 
-	domcert "github.com/fernandofv/api/internal/domain/certificate"
-	dombilling "github.com/fernandofv/api/internal/domain/billing"
-	domidentity "github.com/fernandofv/api/internal/domain/identity"
-	domprogress "github.com/fernandofv/api/internal/domain/progress"
-	domref "github.com/fernandofv/api/internal/domain/referral"
-	domlb "github.com/fernandofv/api/internal/domain/leaderboard"
-	"github.com/fernandofv/api/internal/domain/shared"
-	appevent "github.com/fernandofv/api/internal/application/event"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	appevent "github.com/fernandofv/api/internal/application/event"
+	dombilling "github.com/fernandofv/api/internal/domain/billing"
+	domcert "github.com/fernandofv/api/internal/domain/certificate"
+	domidentity "github.com/fernandofv/api/internal/domain/identity"
+	domlb "github.com/fernandofv/api/internal/domain/leaderboard"
+	domprogress "github.com/fernandofv/api/internal/domain/progress"
+	domref "github.com/fernandofv/api/internal/domain/referral"
+	"github.com/fernandofv/api/internal/domain/shared"
 )
 
 // ─────────────────────────────────────────────────────────────────

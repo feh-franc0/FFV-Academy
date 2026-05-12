@@ -7,17 +7,17 @@ import (
 	"time"
 
 	appsim "github.com/fernandofv/api/internal/application/simulado"
-	domsim "github.com/fernandofv/api/internal/domain/simulado"
 	"github.com/fernandofv/api/internal/domain/shared"
+	domsim "github.com/fernandofv/api/internal/domain/simulado"
 )
 
 // Conflict-capable attempt repo: mockAttemptRepo from finish_attempt_test already
 // covers FindByID/Save/Update/FindActive. We extend locally with a flag to simulate
 // UNIQUE violation on Save.
 type startAttemptMockRepo struct {
-	byID          map[shared.AttemptID]*domsim.Attempt
-	saved         []*domsim.Attempt
-	saveErr       error
+	byID           map[shared.AttemptID]*domsim.Attempt
+	saved          []*domsim.Attempt
+	saveErr        error
 	existingActive *domsim.Attempt
 }
 

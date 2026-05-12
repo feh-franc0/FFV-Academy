@@ -7,10 +7,10 @@ import "github.com/fernandofv/api/internal/domain/shared"
 // INVARIANTE: value ∈ [0,100]; só existe após Attempt.Finish().
 // Produzido pelo Scorer — nunca criado diretamente pelo cliente.
 type Score struct {
-	value        int
-	passed       bool
-	byTopic      map[Topic]TopicCounts
-	correctCount int
+	value          int
+	passed         bool
+	byTopic        map[Topic]TopicCounts
+	correctCount   int
 	totalQuestions int
 }
 
@@ -41,10 +41,10 @@ func NewScore(r ScoreResult) Score {
 	}
 }
 
-func (s Score) Value() int                    { return s.value }
-func (s Score) Passed() bool                  { return s.passed }
-func (s Score) CorrectCount() int             { return s.correctCount }
-func (s Score) TotalQuestions() int           { return s.totalQuestions }
+func (s Score) Value() int                     { return s.value }
+func (s Score) Passed() bool                   { return s.passed }
+func (s Score) CorrectCount() int              { return s.correctCount }
+func (s Score) TotalQuestions() int            { return s.totalQuestions }
 func (s Score) ByTopic() map[Topic]TopicCounts { return s.byTopic }
 
 // WeakTopics retorna os tópicos com taxa de acerto < threshold (0.0-1.0).

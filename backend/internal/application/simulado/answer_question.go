@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	domsimulado "github.com/fernandofv/api/internal/domain/simulado"
 	"github.com/fernandofv/api/internal/domain/shared"
+	domsimulado "github.com/fernandofv/api/internal/domain/simulado"
 )
 
 // AnswerQuestionCommand registra a resposta do usuário para uma questão.

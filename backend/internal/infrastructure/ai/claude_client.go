@@ -12,6 +12,7 @@ import (
 	"fmt"
 
 	"github.com/anthropics/anthropic-sdk-go"
+
 	"github.com/fernandofv/api/internal/config"
 	domtutor "github.com/fernandofv/api/internal/domain/tutor"
 	redisinfra "github.com/fernandofv/api/internal/infrastructure/persistence/redis"
@@ -72,7 +73,7 @@ func systemPrompt() string {
 	return `Você é o Tutor FFV — um assistente de estudos especialista em tecnologia, cloud computing e IA.
 Suas explicações são:
 - Diretas e claras (máximo 3 parágrafos)
-- Em português brasileiro informal mas profissional
+- Em português brasileiro informal mas professional
 - Focadas no PORQUÊ, não apenas no O QUÊ
 - Sem jargão desnecessário
 Nunca revele o gabarito diretamente — explique o raciocínio.`

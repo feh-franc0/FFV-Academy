@@ -1,6 +1,6 @@
 // Package curriculum contém o domínio de artigos do currículo da plataforma.
 //
-// Bounded context: gerencia o conteúdo educacional estruturado em trilhas e hubs.
+// Bounded context: gerencia o conteúdo educational estruturado em trilhas e hubs.
 // Article é o aggregate root deste contexto.
 package curriculum
 
@@ -16,7 +16,7 @@ const (
 	DifficultyAdvanced     = "advanced"
 )
 
-// Article representa um artigo de conteúdo educacional.
+// Article representa um artigo de conteúdo educational.
 // É o aggregate root deste bounded context.
 // Campos são privados para forçar uso de getters — garante invariantes do domínio.
 type Article struct {

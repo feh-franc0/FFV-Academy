@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	domsimulado "github.com/fernandofv/api/internal/domain/simulado"
 	"github.com/fernandofv/api/internal/domain/shared"
+	domsimulado "github.com/fernandofv/api/internal/domain/simulado"
 )
 
 // FinishAttemptCommand finaliza uma tentativa de simulado.
@@ -16,9 +16,9 @@ type FinishAttemptCommand struct {
 
 // FinishAttemptResult contém o resultado após finalização.
 type FinishAttemptResult struct {
-	Attempt      *domsimulado.Attempt
-	ScoreResult  domsimulado.ScoreResult
-	WeakTopics   []domsimulado.Topic
+	Attempt     *domsimulado.Attempt
+	ScoreResult domsimulado.ScoreResult
+	WeakTopics  []domsimulado.Topic
 }
 
 // FinishAttemptUseCase finaliza e calcula o score server-side.
@@ -110,8 +110,8 @@ func NewResumeAttemptUseCase(
 }
 
 type ResumeAttemptResult struct {
-	Attempt   *domsimulado.Attempt
-	Simulado  *domsimulado.Simulado
+	Attempt  *domsimulado.Attempt
+	Simulado *domsimulado.Simulado
 }
 
 func (uc *ResumeAttemptUseCase) Execute(ctx context.Context, userID shared.UserID, simuladoID shared.SimuladoID) (ResumeAttemptResult, error) {

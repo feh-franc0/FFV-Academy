@@ -8,17 +8,17 @@ import (
 
 	appcert "github.com/fernandofv/api/internal/application/certificate"
 	domcert "github.com/fernandofv/api/internal/domain/certificate"
-	domsim "github.com/fernandofv/api/internal/domain/simulado"
 	"github.com/fernandofv/api/internal/domain/shared"
+	domsim "github.com/fernandofv/api/internal/domain/simulado"
 )
 
 // --- Mocks ---
 
 type mockCertRepo struct {
-	byHash       map[shared.CertificateHash]*domcert.Certificate
+	byHash        map[shared.CertificateHash]*domcert.Certificate
 	existsAttempt map[shared.AttemptID]bool
-	saveErr      error
-	saved        []*domcert.Certificate
+	saveErr       error
+	saved         []*domcert.Certificate
 }
 
 func newMockCertRepo() *mockCertRepo {

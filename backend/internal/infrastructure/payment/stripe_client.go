@@ -5,11 +5,12 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/fernandofv/api/internal/config"
-	dombilling "github.com/fernandofv/api/internal/domain/billing"
 	"github.com/stripe/stripe-go/v82"
 	"github.com/stripe/stripe-go/v82/checkout/session"
 	"github.com/stripe/stripe-go/v82/webhook"
+
+	"github.com/fernandofv/api/internal/config"
+	dombilling "github.com/fernandofv/api/internal/domain/billing"
 )
 
 // StripeClient implementa billing.PaymentProvider.

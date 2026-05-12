@@ -6,8 +6,9 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/fernandofv/api/internal/domain/shared"
 	"github.com/google/uuid"
+
+	"github.com/fernandofv/api/internal/domain/shared"
 )
 
 // Event representa um evento de analytics enviado pelo frontend.

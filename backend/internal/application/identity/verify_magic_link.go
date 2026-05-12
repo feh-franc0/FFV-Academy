@@ -47,14 +47,14 @@ type VerifyMagicLinkResult struct {
 // VerifyMagicLinkUseCase autentica o usuário com o token recebido.
 //
 // FLUXO:
-//   1. Valida formato do email.
-//   2. Consome token do Redis (GETDEL — uso único, atômico).
-//   3. Verifica se o token é válido e não expirado.
-//   4. Busca usuário pelo email.
-//   5a. Se não existe: requer RegistrationData; cria novo User.
-//   5b. Se existe: faz login normal.
-//   6. Emite access token (JWT 15min) e refresh token (30d).
-//   7. Persiste refresh token (hash) na DB.
+//  1. Valida formato do email.
+//  2. Consome token do Redis (GETDEL — uso único, atômico).
+//  3. Verifica se o token é válido e não expirado.
+//  4. Busca usuário pelo email.
+//     5a. Se não existe: requer RegistrationData; cria novo User.
+//     5b. Se existe: faz login normal.
+//  6. Emite access token (JWT 15min) e refresh token (30d).
+//  7. Persiste refresh token (hash) na DB.
 type VerifyMagicLinkUseCase struct {
 	tokenStore      identity.MagicTokenStore
 	userRepo        identity.UserRepository
@@ -117,7 +117,7 @@ func (uc *VerifyMagicLinkUseCase) Execute(ctx context.Context, cmd VerifyMagicLi
 	now := uc.clock.Now()
 
 	// Dev bypass: em desenvolvimento, o código 000000 autentica qualquer email sem Redis.
-	if !(uc.devMode && strings.TrimSpace(cmd.Token) == "000000") {
+	if !uc.devMode || strings.TrimSpace(cmd.Token) != "000000" {
 		// Consome token do Redis (atômico: GETDEL — garante uso único).
 		storedToken, err := uc.tokenStore.Consume(ctx, email)
 		if err != nil {

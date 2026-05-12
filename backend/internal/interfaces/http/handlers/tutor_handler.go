@@ -5,8 +5,8 @@ import (
 	"net/http"
 
 	apptutor "github.com/fernandofv/api/internal/application/tutor"
-	domtutor "github.com/fernandofv/api/internal/domain/tutor"
 	"github.com/fernandofv/api/internal/domain/shared"
+	domtutor "github.com/fernandofv/api/internal/domain/tutor"
 	"github.com/fernandofv/api/internal/interfaces/http/middleware"
 )
 

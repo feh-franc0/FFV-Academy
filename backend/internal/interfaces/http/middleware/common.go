@@ -14,7 +14,7 @@ import (
 type ctxKeyRequestID struct{}
 
 // RequestID injeta um UUID único no header X-Request-ID e no contexto de cada request.
-// O ID é propagado para logs e traces — essencial para correlacionar eventos de uma mesma request.
+// O ID é propagado para logs e traces — essential para correlacionar eventos de uma mesma request.
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get("X-Request-ID")
@@ -172,5 +172,3 @@ func (rw *responseWriter) WriteHeader(status int) {
 	rw.status = status
 	rw.ResponseWriter.WriteHeader(status)
 }
-
-

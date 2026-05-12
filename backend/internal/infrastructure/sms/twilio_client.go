@@ -48,7 +48,7 @@ func (c *TwilioClient) SendMagicToken(ctx context.Context, to identity.Phone, to
 	if err != nil {
 		return fmt.Errorf("twilio: send: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("twilio: unexpected status %d", resp.StatusCode)

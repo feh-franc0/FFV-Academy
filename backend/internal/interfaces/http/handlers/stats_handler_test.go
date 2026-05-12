@@ -42,7 +42,7 @@ func Test_StatsHandler_GetPublic_Returns200(t *testing.T) {
 	}
 	h := handlers.NewStatsHandler(repo)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", http.NoBody)
 	w := httptest.NewRecorder()
 	h.GetPublic(w, req)
 
@@ -71,7 +71,7 @@ func Test_StatsHandler_GetPublic_RepoError_ReturnsError(t *testing.T) {
 	repo := &mockStatsRepo{err: errors.New("db unavailable")}
 	h := handlers.NewStatsHandler(repo)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", http.NoBody)
 	w := httptest.NewRecorder()
 	h.GetPublic(w, req)
 
@@ -85,7 +85,7 @@ func Test_StatsHandler_GetPublic_SetsCacheControlHeader(t *testing.T) {
 	repo := &mockStatsRepo{}
 	h := handlers.NewStatsHandler(repo)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", http.NoBody)
 	w := httptest.NewRecorder()
 	h.GetPublic(w, req)
 
@@ -100,7 +100,7 @@ func Test_StatsHandler_GetPublic_ZeroValues_Returns200(t *testing.T) {
 	repo := &mockStatsRepo{stats: handlers.PlatformStats{}}
 	h := handlers.NewStatsHandler(repo)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", http.NoBody)
 	w := httptest.NewRecorder()
 	h.GetPublic(w, req)
 

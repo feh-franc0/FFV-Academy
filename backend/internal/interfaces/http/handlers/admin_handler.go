@@ -16,10 +16,10 @@ import (
 // PADRÃO: protegido pelo middleware RequireAdmin (role=admin no JWT).
 // Acesso restrito — nunca exposto publicamente.
 type AdminHandler struct {
-	userRepo       domidentity.UserRepository
-	attemptRepo    domsim.AttemptRepository
-	eventIngest    *appevent.IngestEventUseCase
-	auditLogRepo   postgresinfra.AdminAuditReader
+	userRepo     domidentity.UserRepository
+	attemptRepo  domsim.AttemptRepository
+	eventIngest  *appevent.IngestEventUseCase
+	auditLogRepo postgresinfra.AdminAuditReader
 }
 
 func NewAdminHandler(

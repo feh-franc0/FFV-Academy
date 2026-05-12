@@ -15,8 +15,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	domsim "github.com/fernandofv/api/internal/domain/simulado"
 	"github.com/fernandofv/api/internal/domain/shared"
+	domsim "github.com/fernandofv/api/internal/domain/simulado"
 )
 
 // catalogJSON é o catálogo de simulados serializado em JSON.
@@ -27,28 +27,28 @@ var catalogJSON []byte
 
 // catalogEntry espelha a estrutura de Simulado do frontend para deserialização.
 type catalogEntry struct {
-	ID            string           `json:"id"`
-	Certification string           `json:"certification"`
-	Title         string           `json:"title"`
-	Description   string           `json:"description"`
-	PriceCents    int64            `json:"priceCents"`
-	QuestionCount int              `json:"questionCount"`
-	TimeLimitMin  int              `json:"timeLimitMin"`
-	Topics        []string         `json:"topics"`
-	Questions     []questionEntry  `json:"questions"`
-	PassingScore  int              `json:"passingScore"`
-	ComingSoon    bool             `json:"comingSoon"`
+	ID            string          `json:"id"`
+	Certification string          `json:"certification"`
+	Title         string          `json:"title"`
+	Description   string          `json:"description"`
+	PriceCents    int64           `json:"priceCents"`
+	QuestionCount int             `json:"questionCount"`
+	TimeLimitMin  int             `json:"timeLimitMin"`
+	Topics        []string        `json:"topics"`
+	Questions     []questionEntry `json:"questions"`
+	PassingScore  int             `json:"passingScore"`
+	ComingSoon    bool            `json:"comingSoon"`
 }
 
 type questionEntry struct {
-	ID          string          `json:"id"`
-	Stem        string          `json:"stem"`
-	Options     []optionEntry   `json:"options"`
-	CorrectID   string          `json:"correctId"`
-	Explanation string          `json:"explanation"`
-	Topic       string          `json:"topic"`
-	Difficulty  string          `json:"difficulty"`
-	RelatedSlug string          `json:"relatedSlug"`
+	ID          string        `json:"id"`
+	Stem        string        `json:"stem"`
+	Options     []optionEntry `json:"options"`
+	CorrectID   string        `json:"correctId"`
+	Explanation string        `json:"explanation"`
+	Topic       string        `json:"topic"`
+	Difficulty  string        `json:"difficulty"`
+	RelatedSlug string        `json:"relatedSlug"`
 }
 
 type optionEntry struct {

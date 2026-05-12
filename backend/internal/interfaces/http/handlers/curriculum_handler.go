@@ -1,4 +1,4 @@
-// Package handlers — curriculum_handler.go expõe a API do currículo educacional.
+// Package handlers — curriculum_handler.go expõe a API do currículo educational.
 //
 // Endpoints públicos: listagem, artigo por slug, busca.
 // Endpoints admin: criação, edição, soft-delete (protegidos por RequireAdmin).
@@ -14,12 +14,12 @@ import (
 	domcurriculum "github.com/fernandofv/api/internal/domain/curriculum"
 )
 
-// CurriculumHandler expõe os endpoints do currículo educacional.
+// CurriculumHandler expõe os endpoints do currículo educational.
 type CurriculumHandler struct {
-	getArticle    *appcurriculum.GetArticleUseCase
+	getArticle     *appcurriculum.GetArticleUseCase
 	listCurriculum *appcurriculum.ListCurriculumUseCase
-	search        *appcurriculum.SearchCurriculumUseCase
-	repo          domcurriculum.Repository // usado nas operações admin (save/update/delete)
+	search         *appcurriculum.SearchCurriculumUseCase
+	repo           domcurriculum.Repository // usado nas operações admin (save/update/delete)
 }
 
 // NewCurriculumHandler cria um novo handler de currículo.

@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
+
 	appbilling "github.com/fernandofv/api/internal/application/billing"
 	appcert "github.com/fernandofv/api/internal/application/certificate"
 	appcurriculum "github.com/fernandofv/api/internal/application/curriculum"
@@ -39,7 +41,6 @@ import (
 	"github.com/fernandofv/api/internal/interfaces/http/middleware"
 	"github.com/fernandofv/api/internal/platform/logger"
 	"github.com/fernandofv/api/internal/platform/telemetry"
-	goredis "github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -60,12 +61,14 @@ func healthCheck() {
 	if port == "" {
 		port = "8080"
 	}
-	resp, err := http.Get("http://localhost:" + port + "/healthz") //nolint:noctx
+	// G107/G704 — URL contém variável de ambiente HTTP_PORT lida do processo,
+	// não input externo. Healthcheck local não tem superfície de ataque SSRF.
+	resp, err := http.Get("http://localhost:" + port + "/healthz") //nolint:noctx,gosec
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "healthcheck: %v\n", err)
 		os.Exit(1)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		fmt.Fprintf(os.Stderr, "healthcheck: status %d\n", resp.StatusCode)
 		os.Exit(1)

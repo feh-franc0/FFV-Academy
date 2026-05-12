@@ -270,4 +270,3 @@ func Test_LogoutAll_Execute_UserNotFound_PropagatesError(t *testing.T) {
 		t.Fatalf("esperado ErrNotFound wrappado, got %v", err)
 	}
 }
-

@@ -21,7 +21,7 @@ type exportUserRepo struct {
 	user *identity.User
 }
 
-func (r *exportUserRepo) Save(_ context.Context, _ *identity.User) error  { return nil }
+func (r *exportUserRepo) Save(_ context.Context, _ *identity.User) error   { return nil }
 func (r *exportUserRepo) Update(_ context.Context, _ *identity.User) error { return nil }
 func (r *exportUserRepo) FindByID(_ context.Context, _ shared.UserID) (*identity.User, error) {
 	if r.user == nil {

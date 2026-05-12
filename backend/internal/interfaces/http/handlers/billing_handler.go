@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/stripe/stripe-go/v82"
+
 	appbilling "github.com/fernandofv/api/internal/application/billing"
 	"github.com/fernandofv/api/internal/domain/shared"
 	"github.com/fernandofv/api/internal/interfaces/http/middleware"

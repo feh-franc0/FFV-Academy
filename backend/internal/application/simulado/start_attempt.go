@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 
-	domsimulado "github.com/fernandofv/api/internal/domain/simulado"
 	"github.com/fernandofv/api/internal/domain/shared"
+	domsimulado "github.com/fernandofv/api/internal/domain/simulado"
 )
 
 // StartAttemptCommand inicia ou retoma uma tentativa de simulado.
@@ -27,10 +27,10 @@ type StartAttemptResult struct {
 // StartAttemptUseCase inicia ou retoma uma tentativa de simulado.
 //
 // FLUXO:
-//   1. Valida que o simulado existe no catálogo.
-//   2. Busca attempt ativa existente para (userID, simuladoID).
-//   3. Se existe: retorna ela (idempotente).
-//   4. Se não existe: cria nova.
+//  1. Valida que o simulado existe no catálogo.
+//  2. Busca attempt ativa existente para (userID, simuladoID).
+//  3. Se existe: retorna ela (idempotente).
+//  4. Se não existe: cria nova.
 type StartAttemptUseCase struct {
 	attemptRepo domsimulado.AttemptRepository
 	catalog     domsimulado.CatalogProvider

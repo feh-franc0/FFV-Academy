@@ -5,17 +5,18 @@ import (
 	"fmt"
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
+
 	"github.com/fernandofv/api/internal/domain/shared"
 	domtutor "github.com/fernandofv/api/internal/domain/tutor"
-	goredis "github.com/redis/go-redis/v9"
 )
 
 // TutorRateLimiter implementa domtutor.RateLimiter usando Redis.
 // Rate limit mensal: sliding window por usuário.
 type TutorRateLimiter struct {
-	client    *goredis.Client
-	freeCap   int
-	proCap    int
+	client  *goredis.Client
+	freeCap int
+	proCap  int
 }
 
 func NewTutorRateLimiter(client *goredis.Client, freeCap, proCap int) *TutorRateLimiter {

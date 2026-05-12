@@ -58,7 +58,7 @@ type CircuitBreaker struct {
 	state         Estado
 	failureCount  int
 	windowStart   time.Time // início da janela de contagem de falhas
-	openedAt      time.Time // momento em que o circuito foi aberto
+	openedAt      time.Time // memento em que o circuito foi aberto
 	halfOpenTried bool      // true se já enviamos o request de teste em half-open
 }
 

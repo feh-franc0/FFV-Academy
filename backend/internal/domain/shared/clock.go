@@ -13,7 +13,7 @@ type Clock interface {
 	Now() time.Time
 }
 
-// SystemClock implementa Clock usando o relógio do sistema operacional.
+// SystemClock implementa Clock usando o relógio do sistema operational.
 type SystemClock struct{}
 
 func (SystemClock) Now() time.Time { return time.Now().UTC() }

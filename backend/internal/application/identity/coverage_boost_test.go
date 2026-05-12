@@ -283,7 +283,7 @@ func Test_VerifyMagicLink_Execute_NewUserWithInvalidPhone_ReturnsValidation(t *t
 // Test_RefreshToken_Execute_RevokeFails_StillReturnsSuccess verifica que falha ao revogar
 // o token antigo NÃO causa lockout do usuário — o novo token já foi salvo e é retornado.
 // O token antigo expirará naturalmente via TTL (30 dias).
-// Comportamento intencional: save-first, revoke-after para evitar lockout permanente.
+// Comportamento intentional: save-first, revoke-after para evitar lockout permanente.
 func Test_RefreshToken_Execute_RevokeFails_StillReturnsSuccess(t *testing.T) {
 	now := time.Now()
 	userID := shared.NewUserID()
@@ -358,7 +358,6 @@ func Test_RefreshToken_Execute_SaveNewTokenFails_ReturnsError(t *testing.T) {
 // mockSaveFailRefreshRepo — Save sempre falha, mas Revoke e FindByHash funcionam.
 type mockSaveFailRefreshRepo struct {
 	mockRefreshRepo
-	savedCount int
 }
 
 func (m *mockSaveFailRefreshRepo) Save(_ context.Context, _ domidentity.RefreshToken) error {

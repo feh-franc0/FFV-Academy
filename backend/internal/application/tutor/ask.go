@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/fernandofv/api/internal/domain/shared"
 	domsim "github.com/fernandofv/api/internal/domain/simulado"
 	domtutor "github.com/fernandofv/api/internal/domain/tutor"
-	"github.com/fernandofv/api/internal/domain/shared"
 )
 
 // AskCommand é o command de pergunta ao tutor.
@@ -23,10 +23,10 @@ type AskCommand struct {
 // AskUseCase orquestra a pergunta ao tutor de IA.
 //
 // FLUXO:
-//   1. Verifica rate limit por usuário/plano.
-//   2. Valida que a questão existe (no catálogo).
-//   3. Delega para TutorProvider (Claude API via infra).
-//   4. Incrementa contador de uso.
+//  1. Verifica rate limit por usuário/plano.
+//  2. Valida que a questão existe (no catálogo).
+//  3. Delega para TutorProvider (Claude API via infra).
+//  4. Incrementa contador de uso.
 type AskUseCase struct {
 	tutorProvider domtutor.TutorProvider
 	rateLimiter   domtutor.RateLimiter

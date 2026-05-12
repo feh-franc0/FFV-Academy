@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	apptutor "github.com/fernandofv/api/internal/application/tutor"
+	"github.com/fernandofv/api/internal/domain/shared"
 	domsim "github.com/fernandofv/api/internal/domain/simulado"
 	domtutor "github.com/fernandofv/api/internal/domain/tutor"
-	"github.com/fernandofv/api/internal/domain/shared"
 )
 
 type mockTutorProvider struct {
@@ -23,8 +23,8 @@ func (m *mockTutorProvider) Ask(_ context.Context, _ domtutor.Query) (domtutor.T
 }
 
 type mockRateLimiter struct {
-	checkErr error
-	incrErr  error
+	checkErr  error
+	incrErr   error
 	incrCalls int
 }
 

@@ -9,14 +9,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	appsim "github.com/fernandofv/api/internal/application/simulado"
-	domsim "github.com/fernandofv/api/internal/domain/simulado"
 	"github.com/fernandofv/api/internal/domain/shared"
+	domsim "github.com/fernandofv/api/internal/domain/simulado"
 )
 
 // --- Mocks inline para teste isolado ---
 
 type mockAttemptRepo struct {
-	byID map[shared.AttemptID]*domsim.Attempt
+	byID  map[shared.AttemptID]*domsim.Attempt
 	saved []*domsim.Attempt
 }
 

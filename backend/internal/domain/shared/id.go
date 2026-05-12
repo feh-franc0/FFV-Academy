@@ -48,8 +48,8 @@ func ParseAttemptID(s string) (AttemptID, error) {
 	return AttemptID(s), nil
 }
 
-func (id AttemptID) String() string  { return string(id) }
-func (id AttemptID) IsZero() bool    { return id == "" }
+func (id AttemptID) String() string { return string(id) }
+func (id AttemptID) IsZero() bool   { return id == "" }
 
 // CertificateHash identifica um certificado emitido.
 // Formato: hex string 64 chars (SHA-256).
@@ -61,14 +61,14 @@ func (h CertificateHash) IsZero() bool   { return h == "" }
 // PurchaseID identifica uma compra.
 type PurchaseID string
 
-func NewPurchaseID() PurchaseID { return PurchaseID(uuid.NewString()) }
+func NewPurchaseID() PurchaseID      { return PurchaseID(uuid.NewString()) }
 func (id PurchaseID) String() string { return string(id) }
 
 // ProductID identifica um produto (ex: "simulado-aws-practitioner").
 type ProductID string
 
-func (id ProductID) String() string   { return string(id) }
-func (id ProductID) IsZero() bool     { return id == "" }
+func (id ProductID) String() string { return string(id) }
+func (id ProductID) IsZero() bool   { return id == "" }
 
 // ParseProductID valida que o ProductID segue o formato esperado.
 func ParseProductID(s string) (ProductID, error) {

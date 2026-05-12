@@ -11,12 +11,12 @@ import (
 // AGGREGATE ROOT: User
 //
 // INVARIANTES:
-//   1. Email é único no sistema (enforçado pela DB e pelo UserRepository).
-//   2. Phone é único no sistema.
-//   3. Name tem 1-120 chars.
-//   4. paidProducts só pode crescer via GrantProduct (nunca setado direto).
-//   5. marketingConsent começa false; somente o usuário pode mudar.
-//   6. Conta deletada não pode ser usada para login.
+//  1. Email é único no sistema (enforçado pela DB e pelo UserRepository).
+//  2. Phone é único no sistema.
+//  3. Name tem 1-120 chars.
+//  4. paidProducts só pode crescer via GrantProduct (nunca setado direto).
+//  5. marketingConsent começa false; somente o usuário pode mudar.
+//  6. Conta deletada não pode ser usada para login.
 //
 // PADRÕES:
 //   - DDD Aggregate Root: User protege seus invariantes.
@@ -147,7 +147,7 @@ func ReconstituteUser(
 // Queries (expõem estado sem modificar)
 // ─────────────────────────────────────────────────────────────────
 
-func (u *User) ID() shared.UserID            { return u.id }
+func (u *User) ID() shared.UserID             { return u.id }
 func (u *User) Email() Email                  { return u.email }
 func (u *User) Phone() Phone                  { return u.phone }
 func (u *User) Name() string                  { return u.name }

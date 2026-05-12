@@ -7,8 +7,8 @@ import (
 	"time"
 
 	appsim "github.com/fernandofv/api/internal/application/simulado"
-	domsim "github.com/fernandofv/api/internal/domain/simulado"
 	"github.com/fernandofv/api/internal/domain/shared"
+	domsim "github.com/fernandofv/api/internal/domain/simulado"
 )
 
 func makeSimulado(simID shared.SimuladoID, numFree, numPaid int) *domsim.Simulado {

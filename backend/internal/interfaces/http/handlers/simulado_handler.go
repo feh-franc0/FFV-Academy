@@ -5,9 +5,10 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+
 	appsim "github.com/fernandofv/api/internal/application/simulado"
-	domsim "github.com/fernandofv/api/internal/domain/simulado"
 	"github.com/fernandofv/api/internal/domain/shared"
+	domsim "github.com/fernandofv/api/internal/domain/simulado"
 	"github.com/fernandofv/api/internal/interfaces/http/middleware"
 )
 
@@ -16,15 +17,15 @@ import (
 // PADRÃO: Server-authoritative design — score calculado no servidor,
 // paywall enforçado no servidor, timer no servidor.
 type SimuladoHandler struct {
-	catalog         domsim.CatalogProvider
-	startAttempt    *appsim.StartAttemptUseCase
-	answerQ         *appsim.AnswerQuestionUseCase
-	toggleFlag      *appsim.ToggleReviewFlagUseCase
-	finishAttempt   *appsim.FinishAttemptUseCase
-	resumeAttempt   *appsim.ResumeAttemptUseCase
-	listAttempts    *appsim.ListAttemptsUseCase
-	cancelAttempt   *appsim.CancelAttemptUseCase
-	reportQuestion  *appsim.ReportQuestionUseCase
+	catalog        domsim.CatalogProvider
+	startAttempt   *appsim.StartAttemptUseCase
+	answerQ        *appsim.AnswerQuestionUseCase
+	toggleFlag     *appsim.ToggleReviewFlagUseCase
+	finishAttempt  *appsim.FinishAttemptUseCase
+	resumeAttempt  *appsim.ResumeAttemptUseCase
+	listAttempts   *appsim.ListAttemptsUseCase
+	cancelAttempt  *appsim.CancelAttemptUseCase
+	reportQuestion *appsim.ReportQuestionUseCase
 }
 
 // WithCancelAttempt injeta o use case de cancelamento.

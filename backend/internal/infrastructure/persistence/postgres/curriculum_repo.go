@@ -10,11 +10,12 @@ import (
 	"fmt"
 	"time"
 
-	domcurriculum "github.com/fernandofv/api/internal/domain/curriculum"
-	"github.com/fernandofv/api/internal/domain/shared"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	domcurriculum "github.com/fernandofv/api/internal/domain/curriculum"
+	"github.com/fernandofv/api/internal/domain/shared"
 )
 
 // CurriculumRepo implementa domcurriculum.Repository usando pgx.
@@ -218,8 +219,8 @@ func scanCurriculumRow(row pgx.Row) (*domcurriculum.Article, error) {
 	var (
 		id, slug, title, trailID, hubID, contentMD, difficulty string
 		xp, readTime, order                                    int
-		published                                               bool
-		createdAt, updatedAt                                    time.Time
+		published                                              bool
+		createdAt, updatedAt                                   time.Time
 	)
 	if err := row.Scan(&id, &slug, &title, &trailID, &hubID, &contentMD,
 		&xp, &readTime, &difficulty, &order, &published, &createdAt, &updatedAt); err != nil {
@@ -233,8 +234,8 @@ func scanCurriculumRows(rows pgx.Rows) (*domcurriculum.Article, error) {
 	var (
 		id, slug, title, trailID, hubID, contentMD, difficulty string
 		xp, readTime, order                                    int
-		published                                               bool
-		createdAt, updatedAt                                    time.Time
+		published                                              bool
+		createdAt, updatedAt                                   time.Time
 	)
 	if err := rows.Scan(&id, &slug, &title, &trailID, &hubID, &contentMD,
 		&xp, &readTime, &difficulty, &order, &published, &createdAt, &updatedAt); err != nil {

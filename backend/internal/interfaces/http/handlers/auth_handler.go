@@ -249,7 +249,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	hash := hashToken(raw)
 	_ = h.logout.Execute(r.Context(), userID, hash)
 
-	// Limpa o cookie independente do resultado.
+	// Limpa o cookie independence do resultado.
 	http.SetCookie(w, &http.Cookie{
 		Name:     refreshCookieName,
 		Value:    "",

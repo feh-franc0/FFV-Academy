@@ -39,12 +39,12 @@ func (uc *UserStatsUseCase) Execute(ctx context.Context, userID shared.UserID) (
 	}
 
 	var (
-		done     int
-		passed   int
-		correct  int
-		total    int
-		xp       int
-		byTopic  = map[domsim.Topic]domsim.TopicCounts{}
+		done    int
+		passed  int
+		correct int
+		total   int
+		xp      int
+		byTopic = map[domsim.Topic]domsim.TopicCounts{}
 	)
 	for _, a := range attempts {
 		if !a.IsFinished() {

@@ -8,8 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fernandofv/api/internal/interfaces/http/httputil"
 	goredis "github.com/redis/go-redis/v9"
+
+	"github.com/fernandofv/api/internal/interfaces/http/httputil"
 )
 
 // RateLimiter limita requests por chave (geralmente IP) dentro de uma janela.

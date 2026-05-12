@@ -103,7 +103,7 @@ func (h *LeaderboardHandler) GetPublic(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetMyRank retorna a posição do usuário autenticado no ranking semanal.
-// Mantido por compatibilidade com clientes antigos.
+// Mantido por compatibilidade com clients antigos.
 // GET /api/v1/leaderboard/me
 func (h *LeaderboardHandler) GetMyRank(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())

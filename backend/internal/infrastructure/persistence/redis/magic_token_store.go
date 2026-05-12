@@ -12,9 +12,10 @@ import (
 	"fmt"
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
+
 	"github.com/fernandofv/api/internal/domain/identity"
 	"github.com/fernandofv/api/internal/domain/shared"
-	goredis "github.com/redis/go-redis/v9"
 )
 
 // MagicTokenStore implementa identity.MagicTokenStore.

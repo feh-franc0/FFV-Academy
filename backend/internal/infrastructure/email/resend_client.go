@@ -72,7 +72,7 @@ func (c *ResendClient) send(ctx context.Context, req resendEmailReq) error {
 	if err != nil {
 		return fmt.Errorf("resend: send: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("resend: unexpected status %d", resp.StatusCode)

@@ -15,7 +15,7 @@ import (
 )
 
 // Config agrega toda a configuração da aplicação. Campos marcados com
-// `required:"true"` causam erro em Load() se não presentes no ambiente.
+// `required:"true"` causam erro em Load() se não presents no ambiente.
 type Config struct {
 	App       AppConfig
 	HTTP      HTTPConfig
@@ -55,9 +55,9 @@ type HTTPConfig struct {
 	IdleTimeout     time.Duration `envconfig:"HTTP_IDLE_TIMEOUT" default:"60s"`
 	ShutdownTimeout time.Duration `envconfig:"HTTP_SHUTDOWN_TIMEOUT" default:"30s"`
 	// RequestTimeout é o deadline por request. Cancela o context e aborta queries DB/Redis
-	// pendentes automaticamente — evita goroutines presas durante incidentes de infra.
+	// pendentes automaticamente — evita goroutines presas durante incidents de infra.
 	// 0 = desabilitado (útil em testes que não têm timeout de infra real).
-	RequestTimeout  time.Duration `envconfig:"HTTP_REQUEST_TIMEOUT" default:"15s"`
+	RequestTimeout time.Duration `envconfig:"HTTP_REQUEST_TIMEOUT" default:"15s"`
 }
 
 type DBConfig struct {
@@ -92,9 +92,9 @@ type StripeConfig struct {
 }
 
 type ResendConfig struct {
-	APIKey       string `envconfig:"RESEND_API_KEY" required:"true"`
-	FromEmail    string `envconfig:"RESEND_FROM_EMAIL" default:"noreply@fernandofrancovalle.com"`
-	FromName     string `envconfig:"RESEND_FROM_NAME" default:"FFV Academy"`
+	APIKey    string `envconfig:"RESEND_API_KEY" required:"true"`
+	FromEmail string `envconfig:"RESEND_FROM_EMAIL" default:"noreply@fernandofrancovalle.com"`
+	FromName  string `envconfig:"RESEND_FROM_NAME" default:"FFV Academy"`
 }
 
 type TwilioConfig struct {
@@ -104,12 +104,12 @@ type TwilioConfig struct {
 }
 
 type AnthropicConfig struct {
-	APIKey       string        `envconfig:"ANTHROPIC_API_KEY" default:""`
-	Model        string        `envconfig:"ANTHROPIC_MODEL" default:"claude-sonnet-4-6"`
-	MaxTokens    int           `envconfig:"ANTHROPIC_MAX_TOKENS" default:"1024"`
-	CacheTTL     time.Duration `envconfig:"ANTHROPIC_CACHE_TTL" default:"168h"` // 7 days
-	RateLimitFree int          `envconfig:"ANTHROPIC_RATE_LIMIT_FREE" default:"50"`
-	RateLimitPro  int          `envconfig:"ANTHROPIC_RATE_LIMIT_PRO" default:"1000"`
+	APIKey        string        `envconfig:"ANTHROPIC_API_KEY" default:""`
+	Model         string        `envconfig:"ANTHROPIC_MODEL" default:"claude-sonnet-4-6"`
+	MaxTokens     int           `envconfig:"ANTHROPIC_MAX_TOKENS" default:"1024"`
+	CacheTTL      time.Duration `envconfig:"ANTHROPIC_CACHE_TTL" default:"168h"` // 7 days
+	RateLimitFree int           `envconfig:"ANTHROPIC_RATE_LIMIT_FREE" default:"50"`
+	RateLimitPro  int           `envconfig:"ANTHROPIC_RATE_LIMIT_PRO" default:"1000"`
 }
 
 type CORSConfig struct {
@@ -181,7 +181,7 @@ func LoadTest() *Config {
 			ConnMaxLifetime: 5 * time.Minute,
 			ConnMaxIdleTime: 1 * time.Minute,
 		},
-		Redis:  RedisConfig{URL: "redis://localhost:6379"},
+		Redis: RedisConfig{URL: "redis://localhost:6379"},
 		JWT: JWTConfig{
 			Secret:          "test-secret-at-least-32-bytes-long!!",
 			AccessTokenTTL:  15 * time.Minute,

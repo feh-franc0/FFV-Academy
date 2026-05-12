@@ -7,10 +7,11 @@ import (
 	"fmt"
 	"time"
 
-	domsim "github.com/fernandofv/api/internal/domain/simulado"
-	"github.com/fernandofv/api/internal/domain/shared"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/fernandofv/api/internal/domain/shared"
+	domsim "github.com/fernandofv/api/internal/domain/simulado"
 )
 
 // AttemptRepo implementa domsim.AttemptRepository.
@@ -266,10 +267,10 @@ func marshalScore(s *domsim.Score) ([]byte, error) {
 		Total   int `json:"total"`
 	}
 	m := map[string]interface{}{
-		"value":           s.Value(),
-		"passed":          s.Passed(),
-		"correctCount":    s.CorrectCount(),
-		"totalQuestions":  s.TotalQuestions(),
+		"value":          s.Value(),
+		"passed":         s.Passed(),
+		"correctCount":   s.CorrectCount(),
+		"totalQuestions": s.TotalQuestions(),
 	}
 	bt := make(map[string]byTopicEntry)
 	for topic, counts := range s.ByTopic() {

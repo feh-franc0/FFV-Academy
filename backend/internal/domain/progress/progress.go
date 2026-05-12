@@ -25,9 +25,9 @@ const MaxStateSizeBytes = 2_000_000 // 2 MB
 //
 // AGGREGATE ROOT: ProgressSnapshot
 // INVARIANTES:
-//   1. state não pode exceder 2 MB.
-//   2. schemaVersion deve ser positivo.
-//   3. Política LWW: servidor rejeita push se clientUpdatedAt <= serverUpdatedAt.
+//  1. state não pode exceder 2 MB.
+//  2. schemaVersion deve ser positivo.
+//  3. Política LWW: servidor rejeita push se clientUpdatedAt <= serverUpdatedAt.
 type ProgressSnapshot struct {
 	userID          shared.UserID
 	schemaVersion   int
@@ -36,7 +36,7 @@ type ProgressSnapshot struct {
 	serverUpdatedAt time.Time
 }
 
-// NewSnapshot cria um novo snapshot de progresso.
+// NewSnapshot cria um novo snapshot de progression.
 func NewSnapshot(
 	userID shared.UserID,
 	schemaVersion int,
@@ -73,11 +73,11 @@ func Reconstitute(
 	}
 }
 
-func (p *ProgressSnapshot) UserID() shared.UserID       { return p.userID }
-func (p *ProgressSnapshot) SchemaVersion() int          { return p.schemaVersion }
-func (p *ProgressSnapshot) State() json.RawMessage      { return p.state }
-func (p *ProgressSnapshot) ClientUpdatedAt() time.Time  { return p.clientUpdatedAt }
-func (p *ProgressSnapshot) ServerUpdatedAt() time.Time  { return p.serverUpdatedAt }
+func (p *ProgressSnapshot) UserID() shared.UserID      { return p.userID }
+func (p *ProgressSnapshot) SchemaVersion() int         { return p.schemaVersion }
+func (p *ProgressSnapshot) State() json.RawMessage     { return p.state }
+func (p *ProgressSnapshot) ClientUpdatedAt() time.Time { return p.clientUpdatedAt }
+func (p *ProgressSnapshot) ServerUpdatedAt() time.Time { return p.serverUpdatedAt }
 
 // IsNewerThan reporta se este snapshot é mais recente que o outro.
 // Usado para LWW: o cliente pode empurrar se seu timestamp é mais novo.

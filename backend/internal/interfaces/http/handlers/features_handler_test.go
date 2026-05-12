@@ -22,7 +22,7 @@ func Test_FeaturesHandler_AllDisabled_ReturnsAllFalse(t *testing.T) {
 		PhoneAuthEnabled: false,
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", http.NoBody)
 	w := httptest.NewRecorder()
 	h.Get(w, req)
 
@@ -54,7 +54,7 @@ func Test_FeaturesHandler_AllEnabled_ReturnsAllTrue(t *testing.T) {
 		PhoneAuthEnabled: true,
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", http.NoBody)
 	w := httptest.NewRecorder()
 	h.Get(w, req)
 
@@ -86,7 +86,7 @@ func Test_FeaturesHandler_MixedFlags_ReturnsCorrectState(t *testing.T) {
 		PhoneAuthEnabled: false,
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", http.NoBody)
 	w := httptest.NewRecorder()
 	h.Get(w, req)
 
@@ -116,7 +116,7 @@ func Test_FeaturesHandler_MixedFlags_ReturnsCorrectState(t *testing.T) {
 func Test_FeaturesHandler_ResponseHasContentType_ApplicationJSON(t *testing.T) {
 	h := handlers.NewFeaturesHandler(config.FeaturesConfig{})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", http.NoBody)
 	w := httptest.NewRecorder()
 	h.Get(w, req)
 
@@ -134,7 +134,7 @@ func Test_FeaturesHandler_ResponseHasContentType_ApplicationJSON(t *testing.T) {
 func Test_FeaturesHandler_ResponseHasCacheControl_60s(t *testing.T) {
 	h := handlers.NewFeaturesHandler(config.FeaturesConfig{})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", http.NoBody)
 	w := httptest.NewRecorder()
 	h.Get(w, req)
 
@@ -151,7 +151,7 @@ func Test_FeaturesHandler_OnlyGETAllowed(t *testing.T) {
 	h := handlers.NewFeaturesHandler(config.FeaturesConfig{})
 
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
-		req := httptest.NewRequest(method, "/api/v1/features", nil)
+		req := httptest.NewRequest(method, "/api/v1/features", http.NoBody)
 		w := httptest.NewRecorder()
 		h.Get(w, req)
 

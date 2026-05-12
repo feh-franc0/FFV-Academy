@@ -69,17 +69,17 @@ type Question struct {
 // POR QUÊ imutável: o conteúdo é editorial e vem do repo estático do frontend.
 // O backend só valida respostas e calcula scores.
 type Simulado struct {
-	ID           shared.SimuladoID
+	ID            shared.SimuladoID
 	Certification string
-	Title        string
-	Description  string
-	PriceCents   int64
+	Title         string
+	Description   string
+	PriceCents    int64
 	QuestionCount int
 	TimeLimitMin  int
-	Topics       []Topic
-	Questions    []Question
+	Topics        []Topic
+	Questions     []Question
 	PassingScore  int // 0-100
-	ComingSoon   bool
+	ComingSoon    bool
 }
 
 // FindQuestion retorna a questão pelo ID. Nil se não encontrada.

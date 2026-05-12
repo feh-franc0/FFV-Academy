@@ -1,5 +1,5 @@
 // Package leaderboard implementa o ranking opt-in com múltiplas janelas
-// temporais — semanal, mensal, anual e geral.
+// temporais — semanal, mensal, annual e geral.
 package leaderboard
 
 import (

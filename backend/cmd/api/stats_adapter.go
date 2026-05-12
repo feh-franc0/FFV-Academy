@@ -11,8 +11,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/fernandofv/api/internal/interfaces/http/handlers"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/fernandofv/api/internal/interfaces/http/handlers"
 )
 
 // pgxStatsRepo implementa handlers.StatsRepository usando pgxpool.Pool.

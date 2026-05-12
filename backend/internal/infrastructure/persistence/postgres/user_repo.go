@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/fernandofv/api/internal/domain/identity"
-	"github.com/fernandofv/api/internal/domain/shared"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/fernandofv/api/internal/domain/identity"
+	"github.com/fernandofv/api/internal/domain/shared"
 )
 
 // UserRepo implementa identity.UserRepository usando pgx.
@@ -309,14 +310,6 @@ func scanUserRow(row userScanner) (*identity.User, error) {
 		identity.Role(roleStr),
 		deletedAt,
 	), nil
-}
-
-func productIDsToStrings(ids []shared.ProductID) []string {
-	result := make([]string, len(ids))
-	for i, id := range ids {
-		result[i] = id.String()
-	}
-	return result
 }
 
 func stringsToProductIDs(strs []string) []shared.ProductID {

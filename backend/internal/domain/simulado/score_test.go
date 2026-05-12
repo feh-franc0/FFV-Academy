@@ -5,8 +5,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/fernandofv/api/internal/domain/simulado"
 	"github.com/fernandofv/api/internal/domain/shared"
+	"github.com/fernandofv/api/internal/domain/simulado"
 )
 
 func Test_Scorer_Calculate_AllCorrect_Returns100(t *testing.T) {

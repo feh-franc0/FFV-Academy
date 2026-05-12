@@ -16,17 +16,17 @@ import (
 type QueryKind string
 
 const (
-	KindPorQue  QueryKind = "por-que"  // Por que a resposta correta é correta?
+	KindPorQue   QueryKind = "por-que"  // Por que a resposta correta é correta?
 	KindAnalogia QueryKind = "analogia" // Analogia do mundo real
 	KindExemplo  QueryKind = "exemplo"  // Exemplo prático
 )
 
 // Query é um VO que representa uma pergunta ao tutor.
 type Query struct {
-	SimuladoID  shared.SimuladoID
-	QuestionID  shared.QuestionID
+	SimuladoID   shared.SimuladoID
+	QuestionID   shared.QuestionID
 	QuestionStem string
-	Kind        QueryKind
+	Kind         QueryKind
 }
 
 // TutorResponse é o VO de resposta do tutor.

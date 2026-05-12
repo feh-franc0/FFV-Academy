@@ -19,15 +19,15 @@ import (
 // Certificate é o aggregate root deste bounded context.
 //
 // INVARIANTES:
-//   1. Hash é derivado deterministicamente de (userID, simuladoID, attemptID, score).
-//   2. Score >= passingScore do simulado (validado no UC de emissão).
-//   3. Imutável após criação.
+//  1. Hash é derivado deterministicamente de (userID, simuladoID, attemptID, score).
+//  2. Score >= passingScore do simulado (validado no UC de emissão).
+//  3. Imutável após criação.
 type Certificate struct {
 	hash       shared.CertificateHash
 	userID     shared.UserID
 	simuladoID shared.SimuladoID
 	attemptID  shared.AttemptID
-	name       string // nome do portador no momento da emissão
+	name       string // nome do portador no memento da emissão
 	score      int
 	issuedAt   time.Time
 }
@@ -79,12 +79,12 @@ func Reconstitute(
 }
 
 func (c *Certificate) Hash() shared.CertificateHash  { return c.hash }
-func (c *Certificate) UserID() shared.UserID          { return c.userID }
-func (c *Certificate) SimuladoID() shared.SimuladoID  { return c.simuladoID }
-func (c *Certificate) AttemptID() shared.AttemptID    { return c.attemptID }
-func (c *Certificate) HolderName() string             { return c.name }
-func (c *Certificate) Score() int                     { return c.score }
-func (c *Certificate) IssuedAt() time.Time            { return c.issuedAt }
+func (c *Certificate) UserID() shared.UserID         { return c.userID }
+func (c *Certificate) SimuladoID() shared.SimuladoID { return c.simuladoID }
+func (c *Certificate) AttemptID() shared.AttemptID   { return c.attemptID }
+func (c *Certificate) HolderName() string            { return c.name }
+func (c *Certificate) Score() int                    { return c.score }
+func (c *Certificate) IssuedAt() time.Time           { return c.issuedAt }
 
 // computeHash gera hash SHA-256 truncado a 64 chars hex.
 // Determinístico: mesmo input → mesmo hash (idempotência).

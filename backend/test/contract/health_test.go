@@ -28,7 +28,7 @@ func (p *healthyPinger) Ping(_ context.Context) error { return nil }
 func Test_HealthHandler_Liveness_Returns200(t *testing.T) {
 	h := handlers.NewHealthHandler(&healthyPinger{}, &healthyPinger{})
 
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req := httptest.NewRequest(http.MethodGet, "/healthz", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	h.Liveness(rec, req)
@@ -44,7 +44,7 @@ func Test_HealthHandler_Liveness_Returns200(t *testing.T) {
 func Test_HealthHandler_Readiness_AllHealthy_Returns200(t *testing.T) {
 	h := handlers.NewHealthHandler(&healthyPinger{}, &healthyPinger{})
 
-	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	req := httptest.NewRequest(http.MethodGet, "/readyz", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	h.Readiness(rec, req)
@@ -63,7 +63,7 @@ func (p *unhealthyPinger) Ping(_ context.Context) error { return assert.AnError 
 func Test_HealthHandler_Readiness_DBUnhealthy_Returns503(t *testing.T) {
 	h := handlers.NewHealthHandler(&unhealthyPinger{}, &healthyPinger{})
 
-	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	req := httptest.NewRequest(http.MethodGet, "/readyz", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	h.Readiness(rec, req)

@@ -13,9 +13,9 @@ import (
 
 // UserRegistered é publicado quando um novo usuário se registra.
 type UserRegistered struct {
-	UserID    shared.UserID
-	Email     Email
-	Phone     Phone
+	UserID     shared.UserID
+	Email      Email
+	Phone      Phone
 	OccurredAt time.Time
 }
 

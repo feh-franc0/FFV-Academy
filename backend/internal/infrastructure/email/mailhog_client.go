@@ -36,7 +36,7 @@ func (c *MailhogClient) SendMagicLink(_ context.Context, to identity.Email, toke
 	var msg bytes.Buffer
 	msg.WriteString("From: FFV Academy Dev <" + c.fromAddr + ">\r\n")
 	msg.WriteString("To: " + to.String() + "\r\n")
-	msg.WriteString(fmt.Sprintf("Subject: [FFV Academy DEV] Código de acesso: %s\r\n", token))
+	fmt.Fprintf(&msg, "Subject: [FFV Academy DEV] Código de acesso: %s\r\n", token)
 	msg.WriteString("MIME-Version: 1.0\r\n")
 	msg.WriteString("Content-Type: text/html; charset=UTF-8\r\n")
 	msg.WriteString("\r\n")

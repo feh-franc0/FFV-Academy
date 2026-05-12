@@ -1,7 +1,8 @@
 // Package handlers — Health check endpoints do serviço.
 //
 // PADRÃO: /healthz (liveness) verifica apenas se o processo está vivo.
-//         /readyz (readiness) verifica dependências externas e o circuit breaker.
+//
+//	/readyz (readiness) verifica dependências externas e o circuit breaker.
 //
 // Kubernetes usa liveness para reiniciar pods travados e readiness para
 // remover pods do load balancer quando dependências estão indisponíveis.

@@ -20,7 +20,9 @@ import (
 
 // ───── Stubs in-memory ────────────────────────────────────────────────────
 
-type stubAttemptRepo struct{ attempts map[shared.AttemptID]*domsim.Attempt }
+type stubAttemptRepo struct {
+	attempts map[shared.AttemptID]*domsim.Attempt
+}
 
 func (r *stubAttemptRepo) Save(_ context.Context, a *domsim.Attempt) error {
 	r.attempts[a.ID()] = a
@@ -53,7 +55,9 @@ func (c *stubCatalog) ListSimulados() ([]*domsim.Simulado, error) {
 	return []*domsim.Simulado{c.sim}, nil
 }
 
-type stubCertRepo struct{ certs map[shared.CertificateHash]*domcert.Certificate }
+type stubCertRepo struct {
+	certs map[shared.CertificateHash]*domcert.Certificate
+}
 
 func (r *stubCertRepo) Save(_ context.Context, c *domcert.Certificate) error {
 	r.certs[c.Hash()] = c

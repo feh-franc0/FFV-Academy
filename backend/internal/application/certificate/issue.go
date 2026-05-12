@@ -7,8 +7,8 @@ import (
 	"fmt"
 
 	domcert "github.com/fernandofv/api/internal/domain/certificate"
-	domsim "github.com/fernandofv/api/internal/domain/simulado"
 	"github.com/fernandofv/api/internal/domain/shared"
+	domsim "github.com/fernandofv/api/internal/domain/simulado"
 )
 
 // IssueCertificateCommand é o command de emissão de certificado.

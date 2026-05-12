@@ -10,8 +10,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/fernandofv/api/internal/config"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/fernandofv/api/internal/config"
 )
 
 // NewPool cria e valida o pool de conexões com o Postgres.

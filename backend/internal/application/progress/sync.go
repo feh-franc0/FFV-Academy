@@ -20,7 +20,7 @@ type SyncPushCommand struct {
 	ClientUpdatedAt time.Time
 }
 
-// SyncPushUseCase salva ou atualiza o snapshot de progresso do usuário.
+// SyncPushUseCase salva ou atualiza o snapshot de progression do usuário.
 //
 // POLÍTICA LWW (last-write-wins): o cliente só pode sobrescrever se seu
 // clientUpdatedAt é mais recente que o do servidor.
@@ -34,8 +34,8 @@ func NewSyncPushUseCase(repo domprogress.Repository, clock shared.Clock) *SyncPu
 	return &SyncPushUseCase{repo: repo, clock: clock}
 }
 
-// maxStateSize limita o JSONB de progresso para evitar writes lentos e abuso
-// de storage. 1 MB cabe dezenas de milhares de eventos de progresso; além
+// maxStateSize limita o JSONB de progression para evitar writes lentos e abuso
+// de storage. 1 MB cabe dezenas de milhares de eventos de progression; além
 // disso é sintoma de bug no cliente (vazamento, histórico não podado).
 const maxStateSize = 1 * 1024 * 1024
 
@@ -77,7 +77,7 @@ type SyncPullResult struct {
 	ServerUpdatedAt time.Time
 }
 
-// SyncPullUseCase retorna o snapshot de progresso do servidor.
+// SyncPullUseCase retorna o snapshot de progression do servidor.
 type SyncPullUseCase struct {
 	repo domprogress.Repository
 }

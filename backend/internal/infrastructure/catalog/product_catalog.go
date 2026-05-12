@@ -11,7 +11,7 @@ import (
 // PADRÃO: mapeamento estático embebido no servidor. O frontend usa os mesmos IDs.
 // Se o catálogo crescer, migrar para DB ou env var.
 type StaticProductCatalog struct {
-	prices map[shared.ProductID]string
+	prices  map[shared.ProductID]string
 	amounts map[shared.ProductID]int64
 }
 

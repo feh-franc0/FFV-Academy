@@ -93,14 +93,14 @@ func NewQuestionReport(
 	}, nil
 }
 
-func (r *QuestionReport) ID() string                  { return r.id }
-func (r *QuestionReport) UserID() shared.UserID       { return r.userID }
+func (r *QuestionReport) ID() string                    { return r.id }
+func (r *QuestionReport) UserID() shared.UserID         { return r.userID }
 func (r *QuestionReport) SimuladoID() shared.SimuladoID { return r.simuladoID }
 func (r *QuestionReport) QuestionID() shared.QuestionID { return r.questionID }
-func (r *QuestionReport) Reason() ReportReason        { return r.reason }
-func (r *QuestionReport) Comment() string             { return r.comment }
-func (r *QuestionReport) CreatedAt() time.Time        { return r.createdAt }
-func (r *QuestionReport) ResolvedAt() *time.Time      { return r.resolvedAt }
+func (r *QuestionReport) Reason() ReportReason          { return r.reason }
+func (r *QuestionReport) Comment() string               { return r.comment }
+func (r *QuestionReport) CreatedAt() time.Time          { return r.createdAt }
+func (r *QuestionReport) ResolvedAt() *time.Time        { return r.resolvedAt }
 
 // QuestionReportRepository é o port de persistência de reports.
 type QuestionReportRepository interface {

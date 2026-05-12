@@ -25,17 +25,17 @@ import (
 // mockLeaderboardRepo implementa domleaderboard.Repository para testes.
 // Todos os métodos são configuráveis via campos; os não usados retornam zero.
 type mockLeaderboardRepo struct {
-	weeklyEntries  []domleaderboard.RankEntry
-	weeklyErr      error
-	periodEntries  []domleaderboard.RankEntry
-	periodErr      error
-	userRank       int
-	userRankErr    error
+	weeklyEntries        []domleaderboard.RankEntry
+	weeklyErr            error
+	periodEntries        []domleaderboard.RankEntry
+	periodErr            error
+	userRank             int
+	userRankErr          error
 	userRankByPeriodRank int
 	userRankByPeriodXP   int
 	userRankByPeriodErr  error
-	optedIn        bool
-	optedInErr     error
+	optedIn              bool
+	optedInErr           error
 }
 
 func (m *mockLeaderboardRepo) UpsertXP(_ context.Context, _ shared.UserID, _ time.Time, _ int) error {
@@ -76,7 +76,7 @@ func Test_LeaderboardHandler_GetWeekly_EmptyRepo_Returns200(t *testing.T) {
 	repo := &mockLeaderboardRepo{}
 	h := handlers.NewLeaderboardHandler(repo)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard", http.NoBody)
 	w := httptest.NewRecorder()
 	h.GetWeekly(w, req)
 
@@ -111,7 +111,7 @@ func Test_LeaderboardHandler_GetWeekly_WithEntries_Returns200(t *testing.T) {
 	}
 	h := handlers.NewLeaderboardHandler(repo)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard", http.NoBody)
 	w := httptest.NewRecorder()
 	h.GetWeekly(w, req)
 
@@ -149,7 +149,7 @@ func Test_LeaderboardHandler_GetWeekly_RepoError_Returns5xx(t *testing.T) {
 	}
 	h := handlers.NewLeaderboardHandler(repo)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard", http.NoBody)
 	w := httptest.NewRecorder()
 	h.GetWeekly(w, req)
 
@@ -169,7 +169,7 @@ func Test_LeaderboardHandler_GetPublic_DefaultPeriod_Returns200(t *testing.T) {
 	}
 	h := handlers.NewLeaderboardHandler(repo)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard/public", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard/public", http.NoBody)
 	w := httptest.NewRecorder()
 	h.GetPublic(w, req)
 
@@ -204,7 +204,7 @@ func Test_LeaderboardHandler_GetPublic_MonthlyPeriod_Returns200(t *testing.T) {
 	}
 	h := handlers.NewLeaderboardHandler(repo)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard/public?period=monthly", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard/public?period=monthly", http.NoBody)
 	w := httptest.NewRecorder()
 	h.GetPublic(w, req)
 
@@ -228,7 +228,7 @@ func Test_LeaderboardHandler_GetPublic_InvalidPeriod_FallsBackToWeekly(t *testin
 	repo := &mockLeaderboardRepo{}
 	h := handlers.NewLeaderboardHandler(repo)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard/public?period=invalido", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard/public?period=invalido", http.NoBody)
 	w := httptest.NewRecorder()
 	h.GetPublic(w, req)
 
@@ -252,7 +252,7 @@ func Test_LeaderboardHandler_GetPublic_AllTime_PeriodStartEmpty(t *testing.T) {
 	repo := &mockLeaderboardRepo{}
 	h := handlers.NewLeaderboardHandler(repo)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard/public?period=all-time", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard/public?period=all-time", http.NoBody)
 	w := httptest.NewRecorder()
 	h.GetPublic(w, req)
 
@@ -280,7 +280,7 @@ func Test_LeaderboardHandler_GetPublic_LimitParam_AcceptsValidLimit(t *testing.T
 	}
 	h := handlers.NewLeaderboardHandler(repo)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard/public?limit=5", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard/public?limit=5", http.NoBody)
 	w := httptest.NewRecorder()
 	h.GetPublic(w, req)
 
@@ -299,7 +299,7 @@ func Test_LeaderboardHandler_GetPublic_DoesNotExposeUserID(t *testing.T) {
 	}
 	h := handlers.NewLeaderboardHandler(repo)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard/public", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard/public", http.NoBody)
 	w := httptest.NewRecorder()
 	h.GetPublic(w, req)
 
@@ -329,7 +329,7 @@ func Test_LeaderboardHandler_GetPublic_SetsCacheControlHeader(t *testing.T) {
 	repo := &mockLeaderboardRepo{}
 	h := handlers.NewLeaderboardHandler(repo)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard/public", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard/public", http.NoBody)
 	w := httptest.NewRecorder()
 	h.GetPublic(w, req)
 
@@ -349,7 +349,7 @@ func Test_LeaderboardHandler_GetMyRank_AuthenticatedUser_Returns200(t *testing.T
 	userID := shared.NewUserID()
 	ctx := context.WithValue(context.Background(), middleware.CtxKeyUserID, userID)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard/me", nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard/me", http.NoBody).WithContext(ctx)
 	w := httptest.NewRecorder()
 	h.GetMyRank(w, req)
 
@@ -387,7 +387,7 @@ func Test_LeaderboardHandler_GetMyRankAll_Returns200WithAllPeriods(t *testing.T)
 	userID := shared.NewUserID()
 	ctx := context.WithValue(context.Background(), middleware.CtxKeyUserID, userID)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard/me/all", nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/leaderboard/me/all", http.NoBody).WithContext(ctx)
 	w := httptest.NewRecorder()
 	h.GetMyRankAll(w, req)
 

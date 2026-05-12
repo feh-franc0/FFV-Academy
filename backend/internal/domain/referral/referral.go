@@ -25,11 +25,11 @@ func ValidateReferralID(id string) error {
 
 // Referral representa um link entre referenciador e referenciado.
 type Referral struct {
-	id          string
-	referrerID  shared.UserID
-	referredID  *shared.UserID // nil se o referido ainda não se cadastrou
-	createdAt   time.Time
-	convertedAt *time.Time
+	id           string
+	referrerID   shared.UserID
+	referredID   *shared.UserID // nil se o referido ainda não se cadastrou
+	createdAt    time.Time
+	convertedAt  *time.Time
 	bonusGranted bool
 }
 
@@ -41,7 +41,7 @@ func New(id string, referrerID shared.UserID, now time.Time) *Referral {
 	}
 }
 
-func (r *Referral) ID() string               { return r.id }
+func (r *Referral) ID() string                { return r.id }
 func (r *Referral) ReferrerID() shared.UserID { return r.referrerID }
 func (r *Referral) BonusGranted() bool        { return r.bonusGranted }
 

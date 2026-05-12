@@ -21,10 +21,10 @@ import (
 
 // RouterConfig agrupa todos os handlers necessários para montar o router.
 type RouterConfig struct {
-	Logger      *slog.Logger
-	JWTService  *auth.JWTService
-	CORS        []string
-	Redis       *goredis.Client // usado pelos rate-limits por IP
+	Logger     *slog.Logger
+	JWTService *auth.JWTService
+	CORS       []string
+	Redis      *goredis.Client // usado pelos rate-limits por IP
 	// RequestTimeout é o timeout máximo por request. Zero = desabilitado.
 	RequestTimeout time.Duration
 	// AuditLog é o repositório de audit log. Opcional — se nil, o middleware é omitido.
@@ -40,9 +40,9 @@ type RouterConfig struct {
 	Leaderboard *handlers.LeaderboardHandler
 	Stats       *handlers.StatsHandler
 	Admin       *handlers.AdminHandler
-	Curriculum  *handlers.CurriculumHandler    // opcional — nil desabilita rotas de currículo
-	Features    *handlers.FeaturesHandler      // opcional — expõe estado das feature flags
-	Metrics     *handlers.MetricsHandler       // opcional — se nil, /metrics não é registrado
+	Curriculum  *handlers.CurriculumHandler     // opcional — nil desabilita rotas de currículo
+	Features    *handlers.FeaturesHandler       // opcional — expõe estado das feature flags
+	Metrics     *handlers.MetricsHandler        // opcional — se nil, /metrics não é registrado
 	MetricsMW   func(http.Handler) http.Handler // opcional — middleware de instrumentação
 }
 
@@ -122,7 +122,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// Auth endpoints: 10KB — email + token cabem em < 1KB; limit generoso para evitar falsos positivos.
 	// Perfil (PATCH): 64KB — nome, telefone, consent — bem abaixo do default de 1MB do Go.
 	// Simulado (answers): 256KB — map de {questionID: optionID} para exames grandes.
-	// Progresso (PUT): 512KB — GameState serializado pode ser grande com muitos artigos.
+	// Progression (PUT): 512KB — GameState serializado pode ser grande com muitos artigos.
 	authBodyLimit := middleware.BodyLimit(10 * 1024)      // 10KB
 	profileBodyLimit := middleware.BodyLimit(64 * 1024)   // 64KB
 	simuladoBodyLimit := middleware.BodyLimit(256 * 1024) // 256KB
@@ -181,7 +181,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// Report de questão.
 		r.Post("/api/v1/questions/{questionId}/report", cfg.Simulado.ReportQuestion)
 
-		// Progresso (GameState cloud sync).
+		// Progression (GameState cloud sync).
 		r.Get("/api/v1/progress", cfg.Progress.Pull)
 		r.With(progressBodyLimit).Put("/api/v1/progress", cfg.Progress.Push)
 

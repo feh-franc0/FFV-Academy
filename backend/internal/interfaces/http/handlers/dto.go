@@ -13,7 +13,6 @@ import (
 	domcert "github.com/fernandofv/api/internal/domain/certificate"
 	domidentity "github.com/fernandofv/api/internal/domain/identity"
 	domsim "github.com/fernandofv/api/internal/domain/simulado"
-	"github.com/fernandofv/api/internal/domain/shared"
 )
 
 // clientIPFromRequest extrai o IP do cliente considerando proxies.
@@ -80,11 +79,11 @@ type AttemptDTO struct {
 
 // ScoreDTO é a representação pública do score.
 type ScoreDTO struct {
-	Value      int                    `json:"value"`
-	Correct    int                    `json:"correct"`
-	Total      int                    `json:"total"`
-	Passed     bool                   `json:"passed"`
-	ByTopic    map[string]TopicDTO    `json:"byTopic"`
+	Value   int                 `json:"value"`
+	Correct int                 `json:"correct"`
+	Total   int                 `json:"total"`
+	Passed  bool                `json:"passed"`
+	ByTopic map[string]TopicDTO `json:"byTopic"`
 }
 
 // TopicDTO agrupa acertos e total por tópico.
@@ -145,13 +144,13 @@ func attemptToDTO(a *domsim.Attempt) AttemptDTO {
 
 // CertificateDTO é a representação pública de um certificado.
 type CertificateDTO struct {
-	Hash        string `json:"hash"`
-	UserID      string `json:"userId"`
-	SimuladoID  string `json:"simuladoId"`
-	AttemptID   string `json:"attemptId"`
-	HolderName  string `json:"holderName"`
-	IssuedAt    string `json:"issuedAt"`
-	VerifyURL   string `json:"verifyUrl"`
+	Hash       string `json:"hash"`
+	UserID     string `json:"userId"`
+	SimuladoID string `json:"simuladoId"`
+	AttemptID  string `json:"attemptId"`
+	HolderName string `json:"holderName"`
+	IssuedAt   string `json:"issuedAt"`
+	VerifyURL  string `json:"verifyUrl"`
 }
 
 func certificateToDTO(c *domcert.Certificate, baseURL string) CertificateDTO {
@@ -212,9 +211,4 @@ func max(a, b int64) int64 {
 		return a
 	}
 	return b
-}
-
-// hasProduct verifica se o usuário possui um produto específico.
-func hasProduct(u *domidentity.User, productID shared.ProductID) bool {
-	return u.HasProduct(productID)
 }

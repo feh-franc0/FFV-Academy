@@ -43,7 +43,7 @@ type PurchaseLister interface {
 // Structs de exportação — serializáveis em JSON
 // ─────────────────────────────────────────────────────────────────
 
-// ExportedProgress é a representação simplificada de um snapshot de progresso.
+// ExportedProgress é a representação simplificada de um snapshot de progression.
 type ExportedProgress struct {
 	SchemaVersion   int       `json:"schemaVersion"`
 	State           []byte    `json:"state"`
@@ -53,12 +53,12 @@ type ExportedProgress struct {
 
 // ExportedPurchase é um registro mínimo de compra para exportação.
 type ExportedPurchase struct {
-	ID          string    `json:"id"`
-	ProductID   string    `json:"productId"`
-	AmountCents int64     `json:"amountCents"`
-	Currency    string    `json:"currency"`
-	Status      string    `json:"status"`
-	CreatedAt   time.Time `json:"createdAt"`
+	ID          string     `json:"id"`
+	ProductID   string     `json:"productId"`
+	AmountCents int64      `json:"amountCents"`
+	Currency    string     `json:"currency"`
+	Status      string     `json:"status"`
+	CreatedAt   time.Time  `json:"createdAt"`
 	PaidAt      *time.Time `json:"paidAt,omitempty"`
 }
 
@@ -146,7 +146,7 @@ func NewExportUserDataUseCase(
 	}
 }
 
-// ExportUserDataCommand é o comando de exportação.
+// ExportUserDataCommand é o commando de exportação.
 type ExportUserDataCommand struct {
 	UserID    shared.UserID
 	IP        string

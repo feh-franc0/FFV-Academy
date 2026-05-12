@@ -11,12 +11,12 @@ import (
 // AGGREGATE ROOT: Attempt
 //
 // INVARIANTES:
-//   1. Uma attempt ativa por (userID, simuladoID) — enforçada por UNIQUE INDEX na DB.
-//   2. finishedAt só existe se >= startedAt.
-//   3. Respostas só podem ser adicionadas antes de finishedAt e antes do deadline.
-//   4. Score só existe quando finishedAt != nil.
-//   5. AnswerQuestion é idempotente (sobrescreve a resposta anterior).
-//   6. Timer é server-authoritative: o cliente não pode alterar o deadline.
+//  1. Uma attempt ativa por (userID, simuladoID) — enforçada por UNIQUE INDEX na DB.
+//  2. finishedAt só existe se >= startedAt.
+//  3. Respostas só podem ser adicionadas antes de finishedAt e antes do deadline.
+//  4. Score só existe quando finishedAt != nil.
+//  5. AnswerQuestion é idempotente (sobrescreve a resposta anterior).
+//  6. Timer é server-authoritative: o cliente não pode alterar o deadline.
 //
 // OC#8 relaxado: 9 campos — aggregate root tem mais campos que OC sugere; documentado.
 type Attempt struct {
@@ -170,7 +170,7 @@ func ReconstituteAttempt(
 // Queries
 // ─────────────────────────────────────────────────────────────────
 
-func (a *Attempt) ID() shared.AttemptID         { return a.id }
+func (a *Attempt) ID() shared.AttemptID          { return a.id }
 func (a *Attempt) UserID() shared.UserID         { return a.userID }
 func (a *Attempt) SimuladoID() shared.SimuladoID { return a.simuladoID }
 func (a *Attempt) StartedAt() time.Time          { return a.startedAt }

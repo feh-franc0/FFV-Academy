@@ -10,9 +10,9 @@ import (
 // MetricsHandler expõe /metrics usando o registry customizado.
 //
 // DECISÃO (MVP): /metrics é público (sem auth/admin). Motivos:
-//   1. Facilita integração com Prometheus scrape em ambiente interno.
-//   2. Não expõe dados sensíveis além de contadores agregados de request.
-//   3. Em produção, restringir via network policy (não via app layer).
+//  1. Facilita integração com Prometheus scrape em ambiente interno.
+//  2. Não expõe dados sensíveis além de contadores agregados de request.
+//  3. Em produção, restringir via network policy (não via app layer).
 //
 // TODO pós-MVP: opcionalmente proteger com auth bearer/basic quando exposto
 // fora da rede interna.

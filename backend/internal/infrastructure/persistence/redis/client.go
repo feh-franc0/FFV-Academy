@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/fernandofv/api/internal/config"
 	goredis "github.com/redis/go-redis/v9"
+
+	"github.com/fernandofv/api/internal/config"
 )
 
 // NewClient cria e valida o cliente Redis.

@@ -12,9 +12,9 @@ import (
 // por email/SMS para autenticação passwordless.
 //
 // CICLO DE VIDA:
-//   1. Generate() → token criado (salvo em Redis com TTL)
-//   2. Verify(input) → True se input == value e não expirado
-//   3. Consumido: Redis GETDEL garante uso único
+//  1. Generate() → token criado (salvo em Redis com TTL)
+//  2. Verify(input) → True se input == value e não expirado
+//  3. Consumido: Redis GETDEL garante uso único
 //
 // INVARIANTES:
 //   - Exatamente 6 dígitos numéricos.

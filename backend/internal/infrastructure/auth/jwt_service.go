@@ -13,11 +13,12 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
+
 	"github.com/fernandofv/api/internal/config"
 	"github.com/fernandofv/api/internal/domain/identity"
 	"github.com/fernandofv/api/internal/domain/shared"
-	"github.com/golang-jwt/jwt/v5"
-	"github.com/google/uuid"
 )
 
 // Claims são os claims customizados do JWT.

@@ -21,7 +21,7 @@ import (
 func Test_FeaturesHandler_Get_NoAuth_Returns200(t *testing.T) {
 	h := handlers.NewFeaturesHandler(config.FeaturesConfig{})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", http.NoBody)
 	// Sem header Authorization — o endpoint é público.
 	rec := httptest.NewRecorder()
 
@@ -39,7 +39,7 @@ func Test_FeaturesHandler_Get_ReturnsExpectedJSONShape(t *testing.T) {
 		PhoneAuthEnabled: true,
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", http.NoBody)
 	rec := httptest.NewRecorder()
 	h.Get(rec, req)
 
@@ -56,7 +56,7 @@ func Test_FeaturesHandler_Get_ReturnsExpectedJSONShape(t *testing.T) {
 func Test_FeaturesHandler_Get_UsesSnakeCaseKeys(t *testing.T) {
 	h := handlers.NewFeaturesHandler(config.FeaturesConfig{})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", http.NoBody)
 	rec := httptest.NewRecorder()
 	h.Get(rec, req)
 
@@ -109,7 +109,7 @@ func Test_FeaturesHandler_Get_RespectsConfiguredFlags(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := handlers.NewFeaturesHandler(tc.cfg)
 
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/features", nil)
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/features", http.NoBody)
 			rec := httptest.NewRecorder()
 			h.Get(rec, req)
 

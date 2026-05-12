@@ -14,7 +14,6 @@ import (
 	"github.com/fernandofv/api/internal/infrastructure/persistence/postgres"
 )
 
-
 func Test_AttemptRepo_SaveAndFindByID_PreservesAnswers(t *testing.T) {
 	pool, cleanup := StartPostgres(t)
 	t.Cleanup(cleanup)

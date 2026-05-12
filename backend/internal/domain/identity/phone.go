@@ -43,9 +43,9 @@ func NewPhone(raw string) (Phone, error) {
 	return Phone{value: v}, nil
 }
 
-func (p Phone) String() string        { return p.value }
+func (p Phone) String() string          { return p.value }
 func (p Phone) Equals(other Phone) bool { return p.value == other.value }
-func (p Phone) IsZero() bool           { return p.value == "" }
+func (p Phone) IsZero() bool            { return p.value == "" }
 
 func MustNewPhone(raw string) Phone {
 	p, err := NewPhone(raw)

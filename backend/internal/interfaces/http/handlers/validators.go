@@ -14,10 +14,10 @@ import (
 
 // Limites definidos aqui para ficarem em um único lugar — fácil de ajustar.
 const (
-	maxEmailLen = 254  // RFC 5321 limite de endereço de email
-	maxNameLen  = 100  // nome para exibição — generoso mas não infinito
-	maxPhoneLen = 20   // E.164 máximo é 15 dígitos + prefixo '+' = 16; 20 tem margem
-	maxTokenLen = 10   // magic token é 6 dígitos; 10 evita enumeração com payloads maiores
+	maxEmailLen = 254 // RFC 5321 limite de endereço de email
+	maxNameLen  = 100 // nome para exibição — generoso mas não infinito
+	maxPhoneLen = 20  // E.164 máximo é 15 dígitos + prefixo '+' = 16; 20 tem margem
+	maxTokenLen = 10  // magic token é 6 dígitos; 10 evita enumeração com payloads maiores
 )
 
 // validateEmail verifica presença e limites do email antes de passar ao domínio.
