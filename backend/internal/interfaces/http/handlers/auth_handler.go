@@ -33,22 +33,6 @@ type AuthHandler struct {
 	deleteAccount    *appidentity.DeleteAccountUseCase
 	exportData       *appidentity.ExportUserDataUseCase
 	userStats        *appidentity.UserStatsUseCase
-	phoneAuthEnabled bool
-}
-
-// WithPhoneAuthEnabled controla se cadastros/logins por telefone são aceitos.
-// Quando desabilitado (FEATURE_PHONE_AUTH_ENABLED=false), requisições com
-// phone (em request-token ou verify) retornam 503. Email magic link sempre
-// funciona — phone é a feature opcional.
-func (h *AuthHandler) WithPhoneAuthEnabled(enabled bool) *AuthHandler {
-	h.phoneAuthEnabled = enabled
-	return h
-}
-
-func writePhoneAuthDisabled(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusServiceUnavailable)
-	_, _ = w.Write([]byte(`{"error":"phone_auth_disabled","message":"Phone authentication is temporarily disabled. Please use email."}`))
 }
 
 func NewAuthHandler(
@@ -70,7 +54,6 @@ func NewAuthHandler(
 		getProfile:       getProfile,
 		updateProfile:    updateProfile,
 		deleteAccount:    deleteAccount,
-		phoneAuthEnabled: true,
 	}
 }
 
@@ -160,12 +143,10 @@ func (h *AuthHandler) Verify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Phone auth opt-in via feature flag. Quando desabilitado, rejeitamos
-	// requisições que tentam cadastrar telefone — frontend deve esconder o campo.
-	if !h.phoneAuthEnabled && strings.TrimSpace(req.Phone) != "" {
-		writePhoneAuthDisabled(w)
-		return
-	}
+	// Telefone é sempre aceito e persistido (campo de contato/recovery).
+	// A feature flag phoneAuthEnabled controla apenas se LOGIN via SMS está
+	// disponível — a coleta do número é independente. Quando SMS está off,
+	// o backend salva o phone mas nunca dispara o TwilioClient.
 
 	cmd := appidentity.VerifyMagicLinkCommand{
 		Email: strings.TrimSpace(req.Email),

@@ -99,7 +99,11 @@ func buildTutorHandler(enabled bool) *handlers.TutorHandler {
 	return handlers.NewTutorHandler(ask).WithEnabled(enabled)
 }
 
-func buildAuthHandlerWithPhoneFlag(phoneEnabled bool) *handlers.AuthHandler {
+// buildAuthHandlerWithPhoneFlag constrói um AuthHandler com use cases reais
+// mas com repos stub. O parâmetro `phoneEnabled` é ignorado — o handler aceita
+// phone sempre (decisão de produto: coleta de telefone independente de SMS).
+// Mantido pra preservar a assinatura dos testes existentes.
+func buildAuthHandlerWithPhoneFlag(_ bool) *handlers.AuthHandler {
 	tokenStore := ffTokenStore{}
 	userRepo := ffUserRepo{}
 	refreshRepo := ffRefreshRepo{}
@@ -126,7 +130,7 @@ func buildAuthHandlerWithPhoneFlag(phoneEnabled bool) *handlers.AuthHandler {
 	return handlers.NewAuthHandler(
 		requestUC, verifyUC, refreshUC, logoutUC, logoutAllUC,
 		getProfileUC, updateProfileUC, deleteUC,
-	).WithPhoneAuthEnabled(phoneEnabled)
+	)
 }
 
 // ─── Testes ──────────────────────────────────────────────────────────────────
@@ -183,23 +187,11 @@ func Test_Security_TutorAIDisabled_AskReturns503(t *testing.T) {
 	}
 }
 
-func Test_Security_PhoneAuthDisabled_VerifyWithPhoneReturns503(t *testing.T) {
-	h := buildAuthHandlerWithPhoneFlag(false)
-
-	body := `{"email":"x@example.com","token":"123456","name":"Eve","phone":"+5511999999999"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/verify",
-		strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	h.Verify(rec, req)
-
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("phone-off com campo phone deve dar 503; got %d body=%s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "phone_auth_disabled") {
-		t.Fatalf("body deve indicar phone_auth_disabled; got %s", rec.Body.String())
-	}
-}
+// Nota: removido Test_Security_PhoneAuthDisabled_VerifyWithPhoneReturns503.
+// Decisão de produto: o telefone é COLETADO sempre (contato/recovery), mas o
+// envio de SMS via Twilio fica controlado pela feature flag separadamente.
+// Aceitar o campo phone no /verify não é mais um bypass — é o comportamento
+// esperado. O gate de SMS continua válido na camada de infrastructure/sms.
 
 func Test_Security_FeatureFlagState_Public(t *testing.T) {
 	cfg := config.FeaturesConfig{

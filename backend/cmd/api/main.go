@@ -240,8 +240,7 @@ func run() error {
 	authH := handlers.NewAuthHandler(
 		requestMagicLinkUC, verifyMagicLinkUC, refreshTokenUC,
 		logoutUC, logoutAllUC, getProfileUC, updateProfileUC, deleteAccountUC,
-	).WithExportData(exportDataUC).WithUserStats(userStatsUC).
-		WithPhoneAuthEnabled(cfg.Features.PhoneAuthEnabled)
+	).WithExportData(exportDataUC).WithUserStats(userStatsUC)
 	simuladoH := handlers.NewSimuladoHandler(
 		catalogProvider, startAttemptUC, answerQUC, toggleFlagUC,
 		finishAttemptUC, resumeAttemptUC, listAttemptsUC,

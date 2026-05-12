@@ -97,11 +97,12 @@ export function LoginModal({ reason, onSuccess, onCancel }: Props) {
 
     if (isRegister) {
       if (name.trim().length < 2) return setError('Nome muito curto');
-      if (FEATURES.phoneAuth) {
-        const normalized = normalizePhone(phone);
-        if (!phoneBRSchema.safeParse(normalized).success) {
-          return setError('Telefone inválido. Use formato (DD) 9 NNNN-NNNN');
-        }
+      // Telefone é sempre coletado (mesmo com SMS desligado).
+      // FEATURES.phoneAuth controla se o LOGIN por SMS está disponível;
+      // a COLETA do número é sempre feita pra contato/recovery futuro.
+      const normalized = normalizePhone(phone);
+      if (!phoneBRSchema.safeParse(normalized).success) {
+        return setError('Telefone inválido. Use formato (DD) 9 NNNN-NNNN');
       }
       // LGPD: consentimento de marketing é opcional — não pode bloquear o cadastro.
     }
@@ -111,9 +112,7 @@ export function LoginModal({ reason, onSuccess, onCancel }: Props) {
       const pendingRegistration = isRegister
         ? {
             name: name.trim(),
-            // Phone só é enviado quando a feature está habilitada — caso contrário
-            // não pedimos o campo e o backend recebe string vazia.
-            phone: FEATURES.phoneAuth ? normalizePhone(phone) : '',
+            phone: normalizePhone(phone),
             marketingConsent: consent,
           }
         : undefined;
@@ -223,8 +222,7 @@ export function LoginModal({ reason, onSuccess, onCancel }: Props) {
                   />
                 </label>
 
-                {FEATURES.phoneAuth && (
-                  <label className="text-xs font-semibold" style={{ color: 'var(--ffv-muted)' }}>
+                <label className="text-xs font-semibold" style={{ color: 'var(--ffv-muted)' }}>
                     Celular
                     <div className="mt-1 flex items-center rounded-lg overflow-hidden text-sm"
                       style={{ border: '1px solid var(--ffv-border)', background: 'var(--ffv-bg)' }}>
@@ -244,7 +242,6 @@ export function LoginModal({ reason, onSuccess, onCancel }: Props) {
                       />
                     </div>
                   </label>
-                )}
 
                 <label className="flex items-start gap-2 text-xs mt-1 cursor-pointer" style={{ color: 'var(--ffv-muted)' }}>
                   <input
