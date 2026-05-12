@@ -20,9 +20,14 @@ test('login mágico via HUD com token mock 000000', async ({ page }) => {
   await dialog.locator('input[type="email"]').fill('teste@ffv.dev');
   await dialog.getByRole('button', { name: /Continuar/i }).click();
 
-  // Step 2 (register, novo usuário): nome + celular + consent + código → Entrar
+  // Step 2 (register, novo usuário): nome + (celular se feature ligada) + consent + código → Entrar
   await dialog.locator('input[type="text"]').first().fill('Teste E2E');
-  await dialog.locator('input[type="tel"]').fill('(11) 98765-4321');
+  // Phone só renderiza se NEXT_PUBLIC_FEATURE_PHONE_AUTH_ENABLED=true.
+  // Em ambiente padrão (e CI) a flag está OFF, então não tem input tel.
+  const phoneInput = dialog.locator('input[type="tel"]');
+  if ((await phoneInput.count()) > 0) {
+    await phoneInput.fill('(11) 98765-4321');
+  }
   await dialog.locator('input[type="checkbox"]').check();
 
   const codeInput = dialog.locator('input[inputmode="numeric"]');

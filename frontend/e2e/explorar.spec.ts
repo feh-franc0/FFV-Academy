@@ -30,8 +30,9 @@ test.describe('/explorar', () => {
   test('filtro por hub reduz resultados', async ({ page }) => {
     await page.goto('/explorar?skipOnboarding=1');
 
-    // Captura contagem inicial (texto "N artigos" no h2)
-    const heading = page.getByRole('heading', { level: 2 });
+    // Captura contagem inicial (texto "N artigos" no h2 do ExplorarClient).
+    // Filtra pelo texto pra evitar conflito com outros h2 da página.
+    const heading = page.getByRole('heading', { level: 2, name: /\d+ artigos?/i });
     await expect(heading).toBeVisible();
     const beforeText = (await heading.textContent()) ?? '';
     const beforeCount = parseInt(beforeText.match(/(\d+)/)?.[1] ?? '0', 10);
