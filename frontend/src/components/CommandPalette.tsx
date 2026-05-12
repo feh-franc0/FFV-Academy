@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { CURRICULUM, HUBS, getTrailHref, type Module, type Trail } from '@/lib/curriculum';
+import { CURRICULUM, HUBS, getTrailHref } from '@/lib/curriculum';
 
 type Item = {
   id: string;

@@ -139,7 +139,7 @@ ENTRYPOINT ["java","-jar","/app/app.jar"]`}</CodeBlock>
       <Section title="k8s deployment com probes" accent={accent}>
         <CodeBlock lang="bash">{`apiVersion: apps/v1
 kind: Deployment
-metadata: { name: orders }
+metadata: { text: orders }
 spec:
   replicas: 3
   template:

@@ -88,7 +88,7 @@ export default function Page() {
       </Section>
 
       <Section title="CI completo" accent={accent}>
-        <CodeBlock lang="yaml">{'# .github/workflows/ios.yml\nname: ios\non: [push, pull_request]\njobs:\n  test:\n    runs-on: macos-14\n    steps:\n      - uses: actions/checkout@v4\n      - uses: maxim-lobanov/setup-xcode@v1\n        with: { xcode-version: "16.0" }\n      - run: bundle install\n      - run: bundle exec fastlane tests\n      - uses: actions/upload-artifact@v4\n        if: failure()\n        with: { name: xcresult, path: "**/*.xcresult" }'}</CodeBlock>
+        <CodeBlock lang="yaml">{'# .github/workflows/ios.yml\nname: ios\non: [push, pull_request]\njobs:\n  test:\n    runs-on: macos-14\n    steps:\n      - uses: actions/checkout@v4\n      - uses: maxim-lobanov/setup-xcode@v1\n        with: { xcode-version: "16.0" }\n      - run: bundle install\n      - run: bundle exec fastlane tests\n      - uses: actions/upload-artifact@v4\n        if: failure()\n        with: { text: xcresult, path: "**/*.xcresult" }'}</CodeBlock>
       </Section>
 
       <Section title="Entregáveis finais" accent={accent}>

@@ -9,6 +9,8 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     baseUrl: "http://localhost:8080",
     adminToken: null,
     httpTimeoutMs: 5_000,
+    newsJsonPath: "/tmp/news.json",
+    catalogJsonPath: "/tmp/catalog.json",
     ...overrides,
   };
 }

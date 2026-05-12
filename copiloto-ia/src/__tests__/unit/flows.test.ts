@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { flows, confirmFlows, matchFlow } from '@/lib/flows'
+import {
+  flows, confirmFlows, matchFlow,
+  buildCobrancaSteps, buildExcelSteps, buildConfirmFlowSteps,
+  CUSTOMERS, DEFAULT_CUSTOMER,
+} from '@/lib/flows'
 
 // ——————————————————————————————————————
 // Data integrity
@@ -353,5 +357,290 @@ describe('matchFlow — non-regression table', () => {
     it(`"${input}" → ${expectedId}`, () => {
       expect(matchFlow(input).id).toBe(expectedId)
     })
+  })
+})
+
+// ——————————————————————————————————————
+// Flow ordering invariants
+// ——————————————————————————————————————
+
+describe('flows — ordering invariants', () => {
+  it('cancelar_fatura comes before baixa_fatura in the array', () => {
+    const cancelIdx = flows.findIndex(f => f.id === 'cancelar_fatura')
+    const baixaIdx  = flows.findIndex(f => f.id === 'baixa_fatura')
+    expect(cancelIdx).toBeLessThan(baixaIdx)
+  })
+
+  it('cobrar_restante comes before enviar_cobranca in the array', () => {
+    const restanteIdx = flows.findIndex(f => f.id === 'cobrar_restante')
+    const cobrancaIdx = flows.findIndex(f => f.id === 'enviar_cobranca')
+    expect(restanteIdx).toBeLessThan(cobrancaIdx)
+  })
+
+  it('fallback is the last flow', () => {
+    expect(flows[flows.length - 1].id).toBe('fallback')
+  })
+
+  it('"cancelar fatura" resolves to cancelar_fatura, not baixa_fatura', () => {
+    expect(matchFlow('cancelar fatura').id).toBe('cancelar_fatura')
+  })
+
+  it('"cobrar o restante" resolves to cobrar_restante, not enviar_cobranca', () => {
+    expect(matchFlow('cobrar o restante').id).toBe('cobrar_restante')
+  })
+
+  it('"como estornar fatura" resolves to cancelar_fatura', () => {
+    expect(matchFlow('como estornar fatura').id).toBe('cancelar_fatura')
+  })
+
+  it('"cobrar saldo devedor" resolves to cobrar_restante', () => {
+    expect(matchFlow('cobrar saldo devedor').id).toBe('cobrar_restante')
+  })
+})
+
+// ——————————————————————————————————————
+// matchFlow — word boundary precision
+// ——————————————————————————————————————
+
+describe('matchFlow — word boundary precision', () => {
+  it('"foi" does not match saudacao ("oi" inside a word)', () => {
+    expect(matchFlow('foi').id).not.toBe('saudacao')
+  })
+
+  it('"moinho" does not match saudacao ("oi" inside a word)', () => {
+    expect(matchFlow('moinho').id).not.toBe('saudacao')
+  })
+
+  it('"oito" does not match saudacao ("oi" followed immediately by letter)', () => {
+    expect(matchFlow('oito').id).not.toBe('saudacao')
+  })
+
+  it('"oi" as standalone word matches saudacao', () => {
+    expect(matchFlow('oi').id).toBe('saudacao')
+  })
+
+  it('"oi!" (with punctuation) matches saudacao', () => {
+    expect(matchFlow('oi!').id).toBe('saudacao')
+  })
+
+  it('"oi, preciso de ajuda" matches saudacao', () => {
+    expect(matchFlow('oi, preciso de ajuda').id).toBe('saudacao')
+  })
+
+  it('"hey" standalone matches saudacao', () => {
+    expect(matchFlow('hey').id).toBe('saudacao')
+  })
+
+  it('"ola" matches saudacao (no accent variant)', () => {
+    expect(matchFlow('ola').id).toBe('saudacao')
+  })
+
+  it('"foi parcial" resolves to pagamento_parcial (not saudacao)', () => {
+    const result = matchFlow('foi parcial')
+    expect(result.id).toBe('pagamento_parcial')
+    expect(result.id).not.toBe('saudacao')
+  })
+})
+
+// ——————————————————————————————————————
+// buildCobrancaSteps
+// ——————————————————————————————————————
+
+describe('buildCobrancaSteps', () => {
+  const overdueCustomer  = CUSTOMERS.find(c => c.status === 'overdue')!
+  const paidCustomer     = CUSTOMERS.find(c => c.status === 'paid')!
+
+  it('returns at least one step when called with null', () => {
+    expect(buildCobrancaSteps(null).length).toBeGreaterThan(0)
+  })
+
+  it('last step is a message with an action card', () => {
+    const steps = buildCobrancaSteps(null)
+    const last  = steps[steps.length - 1]
+    expect(last.type).toBe('message')
+    if (last.type === 'message') expect(last.action).toBeDefined()
+  })
+
+  it('action confirmFlowId is "confirmar_cobranca"', () => {
+    const steps   = buildCobrancaSteps(null)
+    const msgStep = steps.find(s => s.type === 'message')
+    if (msgStep?.type === 'message' && msgStep.action) {
+      expect(msgStep.action.confirmFlowId).toBe('confirmar_cobranca')
+    }
+  })
+
+  it('uses the overdue customer name and days in the action subtitle', () => {
+    const steps   = buildCobrancaSteps(overdueCustomer)
+    const msgStep = steps.find(s => s.type === 'message')
+    if (msgStep?.type === 'message' && msgStep.action) {
+      expect(msgStep.action.subtitle).toContain(overdueCustomer.name)
+      expect(msgStep.action.subtitle).toContain(String(overdueCustomer.days))
+    }
+  })
+
+  it('preview contains customer firstName and value', () => {
+    const steps   = buildCobrancaSteps(overdueCustomer)
+    const msgStep = steps.find(s => s.type === 'message')
+    if (msgStep?.type === 'message' && msgStep.action) {
+      const preview = msgStep.action.preview.join(' ')
+      expect(preview).toContain(overdueCustomer.firstName)
+      expect(preview).toContain(overdueCustomer.value)
+    }
+  })
+
+  it('falls back to DEFAULT_CUSTOMER when supplied customer is paid', () => {
+    const steps   = buildCobrancaSteps(paidCustomer)
+    const msgStep = steps.find(s => s.type === 'message')
+    if (msgStep?.type === 'message' && msgStep.action) {
+      expect(msgStep.action.subtitle).toContain(DEFAULT_CUSTOMER.name)
+    }
+  })
+
+  it('all steps have valid types', () => {
+    const validTypes = new Set(['typing', 'loader', 'message'])
+    buildCobrancaSteps(overdueCustomer).forEach(step => {
+      expect(validTypes.has(step.type)).toBe(true)
+    })
+  })
+})
+
+// ——————————————————————————————————————
+// buildExcelSteps
+// ——————————————————————————————————————
+
+describe('buildExcelSteps', () => {
+  const customer = CUSTOMERS[0]
+
+  it('returns at least one step when called with null', () => {
+    expect(buildExcelSteps(null).length).toBeGreaterThan(0)
+  })
+
+  it('last step is a message with an action card', () => {
+    const steps = buildExcelSteps(null)
+    const last  = steps[steps.length - 1]
+    expect(last.type).toBe('message')
+    if (last.type === 'message') expect(last.action).toBeDefined()
+  })
+
+  it('action confirmFlowId is "confirmar_excel"', () => {
+    const steps   = buildExcelSteps(null)
+    const msgStep = steps.find(s => s.type === 'message')
+    if (msgStep?.type === 'message' && msgStep.action) {
+      expect(msgStep.action.confirmFlowId).toBe('confirmar_excel')
+    }
+  })
+
+  it('action subtitle contains the customer name and ID', () => {
+    const steps   = buildExcelSteps(customer)
+    const msgStep = steps.find(s => s.type === 'message')
+    if (msgStep?.type === 'message' && msgStep.action) {
+      expect(msgStep.action.subtitle).toContain(customer.name)
+      expect(msgStep.action.subtitle).toContain(customer.id)
+    }
+  })
+
+  it('uses DEFAULT_CUSTOMER when called with undefined', () => {
+    const steps   = buildExcelSteps(undefined)
+    const msgStep = steps.find(s => s.type === 'message')
+    if (msgStep?.type === 'message' && msgStep.action) {
+      expect(msgStep.action.subtitle).toContain(DEFAULT_CUSTOMER.name)
+    }
+  })
+
+  it('action preview contains ".xlsx" format reference', () => {
+    const steps   = buildExcelSteps(customer)
+    const msgStep = steps.find(s => s.type === 'message')
+    if (msgStep?.type === 'message' && msgStep.action) {
+      const preview = msgStep.action.preview.join(' ')
+      expect(preview.toLowerCase()).toContain('.xlsx')
+    }
+  })
+
+  it('all steps have valid types', () => {
+    const validTypes = new Set(['typing', 'loader', 'message'])
+    buildExcelSteps(customer).forEach(step => {
+      expect(validTypes.has(step.type)).toBe(true)
+    })
+  })
+})
+
+// ——————————————————————————————————————
+// buildConfirmFlowSteps
+// ——————————————————————————————————————
+
+describe('buildConfirmFlowSteps', () => {
+  const overdueCustomer = CUSTOMERS.find(c => c.status === 'overdue')!
+
+  it('confirmar_cobranca with null uses DEFAULT_CUSTOMER name and phone', () => {
+    const steps   = buildConfirmFlowSteps('confirmar_cobranca', null)
+    const msgStep = steps.find(s => s.type === 'message')
+    if (msgStep?.type === 'message' && msgStep.text) {
+      expect(msgStep.text).toContain(DEFAULT_CUSTOMER.name)
+      expect(msgStep.text).toContain(DEFAULT_CUSTOMER.phone)
+    }
+  })
+
+  it('confirmar_cobranca with a specific customer uses that customer data', () => {
+    const steps   = buildConfirmFlowSteps('confirmar_cobranca', overdueCustomer)
+    const msgStep = steps.find(s => s.type === 'message')
+    if (msgStep?.type === 'message' && msgStep.text) {
+      expect(msgStep.text).toContain(overdueCustomer.name)
+      expect(msgStep.text).toContain(overdueCustomer.phone)
+    }
+  })
+
+  it('confirmar_excel generates a sanitized filename from customer name', () => {
+    const steps   = buildConfirmFlowSteps('confirmar_excel', overdueCustomer)
+    const msgStep = steps.find(s => s.type === 'message')
+    if (msgStep?.type === 'message' && msgStep.file) {
+      const expected = overdueCustomer.name
+        .toLowerCase()
+        .replace(/\s+/g, '_')
+        .replace(/[^a-z0-9_]/g, '')
+      expect(msgStep.file.name).toContain(expected)
+      expect(msgStep.file.name).toContain('.xlsx')
+    }
+  })
+
+  it('confirmar_excel file has 312 rows and 52 KB size', () => {
+    const steps   = buildConfirmFlowSteps('confirmar_excel', null)
+    const msgStep = steps.find(s => s.type === 'message')
+    if (msgStep?.type === 'message' && msgStep.file) {
+      expect(msgStep.file.rows).toBe(312)
+      expect(msgStep.file.size).toBe('52 KB')
+      expect(msgStep.file.fileType).toBe('xlsx')
+    }
+  })
+
+  it('returns empty array for unknown flowId', () => {
+    expect(buildConfirmFlowSteps('does_not_exist', null)).toHaveLength(0)
+  })
+
+  it('both confirm flows end with a message step', () => {
+    const cobrancaSteps = buildConfirmFlowSteps('confirmar_cobranca', null)
+    const excelSteps    = buildConfirmFlowSteps('confirmar_excel', null)
+    expect(cobrancaSteps[cobrancaSteps.length - 1].type).toBe('message')
+    expect(excelSteps[excelSteps.length - 1].type).toBe('message')
+  })
+
+  it('all steps in both confirm flows have valid types', () => {
+    const validTypes = new Set(['typing', 'loader', 'message'])
+    const allSteps = [
+      ...buildConfirmFlowSteps('confirmar_cobranca', null),
+      ...buildConfirmFlowSteps('confirmar_excel', null),
+    ]
+    allSteps.forEach(step => {
+      expect(validTypes.has(step.type)).toBe(true)
+    })
+  })
+
+  it('confirmar_cobranca includes a loader step (WhatsApp sending simulation)', () => {
+    const steps = buildConfirmFlowSteps('confirmar_cobranca', null)
+    expect(steps.some(s => s.type === 'loader')).toBe(true)
+  })
+
+  it('confirmar_excel includes a loader step (spreadsheet generation simulation)', () => {
+    const steps = buildConfirmFlowSteps('confirmar_excel', null)
+    expect(steps.some(s => s.type === 'loader')).toBe(true)
   })
 })

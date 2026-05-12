@@ -174,26 +174,26 @@ jobs:
       - run: npm ci
       - run: npm test -- --coverage
       - uses: actions/upload-artifact@v4
-        with: { name: coverage, path: coverage/ }
+        with: { text: coverage, path: coverage/ }
 
   build:
     needs: [lint, test]          # só roda se lint E test passarem
     runs-on: ubuntu-latest
     outputs:
-      image: \${{ steps.meta.outputs.image }}
+      image: \${'$'}{{ steps.meta.outputs.image }}
     steps:
       - uses: actions/checkout@v4
       - id: meta
-        run: echo "image=ghcr.io/\${{ github.repository }}:\${{ github.sha }}" >> "$GITHUB_OUTPUT"
+        run: echo "image=ghcr.io/\${'$'}{{ github.repository }}:\${'$'}{{ github.sha }}" >> "$GITHUB_OUTPUT"
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: \${{ github.actor }}
-          password: \${{ secrets.GITHUB_TOKEN }}
+          username: \${'$'}{{ github.actor }}
+          password: \${'$'}{{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v6
         with:
           push: true
-          tags: \${{ steps.meta.outputs.image }}
+          tags: \${'$'}{{ steps.meta.outputs.image }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -203,13 +203,13 @@ jobs:
     runs-on: ubuntu-latest
     environment: staging         # ativa gate de aprovação se configurado
     steps:
-      - run: echo "Deploying \${{ needs.build.outputs.image }}"`}</CodeBlock>
+      - run: echo "Deploying \${'$'}{{ needs.build.outputs.image }}"`}</CodeBlock>
       </Section>
 
       <Section title="Matrix builds — testar em N versões sem duplicar YAML" accent={ACCENT}>
         <CodeBlock lang="yaml">{`jobs:
   test:
-    runs-on: \${{ matrix.os }}
+    runs-on: \${'$'}{{ matrix.os }}
     strategy:
       fail-fast: false           # não derruba os outros se um falhar
       matrix:
@@ -225,7 +225,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: \${{ matrix.node }} }
+        with: { node-version: \${'$'}{{ matrix.node }} }
       - run: npm ci
       - run: npm test
       - if: matrix.coverage
@@ -260,7 +260,7 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::123456789012:role/github-deployer
-          role-session-name: gha-\${{ github.run_id }}
+          role-session-name: gha-\${'$'}{{ github.run_id }}
           aws-region: us-east-1
       - run: aws s3 sync ./dist s3://meu-bucket --delete`}</CodeBlock>
         <Callout tone="success">
@@ -287,9 +287,9 @@ jobs:
     path: |
       ~/.npm
       node_modules
-    key: \${{ runner.os }}-node-\${{ hashFiles('**/package-lock.json') }}
+    key: \${'$'}{{ runner.os }}-node-\${'$'}{{ hashFiles('**/package-lock.json') }}
     restore-keys: |
-      \${{ runner.os }}-node-
+      \${'$'}{{ runner.os }}-node-
 
 # Melhor ainda: use o cache embutido do setup-node (atrás é actions/cache)
 - uses: actions/setup-node@v4
@@ -336,8 +336,8 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           push: true
-          tags: \${{ inputs.image-name }}:\${{ github.sha }}
-          platforms: \${{ inputs.platforms }}
+          tags: \${'$'}{{ inputs.image-name }}:\${'$'}{{ github.sha }}
+          platforms: \${'$'}{{ inputs.platforms }}
           cache-from: type=gha
           cache-to: type=gha,mode=max`}</CodeBlock>
         <CodeBlock lang="yaml">{`# no repo que consome:
@@ -348,7 +348,7 @@ jobs:
       image-name: ghcr.io/minha-org/minha-api
       platforms: 'linux/amd64,linux/arm64'
     secrets:
-      REGISTRY_TOKEN: \${{ secrets.GITHUB_TOKEN }}`}</CodeBlock>
+      REGISTRY_TOKEN: \${'$'}{{ secrets.GITHUB_TOKEN }}`}</CodeBlock>
         <Callout tone="info">
           Versione reusable workflows com tag (<InlineCode>@v1</InlineCode>, <InlineCode>@v2</InlineCode>). Mudanças breaking só
           num major novo. Pin por SHA em repos regulados.
@@ -396,8 +396,8 @@ jobs:
         with:
           release-type: node        # lê commits convencionais e cria PR de release
     outputs:
-      release_created: \${{ steps.rp.outputs.release_created }}
-      tag_name: \${{ steps.rp.outputs.tag_name }}
+      release_created: \${'$'}{{ steps.rp.outputs.release_created }}
+      tag_name: \${'$'}{{ steps.rp.outputs.tag_name }}
 
   build-and-publish:
     needs: release-please
@@ -411,7 +411,7 @@ jobs:
       - run: npm run build
       - run: npm publish --provenance --access public
         env:
-          NODE_AUTH_TOKEN: \${{ secrets.NPM_TOKEN }}`}</CodeBlock>
+          NODE_AUTH_TOKEN: \${'$'}{{ secrets.NPM_TOKEN }}`}</CodeBlock>
         <Callout tone="success">
           <strong>Provenance (<InlineCode>--provenance</InlineCode>):</strong> o npm registra no Sigstore que aquele pacote veio
           desse workflow, desse SHA. Consumidores podem verificar — quebra categoria inteira de ataque de supply chain.
@@ -456,7 +456,7 @@ jobs:
       - name: Apply manifests com image atualizada
         run: |
           cd k8s/
-          kustomize edit set image api=ghcr.io/me/api:\${{ github.sha }}
+          kustomize edit set image api=ghcr.io/me/api:\${'$'}{{ github.sha }}
           kubectl apply -k .
           kubectl rollout status deploy/api --timeout=5m
 

@@ -63,7 +63,7 @@ export default function Page() {
       </Section>
 
       <Section title="Definindo modelos" accent={accent}>
-        <CodeBlock lang="swift">{'import SwiftData\nimport Foundation\n\n@Model\nfinal class Note {\n    @Attribute(.unique) var id: UUID\n    var title: String\n    var body: String\n    var createdAt: Date\n    var tags: [String]\n\n    @Relationship(deleteRule: .cascade) var attachments: [Attachment]\n\n    init(title: String, body: String) {\n        self.id = UUID()\n        self.title = title\n        self.body = body\n        self.createdAt = .now\n        self.tags = []\n        self.attachments = []\n    }\n}\n\n@Model\nfinal class Attachment {\n    var filename: String\n    var data: Data\n    init(filename: String, data: Data) {\n        self.filename = filename\n        self.data = data\n    }\n}'}</CodeBlock>
+        <CodeBlock lang="swift">{'import SwiftData\nimport Foundation\n\n@Model\nfinal class Note {\n    @Attribute(.unique) var id: UUID\n    var title: String\n    var body: String\n    var createdAt: Date\n    var tags: [String]\n\n    @Relationship(deleteRule: .cascade) var attachments: [Attachment]\n\n    init(title: String, detail: String) {\n        self.id = UUID()\n        self.title = title\n        self.body = body\n        self.createdAt = .now\n        self.tags = []\n        self.attachments = []\n    }\n}\n\n@Model\nfinal class Attachment {\n    var filename: String\n    var data: Data\n    init(filename: String, data: Data) {\n        self.filename = filename\n        self.data = data\n    }\n}'}</CodeBlock>
       </Section>
 
       <Section title="Bootstrap do container" accent={accent}>
@@ -71,7 +71,7 @@ export default function Page() {
       </Section>
 
       <Section title="@Query: reatividade automática em SwiftUI" accent={accent}>
-        <CodeBlock lang="swift">{'struct NotesList: View {\n    @Query(sort: \\Note.createdAt, order: .reverse) private var notes: [Note]\n    @Environment(\\.modelContext) private var ctx\n\n    var body: some View {\n        List {\n            ForEach(notes) { note in\n                NavigationLink(note.title) { NoteDetail(note: note) }\n            }\n            .onDelete { indexes in\n                for i in indexes { ctx.delete(notes[i]) }\n            }\n        }\n        .toolbar {\n            Button("Nova") {\n                ctx.insert(Note(title: "Sem titulo", body: ""))\n            }\n        }\n    }\n}'}</CodeBlock>
+        <CodeBlock lang="swift">{'struct NotesList: View {\n    @Query(sort: \\Note.createdAt, order: .reverse) private var notes: [Note]\n    @Environment(\\.modelContext) private var ctx\n\n    var body: some View {\n        List {\n            ForEach(notes) { note in\n                NavigationLink(note.title) { NoteDetail(note: note) }\n            }\n            .onDelete { indexes in\n                for i in indexes { ctx.delete(notes[i]) }\n            }\n        }\n        .toolbar {\n            Button("Nova") {\n                ctx.insert(Note(title: "Sem titulo", detail: ""))\n            }\n        }\n    }\n}'}</CodeBlock>
         <Callout tone="success" icon="✅">
           @Query observa o store; qualquer insert/update/delete na mesma ModelContainer reflete na lista automaticamente. Sem NotificationCenter, sem Combine manual.
         </Callout>
@@ -82,7 +82,7 @@ export default function Page() {
       </Section>
 
       <Section title="ModelContext: saves, fetches e transactions" accent={accent}>
-        <CodeBlock lang="swift">{'@Environment(\\.modelContext) private var ctx\n\nfunc addNote() {\n    let n = Note(title: "Nova", body: "")\n    ctx.insert(n)\n    // auto-save por padrao; para controle manual:\n    // try? ctx.save()\n}\n\nfunc fetchByTitle(_ t: String) throws -> [Note] {\n    var desc = FetchDescriptor<Note>(\n        predicate: #Predicate { $0.title == t },\n        sortBy: [SortDescriptor(\\.createdAt, order: .reverse)]\n    )\n    desc.fetchLimit = 50\n    return try ctx.fetch(desc)\n}'}</CodeBlock>
+        <CodeBlock lang="swift">{'@Environment(\\.modelContext) private var ctx\n\nfunc addNote() {\n    let n = Note(title: "Nova", detail: "")\n    ctx.insert(n)\n    // auto-save por padrao; para controle manual:\n    // try? ctx.save()\n}\n\nfunc fetchByTitle(_ t: String) throws -> [Note] {\n    var desc = FetchDescriptor<Note>(\n        predicate: #Predicate { $0.title == t },\n        sortBy: [SortDescriptor(\\.createdAt, order: .reverse)]\n    )\n    desc.fetchLimit = 50\n    return try ctx.fetch(desc)\n}'}</CodeBlock>
       </Section>
 
       <Section title="Migrations leves" accent={accent}>

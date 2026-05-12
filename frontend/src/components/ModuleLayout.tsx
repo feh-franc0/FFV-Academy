@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useGameState } from '@/hooks/useGameState';
 import { Badge } from '@/components/ui/badge';
 import { BADGES_DEF, CURRICULUM, getHubForTrail } from '@/lib/curriculum';
 import { ArticleToc } from '@/components/article/ArticleToc';
+import { BackToTop } from '@/components/article/BackToTop';
 import { MobileToc } from '@/components/article/MobileToc';
 import { ReadingProgressBar } from '@/components/article/ReadingProgressBar';
 import { RelatedArticles } from '@/components/article/RelatedArticles';
@@ -17,9 +18,14 @@ import { RelatedModules } from '@/components/article/RelatedModules';
 import { ShareSocial } from '@/components/ShareSocial';
 import { QuizWordleResult } from '@/components/QuizWordleResult';
 import { ModuleActions } from '@/components/ModuleActions';
+import { TrailCompletionModal } from '@/components/TrailCompletionModal';
 import { PrintCover, PrintQuizAnswerKey, PrintColophon } from '@/components/article/PrintLayout';
 import { isDailyModule, markDailyModuleCompleted } from '@/lib/dailyModule';
 import { GAME_CONFIG } from '@/lib/constants';
+import { BookmarkButton } from '@/components/BookmarkButton';
+import { ModuleRating } from '@/components/ModuleRating';
+import { TextSelectionShare } from '@/components/TextSelectionShare';
+import { ArticleDiscussion } from '@/components/ArticleDiscussion';
 
 export interface QuizQuestion {
   question: string;
@@ -65,10 +71,22 @@ export function ModuleLayout({
   const [submitted, setSubmitted] = useState(false);
   const [result, setResult] = useState<{ xpGained: number; newBadges: string[]; leveledUp: boolean; newLevel: number; cardsAdded: number } | null>(null);
   const [celebrations, setCelebrations] = useState<CelebrationEvent[]>([]);
+  const [trailCompletion, setTrailCompletion] = useState<{
+    trail: typeof CURRICULUM[number];
+    totalXp: number;
+    newBadges: string[];
+  } | null>(null);
   const [timeAttack, setTimeAttack] = useState(false);
   const [timeAttackFailed, setTimeAttackFailed] = useState(false);
   const [timeAttackDeadline, setTimeAttackDeadline] = useState<number | null>(null);
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
+  // hintUsed[qi] = eliminated wrong option index, or null
+  const [hintUsed, setHintUsed] = useState<(number | null)[]>(quiz.map(() => null));
+  // retry mode: null = full quiz, or array of wrong question indices
+  const [retryIndices, setRetryIndices] = useState<number[] | null>(null);
+  // Track time spent per question (in seconds) — set when question is answered
+  const [questionTimes, setQuestionTimes] = useState<number[]>(quiz.map(() => 0));
+  const questionStartRef = useRef<number | null>(null);
 
   const isCompleted = state?.completedModules.includes(slug) ?? false;
   const quizScore = state?.quizScores[slug];
@@ -124,10 +142,33 @@ export function ModuleLayout({
 
   function handleAnswer(qi: number, ai: number) {
     if (submitted) return;
+    // Record time for this question if not yet answered
+    if (answers[qi] === null && questionStartRef.current !== null) {
+      const elapsed = Math.round((Date.now() - questionStartRef.current) / 1000);
+      setQuestionTimes(prev => prev.map((t, i) => (i === qi ? elapsed : t)));
+    }
+    // Start timer for next unanswered question
+    questionStartRef.current = Date.now();
     setAnswers(prev => prev.map((a, i) => (i === qi ? ai : a)));
   }
 
+  function handleHint(qi: number) {
+    if (hintUsed[qi] !== null || answers[qi] !== null) return;
+    const q = quiz[qi];
+    const wrongOptions = q.options
+      .map((_, i) => i)
+      .filter(i => i !== q.correct);
+    const toEliminate = wrongOptions[Math.floor(Math.random() * wrongOptions.length)];
+    setHintUsed(prev => prev.map((h, i) => (i === qi ? toEliminate : h)));
+  }
+
   function handleSubmit() {
+    // In retry mode, just show results — don't re-award XP
+    if (retryIndices) {
+      setSubmitted(true);
+      setResult(null);
+      return;
+    }
     const score = answers.filter((a, i) => a === quiz[i].correct).length;
     submitQuiz(slug, score, quiz.length);
     const quizScore = quiz.length > 0 ? score / quiz.length : 1;
@@ -161,9 +202,32 @@ export function ModuleLayout({
       // Small delay so the user sees the score result first
       setTimeout(() => setCelebrations(events), 400);
     }
+
+    // Trail completion detection: o último módulo desta trilha acaba de ser completado?
+    const moduleTrail = CURRICULUM.find(t => t.modules.some(m => m.slug === slug));
+    if (moduleTrail) {
+      const stateNow = state;
+      // completedModules ainda pode não conter o slug atual no closure, então simulamos
+      const completedAfter = new Set(stateNow?.completedModules ?? []);
+      completedAfter.add(slug);
+      const allDone = moduleTrail.modules.every(m => completedAfter.has(m.slug));
+      const wasIncomplete = !moduleTrail.modules.every(m => (stateNow?.completedModules ?? []).includes(m.slug));
+      if (allDone && wasIncomplete) {
+        const totalXp = moduleTrail.modules.reduce((acc, m) => acc + m.xp, 0);
+        setTimeout(() => {
+          setTrailCompletion({
+            trail: moduleTrail,
+            totalXp,
+            newBadges: r.newBadges,
+          });
+        }, 900);
+      }
+    }
   }
 
-  const allAnswered = answers.every(a => a !== null);
+  // In retry mode, only check answers for the retry questions
+  const activeQuizIndices = retryIndices ?? quiz.map((_, i) => i);
+  const allAnswered = activeQuizIndices.every(i => answers[i] !== null);
   const score = submitted ? answers.filter((a, i) => a === quiz[i].correct).length : 0;
   const perfect = submitted && score === quiz.length;
 
@@ -176,7 +240,7 @@ export function ModuleLayout({
   }
 
   return (
-    <article className="max-w-2xl mx-auto px-6 pb-20" data-article-root>
+    <article className="max-w-2xl mx-auto px-4 sm:px-6 pb-20" data-article-root>
       {/* Print-only: capa, renderizada apenas em PDF */}
       <PrintCover
         title={title}
@@ -281,7 +345,7 @@ export function ModuleLayout({
       <header className="mb-10">
         <div className="flex items-center gap-3 mb-4">
           <span className="text-4xl">{icon}</span>
-          <div>
+          <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-2xl font-bold">{title}</h1>
               {isCompleted && (
@@ -299,8 +363,11 @@ export function ModuleLayout({
           </div>
         </div>
         <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
-          <div className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
-            Leve este módulo pra qualquer lugar
+          <div className="flex items-center gap-2">
+            <BookmarkButton slug={slug} size={15} />
+            <span className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
+              Leve este módulo pra qualquer lugar
+            </span>
           </div>
           <ModuleActions title={title} slug={slug} accent={trailColor} trailName={trailName} />
         </div>
@@ -310,7 +377,7 @@ export function ModuleLayout({
       {/* Floating TOC on wide screens */}
       <aside
         aria-hidden={false}
-        className="hidden xl:block"
+        className="hidden lg:block"
         style={{
           position: 'fixed',
           top: 80,
@@ -324,6 +391,9 @@ export function ModuleLayout({
 
       {/* Bottom-sheet TOC on mobile/tablet */}
       <MobileToc containerSelector="[data-article-content]" accent={trailColor} />
+
+      {/* Floating "back to top" após 50% scroll */}
+      <BackToTop />
 
       {/* Prerequisites */}
       <Prerequisites slug={slug} accent={trailColor} />
@@ -347,9 +417,37 @@ export function ModuleLayout({
           >
             <div className="text-3xl mb-3">🧩</div>
             <h2 className="text-lg font-bold mb-2">Quiz rápido</h2>
-            <p className="text-sm mb-4" style={{ color: 'var(--ffv-muted)' }}>
-              {quiz.length} perguntas · Acerte tudo e ganhe o badge 🎯 Gabarito
-            </p>
+            <div className="flex items-center justify-center gap-2 flex-wrap mb-4">
+              <span className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
+                {quiz.length} pergunta{quiz.length !== 1 ? 's' : ''} · Acerte tudo e ganhe o badge 🎯 Gabarito
+              </span>
+              {moduleLevel && (
+                <span
+                  className="text-[10px] font-bold tracking-widest uppercase px-2 py-0.5 rounded-full"
+                  style={{
+                    background: moduleLevel === 'foundational' ? 'rgba(63,185,80,0.12)' : moduleLevel === 'beginner' ? 'rgba(88,166,255,0.12)' : moduleLevel === 'intermediate' ? 'rgba(227,179,65,0.12)' : 'rgba(247,129,102,0.12)',
+                    color: moduleLevel === 'foundational' ? 'var(--ffv-green)' : moduleLevel === 'beginner' ? 'var(--ffv-blue)' : moduleLevel === 'intermediate' ? 'var(--ffv-yellow)' : 'var(--ffv-red)',
+                  }}
+                >
+                  {moduleLevel === 'foundational' ? 'Fundamentos' : moduleLevel === 'beginner' ? 'Iniciante' : moduleLevel === 'intermediate' ? 'Intermediário' : 'Avançado'}
+                </span>
+              )}
+            </div>
+            {/* Prerequisites incomplete warning */}
+            {(() => {
+              if (!state) return null;
+              const prereqs = state.completedModules;
+              const mod = CURRICULUM.flatMap(t => t.modules).find(m => m.slug === slug);
+              const missing = (mod?.prerequisites ?? []).filter(p => !prereqs.includes(p));
+              return missing.length > 0 ? (
+                <div
+                  className="text-xs px-4 py-2 rounded-lg mb-4 inline-flex items-center gap-2"
+                  style={{ background: 'rgba(227,179,65,0.1)', border: '1px solid rgba(227,179,65,0.3)', color: 'var(--ffv-yellow)' }}
+                >
+                  ⚠️ {missing.length} pré-requisito{missing.length > 1 ? 's' : ''} não concluído{missing.length > 1 ? 's' : ''} — você pode tentar assim mesmo
+                </div>
+              ) : null;
+            })()}
 
             <label
               className="inline-flex items-center gap-2 text-xs mb-5 cursor-pointer select-none"
@@ -359,9 +457,13 @@ export function ModuleLayout({
                 type="checkbox"
                 checked={timeAttack}
                 onChange={e => setTimeAttack(e.target.checked)}
+                aria-describedby="time-attack-desc"
               />
               ⚡ <b>Time Attack</b> — {TIME_ATTACK_SECONDS_PER_Q}s por pergunta · +{TIME_ATTACK_BONUS_XP} XP se 100% no tempo
             </label>
+            <span id="time-attack-desc" className="sr-only">
+              Modo cronometrado: você tem {TIME_ATTACK_SECONDS_PER_Q} segundos por pergunta. Se acertar tudo dentro do tempo, ganha {TIME_ATTACK_BONUS_XP} XP de bônus.
+            </span>
 
             <div>
               <button
@@ -371,6 +473,7 @@ export function ModuleLayout({
                     setTimeAttackDeadline(deadline);
                     setTimeLeft(quiz.length * TIME_ATTACK_SECONDS_PER_Q);
                   }
+                  questionStartRef.current = Date.now();
                   setQuizStarted(true);
                 }}
                 className="px-6 py-2.5 rounded-full font-semibold text-sm transition-all hover:opacity-90 active:scale-95"
@@ -383,10 +486,15 @@ export function ModuleLayout({
         ) : !submitted ? (
           <div>
             <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-              <h2 className="text-lg font-bold">🧩 Quiz</h2>
+              <h2 className="text-lg font-bold">
+                {retryIndices ? `🔄 Refazendo ${retryIndices.length} errada${retryIndices.length > 1 ? 's' : ''}` : '🧩 Quiz'}
+              </h2>
               {timeAttack && timeLeft !== null && !timeAttackFailed && (
                 <span
                   className="text-sm font-bold px-3 py-1 rounded-full font-mono tabular-nums"
+                  aria-live="polite"
+                  aria-atomic="true"
+                  aria-label={`Tempo restante: ${Math.floor(timeLeft / 60)} minutos e ${timeLeft % 60} segundos`}
                   style={{
                     background: timeLeft <= 10 ? 'rgba(247,129,102,0.18)' : 'var(--ffv-bg2)',
                     color: timeLeft <= 10 ? 'var(--ffv-red)' : trailColor,
@@ -403,30 +511,55 @@ export function ModuleLayout({
               )}
             </div>
             <div className="flex flex-col gap-8">
-              {quiz.map((q, qi) => (
-                <div key={qi}>
-                  <p className="font-semibold text-sm mb-3">
-                    <span style={{ color: 'var(--ffv-muted)' }}>{qi + 1}. </span>
-                    {q.question}
-                  </p>
-                  <div className="flex flex-col gap-2">
-                    {q.options.map((opt, ai) => (
+              {activeQuizIndices.map((qi) => {
+                const q = quiz[qi];
+                return (
+                <div key={qi} role="group" aria-label={`Questão ${qi + 1} de ${quiz.length}`}>
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <p className="font-semibold text-sm">
+                      <span style={{ color: trailColor, opacity: 0.8 }}>{qi + 1}. </span>
+                      {q.question}
+                    </p>
+                    {hintUsed[qi] === null && answers[qi] === null && (
                       <button
-                        key={ai}
-                        onClick={() => handleAnswer(qi, ai)}
-                        className="text-left px-4 py-3 rounded-lg text-sm transition-all"
-                        style={{
-                          background: answers[qi] === ai ? `${trailColor}20` : 'var(--ffv-bg2)',
-                          border: `1px solid ${answers[qi] === ai ? trailColor : 'var(--ffv-border)'}`,
-                          color: answers[qi] === ai ? trailColor : 'var(--foreground)',
-                        }}
+                        onClick={() => handleHint(qi)}
+                        className="shrink-0 text-[11px] px-2 py-1 rounded-full transition-all hover:opacity-80"
+                        style={{ color: 'var(--ffv-yellow)', border: '1px solid var(--ffv-yellow)30', background: 'rgba(227,179,65,0.08)' }}
+                        title="Eliminar uma opção errada"
                       >
-                        {opt}
+                        💡 Dica
                       </button>
-                    ))}
+                    )}
+                    {hintUsed[qi] !== null && (
+                      <span className="shrink-0 text-[11px]" style={{ color: 'var(--ffv-muted)' }}>💡 usado</span>
+                    )}
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    {q.options.map((opt, ai) => {
+                      const isEliminated = hintUsed[qi] === ai;
+                      return (
+                        <button
+                          key={ai}
+                          onClick={() => !isEliminated && handleAnswer(qi, ai)}
+                          aria-pressed={answers[qi] === ai}
+                          disabled={isEliminated}
+                          className="text-left px-4 py-3.5 rounded-lg text-sm transition-all disabled:cursor-not-allowed"
+                          style={{
+                            background: isEliminated ? 'transparent' : answers[qi] === ai ? `${trailColor}20` : 'var(--ffv-bg2)',
+                            border: `1px solid ${isEliminated ? 'var(--ffv-border)' : answers[qi] === ai ? trailColor : 'var(--ffv-border)'}`,
+                            color: isEliminated ? 'var(--ffv-muted)' : answers[qi] === ai ? trailColor : 'var(--foreground)',
+                            opacity: isEliminated ? 0.4 : 1,
+                            textDecoration: isEliminated ? 'line-through' : 'none',
+                          }}
+                        >
+                          {opt}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
             <button
               onClick={handleSubmit}
@@ -434,12 +567,43 @@ export function ModuleLayout({
               className="mt-8 w-full py-3 rounded-xl font-semibold text-sm transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
               style={{ background: trailColor, color: '#0d1117' }}
             >
-              {allAnswered ? 'Enviar respostas' : `Responda todas (${answers.filter(a => a !== null).length}/${quiz.length})`}
+              {allAnswered
+                ? (retryIndices ? 'Ver resultado da revisão' : 'Enviar respostas')
+                : `Responda todas (${activeQuizIndices.filter(i => answers[i] !== null).length}/${activeQuizIndices.length})`}
             </button>
           </div>
         ) : (
           /* Results */
           <div>
+            {/* Retry mode results — simplified, no XP */}
+            {retryIndices && (
+              <div
+                className="p-6 rounded-xl mb-6 text-center"
+                style={{ background: 'rgba(63,185,80,0.08)', border: '1px solid rgba(63,185,80,0.2)' }}
+              >
+                {(() => {
+                  const corrected = retryIndices.filter(i => answers[i] === quiz[i].correct).length;
+                  return (
+                    <>
+                      <div className="text-3xl mb-2">{corrected === retryIndices.length ? '✅' : '📖'}</div>
+                      <p className="font-bold text-lg mb-1">
+                        {corrected === retryIndices.length ? 'Todas corretas desta vez!' : 'Continue revisando'}
+                      </p>
+                      <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
+                        {corrected}/{retryIndices.length} corretas na revisão · XP já contabilizado
+                      </p>
+                      <button
+                        onClick={() => { setRetryIndices(null); setAnswers(quiz.map(() => null)); setHintUsed(quiz.map(() => null)); setSubmitted(true); setResult(null); }}
+                        className="mt-4 text-sm font-semibold hover:opacity-70 transition-opacity underline"
+                        style={{ color: 'var(--ffv-blue)' }}
+                      >
+                        Ver gabarito completo
+                      </button>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
             {/* XP reward */}
             {result && (
               <div
@@ -484,6 +648,11 @@ export function ModuleLayout({
               </div>
             )}
 
+            {/* Module rating */}
+            <div className="mt-4 pt-4" style={{ borderTop: '1px solid var(--ffv-border)' }}>
+              <ModuleRating slug={slug} />
+            </div>
+
             {/* Wordle-style share card */}
             <QuizWordleResult
               slug={slug}
@@ -501,9 +670,16 @@ export function ModuleLayout({
                 const isCorrect = userAnswer === correct;
                 return (
                   <div key={qi} className="p-4 rounded-xl" style={{ background: 'var(--ffv-bg2)', border: `1px solid ${isCorrect ? 'rgba(63,185,80,0.3)' : 'rgba(247,129,102,0.3)'}` }}>
-                    <p className="font-semibold text-sm mb-3">
-                      {isCorrect ? '✅' : '❌'} {q.question}
-                    </p>
+                    <div className="flex items-start justify-between gap-2 mb-3">
+                      <p className="font-semibold text-sm">
+                        {isCorrect ? '✅' : '❌'} {q.question}
+                      </p>
+                      {questionTimes[qi] > 0 && (
+                        <span className="shrink-0 text-[10px] tabular-nums" style={{ color: 'var(--ffv-muted)' }}>
+                          ⏱ {questionTimes[qi]}s
+                        </span>
+                      )}
+                    </div>
                     <div className="flex flex-col gap-1.5">
                       {q.options.map((opt, ai) => (
                         <div
@@ -533,6 +709,27 @@ export function ModuleLayout({
               })}
             </div>
 
+            {/* Retry wrong answers */}
+            {(() => {
+              const wrongIdxs = quiz.map((q, i) => answers[i] !== q.correct ? i : -1).filter(i => i >= 0);
+              return wrongIdxs.length > 0 && wrongIdxs.length < quiz.length ? (
+                <button
+                  onClick={() => {
+                    setRetryIndices(wrongIdxs);
+                    setAnswers(quiz.map(() => null));
+                    setHintUsed(quiz.map(() => null));
+                    setSubmitted(false);
+                    setResult(null);
+                    setQuizStarted(true);
+                  }}
+                  className="mt-6 w-full py-2.5 rounded-xl font-semibold text-sm transition-all hover:opacity-90"
+                  style={{ background: 'rgba(247,129,102,0.12)', border: '1px solid rgba(247,129,102,0.3)', color: 'var(--ffv-red)' }}
+                >
+                  Refazer {wrongIdxs.length} pergunta{wrongIdxs.length > 1 ? 's' : ''} errada{wrongIdxs.length > 1 ? 's' : ''} →
+                </button>
+              ) : null;
+            })()}
+
             {/* Next module */}
             <div className="mt-10 flex items-center justify-between gap-4 flex-wrap">
               <Link href="/" className="text-sm transition-colors hover:text-white" style={{ color: 'var(--ffv-muted)' }}>
@@ -552,6 +749,8 @@ export function ModuleLayout({
         )}
       </section>
 
+      <ArticleDiscussion slug={slug} title={title} accentColor={trailColor} />
+
       <NextSteps slug={slug} />
       {relatedSlugs && relatedSlugs.length > 0 && <RelatedModules slugs={relatedSlugs} />}
       <RelatedArticles currentSlug={slug} />
@@ -568,6 +767,17 @@ export function ModuleLayout({
           onDismiss={() => setCelebrations([])}
         />
       )}
+
+      {trailCompletion && (
+        <TrailCompletionModal
+          trail={trailCompletion.trail}
+          totalXp={trailCompletion.totalXp}
+          newBadges={trailCompletion.newBadges}
+          onClose={() => setTrailCompletion(null)}
+        />
+      )}
+
+      <TextSelectionShare articleSlug={slug} articleTitle={title} />
     </article>
   );
 }

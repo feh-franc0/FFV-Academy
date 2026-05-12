@@ -69,7 +69,7 @@ export default function Page() {
       </Section>
 
       <Section title="cli: clap com subcommands" accent={accent}>
-        <CodeBlock lang="rust">{'// crates/cli/src/main.rs\nuse clap::{Parser, Subcommand};\n\n#[derive(Parser)]\n#[command(version, about = "FFV Tasks CLI")]\nstruct Cli { #[command(subcommand)] cmd: Cmd }\n\n#[derive(Subcommand)]\nenum Cmd {\n    Add { title: String },\n    List,\n    Done { id: String },\n}\n\nfn main() -> anyhow::Result<()> {\n    let cli = Cli::parse();\n    match cli.cmd {\n        Cmd::Add { title } => { let t = core::Task::new(title); println!("{}", serde_json::to_string(&t)?); }\n        Cmd::List => { /* chama API via reqwest */ }\n        Cmd::Done { id } => { /* PATCH /tasks/:id */ }\n    }\n    Ok(())\n}'}</CodeBlock>
+        <CodeBlock lang="rust">{'// crates/cli/src/main.rs\nuse clap::{Parser, Subcommand};\n\n#[derive(Parser)]\n#[command(version, about = "FFV Tasks CLI")]\nstruct Cli { #[command(subcommand)] cmd: Cmd }\n\n#[derive(Subcommand)]\nenum Cmd {\n    Add { label: String },\n    List,\n    Done { id: String },\n}\n\nfn main() -> anyhow::Result<()> {\n    let cli = Cli::parse();\n    match cli.cmd {\n        Cmd::Add { title } => { let t = core::Task::new(title); println!("{}", serde_json::to_string(&t)?); }\n        Cmd::List => { /* chama API via reqwest */ }\n        Cmd::Done { id } => { /* PATCH /tasks/:id */ }\n    }\n    Ok(())\n}'}</CodeBlock>
       </Section>
 
       <Section title="server: axum + sqlx + jwt" accent={accent}>

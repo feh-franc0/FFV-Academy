@@ -91,7 +91,7 @@ jobs:
 
       - name: Publicar modelo candidato no MLflow
         env:
-          MLFLOW_TRACKING_URI: \${{ secrets.MLFLOW_URI }}
+          MLFLOW_TRACKING_URI: \${'$'}{{ secrets.MLFLOW_URI }}
         run: python src/register_candidate.py`}</CodeBlock>
         <Callout tone="warn">
           O step <code>gate.py</code> deve falhar o PR se a melhora não for estatisticamente significativa ou se houver regressão em qualquer slice monitorado.

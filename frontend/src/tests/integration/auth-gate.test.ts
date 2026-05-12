@@ -9,7 +9,11 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
-  verifyToken, isPaidFor, grantProduct, getCurrentUser, logout, MOCK_TOKEN,
+  verifyToken,
+  isPaidFor,
+  grantProduct,
+  logout,
+  MOCK_TOKEN,
 } from '../../lib/auth';
 
 const EMAIL = 'gate@exemplo.com';

@@ -217,9 +217,9 @@ async def orchestrate(user_query: str) -> str:
           accent={ACCENT}
           orientation="vertical"
           steps={[
-            { label: 'User', desc: '"Meu cartão não passou na renovação"' },
-            { label: 'Triage agent', desc: 'identifica intenção → handoff: "é billing"' },
-            { label: 'Billing agent', desc: 'get_invoice, update_payment → handoff se refund > $50: "precisa de human"' },
+            { label: 'User', desc: 'Meu cartão não passou na renovação' },
+            { label: 'Triage agent', desc: 'identifica intenção → handoff: "é billing' },
+            { label: 'Billing agent', desc: 'get_invoice, update_payment → handoff se refund > $50: "precisa de human' },
             { label: 'Human agent (HITL)', desc: 'open_ticket → atendimento humano' },
           ]}
         />

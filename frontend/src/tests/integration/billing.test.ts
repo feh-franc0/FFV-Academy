@@ -6,6 +6,13 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+
+// Stub feature flags ANTES de importar billing.ts — caso contrário, FEATURES é
+// avaliado em build time com env vars vazias e createCheckout sempre falha.
+vi.mock('../../lib/features', () => ({
+  FEATURES: { billing: true, tutorAI: true, phoneAuth: true },
+}));
+
 import { createCheckout } from '../../lib/billing';
 import { setAccessToken } from '../../lib/api-client';
 
@@ -44,6 +51,21 @@ describe('createCheckout', () => {
   it('lança erro sem backend configurado', async () => {
     process.env.NEXT_PUBLIC_API_BASE_URL = '';
     await expect(createCheckout('simulado-aws-practitioner')).rejects.toThrow('backend');
+  });
+
+  it('quando billing feature flag está desativada, isolando o módulo, lança erro sem chamar fetch', async () => {
+    // Importa billing num módulo isolado com FEATURES.billing = false.
+    vi.resetModules();
+    vi.doMock('../../lib/features', () => ({
+      FEATURES: { billing: false, tutorAI: false, phoneAuth: false },
+    }));
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const mod = await import('../../lib/billing');
+    await expect(mod.createCheckout('x')).rejects.toThrow(/desabilitado/i);
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.doUnmock('../../lib/features');
+    vi.resetModules();
   });
 
   it('inclui Authorization header (requer login)', async () => {

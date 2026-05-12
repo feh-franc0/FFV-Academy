@@ -25,6 +25,7 @@ type BillingHandler struct {
 	createCheckout   *appbilling.CreateCheckoutUseCase
 	handleWebhook    *appbilling.HandleStripeWebhookUseCase
 	webhookValidator WebhookValidator
+	enabled          bool
 }
 
 func NewBillingHandler(
@@ -36,12 +37,31 @@ func NewBillingHandler(
 		createCheckout:   checkout,
 		handleWebhook:    webhook,
 		webhookValidator: validator,
+		enabled:          true,
 	}
+}
+
+// WithEnabled controla se o handler responde ou retorna 503.
+// Quando desabilitado via feature flag (FEATURE_BILLING_ENABLED=false), todos
+// os métodos retornam 503 — preservando o código sem expor a integração.
+func (h *BillingHandler) WithEnabled(enabled bool) *BillingHandler {
+	h.enabled = enabled
+	return h
+}
+
+func (h *BillingHandler) writeDisabled(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_, _ = w.Write([]byte(`{"error":"billing_disabled","message":"Billing feature is temporarily disabled"}`))
 }
 
 // CreateCheckout cria uma sessão de checkout no Stripe.
 // POST /api/v1/billing/checkout
 func (h *BillingHandler) CreateCheckout(w http.ResponseWriter, r *http.Request) {
+	if !h.enabled {
+		h.writeDisabled(w)
+		return
+	}
 	var req struct {
 		ProductID string `json:"productId"`
 	}
@@ -71,6 +91,10 @@ func (h *BillingHandler) CreateCheckout(w http.ResponseWriter, r *http.Request) 
 // StripeWebhook recebe e processa os eventos do Stripe.
 // POST /api/v1/webhooks/stripe
 func (h *BillingHandler) StripeWebhook(w http.ResponseWriter, r *http.Request) {
+	if !h.enabled {
+		h.writeDisabled(w)
+		return
+	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1MB max
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "erro ao ler body", "bad-request")

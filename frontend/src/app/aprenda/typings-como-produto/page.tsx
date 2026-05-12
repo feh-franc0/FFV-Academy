@@ -94,8 +94,8 @@ export function defineQuery<TData>(config: {
   fetcher: () => Promise<TData>;
 }) { return config; }
 
-// Uso: const q = defineQuery({ key: ['user', 1], fetcher: async () => ({ name: 'F' }) });
-// q.fetcher retorna Promise<{ name: string }> sem você declarar.
+// Uso: const q = defineQuery({ key: ['user', 1], fetcher: async () => ({ text: 'F' }) });
+// q.fetcher retorna Promise<{ text: string }> sem você declarar.
 
 // ❌ Generic inútil
 export function log<T>(x: T): any { console.log(x); return x; } // T não agrega`}</CodeBlock>

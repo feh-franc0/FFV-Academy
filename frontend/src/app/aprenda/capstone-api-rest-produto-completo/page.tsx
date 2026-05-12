@@ -63,7 +63,7 @@ export default function Page() {
 
       <Section title="1. Spec-first: OpenAPI" accent={accent}>
         <CodeBlock lang="yaml">{`openapi: 3.1.0
-info: { title: Tasks API, version: 1.0.0 }
+info: { label: Tasks API, version: 1.0.0 }
 servers: [{ url: https://api.example.com/v1 }]
 components:
   securitySchemes:

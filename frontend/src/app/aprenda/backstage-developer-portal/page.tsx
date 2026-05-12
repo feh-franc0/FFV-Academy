@@ -121,7 +121,7 @@ spec:
       action: fetch:template
       input:
         url: ./skeleton
-        values: { name: NAME, owner: OWNER }
+        values: { text: NAME, owner: OWNER }
     - id: publish
       action: publish:github
       input:

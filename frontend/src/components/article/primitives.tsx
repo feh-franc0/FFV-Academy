@@ -2,7 +2,7 @@ import { Fragment, type ReactNode } from 'react';
 import { codeToHtml } from 'shiki';
 import { CopyButton } from './CopyButton';
 
-type Tone = 'info' | 'warn' | 'danger' | 'success' | 'neutral';
+type Tone = 'info' | 'warn' | 'danger' | 'success' | 'neutral' | 'tip';
 
 const TONE: Record<Tone, { bg: string; border: string; color: string; icon: string }> = {
   info:    { bg: 'rgba(88,166,255,0.08)',  border: 'rgba(88,166,255,0.25)',  color: 'var(--ffv-blue)',   icon: '💡' },
@@ -10,6 +10,7 @@ const TONE: Record<Tone, { bg: string; border: string; color: string; icon: stri
   danger:  { bg: 'rgba(247,129,102,0.10)', border: 'rgba(247,129,102,0.30)', color: 'var(--ffv-red)',    icon: '🚨' },
   success: { bg: 'rgba(63,185,80,0.08)',   border: 'rgba(63,185,80,0.25)',   color: 'var(--ffv-green)',  icon: '✅' },
   neutral: { bg: 'var(--ffv-bg2)',         border: 'var(--ffv-border)',      color: 'var(--ffv-muted)',  icon: '📌' },
+  tip:     { bg: 'rgba(63,185,80,0.08)',   border: 'rgba(63,185,80,0.25)',   color: 'var(--ffv-green)',  icon: '💡' },
 };
 
 /** Slugify a section title into an id-friendly, stable anchor. */
@@ -33,7 +34,7 @@ export function Section({ title, accent = 'var(--ffv-blue)', id, children }: {
   const anchor = id ?? sectionId(title);
   return (
     <section id={anchor} data-section-title={title} style={{ scrollMarginTop: 80 }}>
-      <h2 className="text-base font-bold mb-3 flex items-center gap-2">
+      <h2 className="text-sm md:text-base font-bold mb-3 flex items-center gap-2">
         <span className="w-1 h-4 rounded-full inline-block" style={{ background: accent }} />
         {title}
       </h2>
@@ -48,10 +49,11 @@ export function Callout({ tone = 'info', icon, children }: {
   children: ReactNode;
 }) {
   const t = TONE[tone];
+  const labels: Record<Tone, string> = { info: 'Informação', warn: 'Atenção', danger: 'Perigo', success: 'Dica', neutral: 'Nota', tip: 'Dica' };
   return (
-    <div className="p-4 rounded-xl flex gap-3" style={{ background: t.bg, border: `1px solid ${t.border}` }}>
-      <span className="text-xl flex-shrink-0">{icon ?? t.icon}</span>
-      <div className="text-sm leading-6" style={{ color: 'var(--foreground)' }}>{children}</div>
+    <div className="p-4 rounded-xl flex gap-3 items-start" style={{ background: t.bg, border: `1.5px solid ${t.border}` }}>
+      <span className="text-xl flex-shrink-0 mt-0.5" aria-label={labels[tone]}>{icon ?? t.icon}</span>
+      <div className="text-sm leading-6 min-w-0" style={{ color: 'var(--foreground)' }}>{children}</div>
     </div>
   );
 }
@@ -92,7 +94,7 @@ export async function CodeBlock({ lang = 'text', filename, children }: {
       </div>
       <div
         dangerouslySetInnerHTML={{ __html: html }}
-        className="[&>pre]:p-4 [&>pre]:text-xs [&>pre]:overflow-x-auto [&>pre]:whitespace-pre-wrap [&>pre]:m-0 [&>pre]:!bg-[var(--ffv-bg2)] [&>pre]:font-[var(--font-roboto-mono)]"
+        className="[&>pre]:p-4 [&>pre]:text-xs [&>pre]:overflow-x-auto [&>pre]:whitespace-pre [&>pre]:m-0 [&>pre]:!bg-[var(--ffv-bg2)] [&>pre]:font-[var(--font-roboto-mono)] [&>pre]:[scrollbar-width:thin] [&>pre]:[scrollbar-color:var(--ffv-border)_transparent]"
       />
     </div>
   );
@@ -100,7 +102,7 @@ export async function CodeBlock({ lang = 'text', filename, children }: {
 
 export function InlineCode({ children }: { children: ReactNode }) {
   return (
-    <code className="px-1.5 py-0.5 rounded text-xs" style={{ background: 'var(--ffv-bg3)', border: '1px solid var(--ffv-border)', color: 'var(--ffv-orange)', fontFamily: 'var(--font-roboto-mono)' }}>
+    <code className="px-1.5 py-0.5 rounded text-xs break-words" style={{ background: 'var(--ffv-bg3)', border: '1px solid var(--ffv-border)', color: 'var(--ffv-orange)', fontFamily: 'var(--font-roboto-mono)' }}>
       {children}
     </code>
   );
@@ -108,7 +110,7 @@ export function InlineCode({ children }: { children: ReactNode }) {
 
 export function Kbd({ children }: { children: ReactNode }) {
   return (
-    <kbd className="px-1.5 py-0.5 text-[10px] rounded" style={{ background: 'var(--ffv-bg3)', border: '1px solid var(--ffv-border)', color: 'var(--foreground)', fontFamily: 'var(--font-roboto-mono)', boxShadow: '0 1px 0 var(--ffv-border)' }}>
+    <kbd className="inline-flex items-center justify-center px-2 py-1 text-[10px] min-w-6 rounded font-semibold" style={{ background: 'var(--ffv-bg3)', border: '1px solid var(--ffv-border)', color: 'var(--foreground)', fontFamily: 'var(--font-roboto-mono)', boxShadow: '0 1px 0 var(--ffv-border)' }}>
       {children}
     </kbd>
   );
@@ -175,7 +177,7 @@ export function ComparisonTable({ headers, rows, accent = 'var(--ffv-blue)' }: {
               >
                 <span
                   className="flex-shrink-0 font-semibold"
-                  style={{ color: accent, minWidth: 80 }}
+                  style={{ color: accent, minWidth: 60 }}
                 >
                   {headers[ci]}
                 </span>
@@ -196,24 +198,24 @@ export function DecisionBox({ scenario, winner, winnerColor = 'var(--ffv-blue)',
   winner: string;
   winnerColor?: string;
   why: string;
-  alternatives?: { name?: string; label?: string; note?: string; when?: string }[];
+  alternatives?: { name?: string; label?: string; text?: string; note?: string; when?: string }[];
 }) {
   return (
     <div className="p-4 rounded-xl" style={{ background: 'var(--ffv-bg2)', border: `1px solid ${winnerColor}25` }}>
-      <p className="text-xs font-semibold mb-2" style={{ color: 'var(--ffv-muted)' }}>📋 {scenario}</p>
+      <p className="text-xs font-semibold mb-2 md:mb-3" style={{ color: 'var(--ffv-muted)' }}>📋 {scenario}</p>
       <div className="flex items-center gap-2 mb-2">
         <span className="text-xs px-2 py-0.5 rounded-full font-semibold" style={{ background: `${winnerColor}18`, color: winnerColor }}>
           ✓ {winner}
         </span>
       </div>
-      <p className="text-xs mb-2" style={{ color: 'var(--ffv-muted)' }}>{why}</p>
+      <p className="text-xs mb-2 md:mb-3" style={{ color: 'var(--ffv-muted)' }}>{why}</p>
       {alternatives && alternatives.length > 0 && (
         <div className="flex flex-col gap-1">
           {alternatives.map((alt, i) => {
-            const altName = alt.name ?? alt.label ?? '';
+            const altName = alt.name ?? alt.label ?? alt.text ?? '';
             const altNote = alt.note ?? alt.when ?? '';
             return (
-              <p key={altName || i} className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
+              <p key={altName || i} className="text-xs sm:text-[13px]" style={{ color: 'var(--ffv-muted)' }}>
                 <span style={{ color: 'var(--ffv-border)' }}>Alt: </span>
                 <span className="font-semibold">{altName}</span> — {altNote}
               </p>
@@ -317,7 +319,7 @@ export function HierarchyDiagram({ title, levels, accent = 'var(--ffv-blue)' }: 
               key={i}
               className="rounded-lg p-3"
               style={{
-                marginLeft: `clamp(${depth * 8}px, ${depth * 1.5}vw, ${depth * 20}px)`,
+                marginLeft: `clamp(${depth * 12}px, ${depth * 1.5}vw, ${depth * 20}px)`,
                 marginBottom: i < levels.length - 1 ? '0' : undefined,
                 border: `1px solid ${accent}${Math.round((0.35 - depth * 0.05) * 255).toString(16).padStart(2, '0')}`,
                 background: `color-mix(in srgb, ${accent} ${Math.round(opacity * 100)}%, var(--ffv-bg2))`,
@@ -345,11 +347,12 @@ export function HierarchyDiagram({ title, levels, accent = 'var(--ffv-blue)' }: 
 /** Sequential flow with arrows — A → B → C → D */
 export function FlowDiagram({ title, steps, orientation = 'horizontal', accent = 'var(--ffv-blue)' }: {
   title?: string;
-  steps: { icon?: string; label: string; desc?: string }[];
+  steps: (string | { icon?: string; label: string; desc?: string })[];
   orientation?: 'horizontal' | 'vertical';
   accent?: string;
 }) {
   const isHorizontal = orientation === 'horizontal';
+  const normSteps = steps.map((s) => (typeof s === 'string' ? { label: s } : s));
   return (
     <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${accent}30`, background: 'var(--ffv-bg2)' }}>
       {title && (
@@ -365,7 +368,7 @@ export function FlowDiagram({ title, steps, orientation = 'horizontal', accent =
         }
         style={{ background: `linear-gradient(135deg, color-mix(in srgb, ${accent} 4%, var(--ffv-bg2)) 0%, var(--ffv-bg2) 100%)` }}
       >
-        {steps.map((step, i) => (
+        {normSteps.map((step, i) => (
           <Fragment key={i}>
             <div
               className="flex flex-col items-center text-center rounded-lg p-3 min-w-[100px]"
@@ -381,7 +384,7 @@ export function FlowDiagram({ title, steps, orientation = 'horizontal', accent =
                 <span className="text-[11px] mt-1 leading-4" style={{ color: 'var(--ffv-muted)' }}>{step.desc}</span>
               )}
             </div>
-            {i < steps.length - 1 && (
+            {i < normSteps.length - 1 && (
               isHorizontal ? (
                 <div
                   className="flex items-center justify-center font-bold text-base shrink-0 py-1 sm:py-0 sm:px-1"
@@ -409,13 +412,25 @@ export function FlowDiagram({ title, steps, orientation = 'horizontal', accent =
 }
 
 /** Two parallel flows side by side — Traditional Programming vs ML */
+type CFlowStep = string | ReactNode | { label?: string; title?: string; desc?: string };
 export function ComparisonFlow({ title, left, right, accent = 'var(--ffv-blue)' }: {
   title?: string;
-  left: { label: string; steps: string[] };
-  right: { label: string; steps: string[] };
+  left: { label: string; steps: CFlowStep[] };
+  right: { label: string; steps: CFlowStep[] };
   accent?: string;
 }) {
-  const renderFlow = (flow: { label: string; steps: string[] }, color: string) => (
+  const renderStep = (s: CFlowStep): ReactNode => {
+    if (s == null) return null;
+    if (typeof s === 'string' || typeof s === 'number') return s;
+    if (typeof s === 'object' && !('$$typeof' in (s as object))) {
+      const o = s as { label?: string; title?: string; desc?: string };
+      if ('label' in o || 'title' in o || 'desc' in o) {
+        return o.label ?? o.title ?? o.desc ?? '';
+      }
+    }
+    return s as ReactNode;
+  };
+  const renderFlow = (flow: { label: string; steps: CFlowStep[] }, color: string) => (
     <div className="flex-1 flex flex-col gap-2">
       <div
         className="rounded-lg px-3 py-2 text-center text-[10px] font-bold uppercase tracking-widest"
@@ -429,7 +444,7 @@ export function ComparisonFlow({ title, left, right, accent = 'var(--ffv-blue)' 
             className="rounded-lg px-3 py-2 text-center text-xs"
             style={{ background: `color-mix(in srgb, ${color} 8%, var(--ffv-bg2))`, color: 'var(--foreground)', border: `1px solid ${color}25` }}
           >
-            {step}
+            {renderStep(step)}
           </div>
           {i < flow.steps.length - 1 && (
             <div className="text-center text-base" style={{ color: `${color}70` }}>↓</div>
@@ -466,7 +481,8 @@ export function ComparisonFlow({ title, left, right, accent = 'var(--ffv-blue)' 
 export function ArchFlow({ title, columns, accent = 'var(--ffv-blue)' }: {
   title?: string;
   columns: {
-    header: string;
+    header?: string;
+    title?: string;
     headerColor?: string;
     items: string[];
     footer?: string;
@@ -484,7 +500,7 @@ export function ArchFlow({ title, columns, accent = 'var(--ffv-blue)' }: {
       <div
         className="p-5 grid gap-3"
         style={{
-          gridTemplateColumns: `repeat(auto-fit, minmax(min(100%, 260px), 1fr))`,
+          gridTemplateColumns: `repeat(auto-fit, minmax(min(100%, clamp(200px, 90vw, 260px)), 1fr))`,
           // desktop retoma layout fixo quando há espaço
           ['--ffv-arch-cols' as string]: columns.length,
         }}
@@ -501,7 +517,7 @@ export function ArchFlow({ title, columns, accent = 'var(--ffv-blue)' }: {
                 className="px-3 py-2 text-center text-[10px] font-bold uppercase tracking-wide"
                 style={{ background: `color-mix(in srgb, ${color} 20%, var(--ffv-bg2))`, color }}
               >
-                {col.header}
+                {col.header ?? col.title}
               </div>
               <div className="flex-1 flex flex-col gap-1 p-3" style={{ background: `color-mix(in srgb, ${color} 5%, var(--ffv-bg2))` }}>
                 {col.items.filter(Boolean).map((item, j) => (
@@ -548,7 +564,7 @@ export function MatrixDiagram({ title, rowLabels, colLabels, data, highlightThre
         </div>
       )}
       <div className="p-5 overflow-x-auto">
-        <table className="w-full border-collapse text-center text-xs" style={{ tableLayout: 'auto' }}>
+        <table className="w-full border-collapse text-center text-[9px] sm:text-xs" style={{ tableLayout: 'auto' }}>
           <thead>
             <tr>
               <th className="p-2" style={{ color: 'var(--ffv-muted)', fontWeight: 400 }}></th>
@@ -606,16 +622,27 @@ export function ExamDomainBadge({ domain, weight, color = 'var(--ffv-orange)' }:
 
 export function StackFlow({ title, items, accent = 'var(--ffv-blue)' }: {
   title?: string;
-  items: {
+  items: (string | {
     icon?: string;
-    label: string;
+    label?: string;
+    layer?: string;
+    text?: string;
+    desc?: string;
+    description?: string;
+    tech?: string;
+    items?: string[] | ReactNode;
     sub?: string;
     detail?: ReactNode;
     connector?: string;
     color?: string;
-  }[];
+    tone?: 'default' | 'emphasis' | 'muted' | 'danger' | 'success' | 'normal' | 'tip' | 'warn' | 'info';
+  })[];
   accent?: string;
 }) {
+  const normItems = items.map((it) => {
+    if (typeof it === 'string') return { label: it } as { label: string; icon?: string; sub?: string; detail?: ReactNode; connector?: string; color?: string };
+    return { ...it, label: it.label ?? it.layer ?? it.text ?? '' };
+  });
   return (
     <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${accent}30`, background: 'var(--ffv-bg2)' }}>
       {title && (
@@ -624,7 +651,7 @@ export function StackFlow({ title, items, accent = 'var(--ffv-blue)' }: {
         </div>
       )}
       <div className="p-4 sm:p-6 flex flex-col items-center gap-0">
-        {items.map((it, i) => {
+        {normItems.map((it, i) => {
           const cardColor = it.color ?? accent;
           return (
             <div key={i} className="w-full flex flex-col items-center">
@@ -646,10 +673,10 @@ export function StackFlow({ title, items, accent = 'var(--ffv-blue)' }: {
                   )}
                 </div>
                 {it.detail && (
-                  <div className="text-[11.5px] leading-relaxed" style={{ color: 'var(--foreground)' }}>{it.detail}</div>
+                  <div className="text-[11.5px] leading-relaxed break-words overflow-hidden" style={{ color: 'var(--foreground)' }}>{it.detail}</div>
                 )}
               </div>
-              {i < items.length - 1 && (
+              {i < normItems.length - 1 && (
                 <div className="flex flex-col items-center py-1">
                   <div className="w-px h-4" style={{ background: `${accent}55` }} />
                   {it.connector && (
@@ -889,13 +916,14 @@ export function NodeGraph({ title, accent = 'var(--ffv-blue)', columns, legend }
   accent?: string;
   legend?: string;
   columns: {
-    label: string;
-    nodes: {
+    label?: string;
+    title?: string;
+    nodes: (string | {
       icon?: string;
       label: string;
       sub?: string;
-      tone?: 'default' | 'emphasis' | 'muted' | 'danger' | 'success';
-    }[];
+      tone?: 'default' | 'emphasis' | 'muted' | 'danger' | 'success' | 'normal';
+    })[];
   }[];
 }) {
   const nodeStyles = (tone: string | undefined) => {
@@ -946,9 +974,10 @@ export function NodeGraph({ title, accent = 'var(--ffv-blue)', columns, legend }
                 className="text-[10px] uppercase tracking-widest font-bold text-center py-1.5 rounded-md"
                 style={{ background: `${accent}15`, color: accent, border: `1px solid ${accent}40` }}
               >
-                {col.label}
+                {col.label ?? col.title}
               </div>
-              {col.nodes.map((n, ni) => {
+              {col.nodes.map((rawN, ni) => {
+                const n = typeof rawN === 'string' ? { label: rawN } as { label: string; icon?: string; sub?: string; tone?: 'default' | 'emphasis' | 'muted' | 'danger' | 'success' } : rawN;
                 const ns = nodeStyles(n.tone);
                 return (
                   <div
@@ -982,8 +1011,9 @@ export function NodeGraph({ title, accent = 'var(--ffv-blue)', columns, legend }
 export function Timeline({ title, accent = 'var(--ffv-blue)', events }: {
   title?: string;
   accent?: string;
-  events: { when: string; label: string; detail?: string; highlight?: boolean }[];
+  events: { when?: string; t?: string; label: string; detail?: string; highlight?: boolean }[];
 }) {
+  const normEvents = events.map((e) => ({ ...e, when: e.when ?? e.t ?? '' }));
   return (
     <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${accent}30`, background: 'var(--ffv-bg2)' }}>
       {title && (
@@ -994,7 +1024,7 @@ export function Timeline({ title, accent = 'var(--ffv-blue)', events }: {
       <div className="p-4 sm:p-5">
         <div className="relative flex flex-col gap-3 pl-6">
           <div className="absolute left-2 top-1.5 bottom-1.5 w-px" style={{ background: `${accent}40` }} />
-          {events.map((e, i) => (
+          {normEvents.map((e, i) => (
             <div key={i} className="relative flex items-start gap-3">
               <div
                 className="absolute -left-6 top-1 w-4 h-4 rounded-full flex items-center justify-center"
@@ -1023,7 +1053,7 @@ export function Timeline({ title, accent = 'var(--ffv-blue)', events }: {
 }
 
 export function KeyValue({ items, accent = 'var(--ffv-blue)' }: {
-  items: { k: string; v: ReactNode }[];
+  items: { k: ReactNode; v: ReactNode }[];
   accent?: string;
 }) {
   return (
@@ -1050,9 +1080,21 @@ export function KeyValue({ items, accent = 'var(--ffv-blue)' }: {
 export function AnnotatedFormula({ title, formula, parts, accent = 'var(--ffv-blue)' }: {
   title?: string;
   formula?: string;
-  parts: { text: string; annotation?: string; highlight?: boolean }[];
+  parts: {
+    text?: string;
+    label?: string;
+    name?: string;
+    annotation?: string;
+    note?: string;
+    highlight?: boolean;
+  }[];
   accent?: string;
 }) {
+  const normParts = parts.map((p) => ({
+    text: p.text ?? p.label ?? p.name ?? '',
+    annotation: p.annotation ?? p.note,
+    highlight: p.highlight,
+  }));
   return (
     <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${accent}30`, background: 'var(--ffv-bg2)' }}>
       {title && (
@@ -1067,7 +1109,7 @@ export function AnnotatedFormula({ title, formula, parts, accent = 'var(--ffv-bl
           </div>
         )}
         <div className="flex flex-wrap gap-2 justify-center">
-          {parts.map((part, i) => (
+          {normParts.map((part, i) => (
             part.annotation ? (
               <div key={i} className="flex flex-col items-center gap-1">
                 <div

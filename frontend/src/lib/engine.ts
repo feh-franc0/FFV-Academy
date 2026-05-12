@@ -59,9 +59,19 @@ export interface GameState {
   earlyMorningDays: string[];
   /** Timestamp ISO do primeiro módulo de cada trilha (para badge speedrun_trail). */
   trailStartedAt: Record<string, string>;
+  // v3 — engagement features
+  /** Slugs de módulos salvos pelo usuário. */
+  bookmarks: string[];
+  /** Avaliações do usuário: 1 = útil, -1 = não útil. */
+  moduleRatings: Record<string, 1 | -1>;
+  /** Quests concluídas (daily resets toda a madrugada, weekly reseta segunda-feira). */
+  quests: {
+    daily: Array<{ id: string; completedAt: string }>;
+    weekly: Array<{ id: string; completedAt: string }>;
+  };
 }
 
-const CURRENT_SCHEMA = 2;
+const CURRENT_SCHEMA = 4;
 
 /** Migra estado antigo (sem schemaVersion) para versão atual. */
 function migrateState(parsed: Record<string, unknown>): Partial<GameState> {
@@ -77,6 +87,23 @@ function migrateState(parsed: Record<string, unknown>): Partial<GameState> {
       perfectQuizStreak: typeof state.perfectQuizStreak === 'number' ? state.perfectQuizStreak : 0,
       earlyMorningDays: Array.isArray(state.earlyMorningDays) ? state.earlyMorningDays : [],
       trailStartedAt: state.trailStartedAt && typeof state.trailStartedAt === 'object' ? state.trailStartedAt : {},
+    };
+  }
+  // v2 → v3: bookmarks + moduleRatings
+  if (version < 3) {
+    state = {
+      ...state,
+      schemaVersion: 3,
+      bookmarks: Array.isArray(state.bookmarks) ? state.bookmarks : [],
+      moduleRatings: state.moduleRatings && typeof state.moduleRatings === 'object' ? state.moduleRatings : {},
+    };
+  }
+  // v3 → v4: quests
+  if (version < 4) {
+    state = {
+      ...state,
+      schemaVersion: 4,
+      quests: { daily: [], weekly: [] },
     };
   }
   return state as Partial<GameState>;
@@ -114,6 +141,9 @@ const DEFAULT_STATE: GameState = {
   perfectQuizStreak: 0,
   earlyMorningDays: [],
   trailStartedAt: {},
+  bookmarks: [],
+  moduleRatings: {},
+  quests: { daily: [], weekly: [] },
 };
 
 export function loadState(): GameState {
@@ -152,6 +182,9 @@ export function loadState(): GameState {
         perfectQuizStreak: typeof migrated.perfectQuizStreak === 'number' ? migrated.perfectQuizStreak : 0,
         earlyMorningDays: Array.isArray(migrated.earlyMorningDays) ? migrated.earlyMorningDays : [],
         trailStartedAt: migrated.trailStartedAt && typeof migrated.trailStartedAt === 'object' ? migrated.trailStartedAt as Record<string, string> : {},
+        bookmarks: Array.isArray(migrated.bookmarks) ? migrated.bookmarks : [],
+        moduleRatings: migrated.moduleRatings && typeof migrated.moduleRatings === 'object' ? migrated.moduleRatings as Record<string, 1 | -1> : {},
+        quests: migrated.quests && typeof migrated.quests === 'object' ? migrated.quests as GameState['quests'] : { daily: [], weekly: [] },
       };
     }
   } catch {}
@@ -651,6 +684,39 @@ export function completeOnboarding(preferredHub: string | null) {
 export function setPreferredHub(preferredHub: string | null) {
   const state = loadState();
   saveState({ ...state, preferredHub });
+}
+
+export function toggleBookmark(slug: string): boolean {
+  const state = loadState();
+  const isBookmarked = state.bookmarks.includes(slug);
+  const bookmarks = isBookmarked
+    ? state.bookmarks.filter(s => s !== slug)
+    : [...state.bookmarks, slug];
+  saveState({ ...state, bookmarks });
+  return !isBookmarked;
+}
+
+export function rateModule(slug: string, rating: 1 | -1): void {
+  const state = loadState();
+  saveState({ ...state, moduleRatings: { ...state.moduleRatings, [slug]: rating } });
+}
+
+export function claimQuestReward(questId: string, xpReward: number): void {
+  const state = loadState();
+  const list = state.quests.daily.some(q => q.id === questId)
+    || state.quests.weekly.some(q => q.id === questId);
+  if (list) return; // already claimed
+  const entry = { id: questId, completedAt: new Date().toISOString() };
+  // Determine period from questId prefix
+  const isWeekly = questId.startsWith('weekly_');
+  saveState({
+    ...state,
+    xp: state.xp + xpReward,
+    quests: {
+      daily: isWeekly ? state.quests.daily : [...state.quests.daily, entry],
+      weekly: isWeekly ? [...state.quests.weekly, entry] : state.quests.weekly,
+    },
+  });
 }
 
 // Todas as trilhas liberadas — o leitor escolhe por onde começa

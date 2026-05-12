@@ -7,6 +7,8 @@ import { useGameState } from '@/hooks/useGameState';
 import { exportState, importState } from '@/lib/engine';
 import { ShareCard } from '@/components/ShareCard';
 import { Certificate, getCompletedTrailIds } from '@/components/Certificate';
+import { MyRankCard } from '@/components/MyRankCard';
+import { QuestsCard } from '@/components/QuestsCard';
 import {
   BADGES_DEF,
   CURRICULUM,
@@ -20,9 +22,11 @@ import {
   type Hub,
   type Trail,
 } from '@/lib/curriculum';
+import { StudyHeatmap } from '@/components/StudyHeatmap';
+import { toast } from '@/lib/toast';
 
 export function ProgressoClient() {
-  const { state, levelInfo, dueCards, refresh } = useGameState();
+  const { state, levelInfo, dueCards, refresh, weeklyStats, recommendations } = useGameState();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showShare, setShowShare] = useState(false);
   const [certificateTrailId, setCertificateTrailId] = useState<string | null>(null);
@@ -47,9 +51,9 @@ export function ProgressoClient() {
       const result = importState(json);
       if (result.ok) {
         refresh();
-        alert('Dados importados com sucesso!');
+        toast.success('Dados importados com sucesso!');
       } else {
-        alert(`Arquivo inválido ou corrompido.\n\nMotivo: ${result.error}`);
+        toast.error(`Arquivo inválido: ${result.error}`);
       }
     };
     reader.readAsText(file);
@@ -113,6 +117,148 @@ export function ProgressoClient() {
           <Stat label="Badges" value={`${state.badges.length}`} sub={`de ${BADGES_DEF.length} conquistas`} accent="var(--ffv-purple)" />
           <Stat label="Cards devidos" value={`${dueCards.length}`} sub={dueCards.length > 0 ? 'revisar agora' : 'em dia'} accent="var(--ffv-green)" link={dueCards.length > 0 ? '/revisar' : undefined} />
         </div>
+      </section>
+
+      {/* Esta semana */}
+      {weeklyStats.activeDays > 0 && (
+        <section className="max-w-5xl mx-auto px-6 pb-8">
+          <SectionLabel>ESTA SEMANA</SectionLabel>
+          <div className="grid gap-3 mt-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))' }}>
+            <WeeklyStat icon="📅" value={`${weeklyStats.activeDays}d`} label="dias ativos" color="var(--ffv-blue)" />
+            <WeeklyStat icon="⚡" value={weeklyStats.xp.toLocaleString('pt-BR')} label="XP ganhos" color="var(--ffv-yellow)" />
+            <WeeklyStat icon="⏱" value={weeklyStats.minutes >= 60 ? `${Math.floor(weeklyStats.minutes / 60)}h ${weeklyStats.minutes % 60}min` : `${weeklyStats.minutes}min`} label="de estudo" color="var(--ffv-green)" />
+            <WeeklyStat icon="🧠" value={`${weeklyStats.cards}`} label="cards revisados" color="var(--ffv-purple)" />
+          </div>
+        </section>
+      )}
+
+      {/* Continue de onde parou */}
+      {state.lastArticle && !completed.includes(state.lastArticle.slug) && (
+        <section className="max-w-5xl mx-auto px-6 pb-8">
+          <SectionLabel>CONTINUE DE ONDE PAROU</SectionLabel>
+          <Link
+            href={state.lastArticle.href}
+            className="flex items-center gap-4 mt-4 p-4 rounded-xl transition-all hover:opacity-90"
+            style={{
+              background: `color-mix(in srgb, ${state.lastArticle.trailColor} 8%, var(--ffv-bg2))`,
+              border: `1px solid ${state.lastArticle.trailColor}40`,
+              textDecoration: 'none',
+              color: 'inherit',
+            }}
+          >
+            <div
+              className="flex-shrink-0 flex items-center justify-center"
+              style={{ width: 48, height: 48, borderRadius: 12, background: `${state.lastArticle.trailColor}20`, fontSize: 24 }}
+            >
+              ▶
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-sm truncate">{state.lastArticle.title}</p>
+              <p className="text-xs mt-0.5" style={{ color: 'var(--ffv-muted)' }}>
+                {state.lastArticle.trailName} · {state.lastArticle.readTime} min ·{' '}
+                <span style={{ color: state.lastArticle.trailColor }}>+{state.lastArticle.xp} XP</span>
+                {state.lastArticle.progress > 0.05 && (
+                  <> · {Math.round(state.lastArticle.progress * 100)}% lido</>
+                )}
+              </p>
+            </div>
+            <span className="flex-shrink-0 text-xs font-semibold px-3 py-1 rounded-full" style={{ background: state.lastArticle.trailColor, color: '#0d1117' }}>
+              Continuar →
+            </span>
+          </Link>
+        </section>
+      )}
+
+      {/* Próximos para você */}
+      {recommendations.length > 0 && (
+        <section className="max-w-5xl mx-auto px-6 pb-8">
+          <SectionLabel>PRÓXIMOS PARA VOCÊ</SectionLabel>
+          <div className="grid gap-3 mt-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
+            {recommendations.map(r => (
+              <Link
+                key={r.slug}
+                href={r.href}
+                style={{ textDecoration: 'none', color: 'inherit' }}
+              >
+                <div
+                  className="p-4 rounded-xl h-full flex flex-col gap-2 transition-all hover:opacity-90"
+                  style={{
+                    background: `color-mix(in srgb, ${r.trailColor} 6%, var(--ffv-bg2))`,
+                    border: `1px solid ${r.trailColor}30`,
+                  }}
+                >
+                  <div className="flex items-center gap-2">
+                    <span style={{ fontSize: 18 }}>{r.trailIcon}</span>
+                    <span style={{ fontSize: 10, color: r.trailColor, fontWeight: 700, fontFamily: 'monospace', letterSpacing: '0.08em', textTransform: 'uppercase' }}>{r.trailName}</span>
+                  </div>
+                  <p className="font-semibold text-sm flex-1">{r.title}</p>
+                  <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--ffv-muted)' }}>
+                    <span>⏱ {r.readTime} min</span>
+                    <span>·</span>
+                    <span style={{ color: r.trailColor }}>+{r.xp} XP</span>
+                  </div>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="max-w-5xl mx-auto px-6 pb-12">
+        <StudyHeatmap studyDays={state.studyDays} />
+      </section>
+
+      <section className="max-w-5xl mx-auto px-6 pb-12">
+        <SectionLabel>QUESTS</SectionLabel>
+        <div className="mt-4 grid md:grid-cols-2 gap-4 items-start">
+          <QuestsCard />
+          <div
+            className="rounded-2xl p-5 flex flex-col gap-3"
+            style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}
+          >
+            <div className="flex items-center gap-2 mb-1">
+              <span style={{ fontSize: 18 }}>⚡</span>
+              <span className="font-bold text-sm">Ações rápidas</span>
+            </div>
+            <Link
+              href="/revisao"
+              className="flex items-center justify-between px-4 py-3 rounded-xl text-sm font-medium transition-all hover:opacity-90"
+              style={{ background: 'var(--ffv-bg)', border: '1px solid var(--ffv-border)', color: 'var(--foreground)', textDecoration: 'none' }}
+            >
+              <div className="flex items-center gap-2">
+                <span>🏃</span>
+                <div>
+                  <div className="font-semibold">Maratona de Revisão</div>
+                  <div className="text-xs" style={{ color: 'var(--ffv-muted)' }}>Sessão SRS configurável</div>
+                </div>
+              </div>
+              <span style={{ color: 'var(--ffv-blue)' }}>→</span>
+            </Link>
+            <Link
+              href="/devcard"
+              className="flex items-center justify-between px-4 py-3 rounded-xl text-sm font-medium transition-all hover:opacity-90"
+              style={{ background: 'var(--ffv-bg)', border: '1px solid var(--ffv-border)', color: 'var(--foreground)', textDecoration: 'none' }}
+            >
+              <div className="flex items-center gap-2">
+                <span>🃏</span>
+                <div>
+                  <div className="font-semibold">Meu Dev Card</div>
+                  <div className="text-xs" style={{ color: 'var(--ffv-muted)' }}>Compartilhe no LinkedIn</div>
+                </div>
+              </div>
+              <span style={{ color: 'var(--ffv-purple)' }}>→</span>
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      <section className="max-w-5xl mx-auto px-6 pb-12">
+        <MyRankCard />
+      </section>
+
+      <section className="max-w-5xl mx-auto px-6 pb-12">
+        <SectionLabel>PERFORMANCE POR TRILHA</SectionLabel>
+        <TrailPerformanceGrid completedSlugs={completed} quizScores={state.quizScores} />
       </section>
 
       <section className="max-w-5xl mx-auto px-6 pb-12">
@@ -183,6 +329,43 @@ export function ProgressoClient() {
           </section>
         );
       })()}
+
+      {/* Módulos salvos */}
+      {state.bookmarks.length > 0 && (
+        <section className="max-w-5xl mx-auto px-6 pb-12">
+          <SectionLabel>MÓDULOS SALVOS — {state.bookmarks.length}</SectionLabel>
+          <div className="flex flex-col gap-2 mt-4">
+            {state.bookmarks.map(slug => {
+              const found = CURRICULUM.flatMap(t => t.modules.map(m => ({ ...m, trail: t }))).find(m => m.slug === slug);
+              if (!found) return null;
+              const isDone = completed.includes(slug);
+              return (
+                <Link
+                  key={slug}
+                  href={`/aprenda/${slug}`}
+                  style={{ textDecoration: 'none', color: 'inherit' }}
+                >
+                  <div
+                    className="flex items-center gap-3 p-3 rounded-xl transition-all hover:opacity-90"
+                    style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}
+                  >
+                    <span style={{ fontSize: 18, flexShrink: 0 }}>{found.trail.icon}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-sm truncate">{found.title}</p>
+                      <p className="text-xs mt-0.5" style={{ color: 'var(--ffv-muted)' }}>
+                        {found.trail.name} · {found.readTime} min · <span style={{ color: found.trail.color }}>+{found.xp} XP</span>
+                      </p>
+                    </div>
+                    {isDone && (
+                      <span className="flex-shrink-0 text-xs px-2 py-0.5 rounded-full font-semibold" style={{ background: 'rgba(63,185,80,0.12)', color: 'var(--ffv-green)', border: '1px solid rgba(63,185,80,0.3)' }}>✓</span>
+                    )}
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       <section className="max-w-5xl mx-auto px-6 pb-20">
         <SectionLabel>BADGES</SectionLabel>
@@ -465,6 +648,25 @@ function TrailProgressRow({ trail, completedSlugs }: { trail: Trail; completedSl
   );
 }
 
+/* ───────── WeeklyStat ───────── */
+function WeeklyStat({ icon, value, label, color }: { icon: string; value: string; label: string; color: string }) {
+  return (
+    <div
+      className="rounded-xl p-3 flex items-center gap-3"
+      style={{
+        background: `color-mix(in srgb, ${color} 8%, var(--ffv-bg2))`,
+        border: `1px solid color-mix(in srgb, ${color} 22%, transparent)`,
+      }}
+    >
+      <span style={{ fontSize: 20 }}>{icon}</span>
+      <div>
+        <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--foreground)' }}>{value}</div>
+        <div style={{ fontSize: 11, color: 'var(--ffv-muted)' }}>{label}</div>
+      </div>
+    </div>
+  );
+}
+
 /* ───────── Primitives ───────── */
 function SectionLabel({ children, color = 'var(--ffv-muted)' }: { children: React.ReactNode; color?: string }) {
   return (
@@ -528,4 +730,94 @@ function Stat({
     );
   }
   return inner;
+}
+
+/* ───────── Trail Performance Grid ───────── */
+function TrailPerformanceGrid({
+  completedSlugs,
+  quizScores,
+}: {
+  completedSlugs: string[];
+  quizScores: Record<string, { score: number; total: number; perfect: boolean }>;
+}) {
+  const trails = CURRICULUM.filter(t => {
+    const done = t.modules.filter(m => completedSlugs.includes(m.slug)).length;
+    return done > 0;
+  });
+
+  if (trails.length === 0) {
+    return (
+      <p className="text-sm mt-4" style={{ color: 'var(--ffv-muted)' }}>
+        Complete módulos para ver sua performance por trilha.
+      </p>
+    );
+  }
+
+  return (
+    <div
+      className="mt-4 rounded-2xl overflow-hidden"
+      style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}
+    >
+      {trails.map((trail, i) => {
+        const tp = getTrailProgress(trail.modules, completedSlugs);
+        const trailSlugs = trail.modules.map(m => m.slug);
+        const scores = trailSlugs
+          .filter(s => quizScores[s])
+          .map(s => quizScores[s]);
+        const totalAnswered = scores.reduce((a, s) => a + s.total, 0);
+        const totalCorrect = scores.reduce((a, s) => a + s.score, 0);
+        const accuracy = totalAnswered === 0 ? null : Math.round((totalCorrect / totalAnswered) * 100);
+        const perfects = scores.filter(s => s.perfect).length;
+        const xpEarned = trail.modules
+          .filter(m => completedSlugs.includes(m.slug))
+          .reduce((a, m) => a + m.xp, 0);
+
+        return (
+          <div
+            key={trail.id}
+            className="px-5 py-4 flex items-center gap-4"
+            style={{ borderTop: i === 0 ? undefined : '1px solid var(--ffv-border)' }}
+          >
+            <div
+              className="flex-shrink-0 flex items-center justify-center"
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 10,
+                background: `color-mix(in srgb, ${trail.color} 14%, transparent)`,
+                border: `1px solid color-mix(in srgb, ${trail.color} 30%, transparent)`,
+                fontSize: 18,
+              }}
+            >
+              {trail.icon}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <span className="font-semibold text-sm truncate">{trail.name}</span>
+                <span className="font-mono text-xs flex-shrink-0" style={{ color: trail.color }}>{tp.done}/{tp.total}</span>
+              </div>
+              <div style={{ height: 3, background: 'var(--ffv-bg3)', borderRadius: 999, overflow: 'hidden', marginBottom: 6 }}>
+                <div style={{ width: `${tp.pct}%`, height: '100%', background: trail.color, transition: 'width 0.3s ease' }} />
+              </div>
+              <div className="flex items-center gap-3 flex-wrap">
+                {accuracy !== null && (
+                  <span className="text-xs" style={{ color: accuracy >= 80 ? 'var(--ffv-green)' : accuracy >= 50 ? 'var(--ffv-gold)' : '#f78166' }}>
+                    {accuracy}% precisão
+                  </span>
+                )}
+                {perfects > 0 && (
+                  <span className="text-xs" style={{ color: 'var(--ffv-gold)' }}>
+                    ⭐ {perfects} perfeito{perfects !== 1 ? 's' : ''}
+                  </span>
+                )}
+                <span className="text-xs font-mono" style={{ color: trail.color }}>
+                  +{xpEarned.toLocaleString('pt-BR')} XP
+                </span>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }

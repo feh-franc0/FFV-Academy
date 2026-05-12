@@ -30,12 +30,16 @@ function render(report: DriftReport, nonce: string): string {
       const badge =
         f.status === 'in-sync'
           ? '<span class="b ok">in sync</span>'
-          : f.status === 'stale'
-            ? '<span class="b warn">stale</span>'
-            : f.status === 'missing'
-              ? '<span class="b miss">missing</span>'
-              : '<span class="b info">untagged</span>';
-      return `<tr><td><code>${escape(f.relPath)}</code></td><td>${badge}</td><td><code>${f.manifest ?? '—'}</code></td></tr>`;
+          : f.status === 'project-stale'
+            ? '<span class="b warn">project stale</span>'
+            : f.status === 'user-edited'
+              ? '<span class="b info">user edited</span>'
+              : f.status === 'both-stale'
+                ? '<span class="b warn">both stale</span>'
+                : f.status === 'missing'
+                  ? '<span class="b miss">missing</span>'
+                  : '<span class="b info">untagged</span>';
+      return `<tr><td><code>${escape(f.relPath)}</code></td><td>${badge}</td><td><code>${f.projectManifest ?? '—'}</code></td></tr>`;
     })
     .join('');
 

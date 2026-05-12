@@ -93,7 +93,7 @@ async function handleCharge(req) {
     await tx.charge.create({ data: req.body });
     await tx.idempotencyKey.create({ data: { key, request: req.body } });
   });
-  const response = { status: 201, body: charge };
+  const response = { status: 201, detail: charge };
   await redis.set(\`idem:\${key}\`, JSON.stringify(response), 'EX', 86400 * 2);
   return new Response(JSON.stringify(charge), { status: 201 });
 }`}</CodeBlock>

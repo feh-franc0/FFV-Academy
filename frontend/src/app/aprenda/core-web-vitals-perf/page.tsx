@@ -166,7 +166,7 @@ worker.onmessage = (e) => render(e.data);`}</CodeBlock>
       <Section title="Medindo RUM: web-vitals.js" accent={accent}>
         <CodeBlock lang="ts">{`import { onCLS, onINP, onLCP, onTTFB, onFCP } from 'web-vitals/attribution';
 
-function sendToBackend(metric: { name: string; value: number; attribution: unknown }) {
+function sendToBackend(metric: { text: string; value: number; attribution: unknown }) {
   // Use beacon para garantir envio mesmo no unload
   navigator.sendBeacon('/rum', JSON.stringify({
     name: metric.name,

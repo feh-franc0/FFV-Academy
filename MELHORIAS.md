@@ -563,11 +563,42 @@ Uma **trilha** está pronta quando:
 - [ ] O último artigo tem bridge explícita para próxima trilha recomendada
 
 O **sistema de aprendizado** está pronto quando:
-- [ ] Trilhas 1-2 reescritas com densidade equivalente às Trilhas 9-11
-- [ ] Todos os componentes visuais implementados e usados
-- [ ] Sitemap + JSON-LD ativos (SEO baseline)
+- [x] Trilhas 1-2 reescritas com densidade equivalente às Trilhas 9-11
+- [ ] Todos os componentes visuais implementados e usados *(ArchDiagram ainda em uso)*
+- [x] Sitemap + JSON-LD ativos (SEO baseline)
 - [ ] `Prerequisites`/`NextSteps` funcionando com progresso real do usuário
-- [ ] Seção "Por onde começar?" na home ativa
+- [x] Seção "Por onde começar?" na home ativa
+
+---
+
+## 🔄 Atualização — maio/2026
+
+### Itens completados após esta auditoria
+Várias melhorias deste documento foram parcial ou totalmente endereçadas na **jornada de maio/2026** (ver detalhes em [`CHANGELOG_PLATFORM_2026-05.md`](./CHANGELOG_PLATFORM_2026-05.md)):
+
+- ✅ **Sitemap dinâmico** — `app/sitemap.ts`
+- ✅ **JSON-LD baseline** — `ArticleJsonLd` ativo
+- ✅ **"Por onde começar?" ativa** — `ComecarAqui` na home (6 caminhos)
+- ✅ **Currículo expandido** — 5 trilhas novas (Profissional Digital), 29 módulos
+- ✅ **Home redesenhada** — 16 → 8 seções, com prova social honesta
+- ✅ **Sistema de ranking** — 4 períodos, página dedicada `/ranking`
+- ✅ **`/news` rebuscada** — imagens reais + magazine layout
+
+### Itens ainda em backlog (deste documento)
+- ⏳ **ArchDiagram → componentes visuais** (HierarchyDiagram, FlowDiagram, etc) — não migrados
+- ⏳ **Prerequisites/NextSteps com progresso real** — implementação parcial
+
+### Novos itens identificados (auditoria mai/2026)
+- **P1** Onboarding v2 — 3a pergunta ("quanto tempo por dia?") + playlist personalizada
+- **P1** Mobile experience completo — pódio mobile, filtros, swipe gestures
+- **P2** Cleanup `curriculum.ts` (4894 linhas) — quebrar em arquivos por trilha
+- **P2** Test coverage de componentes — HomeClient, MobileNav, OnboardingModal, MyRankCard
+- **P2** Hook automático `npm run generate-og` no postbuild
+- **P3** Trail overview pages das 5 trilhas novas (`/comunicacao-humana`, `/carreira-digital`, etc)
+- **P3** Migrar imagens Unsplash para `public/news/` em build time
+- **P3** Acessibilidade — só 24/71 componentes têm aria-* (Lighthouse audit)
+
+*Atualização: 04/05/2026 — após redesign da home + ranking + news + auditoria crítica.*
 
 ---
 

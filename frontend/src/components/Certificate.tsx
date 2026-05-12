@@ -80,7 +80,8 @@ export function Certificate({ trailId, onClose }: CertificateProps) {
     // Nome do aluno
     ctx.fillStyle = '#e6edf3';
     ctx.font = 'bold 56px Poppins, Inter, system-ui, sans-serif';
-    ctx.fillText(name || 'Aluno(a) FFV Academy', CERT_W / 2, 350);
+    const displayName = (name || 'Aluno(a) FFV Academy').slice(0, 80);
+    ctx.fillText(displayName, CERT_W / 2, 350);
 
     // Concluiu a trilha
     ctx.fillStyle = '#8b949e';
@@ -238,6 +239,7 @@ export function Certificate({ trailId, onClose }: CertificateProps) {
                 value={name}
                 onChange={e => setName(e.target.value)}
                 placeholder="Seu nome"
+                maxLength={80}
                 className="text-sm px-3 py-1 rounded-md flex-1 max-w-xs"
                 style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)', color: 'var(--foreground)' }}
                 autoFocus

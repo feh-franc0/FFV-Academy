@@ -259,7 +259,7 @@ spec:
           ports: [{ containerPort: 3000 }]
           env:
             - name: DATABASE_URL
-              valueFrom: { secretKeyRef: { name: api-secrets, key: db-url } }
+              valueFrom: { secretKeyRef: { text: api-secrets, key: db-url } }
           readinessProbe:
             httpGet: { path: /health, port: 3000 }
             initialDelaySeconds: 3
@@ -409,11 +409,11 @@ spec:
           - path: /v1
             pathType: Prefix
             backend:
-              service: { name: api-v1, port: { number: 80 } }
+              service: { text: api-v1, port: { number: 80 } }
           - path: /v2
             pathType: Prefix
             backend:
-              service: { name: api-v2, port: { number: 80 } }`}</CodeBlock>
+              service: { text: api-v2, port: { number: 80 } }`}</CodeBlock>
       </Section>
 
       <Section title="ConfigMap e Secret — separar código de config" accent={ACCENT}>
@@ -427,14 +427,14 @@ spec:
         />
         <CodeBlock lang="yaml">{`apiVersion: v1
 kind: ConfigMap
-metadata: { name: app-config }
+metadata: { text: app-config }
 data:
   LOG_LEVEL: info
   FEATURE_NEW_DASHBOARD: "true"
 ---
 apiVersion: v1
 kind: Secret
-metadata: { name: app-secrets }
+metadata: { text: app-secrets }
 type: Opaque
 stringData:
   db-url: postgres://user:pass@db:5432/app
@@ -446,10 +446,10 @@ spec:
     - name: app
       image: me/app:1.0
       envFrom:
-        - configMapRef: { name: app-config }
+        - configMapRef: { text: app-config }
       env:
         - name: DB_URL
-          valueFrom: { secretKeyRef: { name: app-secrets, key: db-url } }`}</CodeBlock>
+          valueFrom: { secretKeyRef: { text: app-secrets, key: db-url } }`}</CodeBlock>
         <Callout tone="danger">
           <strong>Secret NÃO é criptografado por default no etcd</strong> — só codificado em base64. Habilite{' '}
           <em>encryption-at-rest</em> no kube-apiserver (KMS provider) em produção. Para segredos críticos, use{' '}
@@ -503,7 +503,7 @@ spec:
         <CodeBlock lang="yaml">{`# PVC dinâmico: o StorageClass provisiona o PV sozinho
 apiVersion: v1
 kind: PersistentVolumeClaim
-metadata: { name: pg-data }
+metadata: { text: pg-data }
 spec:
   accessModes: [ReadWriteOnce]
   storageClassName: gp3
@@ -512,13 +512,13 @@ spec:
 ---
 apiVersion: v1
 kind: Pod
-metadata: { name: postgres }
+metadata: { text: postgres }
 spec:
   containers:
     - name: pg
       image: postgres:16-alpine
       volumeMounts:
-        - { name: data, mountPath: /var/lib/postgresql/data }
+        - { text: data, mountPath: /var/lib/postgresql/data }
   volumes:
     - name: data
       persistentVolumeClaim: { claimName: pg-data }`}</CodeBlock>
@@ -602,7 +602,7 @@ roleRef:
         />
         <CodeBlock lang="yaml">{`apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
-metadata: { name: api-hpa }
+metadata: { text: api-hpa }
 spec:
   scaleTargetRef:
     apiVersion: apps/v1

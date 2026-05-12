@@ -90,7 +90,7 @@ jobs:
     strategy:
       matrix: { shard: [1, 2, 3, 4] }
     steps:
-      - run: pnpm playwright test --shard=\${{ matrix.shard }}/4
+      - run: pnpm playwright test --shard=\${'$'}{{ matrix.shard }}/4
 
   perf-budget:
     runs-on: ubuntu-latest

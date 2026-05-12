@@ -4,6 +4,7 @@ import { GeneratedFile, ScanResult } from '../core/types';
 export interface TestSuiteInput {
   scan: ScanResult;
   targetFile: string; // relative path of the module to be tested
+  targetContent?: string; // actual content of the file being tested (optional)
 }
 
 /**
@@ -11,19 +12,19 @@ export interface TestSuiteInput {
  * following the testing pyramid. Picks framework based on scan.
  */
 export function generateTestSuite(input: TestSuiteInput): GeneratedFile[] {
-  const { scan, targetFile } = input;
+  const { scan, targetFile, targetContent } = input;
   const lang = scan.stack.language;
   const framework = scan.stack.testFramework ?? defaultFramework(lang);
   const baseName = path.basename(targetFile, path.extname(targetFile));
   const dir = path.dirname(targetFile);
 
   if (lang === 'typescript' || lang === 'javascript') {
-    return tsSuite(dir, baseName, framework);
+    return tsSuite(dir, baseName, framework, targetContent);
   }
   if (lang === 'python') {
     return pySuite(dir, baseName);
   }
-  return tsSuite(dir, baseName, framework);
+  return tsSuite(dir, baseName, framework, targetContent);
 }
 
 function defaultFramework(lang: string): string {
@@ -40,25 +41,66 @@ function defaultFramework(lang: string): string {
   }
 }
 
-function tsSuite(dir: string, name: string, framework: string): GeneratedFile[] {
-  const ext = framework === 'jest' ? 'test.ts' : 'test.ts';
+function extractExportedNames(content: string): string[] {
+  const names: string[] = [];
+  const declarationPattern = /export\s+(?:async\s+)?(?:function|class|const|let|var)\s+(\w+)/g;
+  const namedPattern = /export\s*\{([^}]+)\}/g;
+
+  let m: RegExpExecArray | null;
+  while ((m = declarationPattern.exec(content)) !== null) {
+    names.push(m[1]);
+  }
+  while ((m = namedPattern.exec(content)) !== null) {
+    const parts = m[1].split(',').map((s) => s.trim().split(/\s+as\s+/)[0].trim());
+    for (const p of parts) {
+      if (p && !names.includes(p)) names.push(p);
+    }
+  }
+  return names;
+}
+
+function tsSuite(dir: string, name: string, framework: string, targetContent?: string): GeneratedFile[] {
+  const ext = 'test.ts';
   const importPath = `./${name}`;
 
+  // Extract exported names from target content when available
+  const exportedNames = targetContent ? extractExportedNames(targetContent) : [];
+  const importClause =
+    exportedNames.length > 0
+      ? `{ ${exportedNames.join(', ')} }`
+      : '/* TODO */';
+
+  // Build per-export it() blocks when names are available
+  const perExportBlocks =
+    exportedNames.length > 0
+      ? exportedNames
+          .map(
+            (exportName) => `
+  it('${exportName} — happy path', () => {
+    // Arrange
+    // Act
+    // Assert
+    expect(${exportName}).toBeDefined();
+  });`
+          )
+          .join('\n')
+      : `
+  it('does the expected thing under happy path', () => {
+    // Arrange
+    // Act
+    // Assert
+    expect(true).toBe(true);
+  });`;
+
   const unit = `import { describe, it, expect, beforeEach } from '${framework}';
-import { /* TODO */ } from '${importPath}';
+import ${importClause} from '${importPath}';
 
 // Unit test — single responsibility, no I/O, no network.
 describe('${name} (unit)', () => {
   beforeEach(() => {
     // arrange shared state
   });
-
-  it('does the expected thing under happy path', () => {
-    // Arrange
-    // Act
-    // Assert
-    expect(true).toBe(true);
-  });
+${perExportBlocks}
 
   it('rejects invalid input', () => {
     expect(() => {

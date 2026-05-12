@@ -116,7 +116,7 @@ metrics.set('abc' as UserId, 42);`}</CodeBlock>
 
       <Section title="Quando NÃO usar utilitários" accent={accent}>
         <p>
-          A regra: se seu tipo nomeado é &quot;usado uma vez e tem significado&quot;, <strong>nomeie-o</strong>. Combinações monstruosas como <InlineCode>Omit&lt;Pick&lt;User, &#39;name&#39; | &#39;email&#39;&gt;, &#39;email&#39;&gt;</InlineCode> viram ilegíveis. Crie <InlineCode>type PublicProfile = {'{ name: string }'}</InlineCode> e fim.
+          A regra: se seu tipo nomeado é &quot;usado uma vez e tem significado&quot;, <strong>nomeie-o</strong>. Combinações monstruosas como <InlineCode>Omit&lt;Pick&lt;User, &#39;name&#39; | &#39;email&#39;&gt;, &#39;email&#39;&gt;</InlineCode> viram ilegíveis. Crie <InlineCode>type PublicProfile = {'{ text: string }'}</InlineCode> e fim.
         </p>
       </Section>
     </ModuleLayout>

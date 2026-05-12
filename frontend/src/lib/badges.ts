@@ -10,7 +10,7 @@
  */
 
 import { CURRICULUM, BADGES_DEF, getHubForTrail } from './curriculum';
-import { todayISO, daysBetween } from './srs';
+import { daysBetween } from './srs';
 import { GAME_CONFIG } from './constants';
 import type { GameState } from './engine';
 

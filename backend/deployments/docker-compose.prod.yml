@@ -1,7 +1,7 @@
 name: ffv-prod
 
 services:
-  # ─── Nginx: proxy reverso + SSL ────────────────────────────────────────────
+  # ─── Nginx: proxy reverso + SSL + load balancer ─────────────────────────────
   nginx:
     image: nginx:1.27-alpine
     restart: unless-stopped
@@ -11,9 +11,7 @@ services:
     volumes:
       - /opt/ffv/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - /opt/ffv/nginx/conf.d:/etc/nginx/conf.d:ro
-      # Certificados Let's Encrypt (gerenciados pelo certbot no host)
       - /etc/letsencrypt:/etc/letsencrypt:ro
-      # Webroot para renovação automática do certbot
       - certbot_webroot:/var/www/certbot:ro
     networks:
       - proxy
@@ -21,11 +19,13 @@ services:
       api:
         condition: service_healthy
 
-  # ─── Go API ────────────────────────────────────────────────────────────────
+  # ─── Go API (2 réplicas via --scale api=2 no deploy.sh) ─────────────────────
+  # O Docker DNS resolve "api" para todas as réplicas saudáveis.
+  # O Nginx upstream detecta falhas via max_fails e exclui a réplica doente.
+  # Enquanto Docker reinicia a réplica com problema, 100% do tráfego vai para a outra.
   api:
     image: ghcr.io/feh-franc0/ffv-api:${IMAGE_TAG:-latest}
     restart: unless-stopped
-    # Segredos e config vêm de /opt/ffv/.env (criado manualmente na VPS, nunca no repositório)
     env_file: /opt/ffv/.env
     expose:
       - "8080"
@@ -34,18 +34,31 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    # Distroless não tem shell/curl: usa o próprio binário com flag --healthcheck
     healthcheck:
       test: ["CMD", "/api", "--healthcheck"]
-      interval: 30s
+      interval: 15s
       timeout: 5s
-      start_period: 15s
+      start_period: 20s
       retries: 3
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 60s
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.8"
+        reservations:
+          memory: 128m
+          cpus: "0.1"
     networks:
       - proxy
       - data
 
-  # ─── PostgreSQL ────────────────────────────────────────────────────────────
+  # ─── PostgreSQL ─────────────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -53,7 +66,6 @@ services:
       POSTGRES_USER: ffv
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ffv_prod
-    # Expõe apenas no loopback do host (para o migrate CLI rodar sem entrar no container)
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
@@ -64,10 +76,18 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.8"
+        reservations:
+          memory: 256m
+          cpus: "0.1"
     networks:
       - data
 
-  # ─── Redis ─────────────────────────────────────────────────────────────────
+  # ─── Redis ──────────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -85,6 +105,14 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 320m
+          cpus: "0.3"
+        reservations:
+          memory: 64m
+          cpus: "0.05"
     networks:
       - data
 
@@ -94,8 +122,6 @@ volumes:
   certbot_webroot:
 
 networks:
-  # nginx ↔ api (com acesso externo via ports)
   proxy:
-  # api ↔ postgres ↔ redis (sem acesso externo)
   data:
     internal: true

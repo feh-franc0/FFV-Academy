@@ -2,14 +2,22 @@ import * as crypto from 'crypto';
 import { ScanResult } from '../core/types';
 
 /**
- * A "manifest" is a deterministic fingerprint of the project state that
- * matters for AI-instruction files. When this hash changes, the generated
- * CLAUDE.md / .cursorrules / etc. are likely stale.
+ * Dual-hash strategy:
  *
- * We hash a stable subset of the scan: stack identity, scripts, top-level
- * structure, naming convention. Volatile data (file counts, timestamps) is
- * excluded so the hash doesn't flap on every save.
+ * projectHash — fingerprint of the PROJECT STATE (stack, structure, scripts).
+ *   Changes when: new dependency installed, framework added, source root moved.
+ *   Purpose: "has the project evolved since this file was generated?"
+ *
+ * fileHash — fingerprint of the GENERATED FILE CONTENT at write time.
+ *   Changes when: the file is edited (by the tool or the user).
+ *   Purpose: "has the file been modified since generation?" (to detect user edits)
+ *
+ * Both hashes are embedded in the file so detectDrift can compare them.
  */
+
+const MANIFEST_TAG = 'aitk-manifest';
+
+/** Compute a deterministic hash of the project state. */
 export function computeManifest(scan: ScanResult): string {
   const subset = {
     language: scan.stack.language,
@@ -27,12 +35,17 @@ export function computeManifest(scan: ScanResult): string {
   return crypto.createHash('sha256').update(json).digest('hex').slice(0, 16);
 }
 
-const MANIFEST_TAG = 'aitk-manifest';
-
-export function manifestComment(hash: string): string {
-  return `<!-- ${MANIFEST_TAG}: ${hash} -->`;
+/** Hash of a file's content — stored to detect user edits. */
+export function computeFileHash(content: string): string {
+  return crypto.createHash('sha256').update(content).digest('hex').slice(0, 16);
 }
 
+/** Embed manifest tag in the file comment. */
+export function manifestComment(projectHash: string): string {
+  return `<!-- ${MANIFEST_TAG}: ${projectHash} -->`;
+}
+
+/** Extract the project hash embedded in a file. */
 export function extractManifest(content: string): string | null {
   const m = new RegExp(`<!--\\s*${MANIFEST_TAG}:\\s*([a-f0-9]+)\\s*-->`).exec(content);
   return m ? m[1] : null;

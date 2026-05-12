@@ -48,10 +48,18 @@ function makeMockClient(overrides: Partial<{ [K in keyof FFVClient]: unknown }> 
 
 // ─── Helper: conectar server+client em memória ────────────────────────────────
 
+const MOCK_CFG = {
+  baseUrl: "http://localhost:8080",
+  adminToken: "tok",
+  httpTimeoutMs: 5_000,
+  newsJsonPath: "/tmp/news.json",
+  catalogJsonPath: "/tmp/catalog.json",
+};
+
 async function makeConnectedPair(clientOverrides: Partial<{ [K in keyof FFVClient]: unknown }> = {}) {
   const server = new McpServer({ name: "test", version: "0.0.0" });
   const mockClient = makeMockClient(clientOverrides);
-  registerTools(server, mockClient);
+  registerTools(server, mockClient, MOCK_CFG);
 
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const sdkClient = new Client({ name: "test-client", version: "0.0.0" });

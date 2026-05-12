@@ -174,6 +174,9 @@ test/
 | POST | `/api/v1/events` | JWT | Event.Ingest |
 | GET | `/api/v1/leaderboard` | JWT | Leaderboard.GetWeekly |
 | GET | `/api/v1/leaderboard/me` | JWT | Leaderboard.GetMyRank |
+| GET | `/api/v1/leaderboard/me/all` | JWT | Leaderboard.GetMyRankAll *(novo, mai/2026)* |
+| GET | `/api/v1/leaderboard/public` | público | Leaderboard.GetPublic *(novo, mai/2026 — query: `?period=weekly\|monthly\|yearly\|all-time&limit=N`)* |
+| GET | `/api/v1/stats` | público | Stats.GetPublic *(novo, mai/2026 — totalUsers, activeWeekly, totalXpAwarded)* |
 | GET | `/api/v1/admin/stats` | JWT + admin | Admin.GetStats |
 | GET | `/api/v1/admin/audit` | JWT + admin | Admin.GetAuditLog |
 | POST | `/api/v1/admin/curriculum/{slug}` | JWT + admin | Curriculum.Create |
@@ -465,3 +468,192 @@ RFC 7807 Problem+JSON. `httputil.WriteError(w, status, detail, type)` produz:
 - `ErrValidation` → 400
 - `ErrRateLimited` → 429
 - qualquer outro → 500
+
+---
+
+## 📌 Endpoints públicos novos (mai/2026)
+
+Adicionados para suportar o redesign da home com social proof real e ranking público.
+
+### `GET /api/v1/stats` (público, cache 60s)
+Handler: `internal/interfaces/http/handlers/stats_handler.go`. Query Postgres direto (sem domain layer — é um stats simples). Retorna:
+```json
+{ "totalUsers": 0, "activeWeekly": 0, "totalXpAwarded": 0 }
+```
+
+### `GET /api/v1/leaderboard/public?period=weekly|monthly|yearly|all-time&limit=N` (público, cache 60s)
+Top-N anonimizado (userID vazio). Default: weekly, 10 entradas, max 100. Retorna `periodStart` e `periodEnd` em RFC 3339 para o cliente exibir "ranking de maio".
+
+### `GET /api/v1/leaderboard/me/all` (autenticado)
+Rank do usuário em todos os 4 períodos:
+```json
+{ "ranks": [
+  { "period": "weekly", "rank": 5, "xp": 320 },
+  { "period": "monthly", "rank": 12, "xp": 1100 },
+  { "period": "yearly", "rank": 28, "xp": 4500 },
+  { "period": "all-time", "rank": 35, "xp": 6200 }
+]}
+```
+
+### Domain `internal/domain/leaderboard/leaderboard.go`
+- `Period` enum (`weekly`, `monthly`, `yearly`, `all-time`)
+- `IsValidPeriod(s string) bool`
+- `PeriodWindow(p, now) (start, end)` — janela em UTC
+- `Repository` agora tem `GetByPeriod` e `GetUserRankByPeriod`
+
+### Implementação SQL
+- `GetByPeriod`: usa CTE com `SUM(xp_gained)` e `JOIN leaderboard_opt_ins`. Helper `nullableTime(t)` permite janela aberta no all-time.
+- `GetUserRankByPeriod`: mesma CTE com `RANK() OVER (ORDER BY xp_total DESC)` em outer, filtro por user_id.
+
+---
+
+## 🚀 Deploy e Infraestrutura
+
+### Onde o backend roda
+
+| Item | Detalhe |
+|------|---------|
+| **Provedor** | Hostinger VPS KVM 2 |
+| **IP público** | `72.60.28.82` |
+| **Datacenter** | Estados Unidos — Boston (latência ~120ms para BR) |
+| **OS** | Ubuntu 24.04 LTS |
+| **Hostname** | `srv1660277` |
+| **Recursos** | 2 vCPU / 8 GB RAM / 100 GB NVMe / 8 TB banda |
+| **Domínio da API** | `api.fernandofrancovalle.com` |
+| **SSH** | `ssh deploy@72.60.28.82` (usuário `deploy`, chave ed25519) |
+
+### Arquitetura Docker no VPS
+
+```
+Internet :443/:80
+    │
+  Nginx (container) — TLS Let's Encrypt, rate limiting, HSTS
+    │  upstream api_backend (round-robin, max_fails=3, proxy_next_upstream)
+    ├── api_1:8080  ← réplica 1 (healthcheck /healthz a cada 15s)
+    └── api_2:8080  ← réplica 2 (healthcheck /healthz a cada 15s)
+         │
+    (rede data — internal: true, sem acesso externo)
+         ├── postgres:5432  (exposto em 127.0.0.1:5432 pro migrate CLI)
+         └── redis:6379
+
+Volumes persistentes: postgres_data, redis_data, certbot_webroot
+```
+
+**Fault tolerance:** se uma réplica da API travar, Nginx detecta via `max_fails` e roteia 100% para a outra. Docker reinicia a réplica com problema automaticamente (`restart: unless-stopped`). Usuário não percebe.
+
+**Resource limits por container:**
+- API (×2): 512 MB / 0.8 CPU cada
+- Postgres: 512 MB / 0.8 CPU
+- Redis: 320 MB / 0.3 CPU
+- Total: ~1.9 GB — dentro dos 8 GB do KVM 2
+
+### Como o deploy funciona (automático)
+
+```
+git push main
+  → CI passa (.github/workflows/ci.yml)
+  → .github/workflows/deploy.yml dispara
+      └── build-push:
+            1. Docker build multi-stage (golang:1.25-alpine → distroless)
+            2. Push para ghcr.io/feh-franc0/ffv-api:sha-<hash>
+      └── deploy-backend:
+            1. SCP: docker-compose.prod.yml + nginx conf + migrations → VPS /tmp/
+            2. SSH: executa /opt/ffv/bin/deploy.sh na VPS
+               a. docker pull nova imagem
+               b. salva tag anterior (para rollback)
+               c. sobe postgres + redis se necessário
+               d. migrate -path /opt/ffv/migrations up
+               e. docker compose up --scale api=2 --no-deps api
+               f. health check (aguarda ≥1 réplica healthy, máx 120s)
+               g. sucesso → atualiza nginx
+               h. falha → rollback automático para tag anterior
+```
+
+### Setup inicial da VPS (roda UMA vez como root)
+
+```bash
+ssh root@72.60.28.82
+bash scripts/vps-setup.sh
+# Responde: domínio = api.fernandofrancovalle.com, email LE, usuário = deploy
+nano /opt/ffv/.env   # preenche com valores reais (ver .env.template)
+```
+
+### Acesso SSH ao VPS
+
+```bash
+ssh deploy@72.60.28.82          # usuário de deploy (não-root)
+ssh root@72.60.28.82            # root (só para setup inicial)
+```
+
+### Comandos úteis no VPS
+
+```bash
+# Ver logs da API em tempo real
+docker compose -f /opt/ffv/docker-compose.prod.yml logs -f api
+
+# Ver status de todos os containers
+docker compose -f /opt/ffv/docker-compose.prod.yml ps
+
+# Reiniciar API manualmente
+docker compose -f /opt/ffv/docker-compose.prod.yml restart api
+
+# Ver saúde das réplicas
+docker compose -f /opt/ffv/docker-compose.prod.yml ps api
+
+# Rollback manual para tag anterior
+PREVIOUS=$(cat /opt/ffv/.current_tag)
+IMAGE_TAG=$PREVIOUS docker compose -f /opt/ffv/docker-compose.prod.yml up -d --no-deps --scale api=2 api
+
+# Rodar migration manualmente
+source /opt/ffv/.env
+migrate -path /opt/ffv/migrations -database "$DATABASE_URL" up
+```
+
+### GitHub Secrets necessários (Settings → Secrets → Actions)
+
+| Secret | Valor |
+|--------|-------|
+| `VPS_HOST` | `72.60.28.82` |
+| `VPS_USER` | `deploy` |
+| `VPS_SSH_KEY` | chave privada ed25519 do usuário deploy |
+| `VPS_PORT` | `22` |
+| `NEXT_PUBLIC_API_BASE_URL` | `https://api.fernandofrancovalle.com` |
+| `HOSTINGER_FTP_SERVER` | servidor FTP Hostinger |
+| `HOSTINGER_FTP_USERNAME` | usuário FTP Hostinger |
+| `HOSTINGER_FTP_PASSWORD` | senha FTP Hostinger |
+| `HOSTINGER_FTP_DIR` | `/public_html/` |
+
+### Ativar deploy automático
+
+Por padrão o deploy está **desativado** até a infra estar configurada.
+Para ativar: GitHub → Settings → Variables → Actions → `DEPLOY_ENABLED` = `true`
+
+### Arquivos de deploy no repositório
+
+| Arquivo | Descrição |
+|---------|-----------|
+| `deployments/Dockerfile` | Multi-stage: golang:1.25-alpine → distroless/static-debian12:nonroot |
+| `deployments/docker-compose.prod.yml` | Produção: nginx + api(×2) + postgres + redis |
+| `deployments/docker-compose.yml` | Dev local: api + postgres + redis + mailhog |
+| `deployments/nginx/nginx.conf` | Config base Nginx: gzip, rate-limit zones |
+| `deployments/nginx/conf.d/api.conf` | Virtual host HTTPS + upstream com fault tolerance |
+| `scripts/vps-setup.sh` | Setup inicial da VPS (roda uma vez) |
+| `scripts/deploy.sh` | Deploy script (chamado pelo GitHub Actions via SSH) |
+
+### Healthcheck do binário (`--healthcheck`)
+
+O binário Go suporta a flag `--healthcheck`:
+```bash
+/api --healthcheck   # faz GET /healthz, sai com 0 (ok) ou 1 (falha)
+```
+Usado pelo Docker `HEALTHCHECK CMD` no Dockerfile e no docker-compose.
+Necessário porque a imagem distroless não tem curl/wget/shell.
+
+---
+
+## 📚 Referências cross-projeto
+
+- [`../CLAUDE.md`](../CLAUDE.md) — visão monorepo
+- [`../CHANGELOG_PLATFORM_2026-05.md`](../CHANGELOG_PLATFORM_2026-05.md) — todas as mudanças de maio/2026 (frontend + backend)
+- [`PLAN.md`](./PLAN.md) — plano detalhado de iteração da API
+- [`../frontend/CLAUDE.md`](../frontend/CLAUDE.md) — deploy e infra do frontend (Hostinger shared hosting)

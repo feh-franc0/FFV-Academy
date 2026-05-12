@@ -52,8 +52,8 @@ export default function Page() {
       readTime={10}
       trailName="Technical Writing & RFCs"
       trailColor={accent}
-      nextSlug="tw-docs-api-vivas"
-      nextTitle="tw-docs-api-vivas"
+      nextSlug="capstone-tech-writing-rfc"
+      nextTitle="Capstone: RFC completo para mudança real"
       quiz={quiz}
     >
       <Section title="Mental model" accent={accent}>

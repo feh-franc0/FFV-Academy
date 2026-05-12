@@ -3,8 +3,13 @@
 import { GameDemo } from './GameDemo';
 import { FfvButton } from '@/components/ui/ffv-button';
 import { StatusBadge } from '@/components/ui/status-badge';
+import { useGameState } from '@/hooks/useGameState';
 
 export function Hero({ totalArticles, totalTrails }: { totalArticles: number; totalTrails: number }) {
+  const { state } = useGameState();
+  const lastArticle = state?.lastArticle;
+  const isReturning = !!lastArticle && (state?.completedModules?.length ?? 0) > 0;
+
   return (
     <section className="relative px-6 pt-16 pb-20 md:pt-24 md:pb-24 overflow-hidden">
       <div
@@ -60,12 +65,25 @@ export function Hero({ totalArticles, totalTrails }: { totalArticles: number; to
           </p>
 
           <div className="flex items-center gap-3 flex-wrap">
-            <FfvButton href="/mapa" variant="primary" size="lg">
-              Começar agora — é gratuito →
-            </FfvButton>
-            <FfvButton href="/progresso" variant="secondary" size="lg">
-              Ver meu progresso
-            </FfvButton>
+            {isReturning && lastArticle ? (
+              <>
+                <FfvButton href={lastArticle.href} variant="primary" size="lg">
+                  Continuar: {lastArticle.title.length > 32 ? lastArticle.title.slice(0, 32) + '…' : lastArticle.title} →
+                </FfvButton>
+                <FfvButton href="/mapa" variant="secondary" size="lg">
+                  Explorar trilhas
+                </FfvButton>
+              </>
+            ) : (
+              <>
+                <FfvButton href="/mapa" variant="primary" size="lg">
+                  Começar agora — é gratuito →
+                </FfvButton>
+                <FfvButton href="/progresso" variant="secondary" size="lg">
+                  Ver meu progresso
+                </FfvButton>
+              </>
+            )}
           </div>
         </div>
 

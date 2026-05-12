@@ -94,7 +94,7 @@ const client = DocumentIntelligence(endpoint, new AzureKeyCredential(key));
 
 const init = await client
   .path('/documentModels/{modelId}:analyze', 'prebuilt-invoice')
-  .post({ contentType: 'application/json', body: { urlSource: pdfUrl } });
+  .post({ contentType: 'application/json', detail: { urlSource: pdfUrl } });
 
 const poller = getLongRunningPoller(client, init);
 const result = (await poller.pollUntilDone()).body.analyzeResult;

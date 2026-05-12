@@ -280,7 +280,7 @@ stages:
             { k: 'Library → Variable Group', v: 'Nome + pares chave/valor. Marcar cadeado = secret (não visível depois de salvo).' },
             { k: 'Link com Azure Key Vault', v: 'Variable Group pode apontar pra um KV. Valores atualizam automaticamente; nada fica no ADO.' },
             { k: 'Permissão', v: 'Por Variable Group. Sem acesso, pipeline falha ao requisitar — evita vazamento cruzado entre times.' },
-            { k: 'Uso no YAML', v: 'variables: [{ group: shared-config }, { name: SENTRY_DSN, value: "$(SENTRY_DSN)" }]' },
+            { k: 'Uso no YAML', v: 'variables: [{ group: shared-config }, { text: SENTRY_DSN, value: "$(SENTRY_DSN)" }]' },
             { k: 'Secure Files', v: 'Arquivos (certificados, kubeconfig) que o pipeline baixa com DownloadSecureFile@1.' },
           ]}
         />
@@ -303,12 +303,12 @@ parameters:
 
 steps:
   - task: NodeTool@0
-    inputs: { versionSpec: \${{ parameters.nodeVersion }} }
+    inputs: { versionSpec: \${'$'}{{ parameters.nodeVersion }} }
   - script: npm ci
   - script: npm run lint
   - script: npm test -- --ci
     displayName: 'Test'
-  - \${{ if eq(parameters.runCoverage, true) }}:
+  - \${'$'}{{ if eq(parameters.runCoverage, true) }}:
     - task: PublishCodeCoverageResults@2
       inputs: { summaryFileLocation: 'coverage/cobertura-coverage.xml' }`}</CodeBlock>
         <CodeBlock lang="yaml">{`# pipeline consumidor

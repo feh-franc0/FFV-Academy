@@ -70,10 +70,10 @@ platform: "onnxruntime_onnx"
 max_batch_size: 128
 
 input [
-  { name: "features", data_type: TYPE_FP32, dims: [ 42 ] }
+  { text: "features", data_type: TYPE_FP32, dims: [ 42 ] }
 ]
 output [
-  { name: "probability", data_type: TYPE_FP32, dims: [ 1 ] }
+  { text: "probability", data_type: TYPE_FP32, dims: [ 1 ] }
 ]
 
 dynamic_batching {
@@ -126,8 +126,8 @@ async def predict(payload: dict) -&gt; dict:
 name: "text_pipeline"
 platform: "ensemble"
 max_batch_size: 32
-input  [ { name: "raw_text", data_type: TYPE_STRING, dims: [ 1 ] } ]
-output [ { name: "label",   data_type: TYPE_FP32,   dims: [ 3 ] } ]
+input  [ { text: "raw_text", data_type: TYPE_STRING, dims: [ 1 ] } ]
+output [ { text: "label",   data_type: TYPE_FP32,   dims: [ 3 ] } ]
 
 ensemble_scheduling {
   step [

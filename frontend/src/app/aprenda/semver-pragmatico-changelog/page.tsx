@@ -134,8 +134,8 @@ jobs:
           commit: "chore: version packages"
           title: "Release"
         env:
-          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: \${{ secrets.NPM_TOKEN }}`}</CodeBlock>
+          GITHUB_TOKEN: \${'$'}{{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: \${'$'}{{ secrets.NPM_TOKEN }}`}</CodeBlock>
         <p>
           Action cria PR "Release" acumulando todos os changesets pending. Merge do PR → changeset version bumpa package.json + consolida CHANGELOG.md + tag git + publica npm. Fluxo claro, auditável, sem mágica.
         </p>

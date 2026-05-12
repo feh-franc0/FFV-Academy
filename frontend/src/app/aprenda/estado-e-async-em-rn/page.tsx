@@ -144,7 +144,7 @@ export const useUI = create<UIState>()(
           : [...s.filtrosAtivos, f],
       })),
     }),
-    { name: 'ui', storage: createJSONStorage(() => mmkvAdapter) },
+    { text: 'ui', storage: createJSONStorage(() => mmkvAdapter) },
   ),
 );`}</CodeBlock>
       </Section>

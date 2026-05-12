@@ -28,6 +28,17 @@ type Config struct {
 	Anthropic AnthropicConfig
 	CORS      CORSConfig
 	Telemetry TelemetryConfig
+	Features  FeaturesConfig
+}
+
+// FeaturesConfig agrupa feature flags de funcionalidades opcionais.
+// Permite desabilitar partes da plataforma (billing, tutor IA, phone auth)
+// sem remover código — útil enquanto integrações externas (Stripe, Twilio,
+// Anthropic) não estão configuradas em produção.
+type FeaturesConfig struct {
+	BillingEnabled   bool `envconfig:"FEATURE_BILLING_ENABLED" default:"false"`
+	TutorAIEnabled   bool `envconfig:"FEATURE_TUTOR_AI_ENABLED" default:"false"`
+	PhoneAuthEnabled bool `envconfig:"FEATURE_PHONE_AUTH_ENABLED" default:"false"`
 }
 
 type AppConfig struct {
@@ -73,8 +84,8 @@ type JWTConfig struct {
 }
 
 type StripeConfig struct {
-	SecretKey       string `envconfig:"STRIPE_SECRET_KEY" required:"true"`
-	WebhookSecret   string `envconfig:"STRIPE_WEBHOOK_SECRET" required:"true"`
+	SecretKey       string `envconfig:"STRIPE_SECRET_KEY" default:""`
+	WebhookSecret   string `envconfig:"STRIPE_WEBHOOK_SECRET" default:""`
 	SuccessURL      string `envconfig:"STRIPE_SUCCESS_URL" default:"https://fernandofrancovalle.com/simulados?payment=success"`
 	CancelURL       string `envconfig:"STRIPE_CANCEL_URL" default:"https://fernandofrancovalle.com/simulados?payment=cancelled"`
 	SimuladoPriceID string `envconfig:"STRIPE_SIMULADO_PRICE_ID" default:"price_placeholder"`
@@ -93,7 +104,7 @@ type TwilioConfig struct {
 }
 
 type AnthropicConfig struct {
-	APIKey       string        `envconfig:"ANTHROPIC_API_KEY" required:"true"`
+	APIKey       string        `envconfig:"ANTHROPIC_API_KEY" default:""`
 	Model        string        `envconfig:"ANTHROPIC_MODEL" default:"claude-sonnet-4-6"`
 	MaxTokens    int           `envconfig:"ANTHROPIC_MAX_TOKENS" default:"1024"`
 	CacheTTL     time.Duration `envconfig:"ANTHROPIC_CACHE_TTL" default:"168h"` // 7 days
@@ -134,6 +145,7 @@ func Load() (*Config, error) {
 		{"", &cfg.Anthropic},
 		{"", &cfg.CORS},
 		{"", &cfg.Telemetry},
+		{"", &cfg.Features},
 	}
 
 	for _, g := range groups {
@@ -205,6 +217,13 @@ func LoadTest() *Config {
 			AllowedOrigins: []string{"http://localhost:3000"},
 		},
 		Telemetry: TelemetryConfig{}, // desabilitado em testes
+		Features: FeaturesConfig{
+			// Em testes habilitamos todas as features para não quebrar testes
+			// existentes que cobrem billing/tutor/phone auth.
+			BillingEnabled:   true,
+			TutorAIEnabled:   true,
+			PhoneAuthEnabled: true,
+		},
 	}
 }
 

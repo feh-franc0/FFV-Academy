@@ -84,9 +84,9 @@ function safeMatch(pattern: string, input: string, timeoutMs = 100): boolean {
         <CodeBlock lang="typescript">{`import Fuse from 'fuse.js';
 
 const list = [
-  { name: 'Fernando Franco Valle' },
-  { name: 'Fernanda Silva' },
-  { name: 'Ferreira' },
+  { text: 'Fernando Franco Valle' },
+  { text: 'Fernanda Silva' },
+  { text: 'Ferreira' },
 ];
 
 const fuse = new Fuse(list, {

@@ -214,13 +214,13 @@ udiff-simple          → diff sem linha de contexto extra
         </p>
         <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))' }}>
           {[
-            { name: 'GPT-4o (OpenAI)', desc: 'Default. Rápido, multi-modal.' },
-            { name: 'Claude 3.5/3.7 (Anthropic)', desc: 'Melhor para tarefas longas de código.' },
-            { name: 'Gemini 1.5 (Google)', desc: 'Contexto muito longo (1M tokens).' },
-            { name: 'o3-mini (OpenAI)', desc: 'Raciocínio mais lento, mais preciso.' },
+            { text: 'GPT-4o (OpenAI)', desc: 'Default. Rápido, multi-modal.' },
+            { text: 'Claude 3.5/3.7 (Anthropic)', desc: 'Melhor para tarefas longas de código.' },
+            { text: 'Gemini 1.5 (Google)', desc: 'Contexto muito longo (1M tokens).' },
+            { text: 'o3-mini (OpenAI)', desc: 'Raciocínio mais lento, mais preciso.' },
           ].map(item => (
-            <div key={item.name} className="p-3 rounded-lg" style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}>
-              <p className="font-semibold text-xs mb-1">{item.name}</p>
+            <div key={item.text} className="p-3 rounded-lg" style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}>
+              <p className="font-semibold text-xs mb-1">{item.text}</p>
               <p className="text-xs" style={{ color: 'var(--ffv-muted)' }}>{item.desc}</p>
             </div>
           ))}

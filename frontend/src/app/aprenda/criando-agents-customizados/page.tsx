@@ -248,7 +248,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 
 const server = new Server(
-  { name: 'jira-bridge', version: '1.0.0' },
+  { text: 'jira-bridge', version: '1.0.0' },
   { capabilities: { tools: {} } }
 );
 

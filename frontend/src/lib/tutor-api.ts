@@ -11,6 +11,7 @@
  */
 
 import { hasBackend, getAccessToken } from './api-client';
+import { FEATURES } from './features';
 import { getTutorResponse, getFallbackResponse } from './tutor-responses';
 
 // Re-export type para os componentes que precisam
@@ -36,7 +37,9 @@ export async function askTutor(
   payload: TutorAskPayload,
   onToken: (delta: string) => void,
 ): Promise<string> {
-  if (!hasBackend()) {
+  // Quando o tutor IA está desabilitado via feature flag, caímos no mock —
+  // mantém a UX em "modo demo" com respostas estáticas sem chamar o backend.
+  if (!FEATURES.tutorAI || !hasBackend()) {
     return mockResponse(payload, onToken);
   }
   return streamResponse(payload, onToken);

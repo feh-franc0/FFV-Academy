@@ -100,22 +100,17 @@ test.describe('SyncBanner', () => {
   });
 
   test('dismiss key persiste no localStorage e impede nova exibição', async ({ page }) => {
+    // Como o reload reexecuta os addInitScript, definimos a chave de dismiss
+    // já no script de init (em vez de page.evaluate, que seria limpo no reload).
     await page.addInitScript((keys) => {
-      localStorage.removeItem(keys.dismiss);
       localStorage.setItem(
         keys.gameState,
         JSON.stringify({ completedModules: ['intro-ia'], xp: 100 }),
       );
+      localStorage.setItem(keys.dismiss, String(Date.now()));
     }, { gameState: GAME_STATE_KEY, dismiss: DISMISS_KEY });
 
     await page.goto('/');
-    await page.waitForTimeout(500);
-
-    // Simulate the user clicking dismiss by setting the key directly
-    await page.evaluate((key) => {
-      localStorage.setItem(key, String(Date.now()));
-    }, DISMISS_KEY);
-
     await page.reload();
     await page.waitForTimeout(500);
 

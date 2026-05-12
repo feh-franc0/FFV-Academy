@@ -83,6 +83,13 @@ export const GameStateSchema = z.object({
   perfectQuizStreak: z.number().int().nonnegative().optional(),
   earlyMorningDays: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).optional(),
   trailStartedAt: z.record(z.string(), z.string()).optional(),
+  bookmarks: z.array(z.string()).optional(),
+  moduleRatings: z.record(z.string(), z.union([z.literal(1), z.literal(-1)])).optional(),
+  /** Quests concluídas: { daily: [{ id, completedAt }], weekly: [...] } */
+  quests: z.object({
+    daily: z.array(z.object({ id: z.string(), completedAt: z.string() })),
+    weekly: z.array(z.object({ id: z.string(), completedAt: z.string() })),
+  }).optional(),
   /** Metadata adicionada pelo exportState — ignorada na importação. */
   exportedAt: z.string().optional(),
 }).strict();

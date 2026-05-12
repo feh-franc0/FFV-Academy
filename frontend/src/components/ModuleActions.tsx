@@ -69,6 +69,20 @@ export function ModuleActions({ title, slug, accent, trailName }: Props) {
           <span aria-hidden>🖥️</span>
           <span>Apresentar</span>
         </button>
+        <a
+          href={`mailto:fernandofv1110@gmail.com?subject=Sugestão: ${encodeURIComponent(title)}&body=Artigo: https://fernandofrancovalle.com/aprenda/${encodeURIComponent(slug)}%0A%0AMinha sugestão:%0A`}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border transition-colors hover:opacity-90"
+          style={{
+            borderColor: `${accent}40`,
+            color: 'var(--ffv-muted)',
+            background: 'transparent',
+          }}
+          aria-label="Sugerir melhoria neste artigo"
+          title="Enviar sugestão ou reportar erro"
+        >
+          <span aria-hidden>✏️</span>
+          <span>Sugerir</span>
+        </a>
       </div>
       {presenting && (
         <PresentationMode

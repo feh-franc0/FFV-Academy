@@ -36,9 +36,11 @@ export default defineConfig({
         timeout: 120_000,
       }
     : {
-        command: 'npm run dev',
+        // Força modo mock (backend desabilitado) para que os fluxos auth/quiz
+        // não dependam do servidor Go local em http://localhost:8080.
+        command: 'NEXT_PUBLIC_API_BASE_URL= npm run dev',
         url: 'http://localhost:3000',
-        reuseExistingServer: true,
+        reuseExistingServer: false,
         timeout: 120_000,
       },
 });

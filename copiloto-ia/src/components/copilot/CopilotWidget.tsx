@@ -7,6 +7,7 @@ import remarkGfm from 'remark-gfm'
 import {
   X, Send, Square, Download, CheckCheck, Sparkles,
   ChevronDown, FileSpreadsheet, PhoneForwarded, Loader2, RotateCcw,
+  Zap, Type,
 } from 'lucide-react'
 import clsx from 'clsx'
 import {
@@ -270,25 +271,42 @@ interface WidgetProps {
 }
 
 export default function CopilotWidget({ selectedCustomer }: WidgetProps) {
-  const [isOpen,          setIsOpen]          = useState(false)
-  const [messages,        setMessages]        = useState<ChatMessage[]>([])
-  const [botState,        setBotState]        = useState<'idle' | 'typing' | 'loading'>('idle')
-  const [loaderLabel,     setLoaderLabel]     = useState('')
-  const [inputValue,      setInputValue]      = useState('')
-  const [showProactive,   setShowProactive]   = useState(false)
-  const [resolvedActions, setResolvedActions] = useState<Record<string, 'confirmed' | 'cancelled'>>({})
-  const [isBotBusy,       setIsBotBusy]       = useState(false)
+  const [isOpen,           setIsOpen]           = useState(false)
+  const [messages,         setMessages]         = useState<ChatMessage[]>([])
+  const [botState,         setBotState]         = useState<'idle' | 'typing' | 'loading'>('idle')
+  const [loaderLabel,      setLoaderLabel]      = useState('')
+  const [inputValue,       setInputValue]       = useState('')
+  const [showProactive,    setShowProactive]    = useState(false)
+  const [resolvedActions,  setResolvedActions]  = useState<Record<string, 'confirmed' | 'cancelled'>>({})
+  const [isBotBusy,        setIsBotBusy]        = useState(false)
+  const [streamingEnabled, setStreamingEnabled] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('aria-streaming') !== 'false'
+    }
+    return true
+  })
 
-  const messagesEndRef    = useRef<HTMLDivElement>(null)
-  const inputRef          = useRef<HTMLInputElement>(null)
-  const isBusyRef         = useRef(false)
-  const hasGreetedRef     = useRef(false)
+  const messagesEndRef     = useRef<HTMLDivElement>(null)
+  const inputRef           = useRef<HTMLInputElement>(null)
+  const isBusyRef          = useRef(false)
+  const hasGreetedRef      = useRef(false)
   const currentCustomerRef = useRef<Customer | null>(null)
-  const stopRef           = useRef<() => void>(() => {})
+  const stopRef            = useRef<() => void>(() => {})
+  const streamingRef       = useRef(streamingEnabled)
 
   const setBusy = useCallback((val: boolean) => {
     isBusyRef.current = val
     setIsBotBusy(val)
+  }, [])
+
+  useEffect(() => { streamingRef.current = streamingEnabled }, [streamingEnabled])
+
+  const toggleStreaming = useCallback(() => {
+    setStreamingEnabled(prev => {
+      const next = !prev
+      localStorage.setItem('aria-streaming', String(next))
+      return next
+    })
   }, [])
 
   useEffect(() => {
@@ -360,7 +378,7 @@ export default function CopilotWidget({ selectedCustomer }: WidgetProps) {
           if (stopped) break
           setBotState('idle')
         } else if (step.type === 'message') {
-          if (step.stream && step.text) {
+          if (step.stream && step.text && streamingRef.current) {
             const msgId = addMessage({ role: 'bot', text: '', streaming: true })
             const full  = step.text
             for (let i = STREAM_CHUNK; i <= full.length + STREAM_CHUNK; i += STREAM_CHUNK) {
@@ -630,6 +648,20 @@ export default function CopilotWidget({ selectedCustomer }: WidgetProps) {
                 </p>
               </div>
               <div className="flex items-center gap-1 flex-shrink-0">
+                <button
+                  onClick={toggleStreaming}
+                  data-testid="chat-streaming-toggle"
+                  aria-label={streamingEnabled ? 'Modo digitando (clique para instantâneo)' : 'Modo instantâneo (clique para digitando)'}
+                  title={streamingEnabled ? 'Digitando — clique para enviar instantâneo' : 'Instantâneo — clique para modo digitando'}
+                  className={clsx(
+                    'p-1.5 rounded-lg transition-all',
+                    streamingEnabled
+                      ? 'text-blue-400 hover:text-blue-300 hover:bg-blue-500/10'
+                      : 'text-amber-400 hover:text-amber-300 hover:bg-amber-500/10'
+                  )}
+                >
+                  {streamingEnabled ? <Type className="w-3.5 h-3.5" /> : <Zap className="w-3.5 h-3.5" />}
+                </button>
                 <button onClick={handleReset} data-testid="chat-reset" aria-label="Reiniciar conversa"
                   className="p-1.5 text-slate-500 hover:text-slate-300 hover:bg-slate-700/50 rounded-lg transition-colors">
                   <RotateCcw className="w-3.5 h-3.5" />

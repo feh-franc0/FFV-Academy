@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { requestToken, verifyToken, MOCK_TOKEN, type UserProfile } from '@/lib/auth';
 import { emailSchema, phoneBRSchema } from '@/lib/schemas';
+import { FEATURES } from '@/lib/features';
 
 const IS_DEV = process.env.NODE_ENV !== 'production';
 
@@ -96,9 +97,11 @@ export function LoginModal({ reason, onSuccess, onCancel }: Props) {
 
     if (isRegister) {
       if (name.trim().length < 2) return setError('Nome muito curto');
-      const normalized = normalizePhone(phone);
-      if (!phoneBRSchema.safeParse(normalized).success) {
-        return setError('Telefone inválido. Use formato (DD) 9 NNNN-NNNN');
+      if (FEATURES.phoneAuth) {
+        const normalized = normalizePhone(phone);
+        if (!phoneBRSchema.safeParse(normalized).success) {
+          return setError('Telefone inválido. Use formato (DD) 9 NNNN-NNNN');
+        }
       }
       // LGPD: consentimento de marketing é opcional — não pode bloquear o cadastro.
     }
@@ -106,7 +109,13 @@ export function LoginModal({ reason, onSuccess, onCancel }: Props) {
     setLoading(true);
     try {
       const pendingRegistration = isRegister
-        ? { name: name.trim(), phone: normalizePhone(phone), marketingConsent: consent }
+        ? {
+            name: name.trim(),
+            // Phone só é enviado quando a feature está habilitada — caso contrário
+            // não pedimos o campo e o backend recebe string vazia.
+            phone: FEATURES.phoneAuth ? normalizePhone(phone) : '',
+            marketingConsent: consent,
+          }
         : undefined;
 
       const result = await verifyToken(email.trim(), code, pendingRegistration);
@@ -169,7 +178,7 @@ export function LoginModal({ reason, onSuccess, onCancel }: Props) {
             </label>
 
             {error && (
-              <p className="text-xs" style={{ color: 'var(--ffv-red)' }}>{error}</p>
+              <p className="text-xs" role="alert" aria-live="assertive" style={{ color: 'var(--ffv-red)' }}>{error}</p>
             )}
 
             <div className="flex items-center gap-3 mt-3">
@@ -214,26 +223,28 @@ export function LoginModal({ reason, onSuccess, onCancel }: Props) {
                   />
                 </label>
 
-                <label className="text-xs font-semibold" style={{ color: 'var(--ffv-muted)' }}>
-                  Celular
-                  <div className="mt-1 flex items-center rounded-lg overflow-hidden text-sm"
-                    style={{ border: '1px solid var(--ffv-border)', background: 'var(--ffv-bg)' }}>
-                    <span className="px-3 py-2.5 font-mono font-semibold select-none border-r shrink-0"
-                      style={{ color: 'var(--ffv-blue)', borderColor: 'var(--ffv-border)', background: 'rgba(88,166,255,0.06)' }}>
-                      +55
-                    </span>
-                    <input
-                      type="tel"
-                      autoComplete="tel-national"
-                      required
-                      value={phone}
-                      onChange={formatPhone}
-                      placeholder="(11) 98765-4321"
-                      className="flex-1 px-3 py-2.5 bg-transparent outline-none font-normal"
-                      style={{ color: 'var(--foreground)' }}
-                    />
-                  </div>
-                </label>
+                {FEATURES.phoneAuth && (
+                  <label className="text-xs font-semibold" style={{ color: 'var(--ffv-muted)' }}>
+                    Celular
+                    <div className="mt-1 flex items-center rounded-lg overflow-hidden text-sm"
+                      style={{ border: '1px solid var(--ffv-border)', background: 'var(--ffv-bg)' }}>
+                      <span className="px-3 py-2.5 font-mono font-semibold select-none border-r shrink-0"
+                        style={{ color: 'var(--ffv-blue)', borderColor: 'var(--ffv-border)', background: 'rgba(88,166,255,0.06)' }}>
+                        +55
+                      </span>
+                      <input
+                        type="tel"
+                        autoComplete="tel-national"
+                        required
+                        value={phone}
+                        onChange={formatPhone}
+                        placeholder="(11) 98765-4321"
+                        className="flex-1 px-3 py-2.5 bg-transparent outline-none font-normal"
+                        style={{ color: 'var(--foreground)' }}
+                      />
+                    </div>
+                  </label>
+                )}
 
                 <label className="flex items-start gap-2 text-xs mt-1 cursor-pointer" style={{ color: 'var(--ffv-muted)' }}>
                   <input
@@ -280,7 +291,7 @@ export function LoginModal({ reason, onSuccess, onCancel }: Props) {
             </label>
 
             {error && (
-              <p className="text-xs" style={{ color: 'var(--ffv-red)' }}>{error}</p>
+              <p className="text-xs" role="alert" aria-live="assertive" style={{ color: 'var(--ffv-red)' }}>{error}</p>
             )}
 
             <div className="flex items-center gap-3 mt-2">

@@ -178,7 +178,7 @@ jobs:
       - run: npm install -g @anthropic-ai/claude-code
       - name: Revisar PR com Claude
         env:
-          ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_API_KEY: \${'$'}{{ secrets.ANTHROPIC_API_KEY }}
         run: |
           git diff origin/main...HEAD > pr_diff.txt
           claude -p "\$(cat <<'EOF'

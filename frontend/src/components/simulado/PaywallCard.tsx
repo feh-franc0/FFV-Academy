@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { FEATURES } from '@/lib/features';
 
 interface Props {
   price: number;
@@ -41,21 +42,39 @@ export function PaywallCard({ price, freeLimit, onUnlock }: Props) {
         Desbloqueie o simulado completo — todas as questões restantes, tutor IA em cada uma, e emissão de certificado quando atingir a nota mínima.
       </p>
 
-      <button
-        onClick={handleClick}
-        disabled={processing}
-        className="px-8 py-3 rounded-xl font-bold text-sm disabled:opacity-50"
-        style={{ background: accent, color: '#0d1117' }}
-      >
-        {processing ? 'Processando…' : `Desbloquear por R$ ${price}`}
-      </button>
+      {FEATURES.billing ? (
+        <>
+          <button
+            onClick={handleClick}
+            disabled={processing}
+            className="px-8 py-3 rounded-xl font-bold text-sm disabled:opacity-50"
+            style={{ background: accent, color: '#0d1117' }}
+          >
+            {processing ? 'Processando…' : `Desbloquear por R$ ${price}`}
+          </button>
 
-      <p className="text-[11px] mt-4" style={{ color: 'var(--ffv-muted)' }}>
-        Acesso vitalício · sem assinatura · pagamento único
-      </p>
-      <p className="text-[10px] mt-2 font-mono" style={{ color: 'var(--ffv-muted)' }}>
-        🧪 MVP: clique simula pagamento — nenhum cartão é cobrado
-      </p>
+          <p className="text-[11px] mt-4" style={{ color: 'var(--ffv-muted)' }}>
+            Acesso vitalício · sem assinatura · pagamento único
+          </p>
+          <p className="text-[10px] mt-2 font-mono" style={{ color: 'var(--ffv-muted)' }}>
+            🧪 MVP: clique simula pagamento — nenhum cartão é cobrado
+          </p>
+        </>
+      ) : (
+        <>
+          <button
+            disabled
+            title="Em breve"
+            className="px-8 py-3 rounded-xl font-bold text-sm opacity-50 cursor-not-allowed"
+            style={{ background: accent, color: '#0d1117' }}
+          >
+            Em breve
+          </button>
+          <p className="text-[11px] mt-4" style={{ color: 'var(--ffv-muted)' }}>
+            O simulado completo será liberado em breve. Continue acompanhando seus estudos pelas trilhas gratuitas.
+          </p>
+        </>
+      )}
     </div>
   );
 }

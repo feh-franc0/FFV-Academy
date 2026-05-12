@@ -4,8 +4,22 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  BrainCircuit, Cloud, Wrench, Bot, ChartBarIncreasing, Search, Newspaper,
-  Target, Brain, Code2, Database, Hammer, Menu, X, BookOpen, UserCog, GraduationCap,
+  BrainCircuit,
+  Cloud,
+  Wrench,
+  Bot,
+  ChartBarIncreasing,
+  Search,
+  Target,
+  Brain,
+  Code2,
+  Database,
+  Hammer,
+  Menu,
+  X,
+  BookOpen,
+  UserCog,
+  GraduationCap,
 } from 'lucide-react';
 import { HUBS } from '@/lib/curriculum';
 import { useGameState } from '@/hooks/useGameState';
@@ -26,20 +40,16 @@ const HUB_ICONS: Record<string, LucideIcon> = {
 
 type Item = { href: string; label: string; color: string; Icon: LucideIcon };
 
-/** Itens primários — ficam visíveis o tempo todo no rodapé mobile. */
+/** Itens primários — navegação de plataforma (Home, Explorar, Progresso, Ranking).
+ * Hubs específicos (IA, AWS, etc) ficam no drawer "Mais" — mais discoverable
+ * e menos cluttered no bar de 360px. */
 function getPrimaryItems(): Item[] {
-  const hubIa = HUBS.find(h => h.slug === 'ia');
-  const hubAws = HUBS.find(h => h.slug === 'aws');
-  const hubEng = HUBS.find(h => h.slug === 'engenharia');
-  const hubClaude = HUBS.find(h => h.slug === 'claude-anthropic');
-  const items: Item[] = [];
-  // Labels curtos para caber em ~60px por slot em viewports 360px
-  if (hubIa) items.push({ href: hubIa.href, label: 'IA', color: hubIa.color, Icon: BrainCircuit });
-  if (hubAws) items.push({ href: hubAws.href, label: 'AWS', color: hubAws.color, Icon: Cloud });
-  if (hubEng) items.push({ href: hubEng.href, label: 'Eng', color: hubEng.color, Icon: Wrench });
-  if (hubClaude) items.push({ href: hubClaude.href, label: 'Claude', color: hubClaude.color, Icon: Bot });
-  items.push({ href: '/news', label: 'News', color: '#ff5a36', Icon: Newspaper });
-  return items;
+  return [
+    { href: '/', label: 'Início', color: 'var(--ffv-blue)', Icon: BrainCircuit },
+    { href: '/explorar', label: 'Explorar', color: 'var(--ffv-purple)', Icon: Search },
+    { href: '/progresso', label: 'Progresso', color: 'var(--ffv-green)', Icon: ChartBarIncreasing },
+    { href: '/ranking', label: 'Ranking', color: 'var(--ffv-gold)', Icon: Target },
+  ];
 }
 
 export function MobileNav() {
@@ -61,8 +71,8 @@ export function MobileNav() {
 
   const primary = getPrimaryItems();
 
-  // Itens secundários — acessíveis via "Mais"
-  const otherHubs = HUBS.filter(h => !['ia', 'aws', 'engenharia', 'claude-anthropic'].includes(h.slug));
+  // Itens secundários — drawer "Mais" mostra TODOS os 8 hubs
+  const otherHubs = HUBS;
 
   return (
     <>
@@ -79,7 +89,7 @@ export function MobileNav() {
       >
         <ul
           className="grid items-stretch"
-          style={{ gridTemplateColumns: 'repeat(6, minmax(0, 1fr))' }}
+          style={{ gridTemplateColumns: 'repeat(5, minmax(0, 1fr))' }}
         >
           {primary.map(item => {
             const active = pathname === item.href || pathname.startsWith(item.href + '/');
@@ -211,6 +221,7 @@ export function MobileNav() {
               borderTop: '1px solid var(--ffv-border)',
               borderTopLeftRadius: 18,
               borderTopRightRadius: 18,
+              paddingTop: 'calc(env(safe-area-inset-top, 0px) + 4px)',
               paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 12px)',
               maxHeight: '80vh',
               boxShadow: '0 -10px 40px rgba(0,0,0,0.35)',
@@ -251,19 +262,19 @@ export function MobileNav() {
               )}
 
               <SheetSection title="Atividade">
-                <SheetLink
-                  href="/progresso"
-                  label="Progresso"
-                  color="var(--ffv-green)"
-                  Icon={ChartBarIncreasing}
-                />
-                <SheetLink
-                  href="/revisar"
-                  label={dueCards.length > 0 ? `Revisar (${dueCards.length})` : 'Revisar'}
-                  color="var(--ffv-green)"
-                  Icon={BookOpen}
-                />
+                <SheetLink href="/progresso" label="Progresso" color="var(--ffv-green)" Icon={ChartBarIncreasing} />
+                <SheetLink href="/revisar" label={dueCards.length > 0 ? `Revisar (${dueCards.length})` : 'Revisar'} color="var(--ffv-green)" Icon={BookOpen} />
+                <SheetLink href="/revisao" label="Maratona de Revisão" color="var(--ffv-blue)" Icon={Brain} />
+                <SheetLink href="/plano" label="Meu Plano de Estudos" color="var(--ffv-purple)" Icon={Target} />
                 <SheetLink href="/simulados" label="Simulados" color="#f78166" Icon={Target} />
+                <SheetLink href="/certificacoes" label="Prep de Certificações" color="var(--ffv-yellow)" Icon={GraduationCap} />
+              </SheetSection>
+
+              <SheetSection title="Comunidade">
+                <SheetLink href="/times" label="Times de Estudo" color="var(--ffv-blue)" Icon={Brain} />
+                <SheetLink href="/perfil" label="Meu Perfil Dev" color="var(--ffv-green)" Icon={ChartBarIncreasing} />
+                <SheetLink href="/devcard" label="Dev Card" color="var(--ffv-purple)" Icon={GraduationCap} />
+                <SheetLink href="/ranking" label="Ranking" color="#f78166" Icon={Target} />
               </SheetSection>
 
               <SheetSection title="Conta">

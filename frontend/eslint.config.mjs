@@ -25,6 +25,10 @@ const eslintConfig = defineConfig([
       "react-hooks/purity": "off",
       "react-hooks/static-components": "off",
       "react-hooks/refs": "off",
+
+      // Banir console.log em produção — apenas warn/error/info/debug permitidos
+      // (esses são úteis para debugging legítimo e Sentry).
+      "no-console": ["warn", { allow: ["warn", "error", "info", "debug"] }],
     },
   },
 

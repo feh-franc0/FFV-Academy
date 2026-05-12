@@ -16,14 +16,15 @@ test('login mágico via HUD com token mock 000000', async ({ page }) => {
   const dialog = page.getByRole('dialog', { name: 'Login' });
   await expect(dialog).toBeVisible();
 
-  await dialog.locator('input[type="text"]').first().fill('Teste E2E');
+  // Step 1: email → Continuar
   await dialog.locator('input[type="email"]').fill('teste@ffv.dev');
+  await dialog.getByRole('button', { name: /Continuar/i }).click();
+
+  // Step 2 (register, novo usuário): nome + celular + consent + código → Entrar
+  await dialog.locator('input[type="text"]').first().fill('Teste E2E');
   await dialog.locator('input[type="tel"]').fill('(11) 98765-4321');
   await dialog.locator('input[type="checkbox"]').check();
 
-  await dialog.getByRole('button', { name: /Receber código/i }).click();
-
-  // Passo 2: código.
   const codeInput = dialog.locator('input[inputmode="numeric"]');
   await expect(codeInput).toBeVisible();
   await codeInput.fill('000000');

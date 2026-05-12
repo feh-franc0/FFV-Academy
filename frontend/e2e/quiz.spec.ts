@@ -13,14 +13,15 @@ test('quiz eleva XP ao responder corretamente', async ({ page }) => {
   await page.getByRole('button', { name: /Começar quiz/i }).click();
 
   const correct = [1, 2, 1, 1];
+  // Localiza pelos grupos role=group (cada pergunta é um group com label) — robusto a
+  // mudanças no número de botões auxiliares (ex: 💡 Dica) por pergunta.
   for (let q = 0; q < correct.length; q++) {
-    // Cada pergunta é bloco vertical; 4 botões de opção por pergunta.
-    const options = page.locator('section[data-quiz-interactive] button').filter({
-      hasNotText: /Enviar respostas|Responda todas/,
+    const questionGroup = page.locator('section[data-quiz-interactive] [role="group"]').nth(q);
+    // Filtra hints e outros botões auxiliares — só pega botões de opção.
+    const optionButtons = questionGroup.locator('button').filter({
+      hasNotText: /Dica|Enviar|Responda|💡/,
     });
-    // Seleciona a opção correta da q-ésima pergunta (grupo de 4 botões).
-    const globalIdx = q * 4 + correct[q];
-    await options.nth(globalIdx).click();
+    await optionButtons.nth(correct[q]).click();
   }
 
   await page.getByRole('button', { name: /Enviar respostas/i }).click();

@@ -174,6 +174,39 @@ const RULES: Rule[] = [
       },
     }),
   },
+  {
+    id: 'no-test-coverage-gaps',
+    weight: 8,
+    evaluate: (s) => {
+      const uncovered = s.structure.uncoveredFilesCount ?? 0;
+      return {
+        passed: uncovered === 0,
+        issue: {
+          id: 'no-test-coverage-gaps',
+          severity: 'warning',
+          title: `${uncovered} source file${uncovered === 1 ? '' : 's'} without tests`,
+          description:
+            `${uncovered} source file${uncovered === 1 ? ' has' : 's have'} no corresponding test file. AI-generated additions won't have tests either.`,
+          fixCommand: 'aiToolkit.generateTestSuite',
+          autoFixable: true,
+        },
+      };
+    },
+  },
+  {
+    id: 'has-conventional-commits',
+    weight: 4,
+    evaluate: (s) => ({
+      passed: !(s.gitHistory?.isGitRepo === true && s.gitHistory?.conventionalCommits === false),
+      issue: {
+        id: 'has-conventional-commits',
+        severity: 'info',
+        title: 'Conventional commits not detected',
+        description:
+          'Conventional commits help AI understand change intent (feat|fix|docs|chore|refactor|test|style|perf|ci).',
+      },
+    }),
+  },
 ];
 
 export function computeReadiness(scan: ScanResult): ReadinessReport {

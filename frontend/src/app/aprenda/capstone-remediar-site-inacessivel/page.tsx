@@ -96,7 +96,7 @@ export default function Page() {
 \`\`\`tsx
 it('remove button has accessible name', () => {
   render(<RemoveButton />);
-  expect(screen.getByRole('button', { name: /remover/i })).toBeInTheDocument();
+  expect(screen.getByRole('button', { text: /remover/i })).toBeInTheDocument();
 });
 \`\`\``}</CodeBlock>
       </Section>

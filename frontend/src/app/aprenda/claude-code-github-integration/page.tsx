@@ -191,9 +191,9 @@ jobs:
       - name: Claude review
         id: review
         env:
-          ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_API_KEY: \${'$'}{{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          REVIEW=$(echo "\${{ steps.diff.outputs.diff }}" | \\
+          REVIEW=$(echo "\${'$'}{{ steps.diff.outputs.diff }}" | \\
             npx claude --headless \\
             "Faça code review técnico deste diff. Identifique:
              1. Bugs ou comportamentos incorretos
@@ -208,12 +208,12 @@ jobs:
 
       - name: Post review comment
         env:
-          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: \${'$'}{{ secrets.GITHUB_TOKEN }}
         run: |
-          gh pr comment \${{ github.event.pull_request.number }} \\
+          gh pr comment \${'$'}{{ github.event.pull_request.number }} \\
             --body "## Claude Code Review
 
-\${{ steps.review.outputs.review }}
+\${'$'}{{ steps.review.outputs.review }}
 
 *Gerado automaticamente — revise antes de agir*"`}</CodeBlock>
       </Section>

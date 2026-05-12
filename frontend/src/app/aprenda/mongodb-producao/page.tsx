@@ -107,7 +107,7 @@ export default function Page() {
 {
   _id: ObjectId('...'),
   title: 'Post sobre Mongo',
-  author: { name: 'Fernando' },   // embed: raramente muda
+  author: { text: 'Fernando' },   // embed: raramente muda
   tags: ['nosql', 'mongo'],                 // bounded
   comments: [                                // RISCO se viral
     { user: 'u2', text: 'bom', at: ISODate() }

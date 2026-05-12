@@ -150,7 +150,7 @@ const textWithProsody =
 const ssml =
   '<speak>' +
     'Sua fatura vence em <say-as interpret-as="date" format="dmy">15/04/2026</say-as>. ' +
-    '<break time="300ms"/>O valor é <say-as interpret-as="currency" language="pt-BR">R$ 123,45</say-as>.' +
+    '<break time="300ms"/>O valor é <say-as interpret-as="currency" lang="pt-BR">R$ 123,45</say-as>.' +
   '</speak>';`}</CodeBlock>
       </Section>
 

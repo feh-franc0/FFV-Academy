@@ -39,7 +39,7 @@ const quiz: QuizQuestion[] = [
       'Quebra CORS',
     ],
     correct: 1,
-    explanation: 'Aceitar "filter=raw SQL" é suicídio. DSLs como RSQL (name==John;age>18) ou whitelist por campo (name_eq, age_gt) dão poder sem expor. Google AIP-160 tem a spec mais completa. Prisma-like shape ({ where: { name: { eq: "x" } } }) é moderno em TS.',
+    explanation: 'Aceitar "filter=raw SQL" é suicídio. DSLs como RSQL (name==John;age>18) ou whitelist por campo (name_eq, age_gt) dão poder sem expor. Google AIP-160 tem a spec mais completa. Prisma-like shape ({ where: { text: { eq: "x" } } }) é moderno em TS.',
   },
 ];
 
@@ -111,7 +111,7 @@ GET /users?filter=name = "Fernando" AND age > 18
 
 # Prisma-like (em corpo de request)
 POST /users:search
-{ where: { name: { eq: "Fernando" }, age: { gt: 18 } } }`}</CodeBlock>
+{ where: { text: { eq: "Fernando" }, age: { gt: 18 } } }`}</CodeBlock>
         <p>
           Regra: enumere os campos filtráveis no OpenAPI. Cliente não deve conseguir filtrar por qualquer campo — isso vira DoS (ordenar por campo sem índice, filtro que escaneia tabela toda).
         </p>

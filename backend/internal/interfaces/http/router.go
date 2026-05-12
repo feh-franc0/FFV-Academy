@@ -38,8 +38,10 @@ type RouterConfig struct {
 	Billing     *handlers.BillingHandler
 	Tutor       *handlers.TutorHandler
 	Leaderboard *handlers.LeaderboardHandler
+	Stats       *handlers.StatsHandler
 	Admin       *handlers.AdminHandler
 	Curriculum  *handlers.CurriculumHandler    // opcional — nil desabilita rotas de currículo
+	Features    *handlers.FeaturesHandler      // opcional — expõe estado das feature flags
 	Metrics     *handlers.MetricsHandler       // opcional — se nil, /metrics não é registrado
 	MetricsMW   func(http.Handler) http.Handler // opcional — middleware de instrumentação
 }
@@ -93,6 +95,19 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// Endpoints públicos do catálogo (leitura sem auth).
 	r.Get("/api/v1/simulados", cfg.Simulado.ListSimulados)
 	r.Get("/api/v1/simulados/{simuladoId}", cfg.Simulado.GetSimulado)
+
+	// Stats agregados públicos para a home (social proof).
+	if cfg.Stats != nil {
+		r.Get("/api/v1/stats", cfg.Stats.GetPublic)
+	}
+
+	// Top-10 do ranking semanal — público, anonimizado para visitantes.
+	r.Get("/api/v1/leaderboard/public", cfg.Leaderboard.GetPublic)
+
+	// Feature flags — público, permite ao frontend descobrir features ativas em runtime.
+	if cfg.Features != nil {
+		r.Get("/api/v1/features", cfg.Features.Get)
+	}
 
 	// Endpoints públicos do currículo — leitura sem autenticação.
 	if cfg.Curriculum != nil {
@@ -182,6 +197,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// Leaderboard.
 		r.Get("/api/v1/leaderboard", cfg.Leaderboard.GetWeekly)
 		r.Get("/api/v1/leaderboard/me", cfg.Leaderboard.GetMyRank)
+		r.Get("/api/v1/leaderboard/me/all", cfg.Leaderboard.GetMyRankAll)
 
 		// Admin — requer role=admin.
 		r.Group(func(r chi.Router) {

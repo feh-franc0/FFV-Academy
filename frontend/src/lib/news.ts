@@ -80,6 +80,8 @@ export const NewsItemSchema = z.object({
   category: z.enum(NEWS_CATEGORIES),
   hot: z.boolean().optional(),
   tags: z.array(z.string().min(2).max(32)).max(6).optional(),
+  /** URL HTTPS de imagem de capa (opcional, Unsplash/autoral). */
+  imageUrl: HttpsUrlSchema.optional(),
 });
 
 export type NewsItem = z.infer<typeof NewsItemSchema>;

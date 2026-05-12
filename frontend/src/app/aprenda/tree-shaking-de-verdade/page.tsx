@@ -93,7 +93,7 @@ export const counterB = /* @__PURE__ */ createCounter({ initial: 0 });
 // Exemplo real (Redux Toolkit):
 export const userSlice = /* @__PURE__ */ createSlice({
   name: 'user',
-  initialState: { name: '' },
+  initialState: { text: '' },
   reducers: { setName: (s, a) => { s.name = a.payload; } },
 });
 

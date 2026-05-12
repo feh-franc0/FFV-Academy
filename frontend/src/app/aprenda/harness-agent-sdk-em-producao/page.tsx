@@ -316,10 +316,10 @@ jobs:
       - run: pip install claude-agent-sdk httpx
       - name: Run Claude Review
         env:
-          ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}
-          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: \${{ github.event.pull_request.number }}
-          REPO: \${{ github.repository }}
+          ANTHROPIC_API_KEY: \${'$'}{{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: \${'$'}{{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: \${'$'}{{ github.event.pull_request.number }}
+          REPO: \${'$'}{{ github.repository }}
         run: python .github/scripts/review.py`}</CodeBlock>
         <CodeBlock lang="python">{`# .github/scripts/review.py
 import asyncio, os, httpx
@@ -334,7 +334,7 @@ async def fetch_pr_diff(repo: str, pr_number: int, token: str) -> str:
         )
         return r.text
 
-async def post_review(repo: str, pr: int, token: str, body: str):
+async def post_review(repo: str, pr: int, token: str, detail: str):
     async with httpx.AsyncClient() as client:
         await client.post(
             f"https://api.github.com/repos/\\{repo}/issues/\\{pr}/comments",

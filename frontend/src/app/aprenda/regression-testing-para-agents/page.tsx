@@ -64,8 +64,8 @@ input: "Qual é o tempo em SP agora e me indique 3 livros de sci-fi"
 
 expected:
   tools_used:
-    - { name: "get_weather", args_contains: { city: "São Paulo" } }
-    - { name: "search_books", args_contains: { genre: "sci-fi", count: 3 } }
+    - { text: "get_weather", args_contains: { city: "São Paulo" } }
+    - { text: "search_books", args_contains: { genre: "sci-fi", count: 3 } }
   output_must_contain: ["temperatura", "sci-fi"]
   output_judge_rubric: |
     Response should:

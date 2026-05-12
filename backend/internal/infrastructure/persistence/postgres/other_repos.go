@@ -385,6 +385,82 @@ func (r *LeaderboardRepo) GetUserRank(ctx context.Context, userID shared.UserID,
 	return rank, err
 }
 
+// GetByPeriod agrega XP em todas as semanas dentro da janela do período.
+// Para weekly, equivale a GetWeekly. Para monthly/yearly, soma todas as
+// semanas que intersectam o mês/ano corrente. Para all-time, soma tudo.
+func (r *LeaderboardRepo) GetByPeriod(ctx context.Context, p domlb.Period, now time.Time, limit int) ([]domlb.RankEntry, error) {
+	start, end := domlb.PeriodWindow(p, now)
+
+	// Para PeriodAllTime, start é zero — usamos ranges abertos no SQL.
+	rows, err := r.pool.Query(ctx, `
+		WITH agg AS (
+			SELECT lw.user_id, SUM(lw.xp_gained)::int AS xp_total
+			FROM leaderboard lw
+			JOIN leaderboard_opt_ins lo ON lo.user_id = lw.user_id
+			WHERE ($1::timestamptz IS NULL OR lw.week_start >= $1)
+			  AND lw.week_start < $2
+			GROUP BY lw.user_id
+		)
+		SELECT a.user_id, u.name, a.xp_total,
+		       RANK() OVER (ORDER BY a.xp_total DESC) AS rank
+		FROM agg a
+		JOIN users u ON u.id = a.user_id
+		ORDER BY a.xp_total DESC
+		LIMIT $3
+	`, nullableTime(start), end, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var entries []domlb.RankEntry
+	for rows.Next() {
+		var e domlb.RankEntry
+		var uid string
+		if err := rows.Scan(&uid, &e.DisplayName, &e.XPGained, &e.Rank); err != nil {
+			return nil, err
+		}
+		e.UserID = shared.UserID(uid)
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
+}
+
+// GetUserRankByPeriod retorna (rank, xp) do usuário na janela do período.
+// rank=0 indica que o usuário não tem XP registrado no período.
+func (r *LeaderboardRepo) GetUserRankByPeriod(ctx context.Context, userID shared.UserID, p domlb.Period, now time.Time) (int, int, error) {
+	start, end := domlb.PeriodWindow(p, now)
+
+	var rank, xp int
+	err := r.pool.QueryRow(ctx, `
+		WITH agg AS (
+			SELECT user_id, SUM(xp_gained)::int AS xp_total
+			FROM leaderboard
+			WHERE ($1::timestamptz IS NULL OR week_start >= $1)
+			  AND week_start < $2
+			GROUP BY user_id
+		)
+		SELECT rank, xp_total FROM (
+			SELECT user_id, xp_total, RANK() OVER (ORDER BY xp_total DESC) AS rank
+			FROM agg
+		) ranked
+		WHERE user_id = $3
+	`, nullableTime(start), end, userID.String()).Scan(&rank, &xp)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, 0, nil
+	}
+	return rank, xp, err
+}
+
+// nullableTime devolve nil quando t é zero, permitindo queries com janela
+// aberta no início (caso PeriodAllTime).
+func nullableTime(t time.Time) interface{} {
+	if t.IsZero() {
+		return nil
+	}
+	return t
+}
+
 func (r *LeaderboardRepo) SetOptIn(ctx context.Context, userID shared.UserID, optIn bool) error {
 	if optIn {
 		_, err := r.pool.Exec(ctx,

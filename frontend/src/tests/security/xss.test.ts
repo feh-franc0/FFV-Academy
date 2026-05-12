@@ -13,7 +13,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { captureReferralFromUrl, getReferralRecord } from '../../lib/referral';
-import { importState, loadState } from '../../lib/engine';
+import { importState } from '../../lib/engine';
 
 function setUrl(search: string) {
   Object.defineProperty(window, 'location', {

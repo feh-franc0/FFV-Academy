@@ -53,13 +53,14 @@ test.describe('PWAInstallBanner', () => {
   });
 
   test('dismiss key recente impede exibição após reload', async ({ page }) => {
-    await page.goto('/');
-
-    // Simulate user dismissing the banner
-    await page.evaluate((key) => {
+    // O beforeEach adiciona um init script que limpa a chave em CADA navegação
+    // (incluindo reload). Para testar persistência, sobrescreve com um init
+    // que reescreve a chave depois do remove.
+    await page.addInitScript((key) => {
       localStorage.setItem(key, String(Date.now()));
     }, DISMISS_KEY);
 
+    await page.goto('/');
     await page.reload();
     await page.waitForTimeout(500);
 

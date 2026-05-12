@@ -133,10 +133,10 @@ platform: "onnxruntime_onnx"
 max_batch_size: 16
 
 input [
-  { name: "images"  data_type: TYPE_FP32  dims: [ 3, 640, 640 ] }
+  { text: "images"  data_type: TYPE_FP32  dims: [ 3, 640, 640 ] }
 ]
 output [
-  { name: "output0"  data_type: TYPE_FP32  dims: [ -1, 6 ] }
+  { text: "output0"  data_type: TYPE_FP32  dims: [ -1, 6 ] }
 ]
 
 dynamic_batching {

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, within, cleanup, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import CopilotWidget from '@/components/copilot/CopilotWidget'
+import { CUSTOMERS } from '@/lib/constants'
 
 // framer-motion is mocked in setup.ts
 // react-markdown and remark-gfm — keep real (lightweight enough)
@@ -630,5 +631,483 @@ describe('CopilotWidget — accessibility', () => {
     render(<CopilotWidget />)
     await openChat()
     expect(screen.getByTestId('messages-area')).toHaveAttribute('role', 'log')
+  })
+})
+
+// ——————————————————————————————————————
+// Streaming toggle — presence
+// ——————————————————————————————————————
+
+describe('CopilotWidget — streaming toggle (presence)', () => {
+  afterEach(() => {
+    cleanup()
+    localStorage.clear()
+  })
+
+  it('toggle button is NOT in the DOM when chat is closed', () => {
+    render(<CopilotWidget />)
+    expect(screen.queryByTestId('chat-streaming-toggle')).not.toBeInTheDocument()
+  })
+
+  it('toggle button appears in header when chat is open', async () => {
+    render(<CopilotWidget />)
+    await openChat()
+    expect(screen.getByTestId('chat-streaming-toggle')).toBeInTheDocument()
+  })
+
+  it('toggle button has an aria-label (accessibility)', async () => {
+    render(<CopilotWidget />)
+    await openChat()
+    const toggle = screen.getByTestId('chat-streaming-toggle')
+    expect(toggle.getAttribute('aria-label')).toBeTruthy()
+  })
+
+  it('toggle button has a title tooltip', async () => {
+    render(<CopilotWidget />)
+    await openChat()
+    const toggle = screen.getByTestId('chat-streaming-toggle')
+    expect(toggle.getAttribute('title')).toBeTruthy()
+  })
+})
+
+// ——————————————————————————————————————
+// Streaming toggle — mode switching
+// ——————————————————————————————————————
+
+describe('CopilotWidget — streaming toggle (mode switching)', () => {
+  afterEach(() => {
+    cleanup()
+    localStorage.clear()
+  })
+
+  it('starts in streaming mode by default (aria-label contains "Modo digitando")', async () => {
+    render(<CopilotWidget />)
+    await openChat()
+    expect(screen.getByTestId('chat-streaming-toggle'))
+      .toHaveAttribute('aria-label', expect.stringContaining('Modo digitando'))
+  })
+
+  it('clicking toggle once switches to instant mode (aria-label contains "Modo instantâneo")', async () => {
+    render(<CopilotWidget />)
+    await openChat()
+    await userEvent.click(screen.getByTestId('chat-streaming-toggle'))
+    expect(screen.getByTestId('chat-streaming-toggle'))
+      .toHaveAttribute('aria-label', expect.stringContaining('Modo instantâneo'))
+  })
+
+  it('clicking toggle twice returns to streaming mode', async () => {
+    render(<CopilotWidget />)
+    await openChat()
+    const toggle = screen.getByTestId('chat-streaming-toggle')
+    await userEvent.click(toggle)
+    await userEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-label', expect.stringContaining('Modo digitando'))
+  })
+
+  it('title tooltip changes when switching to instant mode', async () => {
+    render(<CopilotWidget />)
+    await openChat()
+    const toggle = screen.getByTestId('chat-streaming-toggle')
+    const titleBefore = toggle.getAttribute('title')
+    await userEvent.click(toggle)
+    expect(toggle.getAttribute('title')).not.toBe(titleBefore)
+  })
+})
+
+// ——————————————————————————————————————
+// Streaming toggle — localStorage persistence
+// ——————————————————————————————————————
+
+describe('CopilotWidget — streaming toggle (localStorage)', () => {
+  afterEach(() => {
+    cleanup()
+    localStorage.clear()
+  })
+
+  it('saves "false" to localStorage when switching to instant mode', async () => {
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem')
+    render(<CopilotWidget />)
+    await openChat()
+    await userEvent.click(screen.getByTestId('chat-streaming-toggle'))
+    expect(setItemSpy).toHaveBeenCalledWith('aria-streaming', 'false')
+    setItemSpy.mockRestore()
+  })
+
+  it('saves "true" to localStorage when switching back to streaming', async () => {
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem')
+    render(<CopilotWidget />)
+    await openChat()
+    const toggle = screen.getByTestId('chat-streaming-toggle')
+    await userEvent.click(toggle)
+    await userEvent.click(toggle)
+    expect(setItemSpy).toHaveBeenLastCalledWith('aria-streaming', 'true')
+    setItemSpy.mockRestore()
+  })
+
+  it('loads in instant mode when localStorage has aria-streaming="false"', async () => {
+    localStorage.setItem('aria-streaming', 'false')
+    render(<CopilotWidget />)
+    await openChat()
+    expect(screen.getByTestId('chat-streaming-toggle'))
+      .toHaveAttribute('aria-label', expect.stringContaining('Modo instantâneo'))
+  })
+
+  it('loads in streaming mode when localStorage has aria-streaming="true"', async () => {
+    localStorage.setItem('aria-streaming', 'true')
+    render(<CopilotWidget />)
+    await openChat()
+    expect(screen.getByTestId('chat-streaming-toggle'))
+      .toHaveAttribute('aria-label', expect.stringContaining('Modo digitando'))
+  })
+
+  it('loads in streaming mode when localStorage has no aria-streaming key', async () => {
+    localStorage.removeItem('aria-streaming')
+    render(<CopilotWidget />)
+    await openChat()
+    expect(screen.getByTestId('chat-streaming-toggle'))
+      .toHaveAttribute('aria-label', expect.stringContaining('Modo digitando'))
+  })
+
+  it('in instant mode, streaming cursor (▋) never appears in message bubbles', async () => {
+    localStorage.setItem('aria-streaming', 'false')
+    render(<CopilotWidget />)
+    await openChat()
+    await sendMessage('como dou baixa em fatura')
+    // Wait for bot to finish responding
+    await waitFor(
+      () => expect(screen.getByTestId('chat-input')).not.toBeDisabled(),
+      { timeout: 15000 }
+    )
+    // In instant mode msg.streaming is never set true, so the cursor block never renders
+    expect(document.body.textContent).not.toContain('▋')
+  })
+})
+
+// ——————————————————————————————————————
+// Stop button
+// ——————————————————————————————————————
+
+describe('CopilotWidget — stop button', () => {
+  afterEach(() => cleanup())
+
+  it('stop button is NOT visible when bot is idle', async () => {
+    render(<CopilotWidget />)
+    await openChat()
+    expect(screen.queryByTestId('chat-stop')).not.toBeInTheDocument()
+  })
+
+  it('stop button appears while bot is processing', async () => {
+    render(<CopilotWidget />)
+    await openChat()
+    await sendMessage('como dou baixa em fatura')
+    await waitFor(
+      () => expect(screen.queryByTestId('chat-stop')).toBeInTheDocument(),
+      { timeout: 3000 }
+    )
+  })
+
+  it('stop button has aria-label "Parar resposta"', async () => {
+    render(<CopilotWidget />)
+    await openChat()
+    await sendMessage('como dou baixa em fatura')
+    await waitFor(
+      () => expect(screen.queryByTestId('chat-stop')).toBeInTheDocument(),
+      { timeout: 3000 }
+    )
+    expect(screen.getByTestId('chat-stop')).toHaveAttribute('aria-label', 'Parar resposta')
+  })
+
+  it('clicking stop re-enables input', async () => {
+    render(<CopilotWidget />)
+    await openChat()
+    await sendMessage('como dou baixa em fatura')
+    await waitFor(
+      () => expect(screen.queryByTestId('chat-stop')).toBeInTheDocument(),
+      { timeout: 3000 }
+    )
+    await userEvent.click(screen.getByTestId('chat-stop'))
+    await waitFor(
+      () => expect(screen.getByTestId('chat-input')).not.toBeDisabled(),
+      { timeout: 3000 }
+    )
+  })
+
+  it('after clicking stop, send button replaces stop button', async () => {
+    render(<CopilotWidget />)
+    await openChat()
+    await sendMessage('como dou baixa em fatura')
+    await waitFor(
+      () => expect(screen.queryByTestId('chat-stop')).toBeInTheDocument(),
+      { timeout: 3000 }
+    )
+    await userEvent.click(screen.getByTestId('chat-stop'))
+    await waitFor(
+      () => expect(screen.queryByTestId('chat-send')).toBeInTheDocument(),
+      { timeout: 3000 }
+    )
+    expect(screen.queryByTestId('chat-stop')).not.toBeInTheDocument()
+  })
+})
+
+// ——————————————————————————————————————
+// Bot busy state — concurrency protection
+// ——————————————————————————————————————
+
+describe('CopilotWidget — concurrency protection', () => {
+  afterEach(() => cleanup())
+
+  it('input is disabled immediately after sending (bot busy)', async () => {
+    render(<CopilotWidget />)
+    await openChat()
+    await sendMessage('ajuda')
+    await waitFor(
+      () => expect(screen.getByTestId('chat-input')).toBeDisabled(),
+      { timeout: 500 }
+    )
+  })
+
+  it('send button is replaced by stop while bot is busy', async () => {
+    render(<CopilotWidget />)
+    await openChat()
+    await sendMessage('ajuda')
+    await waitFor(
+      () => expect(screen.queryByTestId('chat-stop')).toBeInTheDocument(),
+      { timeout: 3000 }
+    )
+    expect(screen.queryByTestId('chat-send')).not.toBeInTheDocument()
+  })
+
+  it('action card confirm/cancel buttons are gone after cancelling', async () => {
+    render(<CopilotWidget />)
+    await openChat()
+    await sendMessage('enviar cobrança')
+    await waitFor(
+      () => expect(screen.queryByTestId('action-cancel')).toBeInTheDocument(),
+      { timeout: 8000 }
+    )
+    await userEvent.click(screen.getByTestId('action-cancel'))
+    await waitFor(
+      () => expect(screen.queryByTestId('action-resolved')).toBeInTheDocument(),
+      { timeout: 2000 }
+    )
+    expect(screen.queryByTestId('action-confirm')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('action-cancel')).not.toBeInTheDocument()
+  })
+
+  it('action card confirm/cancel buttons are gone after confirming', async () => {
+    render(<CopilotWidget />)
+    await openChat()
+    await sendMessage('enviar cobrança')
+    await waitFor(
+      () => expect(screen.queryByTestId('action-confirm')).toBeInTheDocument(),
+      { timeout: 8000 }
+    )
+    await userEvent.click(screen.getByTestId('action-confirm'))
+    await waitFor(
+      () => expect(screen.queryByTestId('action-resolved')).toBeInTheDocument(),
+      { timeout: 2000 }
+    )
+    expect(screen.queryByTestId('action-confirm')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('action-cancel')).not.toBeInTheDocument()
+  })
+})
+
+// ——————————————————————————————————————
+// Customer analysis
+// ——————————————————————————————————————
+
+describe('CopilotWidget — customer analysis', () => {
+  afterEach(() => cleanup())
+
+  const overdueCustomer = CUSTOMERS.find(c => c.status === 'overdue')!
+  const paidCustomer    = CUSTOMERS.find(c => c.status === 'paid')!
+  const pendingCustomer = CUSTOMERS.find(c => c.status === 'pending')!
+
+  it('passing selectedCustomer opens the chat automatically', async () => {
+    render(<CopilotWidget selectedCustomer={overdueCustomer} />)
+    await waitFor(
+      () => expect(screen.queryByTestId('chat-panel')).toBeInTheDocument(),
+      { timeout: 3000 }
+    )
+  })
+
+  it('analysis message contains the customer name', async () => {
+    render(<CopilotWidget selectedCustomer={overdueCustomer} />)
+    await waitFor(
+      () => {
+        const botMsgs = screen.queryAllByTestId('message-bot')
+        expect(botMsgs.some(m => m.textContent?.includes(overdueCustomer.name))).toBe(true)
+      },
+      { timeout: 6000 }
+    )
+  })
+
+  it('analysis message contains the customer ID', async () => {
+    render(<CopilotWidget selectedCustomer={overdueCustomer} />)
+    await waitFor(
+      () => {
+        const botMsgs = screen.queryAllByTestId('message-bot')
+        expect(botMsgs.some(m => m.textContent?.includes(`#${overdueCustomer.id}`))).toBe(true)
+      },
+      { timeout: 6000 }
+    )
+  })
+
+  it('overdue customer shows "Enviar cobrança" quick reply', async () => {
+    render(<CopilotWidget selectedCustomer={overdueCustomer} />)
+    await waitFor(
+      () => {
+        const qr = screen.queryByTestId('quick-replies')
+        expect(qr).toBeInTheDocument()
+        expect(qr?.textContent).toContain('Enviar cobrança')
+      },
+      { timeout: 6000 }
+    )
+  })
+
+  it('pending customer shows "Enviar cobrança" quick reply', async () => {
+    render(<CopilotWidget selectedCustomer={pendingCustomer} />)
+    await waitFor(
+      () => {
+        const qr = screen.queryByTestId('quick-replies')
+        expect(qr?.textContent).toContain('Enviar cobrança')
+      },
+      { timeout: 6000 }
+    )
+  })
+
+  it('paid customer does NOT show "Enviar cobrança" quick reply', async () => {
+    render(<CopilotWidget selectedCustomer={paidCustomer} />)
+    await waitFor(
+      () => expect(screen.queryByTestId('quick-replies')).toBeInTheDocument(),
+      { timeout: 6000 }
+    )
+    const qr = screen.getByTestId('quick-replies')
+    expect(qr.textContent).not.toContain('Enviar cobrança')
+  })
+
+  it('paid customer shows "Gerar Excel" quick reply', async () => {
+    render(<CopilotWidget selectedCustomer={paidCustomer} />)
+    await waitFor(
+      () => {
+        const qr = screen.queryByTestId('quick-replies')
+        expect(qr?.textContent).toContain('Gerar Excel')
+      },
+      { timeout: 6000 }
+    )
+  })
+
+  it('paid customer shows "Falar com humano" quick reply', async () => {
+    render(<CopilotWidget selectedCustomer={paidCustomer} />)
+    await waitFor(
+      () => {
+        const qr = screen.queryByTestId('quick-replies')
+        expect(qr?.textContent).toContain('Falar com humano')
+      },
+      { timeout: 6000 }
+    )
+  })
+})
+
+// ——————————————————————————————————————
+// File card interaction
+// ——————————————————————————————————————
+
+describe('CopilotWidget — file card interaction', () => {
+  afterEach(() => cleanup())
+
+  const openFileCard = async () => {
+    render(<CopilotWidget />)
+    await openChat()
+    await sendMessage('gerar excel do cliente 123')
+    await waitFor(
+      () => expect(screen.queryByTestId('action-confirm')).toBeInTheDocument(),
+      { timeout: 8000 }
+    )
+    await userEvent.click(screen.getByTestId('action-confirm'))
+    await waitFor(
+      () => expect(screen.queryByTestId('file-card')).toBeInTheDocument(),
+      { timeout: 8000 }
+    )
+  }
+
+  it('file card shows .xlsx extension in filename', async () => {
+    await openFileCard()
+    expect(screen.getByTestId('file-card').textContent).toContain('.xlsx')
+  })
+
+  it('file card shows file size', async () => {
+    await openFileCard()
+    expect(screen.getByTestId('file-card').textContent).toContain('KB')
+  })
+
+  it('file card download button initially shows "Baixar"', async () => {
+    await openFileCard()
+    const btn = within(screen.getByTestId('file-card')).getByRole('button')
+    expect(btn).toHaveTextContent(/baixar/i)
+    expect(btn).toHaveAttribute('aria-label', 'Baixar arquivo')
+  })
+
+  it('download button shows "Baixado" after click', async () => {
+    await openFileCard()
+    const btn = within(screen.getByTestId('file-card')).getByRole('button')
+    await userEvent.click(btn)
+    expect(btn).toHaveTextContent(/baixado/i)
+  })
+
+  it('download button aria-label changes to "Arquivo baixado" after click', async () => {
+    await openFileCard()
+    const btn = within(screen.getByTestId('file-card')).getByRole('button')
+    await userEvent.click(btn)
+    expect(btn).toHaveAttribute('aria-label', 'Arquivo baixado')
+  })
+
+  it('download button becomes non-interactive after click (cursor-default)', async () => {
+    await openFileCard()
+    const btn = within(screen.getByTestId('file-card')).getByRole('button')
+    await userEvent.click(btn)
+    // After click the button renders with cursor-default class — clicking again does nothing
+    const labelAfterFirst = btn.getAttribute('aria-label')
+    await userEvent.click(btn)
+    expect(btn.getAttribute('aria-label')).toBe(labelAfterFirst)
+  })
+})
+
+// ——————————————————————————————————————
+// Header status text
+// ——————————————————————————————————————
+
+describe('CopilotWidget — header status text', () => {
+  afterEach(() => cleanup())
+
+  it('shows "Assistente de Operações · Online" when bot is idle', async () => {
+    render(<CopilotWidget />)
+    await openChat()
+    await waitFor(
+      () => expect(screen.queryByText('Assistente de Operações · Online')).toBeInTheDocument(),
+      { timeout: 8000 }
+    )
+  })
+
+  it('shows "digitando..." while bot is typing', async () => {
+    render(<CopilotWidget />)
+    await userEvent.click(screen.getByTestId('copilot-trigger'))
+    await screen.findByTestId('chat-panel')
+    // Immediately after open the greeting typing step runs
+    await waitFor(
+      () => expect(screen.queryByText('digitando...')).toBeInTheDocument(),
+      { timeout: 3000 }
+    )
+  })
+
+  it('status text is inside the dialog (header position)', async () => {
+    render(<CopilotWidget />)
+    await openChat()
+    await waitFor(
+      () => expect(screen.queryByText('Assistente de Operações · Online')).toBeInTheDocument(),
+      { timeout: 8000 }
+    )
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText('Assistente de Operações · Online')).toBeInTheDocument()
   })
 })

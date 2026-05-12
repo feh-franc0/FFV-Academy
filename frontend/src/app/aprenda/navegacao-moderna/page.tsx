@@ -70,7 +70,7 @@ export default function RootLayout() {
   return (
     <Stack screenOptions={{ headerTintColor: '#14b8a6' }}>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-      <Stack.Screen name="produto/[id]" options={{ title: 'Produto' }} />
+      <Stack.Screen name="produto/[id]" options={{ label: 'Produto' }} />
       <Stack.Screen name="checkout" options={{ presentation: 'modal' }} />
     </Stack>
   );
@@ -81,9 +81,9 @@ import { Tabs } from 'expo-router';
 export default function TabsLayout() {
   return (
     <Tabs>
-      <Tabs.Screen name="index" options={{ title: 'Home' }} />
-      <Tabs.Screen name="busca" options={{ title: 'Busca' }} />
-      <Tabs.Screen name="perfil" options={{ title: 'Perfil' }} />
+      <Tabs.Screen name="index" options={{ label: 'Home' }} />
+      <Tabs.Screen name="busca" options={{ label: 'Busca' }} />
+      <Tabs.Screen name="perfil" options={{ label: 'Perfil' }} />
     </Tabs>
   );
 }

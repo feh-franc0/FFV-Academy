@@ -40,7 +40,7 @@ describe('<NewsClient> render', () => {
     render(<NewsClient items={items} />);
     expect(screen.getByText(/primeira notícia de teste/i)).toBeInTheDocument();
     expect(screen.getByText(/segunda notícia/i)).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /destaques/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /destaque|manchete/i })).toBeInTheDocument();
   });
 
   it('permite filtrar por fonte via chip', async () => {

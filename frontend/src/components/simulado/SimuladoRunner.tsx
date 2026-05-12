@@ -1,17 +1,22 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
-  type Simulado, type SimuladoAttempt,
-  getSimulado, getAttempt, saveAttempt, isQuestionAccessible, FREE_QUESTIONS_LIMIT,
+  type SimuladoAttempt,
+  getSimulado,
+  getAttempt,
+  saveAttempt,
+  isQuestionAccessible,
+  FREE_QUESTIONS_LIMIT,
 } from '@/lib/simulados';
 import { isPaidFor, grantProduct } from '@/lib/auth';
 import { useAuth } from '@/hooks/useAuth';
 import { idFromSlug } from '@/components/SimuladoCard';
 import { TutorChat } from './TutorChat';
 import { PaywallCard } from './PaywallCard';
+import { FEATURES } from '@/lib/features';
 import { STORAGE_KEYS } from '@/lib/constants';
 import { getJSON, setJSON, removeKey } from '@/lib/storage';
 import { SimuladoTimerSchema } from '@/lib/schemas';
@@ -285,13 +290,24 @@ export function SimuladoRunner({ slug }: Props) {
                   >
                     {currentIndex < simulado.questions.length - 1 ? 'Próxima →' : 'Revisar tudo'}
                   </button>
-                  <button
-                    onClick={() => setShowTutor(true)}
-                    className="px-4 py-3 rounded-xl font-semibold text-sm"
-                    style={{ background: 'var(--ffv-bg2)', color: 'var(--foreground)', border: '1px solid var(--ffv-border)' }}
-                  >
-                    💬 Pergunte ao tutor
-                  </button>
+                  {FEATURES.tutorAI ? (
+                    <button
+                      onClick={() => setShowTutor(true)}
+                      className="px-4 py-3 rounded-xl font-semibold text-sm"
+                      style={{ background: 'var(--ffv-bg2)', color: 'var(--foreground)', border: '1px solid var(--ffv-border)' }}
+                    >
+                      💬 Pergunte ao tutor
+                    </button>
+                  ) : (
+                    <button
+                      disabled
+                      title="Em breve"
+                      className="px-4 py-3 rounded-xl font-semibold text-sm opacity-50 cursor-not-allowed"
+                      style={{ background: 'var(--ffv-bg2)', color: 'var(--ffv-muted)', border: '1px solid var(--ffv-border)' }}
+                    >
+                      💬 Tutor IA (em breve)
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -378,7 +394,7 @@ export function SimuladoRunner({ slug }: Props) {
         </aside>
       </div>
 
-      {showTutor && (
+      {showTutor && FEATURES.tutorAI && (
         <TutorChat
           question={currentQuestion}
           onClose={() => setShowTutor(false)}

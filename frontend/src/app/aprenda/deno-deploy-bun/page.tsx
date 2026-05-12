@@ -84,7 +84,7 @@ serve((req) => {
 
 // KV built-in (strong consistency global em beta):
 const kv = await Deno.openKv();
-await kv.set(['posts', 'abc'], { title: 'Hello' });
+await kv.set(['posts', 'abc'], { label: 'Hello' });
 const entry = await kv.get(['posts', 'abc']);
 
 // Queues:

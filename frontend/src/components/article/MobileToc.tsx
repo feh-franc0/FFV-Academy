@@ -28,7 +28,7 @@ export function MobileToc({ containerSelector, accent = 'var(--ffv-blue)' }: Mob
     });
     setHeadings(list);
 
-    if (list.length < 2) return;
+    if (list.length === 0) return;
 
     const io = new IntersectionObserver(
       entries => {
@@ -49,8 +49,7 @@ export function MobileToc({ containerSelector, accent = 'var(--ffv-blue)' }: Mob
     return () => io.disconnect();
   }, [containerSelector]);
 
-  // Don't render if too few headings
-  if (headings.length < 3) return null;
+  if (headings.length === 0) return null;
 
   return (
     <>

@@ -216,8 +216,10 @@ export async function migrateFromLocalStorage(): Promise<void> {
           // Se não é JSON válido, armazena a string bruta.
           await tx.store.put(raw, key);
         }
-        // Remove do localStorage após migrar com sucesso.
-        localStorage.removeItem(key);
+        // NÃO remover do localStorage: loadState() em engine.ts é síncrono e
+        // depende do localStorage como fonte primária. O IndexedDB serve como
+        // backup/sync mirror via debouncedSaveToIDB. Remover quebraria a leitura
+        // inicial do app após migração (state cairia para DEFAULT_STATE).
       }
     }
 

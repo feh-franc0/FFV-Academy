@@ -248,10 +248,10 @@ jobs:
       - run: npm run build
       - name: Deploy para produção
         env:
-          DEPLOY_KEY: \${{ secrets.DEPLOY_KEY }}  # segredo armazenado no repo
+          DEPLOY_KEY: \${'$'}{{ secrets.DEPLOY_KEY }}  # segredo armazenado no repo
         run: ./scripts/deploy.sh`}</CodeBlock>
         <Callout tone="info">
-          Secrets ficam em <strong>Settings → Secrets and variables → Actions</strong>. Nunca coloque senhas, tokens ou chaves diretamente no YAML — use <code>{'${{ secrets.NOME }}'}</code>. O GitHub redacta valores de secrets nos logs automaticamente.
+          Secrets ficam em <strong>Settings → Secrets and variables → Actions</strong>. Nunca coloque senhas, tokens ou chaves diretamente no YAML — use <code>{'\${{ secrets.NOME }}'}</code>. O GitHub redacta valores de secrets nos logs automaticamente.
         </Callout>
       </Section>
 

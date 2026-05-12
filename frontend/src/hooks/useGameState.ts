@@ -14,17 +14,22 @@ import {
   completeOnboarding,
   setPreferredHub,
   setDailyGoal,
+  toggleBookmark,
+  rateModule,
+  claimQuestReward,
   type GameState,
   type CompleteModuleResult,
   type CompleteModuleInput,
   type ReviewCardResult,
   type LastArticle,
-  type DailyChallenge,
 } from '@/lib/engine';
 import type { ReviewQuality } from '@/lib/srs';
 import { getLevelInfo, getTrailProgress, CURRICULUM } from '@/lib/curriculum';
 import { GameStateStorage } from '@/lib/game-state-storage';
 import { STORAGE_KEYS } from '@/lib/constants';
+import { toast } from '@/lib/toast';
+import { playXPCoin, playLevelUp, playBadge, playPop, unlockAudio } from '@/lib/sounds';
+import { BADGES_DEF } from '@/lib/curriculum';
 
 /**
  * Problema do multi-tab:
@@ -65,6 +70,14 @@ const WRITE_DEBOUNCE_MS = 300;
  */
 export async function saveAsync(state: GameState): Promise<void> {
   await GameStateStorage.set(STORAGE_KEYS.GAME_STATE, state);
+  // Cloud sync — debounced 3s no progress-sync.ts; só executa se backend
+  // estiver configurado e usuário logado.
+  try {
+    const { schedulePush } = await import('@/lib/progress-sync');
+    schedulePush();
+  } catch {
+    // sync indisponível em build estático — fail silent
+  }
 }
 
 /**
@@ -166,11 +179,29 @@ export function useGameState() {
   }, []);
 
   const markComplete = useCallback((input: CompleteModuleInput): CompleteModuleResult => {
+    unlockAudio();
+    const before = loadState();
     const result = completeModule(input);
     const next = loadState();
     setState(next);
-    // Persiste no IndexedDB de forma assíncrona (não bloqueia a UI)
     if (next) debouncedSaveToIDB(next);
+
+    if (before && next && before.freezes > next.freezes) {
+      playPop();
+      toast.info('🧊 Freeze usado! Sequência salva');
+    }
+    if (result.leveledUp) {
+      playLevelUp();
+      toast.levelUp(result.newLevel);
+    } else if (result.xpGained > 0) {
+      playXPCoin();
+    }
+    for (const badgeId of result.newBadges) {
+      const def = BADGES_DEF.find(b => b.id === badgeId);
+      playBadge();
+      toast.badge(def ? `${def.icon} ${def.name}` : badgeId);
+    }
+
     return result;
   }, [debouncedSaveToIDB]);
 
@@ -182,10 +213,19 @@ export function useGameState() {
   }, [debouncedSaveToIDB]);
 
   const reviewOne = useCallback((cardId: string, outcome: ReviewQuality): ReviewCardResult => {
+    unlockAudio();
     const result = submitCardReview(cardId, outcome);
     const next = loadState();
     setState(next);
     if (next) debouncedSaveToIDB(next);
+
+    if (result.xpGained > 0) playXPCoin();
+    for (const badgeId of result.newBadges) {
+      const def = BADGES_DEF.find(b => b.id === badgeId);
+      playBadge();
+      toast.badge(def ? `${def.icon} ${def.name}` : badgeId);
+    }
+
     return result;
   }, [debouncedSaveToIDB]);
 
@@ -223,6 +263,28 @@ export function useGameState() {
     if (next) debouncedSaveToIDB(next);
   }, [debouncedSaveToIDB]);
 
+  const bookmark = useCallback((slug: string): boolean => {
+    const isNowBookmarked = toggleBookmark(slug);
+    const next = loadState();
+    setState(next);
+    if (next) debouncedSaveToIDB(next);
+    return isNowBookmarked;
+  }, [debouncedSaveToIDB]);
+
+  const rate = useCallback((slug: string, rating: 1 | -1) => {
+    rateModule(slug, rating);
+    const next = loadState();
+    setState(next);
+    if (next) debouncedSaveToIDB(next);
+  }, [debouncedSaveToIDB]);
+
+  const claimQuest = useCallback((questId: string, xpReward: number) => {
+    claimQuestReward(questId, xpReward);
+    const next = loadState();
+    setState(next);
+    if (next) debouncedSaveToIDB(next);
+  }, [debouncedSaveToIDB]);
+
   const levelInfo = state ? getLevelInfo(state.xp) : null;
 
   const trailsProgress = CURRICULUM.map(trail => ({
@@ -242,6 +304,62 @@ export function useGameState() {
   const dueCards = state ? getDueCards(state.reviewCards) : [];
   const dailyChallenge = state ? getDailyChallenge() : null;
 
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const todayStudy = state?.studyDays.find(d => d.date === todayISO);
+  const todayReviewCount = todayStudy?.cardsReviewed ?? 0;
+  const dailyGoalMet = state ? todayReviewCount >= (state.dailyGoal ?? 3) : false;
+
+  // Weekly stats from studyDays (last 7 days)
+  const weeklyStats = (() => {
+    if (!state) return { minutes: 0, xp: 0, cards: 0, activeDays: 0 };
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 6);
+    cutoff.setHours(0, 0, 0, 0);
+    const week = state.studyDays.filter(d => new Date(d.date) >= cutoff);
+    return {
+      minutes: week.reduce((s, d) => s + d.minutes, 0),
+      xp: week.reduce((s, d) => s + d.xpEarned, 0),
+      cards: week.reduce((s, d) => s + d.cardsReviewed, 0),
+      activeDays: week.filter(d => d.xpEarned > 0).length,
+    };
+  })();
+
+  // Recommended next modules: incomplete modules from most-progressed trail
+  const recommendations = (() => {
+    if (!state) return [];
+    const completed = new Set(state.completedModules);
+    // Find trails ordered by % done (descending), ignore 100% done
+    const trailsByProgress = CURRICULUM
+      .map(t => ({
+        trail: t,
+        done: t.modules.filter(m => completed.has(m.slug)).length,
+        total: t.modules.length,
+      }))
+      .filter(t => t.done < t.total)
+      .sort((a, b) => b.done / b.total - a.done / a.total);
+
+    const picks: Array<{ slug: string; title: string; href: string; xp: number; readTime: number; trailName: string; trailColor: string; trailIcon: string }> = [];
+    for (const { trail } of trailsByProgress) {
+      for (const m of trail.modules) {
+        if (!completed.has(m.slug)) {
+          picks.push({
+            slug: m.slug,
+            title: m.title,
+            href: `/aprenda/${m.slug}`,
+            xp: m.xp,
+            readTime: m.readTime,
+            trailName: trail.name,
+            trailColor: trail.color,
+            trailIcon: trail.icon,
+          });
+          if (picks.length >= 3) break;
+        }
+      }
+      if (picks.length >= 3) break;
+    }
+    return picks;
+  })();
+
   return {
     state,
     levelInfo,
@@ -249,6 +367,10 @@ export function useGameState() {
     overallPct,
     dueCards,
     dailyChallenge,
+    todayReviewCount,
+    dailyGoalMet,
+    weeklyStats,
+    recommendations,
     markComplete,
     submitQuiz,
     reviewOne,
@@ -258,5 +380,8 @@ export function useGameState() {
     finishOnboarding,
     choosePreferredHub,
     updateDailyGoal,
+    bookmark,
+    rate,
+    claimQuest,
   };
 }

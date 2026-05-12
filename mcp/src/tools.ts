@@ -1,6 +1,8 @@
 import { z } from "zod";
+import { readFile, writeFile } from "fs/promises";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ApiError, type Article, type ArticleListItem, type Difficulty, type FFVClient, type UpdateArticleInput } from "./client.js";
+import type { Config } from "./config.js";
 
 // ─── Logger ────────────────────────────────────────────────────────────────────
 
@@ -239,7 +241,33 @@ export function buildDiff(current: Article, patches: PatchFields) {
 
 // ─── Registro de tools ────────────────────────────────────────────────────────
 
-export function registerTools(server: McpServer, client: FFVClient): void {
+// ─── Helpers de arquivo JSON ──────────────────────────────────────────────────
+
+async function readJson<T>(path: string): Promise<T> {
+  const raw = await readFile(path, "utf-8");
+  return JSON.parse(raw) as T;
+}
+
+async function writeJson(path: string, value: unknown): Promise<void> {
+  await writeFile(path, JSON.stringify(value, null, 2) + "\n", "utf-8");
+}
+
+function today(): string {
+  return new Date().toISOString().split("T")[0]!;
+}
+
+// ─── Schemas compartilhados ───────────────────────────────────────────────────
+
+const NEWS_CATEGORIES = ["launch", "research", "business", "safety", "regulation"] as const;
+
+const QuestionOptionSchema = z.object({
+  id: z.enum(["A", "B", "C", "D", "E"]),
+  text: z.string().min(1),
+});
+
+// ─── Registro de tools ────────────────────────────────────────────────────────
+
+export function registerTools(server: McpServer, client: FFVClient, cfg: Config): void {
 
   // ── Taxonomia ──────────────────────────────────────────────────────────────
 
@@ -455,6 +483,459 @@ export function registerTools(server: McpServer, client: FFVClient): void {
         }
         await client.deleteArticle(slug);
         return { deleted: slug };
+      }),
+  );
+
+  // ── Simulados ──────────────────────────────────────────────────────────────
+
+  server.registerTool(
+    "list_simulados",
+    {
+      title: "Listar simulados",
+      description:
+        "Retorna o catálogo completo de simulados da plataforma (endpoint público). " +
+        "Inclui metadados: título, certificação, preço, número de questões, tópicos e nota mínima de aprovação. " +
+        "Use para entender quais simulados já existem antes de criar conteúdo relacionado.",
+      inputSchema: {},
+    },
+    async () => safe("list_simulados", () => client.listSimulados()),
+  );
+
+  server.registerTool(
+    "read_simulado",
+    {
+      title: "Ler simulado",
+      description:
+        "Retorna os detalhes de um simulado específico pelo ID (endpoint público). " +
+        "Inclui tópicos cobertos, limite de tempo e critérios de aprovação. " +
+        "Use para entender o escopo de um simulado antes de criar artigos de suporte ou questões relacionadas.",
+      inputSchema: {
+        simulado_id: z.string().min(1).describe("ID do simulado (ex: 'aws-saa-c03')."),
+      },
+    },
+    async ({ simulado_id }) => safe("read_simulado", () => client.getSimulado(simulado_id)),
+  );
+
+  // ── Certificados ───────────────────────────────────────────────────────────
+
+  server.registerTool(
+    "verify_certificate",
+    {
+      title: "Verificar certificado",
+      description:
+        "Verifica a autenticidade de um certificado FFV Academy pelo hash SHA-256 (endpoint público). " +
+        "Retorna nome do portador, simulado, score e data de emissão. " +
+        "Use para confirmar se um certificado é válido.",
+      inputSchema: {
+        hash: z.string().min(1).describe("Hash SHA-256 do certificado (64 caracteres hex)."),
+      },
+    },
+    async ({ hash }) => safe("verify_certificate", () => client.verifyCertificate(hash)),
+  );
+
+  // ── Leaderboard ────────────────────────────────────────────────────────────
+
+  server.registerTool(
+    "get_leaderboard",
+    {
+      title: "Ranking semanal",
+      description:
+        "Retorna o ranking semanal de XP da plataforma (top 50). Requer FFV_ADMIN_TOKEN. " +
+        "A semana começa na segunda-feira UTC. " +
+        "Use para acompanhar engajamento e identificar alunos mais ativos.",
+      inputSchema: {},
+    },
+    async () => safe("get_leaderboard", () => client.getLeaderboard()),
+  );
+
+  // ── Admin ──────────────────────────────────────────────────────────────────
+
+  server.registerTool(
+    "get_admin_stats",
+    {
+      title: "Estatísticas do portal",
+      description:
+        "Retorna métricas gerais do sistema FFV Academy. Requer FFV_ADMIN_TOKEN. " +
+        "Use para obter uma visão geral do estado operacional da plataforma.",
+      inputSchema: {},
+    },
+    async () => safe("get_admin_stats", () => client.getAdminStats()),
+  );
+
+  server.registerTool(
+    "get_audit_log",
+    {
+      title: "Log de auditoria",
+      description:
+        "Lista o log de mutations administrativas (POST/PATCH/PUT/DELETE com 2xx). Requer FFV_ADMIN_TOKEN. " +
+        "Filtrável por usuário, ação, e intervalo de datas. " +
+        "Use para auditar quem criou, editou ou deletou conteúdo e quando.",
+      inputSchema: {
+        limit: z.number().int().min(1).max(500).optional().describe("Máximo de registros (default 50, máx 500)."),
+        offset: z.number().int().min(0).optional().describe("Offset para paginação (default 0)."),
+        user_id: z.string().optional().describe("Filtrar por ID de usuário específico."),
+        action: z.string().optional().describe("Filtrar por prefixo de ação (ex: 'POST /api/v1/admin/curriculum')."),
+        from: z.string().optional().describe("Data de início ISO 8601 (ex: '2026-01-01T00:00:00Z')."),
+        to: z.string().optional().describe("Data de fim ISO 8601 (ex: '2026-12-31T23:59:59Z')."),
+      },
+    },
+    async ({ limit, offset, user_id, action, from, to }) =>
+      safe("get_audit_log", () =>
+        client.getAuditLog({ limit, offset, userId: user_id, action, from, to }),
+      ),
+  );
+
+  // ── Notícias (frontend/src/data/news.json) ─────────────────────────────────
+
+  server.registerTool(
+    "list_news",
+    {
+      title: "Listar notícias",
+      description:
+        "Lista todas as notícias do portal FFV Academy (lê news.json). " +
+        "Filtrável por categoria ou fonte. Use antes de criar para evitar duplicatas.",
+      inputSchema: {
+        category: z
+          .enum(NEWS_CATEGORIES)
+          .optional()
+          .describe("Filtrar por categoria: launch, research, business, safety, regulation."),
+        source: z.string().optional().describe("Filtrar por fonte (ex: 'Anthropic', 'OpenAI')."),
+        hot_only: z.boolean().optional().describe("Retornar apenas notícias marcadas como hot."),
+      },
+    },
+    async ({ category, source, hot_only }) =>
+      safe("list_news", async () => {
+        const feed = await readJson<{ updatedAt: string; items: unknown[] }>(cfg.newsJsonPath);
+        type Item = { category: string; source: string; hot?: boolean };
+        let items = feed.items as Item[];
+        if (category) items = items.filter((i) => i.category === category);
+        if (source) items = items.filter((i) => i.source === source);
+        if (hot_only) items = items.filter((i) => i.hot === true);
+        return { total: items.length, updatedAt: feed.updatedAt, items };
+      }),
+  );
+
+  server.registerTool(
+    "create_news",
+    {
+      title: "Criar notícia",
+      description:
+        "Adiciona uma nova notícia ao news.json do frontend FFV Academy. " +
+        "Requer rebuild do frontend para publicar. " +
+        "Use list_news antes para checar se já existe notícia similar.",
+      inputSchema: {
+        id: z
+          .string()
+          .regex(/^[a-z0-9-]{3,80}$/)
+          .describe("ID único kebab-case (ex: 'openai-gpt5-launch')."),
+        title: z.string().min(10).max(140).describe("Título da notícia (10-140 chars)."),
+        summary: z
+          .string()
+          .min(20)
+          .max(320)
+          .describe("Resumo editorial em português (20-320 chars)."),
+        source: z.string().min(2).max(40).describe("Nome da fonte (ex: 'Anthropic', 'OpenAI')."),
+        source_url: z
+          .string()
+          .url()
+          .refine((u) => u.startsWith("https://"), "URL deve ser https://")
+          .describe("URL de origem da notícia (https://)."),
+        published_at: z
+          .string()
+          .regex(/^\d{4}-\d{2}-\d{2}$/)
+          .describe("Data de publicação YYYY-MM-DD."),
+        category: z
+          .enum(NEWS_CATEGORIES)
+          .describe("Categoria: launch, research, business, safety, regulation."),
+        hot: z.boolean().optional().describe("Marcar como destaque (aparece em primeiro)."),
+        tags: z
+          .array(z.string().min(2).max(32))
+          .max(6)
+          .optional()
+          .describe("Tags kebab-case (máx 6)."),
+      },
+    },
+    async ({ id, title, summary, source, source_url, published_at, category, hot, tags }) =>
+      safe("create_news", async () => {
+        const feed = await readJson<{ updatedAt: string; items: Record<string, unknown>[] }>(
+          cfg.newsJsonPath,
+        );
+        if (feed.items.some((i) => i["id"] === id)) {
+          throw new Error(`Notícia com id="${id}" já existe. Use update_news para editar.`);
+        }
+        const item: Record<string, unknown> = {
+          id,
+          title,
+          summary,
+          source,
+          sourceUrl: source_url,
+          publishedAt: published_at,
+          category,
+        };
+        if (hot !== undefined) item["hot"] = hot;
+        if (tags?.length) item["tags"] = tags;
+        feed.items.unshift(item); // mais recente primeiro
+        feed.updatedAt = today();
+        await writeJson(cfg.newsJsonPath, feed);
+        return { created: id, total: feed.items.length, updatedAt: feed.updatedAt };
+      }),
+  );
+
+  server.registerTool(
+    "update_news",
+    {
+      title: "Atualizar notícia",
+      description:
+        "Edita uma notícia existente no news.json pelo ID. Apenas campos fornecidos são alterados. " +
+        "Requer rebuild do frontend para publicar.",
+      inputSchema: {
+        id: z.string().min(1).describe("ID da notícia a atualizar."),
+        title: z.string().min(10).max(140).optional(),
+        summary: z.string().min(20).max(320).optional(),
+        source: z.string().min(2).max(40).optional(),
+        source_url: z
+          .string()
+          .url()
+          .refine((u) => u.startsWith("https://"))
+          .optional(),
+        published_at: z
+          .string()
+          .regex(/^\d{4}-\d{2}-\d{2}$/)
+          .optional(),
+        category: z.enum(NEWS_CATEGORIES).optional(),
+        hot: z.boolean().optional(),
+        tags: z.array(z.string().min(2).max(32)).max(6).optional(),
+      },
+    },
+    async ({ id, title, summary, source, source_url, published_at, category, hot, tags }) =>
+      safe("update_news", async () => {
+        const feed = await readJson<{ updatedAt: string; items: Record<string, unknown>[] }>(
+          cfg.newsJsonPath,
+        );
+        const idx = feed.items.findIndex((i) => i["id"] === id);
+        if (idx === -1) throw new Error(`Notícia id="${id}" não encontrada.`);
+        const item = feed.items[idx]!;
+        if (title !== undefined) item["title"] = title;
+        if (summary !== undefined) item["summary"] = summary;
+        if (source !== undefined) item["source"] = source;
+        if (source_url !== undefined) item["sourceUrl"] = source_url;
+        if (published_at !== undefined) item["publishedAt"] = published_at;
+        if (category !== undefined) item["category"] = category;
+        if (hot !== undefined) item["hot"] = hot;
+        if (tags !== undefined) item["tags"] = tags;
+        feed.updatedAt = today();
+        await writeJson(cfg.newsJsonPath, feed);
+        return { updated: id, updatedAt: feed.updatedAt };
+      }),
+  );
+
+  server.registerTool(
+    "delete_news",
+    {
+      title: "Deletar notícia",
+      description:
+        "Remove uma notícia do news.json pelo ID. Operação irreversível via MCP. " +
+        "Requer rebuild do frontend para efeito.",
+      inputSchema: {
+        id: z.string().min(1).describe("ID da notícia a remover."),
+        confirm_id: z
+          .string()
+          .min(1)
+          .describe("Repita o ID exato para confirmar. Deve ser igual ao campo id."),
+      },
+    },
+    async ({ id, confirm_id }) =>
+      safe("delete_news", async () => {
+        if (id !== confirm_id) {
+          throw new Error(
+            `Confirmação inválida: id="${id}" mas confirm_id="${confirm_id}". ` +
+              `Os dois campos devem ser idênticos.`,
+          );
+        }
+        const feed = await readJson<{ updatedAt: string; items: Record<string, unknown>[] }>(
+          cfg.newsJsonPath,
+        );
+        const before = feed.items.length;
+        feed.items = feed.items.filter((i) => i["id"] !== id);
+        if (feed.items.length === before) throw new Error(`Notícia id="${id}" não encontrada.`);
+        feed.updatedAt = today();
+        await writeJson(cfg.newsJsonPath, feed);
+        return { deleted: id, remaining: feed.items.length };
+      }),
+  );
+
+  // ── Questões de simulado (backend/internal/infrastructure/catalog/catalog.json) ──
+
+  server.registerTool(
+    "list_questions",
+    {
+      title: "Listar questões do simulado",
+      description:
+        "Lista as questões de um simulado pelo simulado_id (lê catalog.json). " +
+        "Use para revisar o banco de questões antes de criar novas.",
+      inputSchema: {
+        simulado_id: z
+          .string()
+          .min(1)
+          .describe("ID do simulado (ex: 'aws-clf'). Use list_simulados para ver os IDs."),
+        topic: z.string().optional().describe("Filtrar por tópico (ex: 'Security')."),
+        difficulty: z
+          .enum(["easy", "medium", "hard"])
+          .optional()
+          .describe("Filtrar por dificuldade."),
+      },
+    },
+    async ({ simulado_id, topic, difficulty }) =>
+      safe("list_questions", async () => {
+        type Question = { id: string; topic: string; difficulty: string; stem: string };
+        type Simulado = { id: string; questions: Question[]; questionCount: number };
+        const catalog = await readJson<Simulado[]>(cfg.catalogJsonPath);
+        const sim = catalog.find((s) => s.id === simulado_id);
+        if (!sim) throw new Error(`Simulado id="${simulado_id}" não encontrado.`);
+        let qs = sim.questions;
+        if (topic) qs = qs.filter((q) => q.topic === topic);
+        if (difficulty) qs = qs.filter((q) => q.difficulty === difficulty);
+        return {
+          simulado_id,
+          total: qs.length,
+          questions: qs.map((q) => ({ id: q.id, topic: q.topic, difficulty: q.difficulty, stem: q.stem.slice(0, 80) + (q.stem.length > 80 ? "…" : "") })),
+        };
+      }),
+  );
+
+  server.registerTool(
+    "create_question",
+    {
+      title: "Criar questão de simulado",
+      description:
+        "Adiciona uma nova questão a um simulado no catalog.json. " +
+        "ATENÇÃO: requer rebuild + redeploy do backend para entrar em produção. " +
+        "Use list_questions antes para checar IDs existentes.",
+      inputSchema: {
+        simulado_id: z.string().min(1).describe("ID do simulado onde adicionar a questão."),
+        id: z
+          .string()
+          .regex(/^[a-z0-9-]+$/)
+          .describe("ID único da questão em kebab-case (ex: 'clf-q2')."),
+        stem: z.string().min(10).describe("Enunciado da questão."),
+        options: z
+          .array(QuestionOptionSchema)
+          .length(5)
+          .describe("Exatamente 5 opções: A, B, C, D, E."),
+        correct_id: z.enum(["A", "B", "C", "D", "E"]).describe("ID da opção correta."),
+        explanation: z.string().min(10).describe("Explicação da resposta correta."),
+        topic: z.string().min(2).describe("Tópico da questão (ex: 'Security', 'Cloud Concepts')."),
+        difficulty: z.enum(["easy", "medium", "hard"]).describe("Dificuldade da questão."),
+        related_slug: z
+          .string()
+          .optional()
+          .describe("Slug de artigo FFV relacionado (opcional, para link de estudo)."),
+      },
+    },
+    async ({ simulado_id, id, stem, options, correct_id, explanation, topic, difficulty, related_slug }) =>
+      safe("create_question", async () => {
+        type Question = { id: string };
+        type Simulado = { id: string; questions: Question[]; questionCount: number };
+        const catalog = await readJson<Simulado[]>(cfg.catalogJsonPath);
+        const simIdx = catalog.findIndex((s) => s.id === simulado_id);
+        if (simIdx === -1) throw new Error(`Simulado id="${simulado_id}" não encontrado.`);
+        const sim = catalog[simIdx]!;
+        if (sim.questions.some((q) => q.id === id)) {
+          throw new Error(`Questão id="${id}" já existe neste simulado.`);
+        }
+        const question: Record<string, unknown> = {
+          id,
+          stem,
+          options: options.map((o) => ({ id: o.id, text: o.text })),
+          correctId: correct_id,
+          explanation,
+          topic,
+          difficulty,
+        };
+        if (related_slug) question["relatedSlug"] = related_slug;
+        sim.questions.push(question as Question);
+        sim.questionCount = sim.questions.length;
+        await writeJson(cfg.catalogJsonPath, catalog);
+        return { created: id, simulado_id, total_questions: sim.questionCount };
+      }),
+  );
+
+  server.registerTool(
+    "update_question",
+    {
+      title: "Atualizar questão de simulado",
+      description:
+        "Edita uma questão existente no catalog.json. Apenas campos fornecidos são alterados. " +
+        "ATENÇÃO: requer rebuild + redeploy do backend para entrar em produção.",
+      inputSchema: {
+        simulado_id: z.string().min(1).describe("ID do simulado que contém a questão."),
+        question_id: z.string().min(1).describe("ID da questão a editar."),
+        stem: z.string().min(10).optional(),
+        options: z.array(QuestionOptionSchema).length(5).optional(),
+        correct_id: z.enum(["A", "B", "C", "D", "E"]).optional(),
+        explanation: z.string().min(10).optional(),
+        topic: z.string().min(2).optional(),
+        difficulty: z.enum(["easy", "medium", "hard"]).optional(),
+        related_slug: z.string().optional(),
+      },
+    },
+    async ({ simulado_id, question_id, stem, options, correct_id, explanation, topic, difficulty, related_slug }) =>
+      safe("update_question", async () => {
+        type Question = Record<string, unknown>;
+        type Simulado = { id: string; questions: Question[] };
+        const catalog = await readJson<Simulado[]>(cfg.catalogJsonPath);
+        const sim = catalog.find((s) => s.id === simulado_id);
+        if (!sim) throw new Error(`Simulado id="${simulado_id}" não encontrado.`);
+        const q = sim.questions.find((q) => q["id"] === question_id);
+        if (!q) throw new Error(`Questão id="${question_id}" não encontrada no simulado "${simulado_id}".`);
+        if (stem !== undefined) q["stem"] = stem;
+        if (options !== undefined) q["options"] = options.map((o) => ({ id: o.id, text: o.text }));
+        if (correct_id !== undefined) q["correctId"] = correct_id;
+        if (explanation !== undefined) q["explanation"] = explanation;
+        if (topic !== undefined) q["topic"] = topic;
+        if (difficulty !== undefined) q["difficulty"] = difficulty;
+        if (related_slug !== undefined) q["relatedSlug"] = related_slug;
+        await writeJson(cfg.catalogJsonPath, catalog);
+        return { updated: question_id, simulado_id };
+      }),
+  );
+
+  server.registerTool(
+    "delete_question",
+    {
+      title: "Deletar questão de simulado",
+      description:
+        "Remove uma questão do catalog.json. Operação irreversível via MCP. " +
+        "ATENÇÃO: requer rebuild + redeploy do backend para entrar em produção.",
+      inputSchema: {
+        simulado_id: z.string().min(1).describe("ID do simulado que contém a questão."),
+        question_id: z.string().min(1).describe("ID da questão a remover."),
+        confirm_id: z
+          .string()
+          .min(1)
+          .describe("Repita o question_id exato para confirmar."),
+      },
+    },
+    async ({ simulado_id, question_id, confirm_id }) =>
+      safe("delete_question", async () => {
+        if (question_id !== confirm_id) {
+          throw new Error(
+            `Confirmação inválida: question_id="${question_id}" mas confirm_id="${confirm_id}".`,
+          );
+        }
+        type Question = Record<string, unknown>;
+        type Simulado = { id: string; questions: Question[]; questionCount: number };
+        const catalog = await readJson<Simulado[]>(cfg.catalogJsonPath);
+        const sim = catalog.find((s) => s.id === simulado_id);
+        if (!sim) throw new Error(`Simulado id="${simulado_id}" não encontrado.`);
+        const before = sim.questions.length;
+        sim.questions = sim.questions.filter((q) => q["id"] !== question_id);
+        if (sim.questions.length === before) {
+          throw new Error(`Questão id="${question_id}" não encontrada.`);
+        }
+        sim.questionCount = sim.questions.length;
+        await writeJson(cfg.catalogJsonPath, catalog);
+        return { deleted: question_id, simulado_id, remaining_questions: sim.questionCount };
       }),
   );
 }

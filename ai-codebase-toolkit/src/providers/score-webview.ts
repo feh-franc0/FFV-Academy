@@ -11,6 +11,14 @@ const ALLOWED_COMMANDS = new Set([
   'aiToolkit.generateDocsSite',
   'aiToolkit.generateArchitectureDiagram',
   'aiToolkit.scaffoldFeature',
+  'aiToolkit.enrichWithAI',
+  'aiToolkit.checkDrift',
+  'aiToolkit.generateOnboarding',
+  'aiToolkit.generatePRContext',
+  'aiToolkit.detectDocGaps',
+  'aiToolkit.showMetrics',
+  'aiToolkit.editOverrides',
+  'aiToolkit.compareWithAI',
 ]);
 
 export function showScoreWebview(report: ReadinessReport, context: vscode.ExtensionContext): void {

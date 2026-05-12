@@ -343,7 +343,7 @@ jobs:
 
       - name: Run RAG eval on golden set
         env:
-          ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_API_KEY: \${'$'}{{ secrets.ANTHROPIC_API_KEY }}
         run: python -m eval.run --out eval_results.json
 
       - name: Compare with baseline

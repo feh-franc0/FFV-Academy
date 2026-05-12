@@ -85,7 +85,7 @@ ytext.observe((ev) =&gt; {
 });
 
 // Awareness: presence (cursor, selection, nome do usuário)
-provider.awareness.setLocalState({ user: { name: 'Fernando', color: '#3b82f6' },
+provider.awareness.setLocalState({ user: { text: 'Fernando', color: '#3b82f6' },
                                     cursor: { index: ytext.length } });`}</CodeBlock>
         <Callout tone="info">
           Yjs representa texto como Y.Text (uma sequência CRDT baseada em YATA), arrays como Y.Array, objetos como Y.Map. Tudo binário, diffs pequenos, integração pronta com ProseMirror/TipTap/Monaco/CodeMirror.
@@ -134,7 +134,7 @@ const editor = new Editor({
   extensions: [
     StarterKit.configure({ history: false }), // history vem do Yjs
     Collaboration.configure({ document: ydoc }),
-    CollaborationCursor.configure({ provider, user: { name: 'Fernando', color: '#3b82f6' } }),
+    CollaborationCursor.configure({ provider, user: { text: 'Fernando', color: '#3b82f6' } }),
   ],
 });`}</CodeBlock>
         <Callout tone="success" icon="🎯">

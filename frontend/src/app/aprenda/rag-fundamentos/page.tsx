@@ -120,9 +120,9 @@ function Content() {
           orientation="vertical"
           steps={[
             { label: 'Pergunta do usuário', desc: '' },
-            { label: '1. Retrieve', desc: 'embed → vector DB → top-k trechos' },
-            { label: '2. Augment Prompt', desc: '[pergunta + trechos recuperados]' },
-            { label: '3. Generate (LLM)', desc: 'resposta + citações baseadas no contexto' },
+            '1. Retrieve — embed → vector DB → top-k trechos',
+            '2. Augment Prompt — [pergunta + trechos recuperados]',
+            '3. Generate (LLM) — resposta + citações baseadas no contexto',
           ]}
         />
       </Section>

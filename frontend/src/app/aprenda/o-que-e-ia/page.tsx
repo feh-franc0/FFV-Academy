@@ -102,7 +102,7 @@ function Content() {
           title="Hierarquia da IA"
           accent={accent}
           levels={[
-            { label: 'INTELIGÊNCIA ARTIFICIAL', desc: 'Sistemas que realizam tarefas "inteligentes"' },
+            { label: 'INTELIGÊNCIA ARTIFICIAL', desc: 'Sistemas que realizam tarefas "inteligentes' },
             { label: 'MACHINE LEARNING', desc: 'Sistemas que aprendem a partir de dados' },
             { label: 'DEEP LEARNING', desc: 'ML com redes neurais profundas (muitas camadas)' },
             { label: 'LLMs', desc: 'Transformers treinados em linguagem em escala massiva' },

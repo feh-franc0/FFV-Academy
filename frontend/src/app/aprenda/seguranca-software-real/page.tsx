@@ -179,7 +179,7 @@ function Content() {
 - name: Scan for secrets
   uses: gitleaks/gitleaks-action@v2
   env:
-    GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+    GITHUB_TOKEN: \${'$'}{{ secrets.GITHUB_TOKEN }}
 
 # Em runtime (Node + AWS)
 import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';

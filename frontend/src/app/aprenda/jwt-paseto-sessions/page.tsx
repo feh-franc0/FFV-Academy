@@ -85,7 +85,7 @@ export default function Page() {
       <Section title="Refresh token rotation" accent={accent}>
         <CodeBlock lang="typescript">{`// Padrão: refresh uso único, rota nova a cada uso
 async function refresh(oldRefreshToken: string) {
-  const stored = await db.refreshTokens.findUnique({ where: { token: oldRefreshToken } });
+  const stored = await db.refreshTokens.findUnique({ where: { text: oldRefreshToken } });
   if (!stored || stored.usedAt) {
     // REUSO DETECTADO — refresh roubado. Invalidar família inteira
     if (stored) await db.refreshTokens.updateMany({
@@ -96,13 +96,13 @@ async function refresh(oldRefreshToken: string) {
   }
 
   await db.refreshTokens.update({
-    where: { token: oldRefreshToken },
+    where: { text: oldRefreshToken },
     data: { usedAt: new Date() },
   });
 
   const newRefresh = crypto.randomBytes(32).toString('hex');
   await db.refreshTokens.create({
-    data: { token: newRefresh, familyId: stored.familyId, userId: stored.userId },
+    data: { text: newRefresh, familyId: stored.familyId, userId: stored.userId },
   });
 
   return {

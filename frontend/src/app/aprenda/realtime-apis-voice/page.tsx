@@ -190,7 +190,7 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(
         vad=silero.VAD.load(),
-        stt=openai.STT(model='whisper-1', language='pt'),
+        stt=openai.STT(model='whisper-1', lang='pt'),
         llm=openai.LLM(model='gpt-4o'),
         tts=openai.TTS(voice='nova'),
         # OU: llm=openai.realtime.RealtimeModel() para end-to-end

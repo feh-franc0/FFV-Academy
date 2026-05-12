@@ -90,9 +90,9 @@ function Content() {
       <Section title="SLI → SLO → SLA: a hierarquia">
         <HierarchyDiagram
           levels={[
-            { label: 'SLI — Service Level Indicator', desc: '"O que eu meço" · ex: % requests com latência < 300ms' },
-            { label: 'SLO — Service Level Objective', desc: '"O alvo interno" · ex: SLI ≥ 99.5% em janela rolling de 30 dias' },
-            { label: 'SLA — Service Level Agreement', desc: '"O contrato com penalidades" · ex: ≥ 99.0% · violação = crédito 10%' },
+            { label: 'SLI', desc: 'Service Level Indicator — O que eu meço" · ex: % requests com latência < 300ms' },
+            { label: 'SLO', desc: 'Service Level Objective — O alvo interno" · ex: SLI ≥ 99.5% em janela rolling de 30 dias' },
+            { label: 'SLA', desc: 'Service Level Agreement — O contrato com penalidades" · ex: ≥ 99.0% · violação = crédito 10%' },
           ]}
         />
       </Section>

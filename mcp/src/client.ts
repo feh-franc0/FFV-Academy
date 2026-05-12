@@ -61,6 +61,54 @@ export interface UpdateArticleInput {
   published?: boolean;
 }
 
+export interface SimuladoItem {
+  id: string;
+  certification: string;
+  title: string;
+  description: string;
+  priceCents: number;
+  questionCount: number;
+  timeLimitMin: number;
+  topics: string[];
+  passingScore: number;
+  comingSoon: boolean;
+}
+
+export interface ListSimuladosResult {
+  simulados: SimuladoItem[];
+  total: number;
+}
+
+export interface LeaderboardEntry {
+  rank: number;
+  userId: string;
+  userName: string;
+  score: number;
+}
+
+export interface LeaderboardResult {
+  weekStart: string;
+  entries: LeaderboardEntry[];
+  total: number;
+}
+
+export interface CertificateInfo {
+  hash: string;
+  userId: string;
+  simuladoId: string;
+  attemptId: string;
+  holderName: string;
+  issuedAt: string;
+  verifyUrl: string;
+}
+
+export interface AuditLogResult {
+  data: unknown[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -120,6 +168,53 @@ export class FFVClient {
       undefined,
       true,
     );
+  }
+
+  // Simulados (públicos).
+
+  async listSimulados(): Promise<ListSimuladosResult> {
+    return this.request<ListSimuladosResult>("GET", "/api/v1/simulados");
+  }
+
+  async getSimulado(id: string): Promise<SimuladoItem> {
+    return this.request<SimuladoItem>("GET", `/api/v1/simulados/${encodeURIComponent(id)}`);
+  }
+
+  // Certificados (público).
+
+  async verifyCertificate(hash: string): Promise<CertificateInfo> {
+    return this.request<CertificateInfo>("GET", `/api/v1/certificates/${encodeURIComponent(hash)}`);
+  }
+
+  // Leaderboard (requer auth — admin token funciona).
+
+  async getLeaderboard(): Promise<LeaderboardResult> {
+    return this.requestAuth<LeaderboardResult>("GET", "/api/v1/leaderboard", undefined);
+  }
+
+  // Admin.
+
+  async getAdminStats(): Promise<unknown> {
+    return this.requestAuth<unknown>("GET", "/api/v1/admin/stats", undefined);
+  }
+
+  async getAuditLog(params: {
+    limit?: number;
+    offset?: number;
+    userId?: string;
+    action?: string;
+    from?: string;
+    to?: string;
+  }): Promise<AuditLogResult> {
+    const qs = new URLSearchParams();
+    if (params.limit !== undefined) qs.set("limit", String(params.limit));
+    if (params.offset !== undefined) qs.set("offset", String(params.offset));
+    if (params.userId) qs.set("user_id", params.userId);
+    if (params.action) qs.set("action", params.action);
+    if (params.from) qs.set("from", params.from);
+    if (params.to) qs.set("to", params.to);
+    const suffix = qs.toString() ? `?${qs}` : "";
+    return this.requestAuth<AuditLogResult>("GET", `/api/v1/admin/audit${suffix}`, undefined);
   }
 
   // Núcleo HTTP.

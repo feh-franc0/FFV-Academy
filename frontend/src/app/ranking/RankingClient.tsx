@@ -9,6 +9,7 @@ import {
   type RankPeriod,
   type MyRankByPeriod,
 } from '@/lib/leaderboard-api';
+import { HUBS } from '@/lib/curriculum';
 
 const PERIODS: { id: RankPeriod; label: string; short: string; emoji: string }[] = [
   { id: 'all-time', label: 'Geral', short: 'GERAL', emoji: '👑' },
@@ -23,6 +24,7 @@ export function RankingClient() {
   const [loading, setLoading] = useState(true);
   const [periodLabel, setPeriodLabel] = useState<string>('');
   const [myRanks, setMyRanks] = useState<MyRankByPeriod[]>([]);
+  const [hubFilter, setHubFilter] = useState<string>('all');
 
   useEffect(() => {
     let cancelled = false;
@@ -147,11 +149,56 @@ export function RankingClient() {
         </div>
       </section>
 
+      {/* Hub filter tabs */}
+      <section className="px-6 pb-2">
+        <div className="max-w-5xl mx-auto">
+          <p className="text-xs font-mono mb-3" style={{ color: 'var(--ffv-muted)', letterSpacing: '0.06em' }}>
+            FILTRAR POR HUB
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              onClick={() => setHubFilter('all')}
+              className="px-3 py-1.5 rounded-full font-semibold text-xs transition-all"
+              style={{
+                background: hubFilter === 'all' ? 'var(--ffv-blue)' : 'var(--ffv-bg2)',
+                border: `1px solid ${hubFilter === 'all' ? 'var(--ffv-blue)' : 'var(--ffv-border)'}`,
+                color: hubFilter === 'all' ? '#fff' : 'var(--ffv-muted)',
+                cursor: 'pointer',
+              }}
+            >
+              🌐 Todos
+            </button>
+            {HUBS.map(h => (
+              <button
+                key={h.id}
+                type="button"
+                onClick={() => setHubFilter(h.id)}
+                className="px-3 py-1.5 rounded-full font-semibold text-xs transition-all"
+                style={{
+                  background: hubFilter === h.id ? h.color : 'var(--ffv-bg2)',
+                  border: `1px solid ${hubFilter === h.id ? h.color : 'var(--ffv-border)'}`,
+                  color: hubFilter === h.id ? '#0d1117' : 'var(--ffv-muted)',
+                  cursor: 'pointer',
+                }}
+              >
+                {h.icon} {h.shortName}
+              </button>
+            ))}
+          </div>
+          {hubFilter !== 'all' && (
+            <p className="text-xs mt-2" style={{ color: 'var(--ffv-muted)' }}>
+              Exibindo ranking global — filtro por hub em breve (requer backend).
+            </p>
+          )}
+        </div>
+      </section>
+
       {/* Sua posição (só se autenticado) */}
       {myRankInPeriod && myRankInPeriod.rank > 0 && (
         <section className="px-6">
           <div className="max-w-5xl mx-auto pb-8">
-            <MyRankCard rank={myRankInPeriod.rank} xp={myRankInPeriod.xp} />
+            <MyRankCard rank={myRankInPeriod.rank} xp={myRankInPeriod.xp} entries={entries ?? []} />
           </div>
         </section>
       )}
@@ -430,7 +477,10 @@ function RankList({ entries }: { entries: PublicLeaderboardEntry[] }) {
 
 /* ─────────────────── Card "minha posição" ─────────────────── */
 
-function MyRankCard({ rank, xp }: { rank: number; xp: number }) {
+function MyRankCard({ rank, xp, entries }: { rank: number; xp: number; entries: PublicLeaderboardEntry[] }) {
+  const entryAbove = rank > 1 ? entries.find(e => e.rank === rank - 1) : null;
+  const xpGap = entryAbove ? entryAbove.xpGained - xp : null;
+
   return (
     <div
       className="rounded-2xl p-5 flex items-center gap-4"
@@ -461,6 +511,20 @@ function MyRankCard({ rank, xp }: { rank: number; xp: number }) {
             no ranking
           </span>
         </p>
+        {xpGap !== null && xpGap > 0 && (
+          <p className="font-mono text-xs mt-1" style={{ color: 'var(--ffv-muted)' }}>
+            Faltam{' '}
+            <span style={{ color: 'var(--ffv-gold)', fontWeight: 700 }}>
+              {xpGap.toLocaleString('pt-BR')} XP
+            </span>
+            {' '}para o #{rank - 1}
+          </p>
+        )}
+        {rank === 1 && (
+          <p className="font-mono text-xs mt-1" style={{ color: 'var(--ffv-gold)' }}>
+            Você está em 1º lugar 👑
+          </p>
+        )}
       </div>
       <div className="text-right">
         <p

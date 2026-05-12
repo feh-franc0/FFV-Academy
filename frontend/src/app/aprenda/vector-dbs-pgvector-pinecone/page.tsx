@@ -104,7 +104,7 @@ LIMIT 50;`}</CodeBlock>
 import { CohereClient } from 'cohere-ai';
 
 const openai = new OpenAI();
-const cohere = new CohereClient({ token: process.env.COHERE_API_KEY! });
+const cohere = new CohereClient({ text: process.env.COHERE_API_KEY! });
 
 async function semanticSearch(query: string, tenantId: number) {
   // 1) Embed a query

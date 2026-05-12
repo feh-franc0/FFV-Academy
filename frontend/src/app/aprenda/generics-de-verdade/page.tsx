@@ -74,10 +74,10 @@ const name = first(['a', 'b']); // name: string | undefined`}</CodeBlock>
         <p>
           Quando T é qualquer coisa, você não pode fazer muito com ele. <InlineCode>extends</InlineCode> diz &quot;T tem que ter pelo menos isso&quot;.
         </p>
-        <CodeBlock lang="typescript">{`function getName<T extends { name: string }>(x: T): string {
+        <CodeBlock lang="typescript">{`function getName<T extends { text: string }>(x: T): string {
   return x.name; // ok porque T sempre tem name
 }
-getName({ name: 'Ana', age: 30 }); // ok, preserva age no tipo
+getName({ text: 'Ana', age: 30 }); // ok, preserva age no tipo
 getName({ age: 30 }); // ❌ erro: falta name`}</CodeBlock>
         <Callout tone="info" icon="💡">
           Use constraints pra documentar &quot;o que minha função PRECISA do tipo&quot;, mas deixe T o mais livre possível — sobre-constringir tira flexibilidade.

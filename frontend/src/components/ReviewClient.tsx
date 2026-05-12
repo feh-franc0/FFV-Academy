@@ -1,10 +1,11 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useGameState } from '@/hooks/useGameState';
 import type { ReviewCard } from '@/lib/srs';
 import type { ReviewQuality } from '@/lib/srs';
+import { playXPCoin, playPop, unlockAudio } from '@/lib/sounds';
 
 type Phase = 'empty' | 'answering' | 'revealed' | 'finished';
 
@@ -22,13 +23,16 @@ export function ReviewClient() {
   const [stats, setStats] = useState<SessionStats>({ total: 0, correct: 0, xpGained: 0 });
   const [queue, setQueue] = useState<ReviewCard[] | null>(null);
 
-  // Initialize queue from dueCards (only once per mount with real data)
-  if (queue === null && state && dueCards.length > 0) {
-    setQueue([...dueCards].sort((a, b) => a.dueDate.localeCompare(b.dueDate)));
-  }
-  if (queue === null && state && dueCards.length === 0) {
-    setQueue([]);
-  }
+  useEffect(() => {
+    if (queue !== null || !state) return;
+    setQueue(
+      dueCards.length > 0
+        ? [...dueCards].sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+        : []
+    );
+    // Initialize once when state first loads — intentionally omit dueCards from deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
 
   const currentCard: ReviewCard | null = queue && queue.length > 0 ? queue[0] : null;
   const phase: Phase = !state
@@ -50,8 +54,14 @@ export function ReviewClient() {
 
   function handleSelect(idx: number) {
     if (revealed) return;
+    unlockAudio();
     setSelected(idx);
     setRevealed(true);
+    if (idx === currentCard?.correct) {
+      playXPCoin();
+    } else {
+      playPop();
+    }
   }
 
   function handleRate(outcome: ReviewQuality) {
@@ -188,9 +198,18 @@ export function ReviewClient() {
             <RatingButton label="Bom" sublabel="+2 XP · 3d" tone="#3fb950" onClick={() => handleRate('good')} />
             <RatingButton label="Fácil" sublabel="+4 XP · longo" tone="#58a6ff" onClick={() => handleRate('easy')} />
           </div>
-          <p className="mt-4 text-[11px]" style={{ color: 'var(--ffv-muted)' }}>
-            Seja honesto — a fila só ajuda se você calibrar pelo esforço real.
-          </p>
+          <div className="mt-4 flex items-center justify-between">
+            <p className="text-[11px]" style={{ color: 'var(--ffv-muted)' }}>
+              Seja honesto — a fila só ajuda se você calibrar pelo esforço real.
+            </p>
+            <Link
+              href={`/aprenda/${currentCard.slug}`}
+              className="text-[11px] font-semibold shrink-0 ml-4 hover:opacity-70 transition-opacity"
+              style={{ color: 'var(--ffv-blue)' }}
+            >
+              Reler artigo →
+            </Link>
+          </div>
         </div>
       )}
     </main>

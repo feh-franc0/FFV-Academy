@@ -12,9 +12,13 @@
  */
 
 import { hasBackend, apiPost } from './api-client';
+import { FEATURES } from './features';
 
 /** Inicia checkout Stripe e retorna a URL para redirect. */
 export async function createCheckout(productId: string): Promise<string> {
+  if (!FEATURES.billing) {
+    throw new Error('Billing temporariamente desabilitado.');
+  }
   if (!hasBackend()) {
     throw new Error('Checkout real requer backend configurado.');
   }

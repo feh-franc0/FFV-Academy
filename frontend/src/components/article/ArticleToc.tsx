@@ -56,7 +56,7 @@ export function ArticleToc({ containerSelector, accent = 'var(--ffv-blue)' }: Ar
     return () => io.disconnect();
   }, [containerSelector]);
 
-  if (headings.length < 2) return null;
+  if (headings.length === 0) return null;
 
   return (
     <nav aria-label="Sumário do artigo" style={{ width: '100%' }}>
@@ -78,7 +78,7 @@ export function ArticleToc({ containerSelector, accent = 'var(--ffv-blue)' }: Ar
             <li key={h.id}>
               <a
                 href={`#${h.id}`}
-                className="block py-1.5 pl-3 transition-colors"
+                className="block py-1.5 pl-3"
                 style={{
                   fontSize: 12,
                   color: active ? 'var(--foreground)' : 'var(--ffv-muted)',
@@ -86,6 +86,7 @@ export function ArticleToc({ containerSelector, accent = 'var(--ffv-blue)' }: Ar
                   marginLeft: -1,
                   fontWeight: active ? 600 : 400,
                   lineHeight: 1.5,
+                  transition: 'color 200ms, border-color 200ms, font-weight 200ms',
                 }}
               >
                 {h.title}

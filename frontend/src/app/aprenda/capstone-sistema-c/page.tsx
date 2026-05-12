@@ -145,7 +145,7 @@ jobs:
         sanitizer: [address, undefined, thread]
     steps:
       - uses: actions/checkout@v4
-      - run: cmake -S . -B build -DSAN=\${{ matrix.sanitizer }}
+      - run: cmake -S . -B build -DSAN=\${'$'}{{ matrix.sanitizer }}
       - run: cmake --build build
       - run: ctest --test-dir build --output-on-failure`}</CodeBlock>
         <Callout tone="success" icon="✅">

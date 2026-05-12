@@ -59,7 +59,7 @@ describe('drift detection', () => {
     const report = await detectDrift(scanV2);
     expect(report.staleCount).toBe(1);
     const claude = report.files.find((f) => f.target === 'claude');
-    expect(claude?.status).toBe('stale');
+    expect(claude?.status).toBe('project-stale');
   });
 
   it('marks externally-edited (untagged) files', async () => {

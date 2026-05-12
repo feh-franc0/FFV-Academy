@@ -57,7 +57,7 @@ export function ReadingProgressBar({ containerSelector, color, onProgress }: Pro
     <div
       aria-hidden
       className="fixed top-14 left-0 right-0 z-40 pointer-events-none"
-      style={{ height: 2, background: 'transparent' }}
+      style={{ height: 'clamp(2px, 0.4vh, 4px)', background: 'transparent' }}
     >
       <div
         style={{

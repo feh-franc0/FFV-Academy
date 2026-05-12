@@ -15,16 +15,31 @@ import (
 // PADRÃO: rate-limit por usuário/plano enforçado no use case.
 // Claude API chamado apenas se cache miss (infra layer).
 type TutorHandler struct {
-	ask *apptutor.AskUseCase
+	ask     *apptutor.AskUseCase
+	enabled bool
 }
 
 func NewTutorHandler(ask *apptutor.AskUseCase) *TutorHandler {
-	return &TutorHandler{ask: ask}
+	return &TutorHandler{ask: ask, enabled: true}
+}
+
+// WithEnabled controla se o handler responde ou retorna 503.
+// Quando desabilitado (FEATURE_TUTOR_AI_ENABLED=false), retorna 503 sem
+// chamar a API do Anthropic — evita custos com a integração não configurada.
+func (h *TutorHandler) WithEnabled(enabled bool) *TutorHandler {
+	h.enabled = enabled
+	return h
 }
 
 // Ask responde uma pergunta sobre uma questão de simulado.
 // POST /api/v1/tutor/ask
 func (h *TutorHandler) Ask(w http.ResponseWriter, r *http.Request) {
+	if !h.enabled {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":"tutor_ai_disabled","message":"Tutor AI is temporarily disabled"}`))
+		return
+	}
 	var req struct {
 		SimuladoID string `json:"simuladoId"`
 		QuestionID string `json:"questionId"`

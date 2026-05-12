@@ -43,10 +43,34 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--healthcheck" {
+		healthCheck()
+		return
+	}
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// healthCheck faz GET /healthz no próprio processo e sai com 0 (ok) ou 1 (falha).
+// Chamado pelo Docker HEALTHCHECK CMD — distroless não tem curl/wget.
+func healthCheck() {
+	port := os.Getenv("HTTP_PORT")
+	if port == "" {
+		port = "8080"
+	}
+	resp, err := http.Get("http://localhost:" + port + "/healthz") //nolint:noctx
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "healthcheck: %v\n", err)
+		os.Exit(1)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "healthcheck: status %d\n", resp.StatusCode)
+		os.Exit(1)
+	}
+	os.Exit(0)
 }
 
 func run() error {
@@ -213,15 +237,19 @@ func run() error {
 	authH := handlers.NewAuthHandler(
 		requestMagicLinkUC, verifyMagicLinkUC, refreshTokenUC,
 		logoutUC, logoutAllUC, getProfileUC, updateProfileUC, deleteAccountUC,
-	).WithExportData(exportDataUC).WithUserStats(userStatsUC)
+	).WithExportData(exportDataUC).WithUserStats(userStatsUC).
+		WithPhoneAuthEnabled(cfg.Features.PhoneAuthEnabled)
 	simuladoH := handlers.NewSimuladoHandler(
 		catalogProvider, startAttemptUC, answerQUC, toggleFlagUC,
 		finishAttemptUC, resumeAttemptUC, listAttemptsUC,
 	).WithCancelAttempt(cancelAttemptUC).WithReportQuestion(reportQuestionUC)
 	progressH := handlers.NewProgressHandler(syncPushUC, syncPullUC)
 	certH := handlers.NewCertificateHandler(issueCertUC, verifyCertUC, listCertsUC, baseURL)
-	billingH := handlers.NewBillingHandler(createCheckoutUC, handleWebhookUC, stripeClient)
-	tutorH := handlers.NewTutorHandler(askTutorUC)
+	billingH := handlers.NewBillingHandler(createCheckoutUC, handleWebhookUC, stripeClient).
+		WithEnabled(cfg.Features.BillingEnabled)
+	tutorH := handlers.NewTutorHandler(askTutorUC).
+		WithEnabled(cfg.Features.TutorAIEnabled)
+	featuresH := handlers.NewFeaturesHandler(cfg.Features)
 	leaderboardH := handlers.NewLeaderboardHandler(leaderboardRepo)
 	statsH := handlers.NewStatsHandler(&pgxStatsRepo{pool: pool})
 	adminH := handlers.NewAdminHandler(userRepo, attemptRepo, eventUC).
@@ -254,6 +282,7 @@ func run() error {
 		Stats:          statsH,
 		Admin:          adminH,
 		Curriculum:     curriculumH,
+		Features:       featuresH,
 		Metrics:        metricsH,
 		MetricsMW:      metricsReg.Middleware(),
 	}

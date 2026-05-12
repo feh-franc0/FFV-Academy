@@ -44,14 +44,15 @@ Pré-requisito de tudo abaixo. Estimativa: **3-5 dias**.
 
 ### Tier 1 — Loop viral aumentado
 
-#### 4. Leaderboard semanal opt-in
+#### 4. Leaderboard com 4 períodos ✅ IMPLEMENTADO (mai/2026)
 **ROI alto**. Duolingo Leagues aumentou retenção em ~20%.
-- Ranking de XP da semana corrente (Mon-Sun).
-- Usuário escolhe se aparece (opt-in explícito).
-- Display: top 20 + posição do usuário (mesmo se não top 20).
-- Reset toda segunda 00:00 UTC.
-- Página `/leaderboard` ou seção no `/progresso`.
-- Variantes futuras: por hub, por trilha, mensal, all-time.
+- ✅ Ranking de XP semanal (Mon-Sun) — `GET /api/v1/leaderboard`
+- ✅ **Mensal, anual, geral** — `GET /api/v1/leaderboard/public?period=...`
+- ✅ Usuário escolhe se aparece (opt-in via tabela `leaderboard_opt_ins`)
+- ✅ Display: pódio top 3 + lista até 100 + posição do usuário se autenticado (`/api/v1/leaderboard/me/all`)
+- ✅ Página dedicada `/ranking` com 4 tabs
+- ✅ Card "Sua posição" no `/progresso` (`MyRankCard`)
+- ⏳ Variantes futuras: por hub, por trilha
 
 #### 5. Perfil público `/u/<handle>`
 - URL compartilhável: `fernandofrancovalle.com/u/fernando`
@@ -224,4 +225,18 @@ ROI claro.
 
 ---
 
-**Última atualização**: 2026-04-19
+**Última atualização**: 2026-05-04
+
+---
+
+## 📊 Resumo do que foi implementado
+
+Maio/2026 entregou parcialmente o **Tier 1 do roadmap viral**:
+- ✅ Leaderboard com 4 períodos (geral, anual, mensal, semanal)
+- ✅ Endpoint `/api/v1/stats` público para social proof
+- ✅ Sync de progresso wired (push/pull) com auth opcional
+- ⏳ Perfil público `/u/<handle>` — em backlog
+- ⏳ Notificações via web push — em backlog
+- ⏳ Referral tracking real — em backlog
+
+Detalhes técnicos de implementação: ver [`CHANGELOG_PLATFORM_2026-05.md`](./CHANGELOG_PLATFORM_2026-05.md).

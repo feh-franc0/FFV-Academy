@@ -1,5 +1,6 @@
 'use client';
 
+import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { BrainCircuit, Cloud, Wrench, Bot, ChartBarIncreasing, Target, Newspaper } from 'lucide-react';
@@ -10,6 +11,8 @@ import { HUBS, LEVELS } from '@/lib/curriculum';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { AuthBadge } from '@/components/auth/AuthBadge';
 import { CommandPaletteTrigger } from '@/components/CommandPalette';
+import { unlockAudio } from '@/lib/sounds';
+import { toast } from '@/lib/toast';
 import type { ComponentType, SVGProps } from 'react';
 
 type LucideIcon = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
@@ -37,8 +40,35 @@ function NavIcon({ href, size }: { href: string; size: number }) {
 }
 
 export function GameHUD() {
-  const { state, levelInfo, dueCards } = useGameState();
+  const { state, levelInfo, dueCards, todayReviewCount, dailyGoalMet } = useGameState();
   const pathname = usePathname() ?? '/';
+
+  // Unlock audio on first interaction with the header
+  const headerRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    const handler = () => unlockAudio();
+    el.addEventListener('click', handler, { once: true });
+    return () => el.removeEventListener('click', handler);
+  }, []);
+
+  // Streak-at-risk reminder — once per day, shown when user hasn't studied yet and streak > 0
+  useEffect(() => {
+    if (!state || state.streak === 0) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const lastStudied = state.lastStudyDate;
+    if (lastStudied === today) return;
+    const storageKey = `ffv_streak_reminder_${today}`;
+    if (sessionStorage.getItem(storageKey)) return;
+    sessionStorage.setItem(storageKey, '1');
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().slice(0, 10);
+    if (lastStudied === yesterdayStr) {
+      toast.info(`🔥 Sequência de ${state.streak} dias em risco — estude algo hoje!`);
+    }
+  }, [state]);
 
   // Apenas 4 hubs primários + Progresso no header desktop — resto fica em Cmd+K e MobileNav.
   const PRIMARY_HUB_SLUGS = new Set(['ia', 'aws', 'engenharia', 'claude-anthropic']);
@@ -53,6 +83,7 @@ export function GameHUD() {
 
   return (
     <header
+      ref={headerRef}
       className="fixed top-0 left-0 right-0 z-50 flex items-center px-5"
       style={{
         height: 'calc(56px + env(safe-area-inset-top, 0px))',
@@ -93,6 +124,30 @@ export function GameHUD() {
 
       <div className="flex items-center gap-1.5 sm:gap-2 ml-auto">
         <CommandPaletteTrigger />
+        {/* Daily goal pill */}
+        {state && state.dailyGoal > 0 && (
+          <Tooltip>
+            <TooltipTrigger>
+              <Link
+                href="/revisar"
+                aria-label={`Meta diária: ${todayReviewCount} de ${state.dailyGoal} cards`}
+                className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold transition-opacity hover:opacity-90"
+                style={{
+                  background: dailyGoalMet
+                    ? 'color-mix(in srgb, var(--ffv-green) 14%, transparent)'
+                    : 'color-mix(in srgb, var(--ffv-yellow) 12%, transparent)',
+                  border: `1px solid ${dailyGoalMet ? 'color-mix(in srgb, var(--ffv-green) 32%, transparent)' : 'color-mix(in srgb, var(--ffv-yellow) 28%, transparent)'}`,
+                  color: dailyGoalMet ? 'var(--ffv-green)' : 'var(--ffv-yellow)',
+                }}
+              >
+                🎯 {todayReviewCount}/{state.dailyGoal}
+              </Link>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              <p>{dailyGoalMet ? '✅ Meta diária atingida!' : `Meta: ${todayReviewCount} de ${state.dailyGoal} cards hoje`}</p>
+            </TooltipContent>
+          </Tooltip>
+        )}
         {state && dueCards.length > 0 && (
           <Tooltip>
             <TooltipTrigger
@@ -162,6 +217,18 @@ function HUDStats({
   const xpNeeded = (nextLevel?.xpMin ?? 9999) - (levelInfo?.xpMin ?? 0);
   const levelPct = Math.min(100, Math.round((xpInLevel / xpNeeded) * 100));
 
+  // Animate XP number when it changes
+  const prevXp = useRef(state.xp);
+  const [xpBump, setXpBump] = useState(false);
+  useEffect(() => {
+    if (prevXp.current !== state.xp) {
+      prevXp.current = state.xp;
+      setXpBump(true);
+      const t = setTimeout(() => setXpBump(false), 600);
+      return () => clearTimeout(t);
+    }
+  }, [state.xp]);
+
   return (
     <div className="flex items-center gap-3">
       {/* Mobile-only: ícone compacto de nível linkando pra /progresso */}
@@ -214,8 +281,19 @@ function HUDStats({
           <div className="hidden sm:flex items-center gap-2 cursor-default">
             <span className="text-sm">{levelInfo?.icon ?? '🌱'}</span>
             <div className="flex flex-col justify-center" style={{ width: 72 }}>
-              <Progress value={levelPct} className="h-1.5" />
-              <span className="text-xs mt-0.5 tabular-nums" style={{ color: 'var(--ffv-muted)' }}>
+              <Progress
+                value={levelPct}
+                className="h-1.5"
+                style={{ transition: 'all 0.6s cubic-bezier(0.4,0,0.2,1)' }}
+              />
+              <span
+                className="text-xs mt-0.5 tabular-nums"
+                style={{
+                  color: xpBump ? levelInfo?.color ?? 'var(--ffv-green)' : 'var(--ffv-muted)',
+                  fontWeight: xpBump ? 700 : undefined,
+                  transition: 'color 0.4s ease, font-weight 0.2s ease',
+                }}
+              >
                 {state.xp} XP
               </span>
             </div>

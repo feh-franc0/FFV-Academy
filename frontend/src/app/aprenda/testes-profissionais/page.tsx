@@ -351,14 +351,14 @@ import { test, expect } from '@playwright/test';
 
 test('user completes checkout', async ({ page }) => {
   await page.goto('/products/camisa-ffv');
-  await page.getByRole('button', { name: 'Adicionar ao carrinho' }).click();
-  await page.getByRole('link', { name: 'Carrinho' }).click();
-  await page.getByRole('button', { name: 'Finalizar' }).click();
+  await page.getByRole('button', { text: 'Adicionar ao carrinho' }).click();
+  await page.getByRole('link', { text: 'Carrinho' }).click();
+  await page.getByRole('button', { text: 'Finalizar' }).click();
 
   await page.getByLabel('E-mail').fill('test@ffv.com');
   await page.getByLabel('Cartão').fill('4242 4242 4242 4242');
   await page.getByLabel('CVV').fill('123');
-  await page.getByRole('button', { name: 'Pagar' }).click();
+  await page.getByRole('button', { text: 'Pagar' }).click();
 
   await expect(page.getByText('Pedido confirmado')).toBeVisible({ timeout: 10_000 });
 });`}</CodeBlock>

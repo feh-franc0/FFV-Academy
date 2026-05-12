@@ -16,7 +16,7 @@ const quiz: QuizQuestion[] = [
       'Nominal não existe mais',
     ],
     correct: 1,
-    explanation: 'Em TS, { name: string } é satisfeito por qualquer objeto com name: string. Em Java, para implementar Namable você escreve implements Namable. Estrutural facilita composição e adaptação; nominal documenta intenção e evita colisão acidental. Times grandes costumam valorizar nominal em domain boundary.',
+    explanation: 'Em TS, { text: string } é satisfeito por qualquer objeto com name: string. Em Java, para implementar Namable você escreve implements Namable. Estrutural facilita composição e adaptação; nominal documenta intenção e evita colisão acidental. Times grandes costumam valorizar nominal em domain boundary.',
   },
   {
     question: 'Por que TypeScript é unsound e Rust é sound?',
@@ -79,8 +79,8 @@ add(1, "b");   // erro em compile`}</CodeBlock>
 
       <Section title="Eixo 2: estrutural vs nominal" accent={accent}>
         <CodeBlock lang="ts">{`// TS é estrutural
-interface Named { name: string; }
-const u = { name: "Ana", age: 30 };
+interface Named { text: string; }
+const u = { text: "Ana", age: 30 };
 const n: Named = u;   // OK, mesma forma`}</CodeBlock>
         <CodeBlock lang="java">{`// Java é nominal
 interface Named { String name(); }

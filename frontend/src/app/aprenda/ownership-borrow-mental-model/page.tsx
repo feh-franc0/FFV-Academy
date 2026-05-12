@@ -67,7 +67,7 @@ export default function Page() {
       </Section>
 
       <Section title="Move vs Copy na prática" accent={accent}>
-        <CodeBlock lang="rust">{'// MOVE (tipos owned: String, Vec, Box, arquivos...)\nlet s1 = String::from("olá");\nlet s2 = s1;           // ownership MOVE de s1 para s2\n// println!("{}", s1); // ERRO: value moved\nprintln!("{}", s2);    // ok\n\n// COPY (tipos bit-copiáveis baratos: i32, bool, char, f64, &T...)\nlet x: i32 = 42;\nlet y = x;             // COPY — ambos válidos\nprintln!("{} {}", x, y);\n\n// derive(Clone) dá .clone() explícito\n#[derive(Clone)]\nstruct Config { name: String }\nlet a = Config { name: "prod".into() };\nlet b = a.clone();     // cópia explícita, custo visível'}</CodeBlock>
+        <CodeBlock lang="rust">{'// MOVE (tipos owned: String, Vec, Box, arquivos...)\nlet s1 = String::from("olá");\nlet s2 = s1;           // ownership MOVE de s1 para s2\n// println!("{}", s1); // ERRO: value moved\nprintln!("{}", s2);    // ok\n\n// COPY (tipos bit-copiáveis baratos: i32, bool, char, f64, &T...)\nlet x: i32 = 42;\nlet y = x;             // COPY — ambos válidos\nprintln!("{} {}", x, y);\n\n// derive(Clone) dá .clone() explícito\n#[derive(Clone)]\nstruct Config { text: String }\nlet a = Config { text: "prod".into() };\nlet b = a.clone();     // cópia explícita, custo visível'}</CodeBlock>
         <Callout tone="warn" icon="⚠️">
           Não confunda Copy (implícito, barato) com Clone (explícito, pode ser caro). String é Clone mas não Copy — alocação de heap não pode ser duplicada "sem custo".
         </Callout>

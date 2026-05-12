@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 
 // engine.ts usa 'use client' — ok em Vitest, a diretiva é ignorada
 // Mas depende de localStorage (jsdom fornece) e de CURRICULUM/LEVELS

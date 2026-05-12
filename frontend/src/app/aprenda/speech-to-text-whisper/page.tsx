@@ -97,7 +97,7 @@ model = WhisperModel('large-v3', device='cuda', compute_type='float16')
 
 segments, info = model.transcribe(
     'reuniao.mp3',
-    language='pt',
+    lang='pt',
     vad_filter=True,          # corta silêncio antes de processar
     word_timestamps=True,
 )
@@ -141,7 +141,7 @@ audioStream.on('data', (chunk) => live.send(chunk));`}</CodeBlock>
 audio = whisperx.load_audio('reuniao.wav')
 
 # 1) Transcrição com Whisper
-model = whisperx.load_model('large-v3', device='cuda', language='pt')
+model = whisperx.load_model('large-v3', device='cuda', lang='pt')
 result = model.transcribe(audio, batch_size=16)
 
 # 2) Alinhamento forçado (word-level timestamps precisos)
