@@ -38,18 +38,15 @@ test.describe('/explorar', () => {
     const beforeCount = parseInt(beforeText.match(/(\d+)/)?.[1] ?? '0', 10);
     expect(beforeCount).toBeGreaterThan(0);
 
-    // Clica em qualquer chip de hub que NÃO seja "Todos".
-    // Hubs são botões com emoji + shortName (ex: "🤖 IA", "☁️ AWS").
-    // Pegamos todos os botões da primeira FilterRow (Hub) que não sejam "Todos".
-    const allChips = page.getByRole('button');
-    const chipTexts = await allChips.allTextContents();
-    // Pega o segundo botão de "hub" (primeiro é "Todos")
-    // Filtra por aqueles com emoji típico de hub
+    // Escopa nos chips DO FILTRO HUB (role=group aria-label="Filtro Hub")
+    // para evitar bater em outros botões da página (GameHUD, modais, etc).
+    const hubChips = page.getByRole('group', { name: 'Filtro Hub' }).getByRole('button');
+    const chipTexts = await hubChips.allTextContents();
     const hubChipIndex = chipTexts.findIndex(
       t => /^(🤖|☁️|🧠|⚙️|🛠|🏗|🔧|🚀|📊|💻|🎯|🌐|🔐|📦|🎨)/.test(t.trim()),
     );
     if (hubChipIndex >= 0) {
-      await allChips.nth(hubChipIndex).click();
+      await hubChips.nth(hubChipIndex).click();
       await expect(heading).toBeVisible();
       const afterText = (await heading.textContent()) ?? '';
       const afterCount = parseInt(afterText.match(/(\d+)/)?.[1] ?? '0', 10);

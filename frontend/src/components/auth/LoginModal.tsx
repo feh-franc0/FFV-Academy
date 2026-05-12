@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { requestToken, verifyToken, MOCK_TOKEN, type UserProfile } from '@/lib/auth';
 import { emailSchema, phoneBRSchema } from '@/lib/schemas';
-import { FEATURES } from '@/lib/features';
 
 const IS_DEV = process.env.NODE_ENV !== 'production';
 

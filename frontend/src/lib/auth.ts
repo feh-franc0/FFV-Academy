@@ -72,7 +72,12 @@ function dtoToProfile(dto: UserDTO): UserProfile {
 export const MOCK_TOKEN = '000000';
 
 // Flag avaliada em tempo de build pelo compilador — constante para tree-shaking efetivo.
-const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+// E2E override: o build estático usado pelos testes do Playwright roda com
+// NODE_ENV=production (Next.js força isso em `npm run build`), mas precisa do
+// caminho mock pra autenticar com token "000000". A flag NEXT_PUBLIC_E2E_TESTING
+// é setada APENAS no build do job E2E do CI — nunca em produção real.
+const IS_E2E_BUILD = process.env.NEXT_PUBLIC_E2E_TESTING === 'true';
+const IS_PRODUCTION = process.env.NODE_ENV === 'production' && !IS_E2E_BUILD;
 
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));

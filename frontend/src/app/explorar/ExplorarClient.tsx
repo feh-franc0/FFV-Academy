@@ -235,7 +235,11 @@ export function ExplorarClient() {
 
 function FilterRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-2 ffv-scroll-x-mask flex-nowrap md:flex-wrap">
+    <div
+      role="group"
+      aria-label={`Filtro ${label}`}
+      className="flex items-center gap-2 ffv-scroll-x-mask flex-nowrap md:flex-wrap"
+    >
       <span
         className="text-[11px] font-mono uppercase tracking-wider mr-2"
         style={{ color: 'var(--ffv-muted)', minWidth: 60, letterSpacing: '0.08em' }}
