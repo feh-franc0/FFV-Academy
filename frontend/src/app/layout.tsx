@@ -185,7 +185,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         {/* Plausible Analytics — privacy-first, sem cookies, LGPD-ok, evento quiz-complete via JS */}
         <script defer data-domain="fernandofrancovalle.com" src="https://plausible.io/js/script.js" />
       </head>
-      <body className="min-h-screen flex flex-col" style={{ background: 'var(--ffv-bg)', color: 'var(--foreground)' }}>
+      <body
+        className="min-h-screen flex flex-col"
+        style={{ background: 'var(--ffv-bg)', color: 'var(--foreground)' }}
+        // Extensões de browser (ColorZilla, Grammarly, Dark Reader) injetam
+        // atributos como cz-shortcut-listen no <body> antes do React hidratar.
+        // suppressHydrationWarning silencia esses falsos positivos em dev.
+        suppressHydrationWarning
+      >
         <a href="#main-content" className="skip-to-content">Pular para o conteúdo</a>
         <ReferralCapture />
         <PWARegister />

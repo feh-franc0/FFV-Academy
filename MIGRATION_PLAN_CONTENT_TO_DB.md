@@ -26,7 +26,7 @@
 
 | Sprint | Período | Status | % Concluído |
 |---|---|---|---|
-| **Sprint 1** — Schema + Foundation | Sem 1 | 🟡 Em progresso | 35% |
+| **Sprint 1** — Schema + Foundation | Sem 1 | 🟡 Em progresso | 80% |
 | **Sprint 2** — Blocos + Parser | Sem 2 | ⬜ Não iniciada | 0% |
 | **Sprint 3** — Migração piloto | Sem 3 | ⬜ Não iniciada | 0% |
 | **Sprint 4** — Wave 1 (100 módulos) | Sem 4 | ⬜ Não iniciada | 0% |
@@ -774,23 +774,34 @@ Cache invalidation pipeline (ao editar):
 
 ### Tarefas
 - [x] **Migrations 026-036** (11 arquivos up + 11 down) — em `feat/cms-sprint-1`
-- [ ] Testes de migration (up + down + up) — pendente Docker local
-- [ ] Aplicar migrations em local + staging
-- [ ] Go structs: Section, Paragraph, Callout, CodeBlock, ComparisonTable
-- [ ] Validador Go com `validator.v10`
-- [ ] Repository `curriculum_repo.go` com fetch recursivo
-- [ ] Endpoint `GET /api/v1/curriculum/:slug` retornando blocks
-- [ ] Cache Redis no handler (TTL 1h)
-- [ ] Contract tests do endpoint
-- [ ] Zod schemas no frontend para 5 tipos
-- [ ] `BlockRenderer.tsx` com 5 tipos no registry
-- [ ] Fallback gracioso (unknown type, invalid data)
-- [ ] Testes unitários do renderer
-- [ ] Página `/admin/blocks` (storybook básico)
-- [ ] Visual regression tests dos 5 tipos
-- [ ] Criar 1 módulo de teste no DB manualmente (INSERT SQL)
-- [ ] Renderizar esse módulo via rota `/aprenda-dynamic/teste-cms`
-- [ ] Comparar visual com módulo equivalente estático
+- [x] Testes de migration (up + down + up) — aplicadas no Postgres local Docker
+- [x] Aplicar migrations em local (Docker compose dev) ✅
+- [ ] Aplicar migrations em staging
+- [ ] Aplicar migrations em produção
+- [x] Go structs Block + 15 tipos válidos (constantes BlockType*)
+- [x] Repository `curriculum_repo.go` com `FindBlocksBySlug` (árvore reconstruída em Go) + `SaveBlocks` (transacional)
+- [x] Endpoint `GET /api/v1/curriculum/:slug/blocks` retornando blocks ✅
+- [x] ETag + Cache-Control no handler
+- [x] OpenAPI documentado + Swagger UI funcional em http://localhost:8090
+- [ ] Cache Redis no handler (TTL 1h) — adiar para Sprint 2
+- [ ] Contract tests do endpoint — adiar para Sprint 2
+- [x] Zod schemas no frontend para 15 tipos (5 ativos, 10 placeholders)
+- [x] `BlockRenderer.tsx` com 5 tipos ativos no registry + adapters inline
+- [x] Fallback gracioso (unknown type, invalid data, PlaceholderBlock)
+- [ ] Testes unitários do renderer — adiar para Sprint 2
+- [ ] Página `/admin/blocks` (storybook básico) — Sprint 2
+- [ ] Visual regression tests dos 5 tipos — Sprint 2
+- [x] **Seed inicial**: 1 hub + 1 trilha + 3 módulos reais (19 blocks)
+- [x] Rota dinâmica `/aprenda-dynamic/[slug]/` paralela criada
+- [x] Renderizado e validado em http://localhost:3000/aprenda-dynamic/o-que-e-ia/
+- [ ] Comparar visual com módulo equivalente estático — pendente revisão Fernando
+
+**Validações ponta-a-ponta concluídas (2026-05-13):**
+- ✅ Backend Go rodando em `:8080`
+- ✅ Postgres + Redis via docker compose
+- ✅ Swagger UI em `:8090` executando endpoint com sucesso (200 OK)
+- ✅ Frontend Next.js em `:3000` SSR consumindo backend
+- ✅ Conteúdo do banco renderizado pelo BlockRenderer no browser
 
 ### Deliverable Sprint 1
 ✅ 1 módulo de teste renderizando 100% do DB, indistinguível dos estáticos.

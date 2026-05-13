@@ -26,9 +26,14 @@ export async function fetchArticleWithBlocks(
   }
 
   try {
-    const res = await fetch(`${API_BASE_URL}/api/v1/curriculum/${encodeURIComponent(slug)}/blocks`, {
-      // Next.js: cache por 1h, revalida em background.
-      next: { revalidate: 3600 },
+    const url = `${API_BASE_URL}/api/v1/curriculum/${encodeURIComponent(slug)}/blocks`;
+    // eslint-disable-next-line no-console
+    console.log(`[curriculum-api] fetching ${url}`);
+    const res = await fetch(url, {
+      // Em dev local: sem cache, pra ver request no Network do browser.
+      // Em prod (Next build): revalida a cada 1h.
+      cache: process.env.NODE_ENV === 'development' ? 'no-store' : undefined,
+      next: process.env.NODE_ENV === 'development' ? undefined : { revalidate: 3600 },
     });
 
     if (res.status === 404) {
