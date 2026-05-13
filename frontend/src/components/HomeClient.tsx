@@ -32,6 +32,7 @@ import { SocialProofBar } from '@/components/home/SocialProofBar';
 import { HowItWorks } from '@/components/home/HowItWorks';
 import { ComecarAqui } from '@/components/home/ComecarAqui';
 import { Explorar } from '@/components/home/Explorar';
+import { Trending } from '@/components/home/Trending';
 import { HomeRanking } from '@/components/home/HomeRanking';
 import { ComunidadeAutor } from '@/components/home/ComunidadeAutor';
 import { FinalCta } from '@/components/home/FinalCta';
@@ -85,6 +86,7 @@ export function HomeClient() {
 
       <ComecarAqui hidden={hasProgress} />
       <Explorar />
+      <Trending />
       <HomeRanking />
       <ComunidadeAutor />
       <FinalCta />

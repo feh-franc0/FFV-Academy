@@ -258,6 +258,17 @@ func importOne(ctx context.Context, pool *pgxpool.Pool, slug, title string, bloc
 	return count, nil
 }
 
+// sanitizeJSONB remove escapes NUL que o JSONB do Postgres rejeita
+// (SQLSTATE 22P05). Strip silencioso da sequência de escape de 6 chars e do
+// byte NUL literal — blocks de código podem ter um desses por acidente do
+// parser AST sem que isso afete o significado.
+func sanitizeJSONB(b []byte) []byte {
+	s := string(b)
+	s = strings.ReplaceAll(s, "\\u0000", "")
+	s = strings.ReplaceAll(s, "\x00", "")
+	return []byte(s)
+}
+
 func insertBlocks(ctx context.Context, tx pgx.Tx, slug string, parentID *string, blocks []Block) (int, error) {
 	count := 0
 	for i, b := range blocks {
@@ -265,6 +276,7 @@ func insertBlocks(ctx context.Context, tx pgx.Tx, slug string, parentID *string,
 		if err != nil {
 			return count, fmt.Errorf("marshal data block %d: %w", i, err)
 		}
+		dataJSON = sanitizeJSONB(dataJSON)
 
 		var insertedID string
 		err = tx.QueryRow(ctx, `

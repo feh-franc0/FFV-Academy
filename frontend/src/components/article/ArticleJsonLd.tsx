@@ -1,4 +1,5 @@
 const BASE_URL = 'https://fernandofrancovalle.com';
+import { safeJsonLd } from '@/lib/safe-json';
 
 interface ArticleJsonLdProps {
   title: string;
@@ -75,11 +76,11 @@ export function ArticleJsonLd({
     <>
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(articleLd) }}
+        dangerouslySetInnerHTML={{ __html: safeJsonLd(articleLd) }}
       />
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbLd) }}
+        dangerouslySetInnerHTML={{ __html: safeJsonLd(breadcrumbLd) }}
       />
     </>
   );

@@ -308,6 +308,88 @@ func (h *CurriculumHandler) Update(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, toArticleResponse(article, true))
 }
 
+// SaveBlocks substitui a árvore inteira de blocks de um artigo.
+// PUT /api/v1/admin/curriculum/:slug/blocks
+//
+// Body: { "blocks": [ {id, type, position, data, children?}, ... ] }
+//
+// Operação atômica: DELETE + INSERT em transação. IDs novos (sem UUID válido)
+// são re-gerados pelo Postgres. Position é validada >= 0.
+func (h *CurriculumHandler) SaveBlocks(w http.ResponseWriter, r *http.Request) {
+	slug := chi.URLParam(r, "slug")
+	if slug == "" {
+		WriteError(w, http.StatusBadRequest, "slug obrigatório", "validation-error")
+		return
+	}
+
+	// Confirma que o artigo existe antes de mexer nos blocks.
+	if _, err := h.getArticle.Execute(r.Context(), slug); err != nil {
+		HandleDomainErrorCtx(r, w, err)
+		return
+	}
+
+	type incomingBlock struct {
+		ID       string          `json:"id"`
+		Type     string          `json:"type"`
+		Position int             `json:"position"`
+		Data     json.RawMessage `json:"data"`
+		Children []incomingBlock `json:"children,omitempty"`
+	}
+	var req struct {
+		Blocks []incomingBlock `json:"blocks"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, "body inválido", "validation-error")
+		return
+	}
+
+	var convert func(items []incomingBlock) ([]*domcurriculum.Block, error)
+	convert = func(items []incomingBlock) ([]*domcurriculum.Block, error) {
+		out := make([]*domcurriculum.Block, 0, len(items))
+		for _, it := range items {
+			b, err := domcurriculum.NewBlock(it.ID, it.Type, it.Position, it.Data)
+			if err != nil {
+				return nil, err
+			}
+			if len(it.Children) > 0 {
+				children, err := convert(it.Children)
+				if err != nil {
+					return nil, err
+				}
+				for _, c := range children {
+					b.AddChild(c)
+				}
+			}
+			out = append(out, b)
+		}
+		return out, nil
+	}
+
+	blocks, err := convert(req.Blocks)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error(), "validation-error")
+		return
+	}
+
+	if err := h.repo.SaveBlocks(r.Context(), slug, blocks); err != nil {
+		HandleDomainErrorCtx(r, w, err)
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"slug":        slug,
+		"blocks_count": countBlocks(blocks),
+	})
+}
+
+func countBlocks(blocks []*domcurriculum.Block) int {
+	n := len(blocks)
+	for _, b := range blocks {
+		n += countBlocks(b.Children)
+	}
+	return n
+}
+
 // Delete realiza soft-delete de um artigo.
 // DELETE /api/v1/admin/curriculum/:slug
 func (h *CurriculumHandler) Delete(w http.ResponseWriter, r *http.Request) {

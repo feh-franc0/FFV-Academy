@@ -27,8 +27,36 @@ export function VerificarClient() {
       return;
     }
     setHash(h);
-    setRecord(getCertificateLocal(h));
-    setReady(true);
+
+    // 1. Tenta local primeiro (mais rápido — certificado emitido neste device).
+    const local = getCertificateLocal(h);
+    if (local) {
+      setRecord(local);
+      setReady(true);
+      return;
+    }
+
+    // 2. Fallback: consulta o backend. Endpoint público sem auth.
+    const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
+    if (!apiBase) {
+      setReady(true);
+      return;
+    }
+    fetch(`${apiBase}/api/v1/certificates/${encodeURIComponent(h)}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(json => {
+        if (!json) return;
+        // Mapeia DTO do backend para CertificateRecord do cliente.
+        setRecord({
+          hash: json.hash ?? h,
+          simuladoId: json.simulado_id ?? json.simuladoId ?? '',
+          score: json.score ?? 0,
+          name: json.student_name ?? json.name ?? 'Anônimo',
+          issuedAt: json.issued_at ?? json.issuedAt ?? '',
+        });
+      })
+      .catch(() => {})
+      .finally(() => setReady(true));
   }, []);
 
   if (!ready) {

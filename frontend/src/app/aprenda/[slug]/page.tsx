@@ -14,6 +14,13 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { fetchArticleWithBlocks } from '@/lib/curriculum-api';
 import { BlockTree } from '@/components/article/BlockRenderer';
+import { ViewTracker } from '@/components/article/ViewTracker';
+import { CommentSection } from '@/components/comments/CommentSection';
+import { NextSteps } from '@/components/article/NextSteps';
+import { TrailLeaderboard } from '@/components/ranking/TrailLeaderboard';
+import { AnkiExport } from '@/components/article/AnkiExport';
+import { TrailCertificateBanner } from '@/components/TrailCertificateBanner';
+import { safeJsonLd } from '@/lib/safe-json';
 
 interface PageProps {
   params: Promise<{ slug: string }>;
@@ -73,8 +80,37 @@ export default async function ModulePage({ params }: PageProps) {
     notFound();
   }
 
+  // JSON-LD Article — rich results no Google. headline + description em todas
+  // as páginas de módulo. Servidor renderiza, search engines indexam.
+  const jsonLd = {
+    '@context': 'https://schema.org',
+    '@type': 'Article',
+    headline: article.title,
+    description: `Aprenda ${article.title} na trilha ${article.trail_id} (hub ${article.hub_id}) — FFV Academy.`,
+    inLanguage: 'pt-BR',
+    isAccessibleForFree: true,
+    datePublished: article.updated_at,
+    dateModified: article.updated_at,
+    publisher: {
+      '@type': 'Organization',
+      name: 'FFV Academy',
+      url: 'https://fernandofrancovalle.com',
+    },
+    mainEntityOfPage: {
+      '@type': 'WebPage',
+      '@id': `https://fernandofrancovalle.com/aprenda/${slug}/`,
+    },
+    educationalLevel: article.difficulty,
+    timeRequired: `PT${article.read_time}M`,
+    learningResourceType: 'Article',
+  };
+
   return (
     <main className="max-w-3xl mx-auto px-6 py-12">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: safeJsonLd(jsonLd) }}
+      />
       <header className="mb-8 pb-6" style={{ borderBottom: '1px solid var(--ffv-border)' }}>
         <div className="flex gap-2 mb-2 text-xs font-mono uppercase tracking-wider" style={{ color: 'var(--ffv-muted)' }}>
           <span>{article.hub_id}</span>
@@ -94,6 +130,24 @@ export default async function ModulePage({ params }: PageProps) {
       <article className="prose prose-invert max-w-none">
         <BlockTree blocks={article.blocks} />
       </article>
+
+      <ViewTracker slug={slug} hubId={article.hub_id} trailId={article.trail_id} />
+
+      <TrailCertificateBanner trailId={article.trail_id} />
+
+      <div className="mt-8 flex justify-end">
+        <AnkiExport slug={slug} title={article.title} blocks={article.blocks} />
+      </div>
+
+      <NextSteps slug={slug} />
+
+      <section className="mt-12">
+        <TrailLeaderboard trailId={article.trail_id} />
+      </section>
+
+      <section className="mt-12">
+        <CommentSection targetType="article" targetId={slug} />
+      </section>
     </main>
   );
 }

@@ -185,9 +185,9 @@ const ADAPTERS: Record<string, AdapterEntry> = {
           title={asText(data?.title)}
           orientation={(data?.orientation === 'vertical' ? 'vertical' : 'horizontal') as 'horizontal' | 'vertical'}
           steps={steps.map((s: any) => ({
-            title: asText(s?.title),
-            body: asText(s?.body ?? s?.subtitle ?? ''),
-            badge: asText(s?.badge ?? ''),
+            // Primitive aceita {label, desc} — adapter aceita também title/body.
+            label: asText(s?.label ?? s?.title),
+            desc: asText(s?.desc ?? s?.body ?? s?.subtitle ?? ''),
           }))}
         />
       );
@@ -203,9 +203,8 @@ const ADAPTERS: Record<string, AdapterEntry> = {
         <StackFlow
           title={asText(data?.title)}
           items={items.map((s: any) => ({
-            title: asText(s?.title),
-            body: asText(s?.body ?? ''),
-            badge: asText(s?.badge ?? ''),
+            label: asText(s?.label ?? s?.title),
+            text: asText(s?.text ?? s?.body ?? ''),
           }))}
         />
       );
@@ -260,9 +259,9 @@ const ADAPTERS: Record<string, AdapterEntry> = {
         <Timeline
           title={asText(data?.title)}
           events={events.map((e: any) => ({
-            date: asText(e?.date),
-            title: asText(e?.title),
-            body: asText(e?.body ?? e?.description ?? ''),
+            when: asText(e?.when ?? e?.date),
+            label: asText(e?.label ?? e?.title),
+            detail: asText(e?.detail ?? e?.body ?? e?.description ?? ''),
           }))}
         />
       );
@@ -279,7 +278,10 @@ const ADAPTERS: Record<string, AdapterEntry> = {
           title={asText(data?.title)}
           levels={levels.map((l: any) => ({
             label: asText(l?.label),
-            nodes: Array.isArray(l?.nodes) ? l.nodes.map(asText) : [],
+            // Primitive espera {label, desc}. nodes (array) é colapsado em string.
+            desc: Array.isArray(l?.nodes)
+              ? l.nodes.map(asText).join(', ')
+              : asText(l?.desc ?? ''),
           }))}
         />
       );
@@ -313,14 +315,32 @@ const ADAPTERS: Record<string, AdapterEntry> = {
 
   split_flow: {
     allowsChildren: false,
-    render: (data) => (
-      <SplitFlow
-        title={asText(data?.title)}
-        center={asText(data?.center)}
-        left={(data?.left ?? []).map((s: any) => ({ title: asText(s?.title), body: asText(s?.body ?? '') }))}
-        right={(data?.right ?? []).map((s: any) => ({ title: asText(s?.title), body: asText(s?.body ?? '') }))}
-      />
-    ),
+    render: (data) => {
+      // SplitFlow espera { label, items: [{ label, sub? }] } em left/right.
+      // O parser ingestor pode mandar arrays ou objetos — normalizamos.
+      const normalizeCol = (raw: any): { label: string; items: { label: string; sub?: string }[] } => {
+        if (Array.isArray(raw)) {
+          return {
+            label: '',
+            items: raw.map((s: any) => ({ label: asText(s?.label ?? s?.title), sub: asText(s?.sub ?? s?.body ?? '') })),
+          };
+        }
+        return {
+          label: asText(raw?.label ?? raw?.title ?? ''),
+          items: Array.isArray(raw?.items)
+            ? raw.items.map((s: any) => ({ label: asText(s?.label ?? s?.title), sub: asText(s?.sub ?? s?.body ?? '') }))
+            : [],
+        };
+      };
+      return (
+        <SplitFlow
+          title={asText(data?.title)}
+          center={asText(data?.center)}
+          left={normalizeCol(data?.left)}
+          right={normalizeCol(data?.right)}
+        />
+      );
+    },
   },
 
   layer_stack: {
@@ -334,9 +354,9 @@ const ADAPTERS: Record<string, AdapterEntry> = {
           separatorLabel={asText(data?.separatorLabel ?? '')}
           variant={(data?.variant === 'compact' ? 'compact' : 'default') as 'default' | 'compact'}
           layers={layers.map((l: any) => ({
-            title: asText(l?.title),
-            body: asText(l?.body ?? ''),
-            badge: asText(l?.badge ?? ''),
+            label: asText(l?.label ?? l?.title),
+            instruction: asText(l?.instruction ?? l?.body ?? ''),
+            note: asText(l?.note ?? l?.badge ?? ''),
           }))}
         />
       );
@@ -395,8 +415,14 @@ const ADAPTERS: Record<string, AdapterEntry> = {
         <MindMap
           root={asText(data?.root)}
           branches={branches.map((b: any) => ({
-            label: asText(b?.label),
-            children: Array.isArray(b?.children) ? b.children.map(asText) : [],
+            // Primitive espera {title, items: string[]}. Adapter aceita
+            // ambos os formatos (label ou title, children ou items).
+            title: asText(b?.title ?? b?.label),
+            items: Array.isArray(b?.items)
+              ? b.items.map(asText)
+              : Array.isArray(b?.children)
+                ? b.children.map(asText)
+                : [],
           }))}
         />
       );

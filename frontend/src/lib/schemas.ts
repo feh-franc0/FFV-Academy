@@ -127,12 +127,16 @@ export const phoneBRSchema = z
   .regex(/^\+?55\d{10,11}$/, 'telefone BR inválido (formato: +55DDDNNNNNNNN)');
 
 export const UserProfileSchema = z.object({
+  // id e role são opcionais pra retro-compat com perfis salvos antes do
+  // backend real — dtoToProfile sempre preenche em sessões novas.
+  id: z.string().optional().default(''),
   name: z.string().min(1).max(120),
   email: emailSchema,
   // Permite string vazia para usuários migrados ou cadastrados sem telefone.
   phone: phoneBRSchema.or(z.literal('')),
   createdAt: z.string(),
   marketingConsent: z.boolean(),
+  role: z.string().optional().default('user'),
   paidProducts: z.array(z.string().regex(/^[a-z0-9-]{1,80}$/)),
 }).strict();
 
