@@ -983,24 +983,67 @@ Cache invalidation pipeline (ao editar):
 
 ---
 
-## Sprint 10 — Polish (Semana 10)
+## Sprint 10 — Polish + Painel Admin com Métricas (Semana 10)
 
 **Status**: ⬜ Não iniciada
 
 ### Objetivos
 - Plataforma CMS-driven madura
+- **Portal admin profissional com métricas reais** (escopo ampliado por solicitação)
 
-### Tarefas
+### Tarefas — CMS
+
 - [ ] Painel admin completo (drafts, scheduling, A/B variants)
-- [ ] Analytics avançado (heatmap por bloco, dropoff)
 - [ ] Bulk operations (publicar/arquivar em lote)
 - [ ] Importação OneOff (Markdown, Notion export)
 - [ ] Documentação completa em `docs/CMS.md`
 - [ ] Runbook de operação editorial
 - [ ] Treinamento (você + futuros editores)
 
+### Tarefas — Portal Admin de Métricas
+
+**Backend (Go)** — endpoints `/api/v1/admin/metrics/*`:
+
+- [ ] `GET /admin/metrics/overview` — KPIs gerais (DAU, WAU, MAU, total usuários, novos por semana, módulos publicados, XP distribuído)
+- [ ] `GET /admin/metrics/articles?from=&to=` — por módulo: views, completions, dropoff rate, tempo médio, rating médio
+- [ ] `GET /admin/metrics/articles/:slug` — drill-down de 1 módulo: heatmap por bloco (onde users param), distribuição de tempo, comentários, ratings
+- [ ] `GET /admin/metrics/quizzes` — por questão: taxa de acerto, tempo médio, qual opção mais errada, dificuldade calculada
+- [ ] `GET /admin/metrics/quizzes/:question_id` — drill-down de 1 questão: usuários que acertaram/erraram, distribuição por hub/trilha
+- [ ] `GET /admin/metrics/trails` — por trilha: enrollments, taxa de conclusão, dropoff, tempo médio para completar
+- [ ] `GET /admin/metrics/funnel` — funil completo: visita home → começa trilha → completa módulo → atinge milestone (badges/level)
+- [ ] `GET /admin/metrics/retention` — coortes semanais/mensais (D1, D7, D30 retention)
+- [ ] `GET /admin/metrics/search` — top queries, queries sem resultado, click-through rate
+- [ ] `GET /admin/metrics/users` — segmentação: free/paid, ativos/inativos, top XP
+
+**Tabelas novas (migrations 037-040 ou usar existentes)**:
+
+- [ ] `event_views` (já temos `analytics_events` — agregar sobre essa)
+- [ ] `quiz_attempts` (cada tentativa de resposta — armazena correct, time_spent, hint_used)
+- [ ] `module_progress` (granular: % do módulo lido, tempo total, scroll depth máximo)
+- [ ] Views materializadas em Postgres para agregações pesadas (refresh hourly via cron)
+
+**Frontend (Next.js) — Painel `/admin/metrics/`**:
+
+- [ ] `/admin/metrics` — dashboard overview com cards KPI + gráficos (Recharts/Tremor)
+- [ ] `/admin/metrics/articles` — tabela com filtro, ordenação, drill-down
+- [ ] `/admin/metrics/articles/[slug]` — visualização individual com heatmap visual (cor por bloco baseado em dropoff)
+- [ ] `/admin/metrics/quizzes` — tabela de questões com taxa de acerto + dificuldade
+- [ ] `/admin/metrics/quizzes/[id]` — distribuição de respostas (gráfico de barras por opção)
+- [ ] `/admin/metrics/trails` — funil de cada trilha
+- [ ] `/admin/metrics/retention` — heatmap de coortes
+- [ ] `/admin/metrics/funnel` — Sankey diagram de jornada do usuário
+- [ ] Filtros globais: data range, hub, trilha, dificuldade
+- [ ] Export CSV de qualquer tabela
+
+**Permissões e segurança**:
+
+- [ ] Todas as rotas `/admin/metrics/*` requerem `role=admin` no JWT
+- [ ] Audit log de cada acesso (quem viu o quê quando)
+- [ ] Rate limit específico para evitar scraping de métricas
+- [ ] Anonimização: nunca expor email/nome individual (só agregados)
+
 ### Deliverable Sprint 10
-✅ Plataforma CMS profissional + processo editorial sustentável.
+✅ Plataforma CMS profissional + painel admin com métricas em tempo real e drill-down por módulo/questão/usuário/trilha.
 
 ---
 

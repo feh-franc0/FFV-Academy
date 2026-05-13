@@ -101,16 +101,16 @@ type updateArticleRequest struct {
 // Diferente de articleResponse, NÃO inclui content_md (legacy) — apenas blocks.
 // updated_at é exposto como time.Time para precisão do ETag client-side.
 type articleWithBlocksResponse struct {
-	Slug       string                  `json:"slug"`
-	Title      string                  `json:"title"`
-	TrailID    string                  `json:"trail_id"`
-	HubID      string                  `json:"hub_id"`
-	XP         int                     `json:"xp"`
-	ReadTime   int                     `json:"read_time"`
-	Difficulty string                  `json:"difficulty"`
-	Order      int                     `json:"order"`
-	UpdatedAt  time.Time               `json:"updated_at"`
-	Blocks     []*domcurriculum.Block  `json:"blocks"`
+	Slug       string                 `json:"slug"`
+	Title      string                 `json:"title"`
+	TrailID    string                 `json:"trail_id"`
+	HubID      string                 `json:"hub_id"`
+	XP         int                    `json:"xp"`
+	ReadTime   int                    `json:"read_time"`
+	Difficulty string                 `json:"difficulty"`
+	Order      int                    `json:"order"`
+	UpdatedAt  time.Time              `json:"updated_at"`
+	Blocks     []*domcurriculum.Block `json:"blocks"`
 }
 
 // ─── Endpoints públicos ───────────────────────────────────────────────────────
@@ -195,16 +195,16 @@ func (h *CurriculumHandler) GetBlocks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=3600, stale-while-revalidate=86400")
 
 	WriteJSON(w, http.StatusOK, articleWithBlocksResponse{
-		Slug:           article.Slug(),
-		Title:          article.Title(),
-		TrailID:        article.TrailID(),
-		HubID:          article.HubID(),
-		XP:             article.XP(),
-		ReadTime:       article.ReadTime(),
-		Difficulty:     article.Difficulty(),
-		Order:          article.Order(),
-		UpdatedAt:      article.UpdatedAt(),
-		Blocks:         blocks,
+		Slug:       article.Slug(),
+		Title:      article.Title(),
+		TrailID:    article.TrailID(),
+		HubID:      article.HubID(),
+		XP:         article.XP(),
+		ReadTime:   article.ReadTime(),
+		Difficulty: article.Difficulty(),
+		Order:      article.Order(),
+		UpdatedAt:  article.UpdatedAt(),
+		Blocks:     blocks,
 	})
 }
 
