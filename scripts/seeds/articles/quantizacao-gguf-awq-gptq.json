@@ -1,0 +1,810 @@
+{
+  "slug": "quantizacao-gguf-awq-gptq",
+  "title": null,
+  "blocks": [
+    {
+      "id": "dcede9fe-d70a-495f-a69e-b51951b473e5",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Quantização é o que transforma um modelo de 70B parâmetros — 140 GB em FP16, fora do alcance de qualquer hardware consumer — em um arquivo de 35 GB rodando em um Mac Studio. Mas reduzir 16 bits para 4 bits sem destruir a qualidade exige algoritmos não-triviais: GPTQ usa segunda derivada da loss, AWQ analisa ativações para proteger pesos salientes, GGUF mistura precisões por camada com importance matrix, NF4 explora a distribuição gaussiana dos pesos pré-treinados. Este módulo dissecciona cada técnica, os papers originais e quando escolher cada uma. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "09369b0e-b6df-4efd-9f34-fe0564b9ca7c",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O problema fundamental: 16 bits por peso é muito"
+      },
+      "children": [
+        {
+          "id": "f060c50b-a5fa-484c-89a9-66143c41d395",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Modelos modernos armazenam pesos em "
+              },
+              {
+                "text": "bfloat16",
+                "code": true
+              },
+              {
+                "text": " (16 bits cada). Llama 3.1 8B tem 8.03 bilhões de parâmetros — 16 GB de VRAM só para pesos, antes de KV cache, ativações, otimizador. Quantização reduz a representação de cada peso para 8, 4, 3 ou até 2 bits, multiplicando por 2-8× o throughput de memória e diminuindo a pegada de VRAM proporcionalmente. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "10efcd64-5692-4167-a84a-a8d25acc5df2",
+          "type": "annotated_formula",
+          "position": 1,
+          "data": {
+            "title": "Quantização linear simétrica",
+            "formula": "w_q = round(w / s) · s,  s = max(|w|) / (2^(b-1) - 1)",
+            "parts": [
+              {
+                "text": "w",
+                "annotation": "peso original FP16"
+              },
+              {
+                "text": "s",
+                "annotation": "escala (scale)",
+                "highlight": true
+              },
+              {
+                "text": "b",
+                "annotation": "bits (ex: 4)"
+              },
+              {
+                "text": "w_q",
+                "annotation": "peso reconstruído",
+                "highlight": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "7739cf90-2cc6-411f-8caa-eec0592e6feb",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Quantização simétrica mapeia [-max, +max] para [-2^(b-1), 2^(b-1)-1]. A assimétrica adiciona um zero-point e mapeia [min, max] → [0, 2^b-1] — melhor para distribuições skewed (ativações pós-ReLU), pior para pesos quase-gaussianos. LLMs costumam usar simétrica para pesos e assimétrica para ativações."
+          }
+        },
+        {
+          "id": "9c0a438c-0ab7-4cef-a69a-5aa14dbe17ed",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Precisão",
+              "Bits/peso",
+              "Llama 3 8B",
+              "Llama 3 70B",
+              "Hardware típico"
+            ],
+            "rows": [
+              [
+                "FP32",
+                "32",
+                "32 GB",
+                "280 GB",
+                "A100/H100 datacenter"
+              ],
+              [
+                "BF16/FP16",
+                "16",
+                "16 GB",
+                "140 GB",
+                "RTX 4090 24GB (só 8B cabe)"
+              ],
+              [
+                "INT8",
+                "8",
+                "8 GB",
+                "70 GB",
+                "2× RTX 4090 ou A6000"
+              ],
+              [
+                "INT4 (AWQ/GPTQ)",
+                "~4.25",
+                "4.5 GB",
+                "35 GB",
+                "RTX 3060 12GB / M-series 36GB+"
+              ],
+              [
+                "Q3_K_M (GGUF)",
+                "~3.5",
+                "3.8 GB",
+                "30 GB",
+                "M2 Pro 32GB"
+              ],
+              [
+                "Q2_K_S (GGUF imatrix)",
+                "~2.6",
+                "2.8 GB",
+                "22 GB",
+                "M1 Max 32GB (com perda)"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "a791122a-c766-42b1-a070-96963ffe3086",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "GPTQ: quantização guiada por hessiana"
+      },
+      "children": [
+        {
+          "id": "fb2ec18e-46ff-4d2a-9dc2-2f31de72a502",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Frantar et al., 2022",
+                "bold": true
+              },
+              {
+                "text": " (paper: "
+              },
+              {
+                "text": "arXiv:2210.17323",
+                "code": true
+              },
+              {
+                "text": ") propuseram GPTQ como evolução do OBQ (Optimal Brain Quantization). A intuição: ao quantizar um peso w_i, podemos compensar o erro ajustando os pesos não- quantizados restantes via inverso da hessiana da loss. Processa-se uma coluna por vez, propagando correções para colunas futuras. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "b156afe7-d7cf-4a5a-b947-33b5ef43536a",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Pipeline GPTQ por layer",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "icon": "📥",
+                "label": "Forward pass calibração",
+                "desc": "128-512 sequências; coleta ativações X de cada layer"
+              },
+              {
+                "icon": "🧮",
+                "label": "Hessiana H = 2·XᵀX",
+                "desc": "computada uma vez por layer; H⁻¹ via Cholesky"
+              },
+              {
+                "icon": "🔀",
+                "label": "Quantize coluna i",
+                "desc": "wᵢ_q = round(wᵢ/sᵢ)·sᵢ"
+              },
+              {
+                "icon": "➖",
+                "label": "Compensa colunas i+1..n",
+                "desc": "W[:,i+1:] -= (wᵢ - wᵢ_q) · H⁻¹[i,i+1:] / H⁻¹[i,i]"
+              },
+              {
+                "icon": "✅",
+                "label": "Salva W_q + scales",
+                "desc": "safetensors com metadado quant_config"
+              }
+            ]
+          }
+        },
+        {
+          "id": "d5ba24e2-02b4-4375-9e93-44ca992b09b4",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "python",
+            "code": "# AutoGPTQ — quantização INT4 com calibração de domínio\nfrom auto_gptq import AutoGPTQForCausalLM, BaseQuantizeConfig\nfrom transformers import AutoTokenizer\nfrom datasets import load_dataset\n\nMODEL_ID = \"meta-llama/Meta-Llama-3.1-8B-Instruct\"\nOUT_DIR  = \"llama-3.1-8b-gptq-int4\"\n\ntok = AutoTokenizer.from_pretrained(MODEL_ID)\n\ncfg = BaseQuantizeConfig(\n    bits=4,\n    group_size=128,        # 128 pesos compartilham mesma escala\n    desc_act=False,        # True = +qualidade, -20% throughput em serving\n    damp_percent=0.01,     # regularização do Cholesky\n    sym=True,              # simétrico para pesos\n    true_sequential=True,  # quantiza camada-a-camada respeitando dependências\n)\n\n# Calibração DEVE refletir distribuição de produção\ncalib = load_dataset(\"HuggingFaceH4/ultrachat_200k\", split=\"train_sft[:256]\")\nexamples = [\n    tok(ex[\"messages\"][0][\"content\"] + ex[\"messages\"][1][\"content\"],\n        return_tensors=\"pt\", max_length=2048, truncation=True)\n    for ex in calib\n]\n\nmodel = AutoGPTQForCausalLM.from_pretrained(MODEL_ID, cfg, torch_dtype=\"auto\")\nmodel.quantize(examples)   # ~3h em RTX 4090 para 8B\nmodel.save_quantized(OUT_DIR, use_safetensors=True)"
+          }
+        },
+        {
+          "id": "f4bc418b-6381-42ba-af6f-1a8c2ff66d8f",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "desc_act reordena colunas por norma de ativação antes de quantizar — preserva mais qualidade mas força memory access não-coalesced em kernels GEMM. Em vLLM/TGI, modelos GPTQ com são 20-40% mais lentos. Decida pelo perfil: chat geral → desc_act=False; código/matemática → desc_act=True."
+          }
+        }
+      ]
+    },
+    {
+      "id": "145b3537-0dad-45b6-92c5-4bf7a5797808",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "AWQ: proteja os pesos salientes"
+      },
+      "children": [
+        {
+          "id": "f3d5f686-035c-4e52-bcc0-268e5e7cdd4f",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Lin et al., MIT 2023",
+                "bold": true
+              },
+              {
+                "text": " (paper: "
+              },
+              {
+                "text": "arXiv:2306.00978",
+                "code": true
+              },
+              {
+                "text": ") observaram que apenas ~1% dos pesos são responsáveis pela maior parte da capacidade do modelo — e esses pesos podem ser identificados pela "
+              },
+              {
+                "text": "magnitude das ativações",
+                "bold": true
+              },
+              {
+                "text": " nos canais correspondentes, não pelos próprios pesos. AWQ aplica per-channel scaling para deslocar o range dos canais salientes antes da quantização uniforme. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "6c912cda-2557-4a18-8eae-8ac3b94b3e61",
+          "type": "annotated_formula",
+          "position": 1,
+          "data": {
+            "title": "AWQ — scaling per-channel",
+            "formula": "Y = (X / s) · Q(W · s),  s_i = mean(|x_i|)^α",
+            "parts": [
+              {
+                "text": "X",
+                "annotation": "ativações"
+              },
+              {
+                "text": "s_i",
+                "annotation": "escala por canal",
+                "highlight": true
+              },
+              {
+                "text": "Q(·)",
+                "annotation": "quantização uniforme INT4"
+              },
+              {
+                "text": "α",
+                "annotation": "hiperparâmetro [0,1] — busca em grid"
+              }
+            ]
+          }
+        },
+        {
+          "id": "d5ad4630-f427-45cf-91f9-e38c84a77ad1",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": " Matematicamente, Y é invariante sob a transformação. Mas Q(W·s) sofre menos erro porque os canais dominantes foram amplificados antes de quantizar (mais bits efetivos na faixa que importa). A escolha de α é por search: avalia perda de reconstrução em 32 amostras de calibração. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "6b51e0c9-68f9-4fcc-82c5-f5673bb3482a",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "python",
+            "code": "# AWQ — autoawq library\nfrom awq import AutoAWQForCausalLM\nfrom transformers import AutoTokenizer\n\nMODEL = \"Qwen/Qwen2.5-7B-Instruct\"\nOUT   = \"qwen2.5-7b-awq-int4\"\n\ntok = AutoTokenizer.from_pretrained(MODEL, trust_remote_code=True)\nmodel = AutoAWQForCausalLM.from_pretrained(MODEL, device_map=\"auto\", trust_remote_code=True)\n\nquant_cfg = {\n    \"zero_point\": True,\n    \"q_group_size\": 128,\n    \"w_bit\": 4,\n    \"version\": \"GEMM\",   # GEMM = batch grande; GEMV = decoding token a token\n}\n\n# AWQ usa pileval (default) ou seu próprio dataset\nmodel.quantize(tok, quant_config=quant_cfg, calib_data=\"pileval\", n_parallel_calib_samples=32)\nmodel.save_quantized(OUT)\ntok.save_pretrained(OUT)\n\n# Loading em vLLM\n# vllm serve qwen2.5-7b-awq-int4 --quantization awq_marlin --dtype half"
+          }
+        },
+        {
+          "id": "5ea4211f-2acf-4925-ab99-204d2fe9b57b",
+          "type": "decision_box",
+          "position": 4,
+          "data": {
+            "scenario": "Escolha entre AWQ e GPTQ para serving de chat 7B",
+            "winner": "AWQ + Marlin kernel",
+            "why": "AWQ preserva 0.3-0.8 PPL melhor que GPTQ act_order=False, e ~paridade com GPTQ desc_act=True — sem o custo de 20-40% de throughput. Marlin kernel (vLLM) é state-of-the-art para INT4 GEMM em Ampere/Hopper.",
+            "alternatives": [
+              {
+                "name": "GPTQ desc_act=True: prefira em tasks de código/matemática se +1% de accuracy compensa -25% throughput"
+              },
+              {
+                "name": "GGUF Q4_K_M: prefira para deploy em CPU/Mac ou hardware misto"
+              },
+              {
+                "name": "bitsandbytes NF4: só para fine-tuning QLoRA, não para serving (lento)"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "e9dafc8a-77c1-4a92-95b2-866df9e5255d",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "GGUF e k-quants: precisão mista por camada"
+      },
+      "children": [
+        {
+          "id": "5e088fb7-41d3-44d7-8829-739ff92d43cc",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " GGUF é o formato do "
+              },
+              {
+                "text": "llama.cpp",
+                "bold": true
+              },
+              {
+                "text": " (Georgi Gerganov). Não é um algoritmo de quantização — é um container que pode armazenar pesos em diversos esquemas (Q4_0 legacy, Q4_K_M, Q5_K_S, Q8_0, etc.). O diferencial dos "
+              },
+              {
+                "text": "k-quants",
+                "bold": true
+              },
+              {
+                "text": " é misturar precisões DENTRO do mesmo modelo: layers sensíveis (attention.output, ffn.down) ganham mais bits; outros ganham menos. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "37a47038-4714-4bd1-9825-2965cf769a65",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Esquema",
+              "Bits efetivos",
+              "Estratégia",
+              "PPL Llama 7B (wiki)",
+              "Uso recomendado"
+            ],
+            "rows": [
+              [
+                "Q8_0",
+                "8.5",
+                "INT8 uniforme + scale per-bloc de 32",
+                "~5.79 (≈FP16)",
+                "CPU rápido, baseline"
+              ],
+              [
+                "Q6_K",
+                "6.56",
+                "Mix 6-bit majority + 8-bit em layers críticos",
+                "5.81",
+                "Quase indistinguível de FP16"
+              ],
+              [
+                "Q5_K_M",
+                "5.69",
+                "Mix 5/6-bit, balanceado",
+                "5.85",
+                "Default para qualidade"
+              ],
+              [
+                "Q4_K_M",
+                "4.83",
+                "Mix 4/5/6-bit, attn.v + ffn.down em 5/6",
+                "5.95",
+                "Sweet spot 2026"
+              ],
+              [
+                "Q4_K_S",
+                "4.58",
+                "Q4_K_M sem upgrade em layers críticos",
+                "6.02",
+                "Memória apertada"
+              ],
+              [
+                "Q3_K_M",
+                "3.91",
+                "Mix 3/4-bit + imatrix",
+                "6.30",
+                "Modelos grandes em RAM consumer"
+              ],
+              [
+                "Q2_K_S",
+                "2.63",
+                "Mix 2/3-bit + imatrix obrigatória",
+                "7.20",
+                "Última fronteira; perda visível"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "64fe6352-b9c8-482c-9462-25af8c632237",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "code": "# llama.cpp — pipeline completo de quantização\n# 1. Converter HF safetensors → GGUF FP16\npython convert_hf_to_gguf.py meta-llama/Meta-Llama-3.1-8B-Instruct \\\n    --outfile llama-3.1-8b-f16.gguf --outtype f16\n\n# 2. Coletar importance matrix em texto representativo\n./llama-imatrix \\\n    -m llama-3.1-8b-f16.gguf \\\n    -f calibration_pt-br.txt \\        # mix PT-BR + código + chat real\n    -o imatrix-llama8b.dat \\\n    --chunks 128\n\n# 3. Quantizar com imatrix → Q4_K_M\n./llama-quantize \\\n    --imatrix imatrix-llama8b.dat \\\n    llama-3.1-8b-f16.gguf \\\n    llama-3.1-8b-Q4_K_M.gguf \\\n    Q4_K_M\n\n# 4. Validar perplexity\n./llama-perplexity -m llama-3.1-8b-Q4_K_M.gguf -f wikitext-2-raw/wiki.test.raw"
+          }
+        },
+        {
+          "id": "a91a77ab-2a7a-4b1f-a370-3b77ba817d83",
+          "type": "stack_flow",
+          "position": 3,
+          "data": {
+            "title": "Anatomia de um arquivo GGUF",
+            "items": [
+              {
+                "icon": "🪪",
+                "label": "Magic + version header",
+                "sub": "GGUF + uint32 version (atual: 3)"
+              },
+              {
+                "icon": "🗂️",
+                "label": "Metadata KV pairs",
+                "sub": "general.architecture, general.name, tokenizer.ggml.model, chat_template, ..."
+              },
+              {
+                "icon": "🔤",
+                "label": "Tokenizer embarcado",
+                "sub": "vocab + merges + special tokens — sem dependência de Python"
+              },
+              {
+                "icon": "📐",
+                "label": "Tensor info table",
+                "sub": "name, dims, ggml_type (Q4_K, Q6_K, F16...), offset"
+              },
+              {
+                "icon": "💾",
+                "label": "Tensor data (alinhado 32B)",
+                "sub": "pesos quantizados; mmap-friendly, page-aligned"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b721bc31-776b-418b-b97e-bd9978ddda4a",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "bitsandbytes e NF4: a magia do QLoRA"
+      },
+      "children": [
+        {
+          "id": "2136c0a4-7109-4a77-9aa3-9bb8c87a7d7d",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Dettmers et al., 2023",
+                "bold": true
+              },
+              {
+                "text": " (QLoRA paper: "
+              },
+              {
+                "text": "arXiv:2305.14314",
+                "code": true
+              },
+              {
+                "text": ") provaram que dá para fine-tunear Llama 65B em uma única A100 80GB combinando: "
+              },
+              {
+                "text": "NF4",
+                "bold": true
+              },
+              {
+                "text": " (NormalFloat 4-bit), "
+              },
+              {
+                "text": "double quantization",
+                "bold": true
+              },
+              {
+                "text": " (quantizar as escalas) e "
+              },
+              {
+                "text": "paged optimizers",
+                "bold": true
+              },
+              {
+                "text": " (offload do estado Adam para CPU). NF4 é desenhado especificamente para a distribuição empírica dos pesos pré-treinados. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "4b86acd3-749e-4b32-b01d-80e4b5ed6a4f",
+          "type": "annotated_formula",
+          "position": 1,
+          "data": {
+            "title": "NF4 — quantis da N(0,1)",
+            "formula": "q_k = Φ⁻¹((k + 0.5) / 16),  k ∈ {0..15}",
+            "parts": [
+              {
+                "text": "Φ⁻¹",
+                "annotation": "inversa da CDF normal"
+              },
+              {
+                "text": "k",
+                "annotation": "índice 4-bit"
+              },
+              {
+                "text": "16 níveis",
+                "annotation": "simétricos, info-óptimos sob N(0,1)",
+                "highlight": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "8bbd4a63-2d73-4613-870b-1e9781063555",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "python",
+            "code": "# QLoRA setup com bitsandbytes — fine-tune 8B em RTX 4090\nfrom transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig\nfrom peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training\nimport torch\n\nbnb_cfg = BitsAndBytesConfig(\n    load_in_4bit=True,\n    bnb_4bit_quant_type=\"nf4\",          # NormalFloat-4\n    bnb_4bit_use_double_quant=True,     # quantiza escalas → -0.4 bits/peso\n    bnb_4bit_compute_dtype=torch.bfloat16,\n)\n\nmodel = AutoModelForCausalLM.from_pretrained(\n    \"meta-llama/Meta-Llama-3.1-8B-Instruct\",\n    quantization_config=bnb_cfg,\n    device_map=\"auto\",\n)\nmodel = prepare_model_for_kbit_training(model)\n\nlora = LoraConfig(\n    r=16, lora_alpha=32,\n    target_modules=[\"q_proj\",\"k_proj\",\"v_proj\",\"o_proj\",\"gate_proj\",\"up_proj\",\"down_proj\"],\n    lora_dropout=0.05, bias=\"none\", task_type=\"CAUSAL_LM\",\n)\nmodel = get_peft_model(model, lora)\n# ~0.5% dos params são treináveis; base em NF4 fica congelada"
+          }
+        },
+        {
+          "id": "cf4fe069-2bd8-4d29-8ca1-23d2fe57ce94",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "NF4 é excelente para fine-tuning (QLoRA) mas subótimo para serving puro. Para inferência de produção, prefira AWQ ou GPTQ — kernels GEMM otimizados (Marlin, Machete) superam bitsandbytes em 2-4× tokens/s."
+          }
+        }
+      ]
+    },
+    {
+      "id": "848fe5aa-c9e5-4526-83f0-97f4be7fd30f",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Como escolher: árvore de decisão"
+      },
+      "children": [
+        {
+          "id": "a44419cc-a15c-460d-9591-32686c257db8",
+          "type": "key_value",
+          "position": 0,
+          "data": {
+            "items": [
+              {
+                "k": "Serving GPU produção (vLLM/TGI)",
+                "v": "AWQ-INT4 + Marlin kernel. Fallback: GPTQ desc_act=False."
+              },
+              {
+                "k": "Serving GPU + tasks de código/matemática",
+                "v": "GPTQ desc_act=True ou FP8 (H100+)."
+              },
+              {
+                "k": "Uso local (Mac, Linux consumer)",
+                "v": "GGUF Q4_K_M com imatrix. Q5_K_M se sobrar RAM."
+              },
+              {
+                "k": "CPU-only (servidor sem GPU)",
+                "v": "GGUF Q4_K_M + AVX2/AVX512. Llama.cpp continuous batching."
+              },
+              {
+                "k": "Mobile / embarcado",
+                "v": "GGUF Q4_K_S ou ExecuTorch INT4 (módulo separado)."
+              },
+              {
+                "k": "Fine-tuning com pouca VRAM",
+                "v": "QLoRA com NF4 + double quant. Não use AWQ/GPTQ para treinar."
+              },
+              {
+                "k": "Modelo muito grande (>70B) em hardware limitado",
+                "v": "GGUF Q3_K_M ou Q2_K_S com imatrix. Aceite o trade-off."
+              },
+              {
+                "k": "Precisão crítica (não pode degradar)",
+                "v": "INT8 (SmoothQuant) ou FP8. Evite INT4."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "e56bf652-5953-4e3d-acf7-525dff10af34",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Validação: perplexity ≠ qualidade de tarefa"
+      },
+      "children": [
+        {
+          "id": "7544d7bf-7876-475f-8d21-ffb3502fdcb1",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Perplexity em WikiText mede modelagem geral de linguagem. Não correlaciona perfeitamente com performance em tarefas específicas. Um Q4_K_M com ΔPPL=+0.16 pode perder 3 pontos em GSM8K (matemática) e 5 em HumanEval (código). Sempre valide quantização no seu benchmark de produção, não só em perplexity."
+          }
+        },
+        {
+          "id": "25cfc9a6-4eab-43d3-94a9-c1ebc7302a9b",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "# Bateria mínima de avaliação pós-quantização\n# 1. PPL geral\n./llama-perplexity -m model-Q4_K_M.gguf -f wiki.test.raw\n\n# 2. lm-evaluation-harness — MMLU, GSM8K, HumanEval, IFEval\nlm_eval --model hf --model_args pretrained=./awq-int4-model,trust_remote_code=True \\\n        --tasks mmlu,gsm8k,humaneval,ifeval --batch_size 8\n\n# 3. Seu próprio eval set (golden examples de produção)\npython eval_production.py --model-path ./awq-int4-model --testset ./golden.jsonl"
+          }
+        },
+        {
+          "id": "4b941c8b-6990-4009-b0fe-740e7de35ea1",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Modelo",
+              "MMLU FP16",
+              "MMLU AWQ-INT4",
+              "GSM8K FP16",
+              "GSM8K AWQ-INT4",
+              "Δ aceito?"
+            ],
+            "rows": [
+              [
+                "Llama 3.1 8B",
+                "68.4",
+                "67.8",
+                "84.5",
+                "82.1",
+                "Sim (-0.6 / -2.4)"
+              ],
+              [
+                "Llama 3.1 70B",
+                "83.6",
+                "83.2",
+                "95.1",
+                "94.6",
+                "Sim (-0.4 / -0.5)"
+              ],
+              [
+                "Qwen 2.5 7B",
+                "74.2",
+                "73.5",
+                "85.4",
+                "82.0",
+                "Aceitável"
+              ],
+              [
+                "Phi-4 14B",
+                "84.8",
+                "83.1",
+                "91.2",
+                "85.4",
+                "Marginal — preferir INT8"
+              ],
+              [
+                "Llama 3.2 3B",
+                "58.0",
+                "54.6",
+                "76.7",
+                "69.1",
+                "Não — modelo pequeno demais para INT4"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "5b7e07c1-d6bc-4e60-94d7-397ea6e31561",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "d7197918-256c-435f-a96e-19880c529280",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Posso quantizar um modelo já fine-tunado, ou tenho que quantizar a base e re-treinar?",
+            "answer": "Pode (e deve) quantizar o modelo já fine-tunado. AWQ/GPTQ/GGUF são pós-treinamento (PTQ). Se você fez QLoRA com NF4, faça primeiro para fundir LoRA com base FP16, depois rode AWQ/GPTQ sobre o resultado."
+          }
+        },
+        {
+          "id": "3d697db4-2e40-4ee3-b24a-fe728f2dec5b",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Por que minha quantização AWQ deu PPL pior que esperado?",
+            "answer": "Causas comuns: (1) calibração com dataset fora do domínio, (2) group_size pequeno demais (use 128, não 32), (3) zero_point=False em distribuições assimétricas, (4) sequence length de calibração curta (use ≥2048). Re-calibre com 256+ amostras de produção real."
+          }
+        },
+        {
+          "id": "bce825c8-0ae1-404c-82fe-cb85a6f26ed1",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "GGUF roda em GPU ou só CPU?",
+            "answer": "llama.cpp tem backends CUDA, Metal (Apple), Vulkan, ROCm e SYCL — GGUF roda em GPU desde 2023. O flag offloada N camadas para GPU. Você pode rodar Llama 70B Q4_K_M com 30 layers em RTX 4090 + resto em RAM (split tensor)."
+          }
+        },
+        {
+          "id": "79c711ea-daa1-4bfb-af73-4944b77d6ec7",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "FP8 já substituiu INT4?",
+            "answer": "Em H100/H200 e Blackwell, FP8 (E4M3, E5M2) é mais rápido que INT4 com qualidade próxima de BF16 — TensorRT-LLM e vLLM suportam. Mas FP8 ocupa 2× mais memória que INT4. Para serving onde memória é o gargalo, INT4 ainda vence. Para latência pura em datacenter, FP8 é o caminho."
+          }
+        }
+      ]
+    },
+    {
+      "id": "1bd6c3b7-369f-4454-946b-f28ad30d3604",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Referências canônicas"
+      },
+      "children": [
+        {
+          "id": "4544ff60-8d0a-4b95-a5e4-02c8c0badcff",
+          "type": "key_value",
+          "position": 0,
+          "data": {
+            "items": [
+              {
+                "k": "GPTQ paper",
+                "v": "Frantar et al., \"GPTQ: Accurate Post-Training Quantization for GPT Models\", arXiv:2210.17323 (2022)"
+              },
+              {
+                "k": "AWQ paper",
+                "v": "Lin et al., \"AWQ: Activation-aware Weight Quantization\", MIT 2023, arXiv:2306.00978"
+              },
+              {
+                "k": "QLoRA + NF4",
+                "v": "Dettmers et al., \"QLoRA: Efficient Finetuning of Quantized LLMs\", arXiv:2305.14314 (2023)"
+              },
+              {
+                "k": "SmoothQuant",
+                "v": "Xiao et al., \"SmoothQuant: Accurate and Efficient PTQ for LLMs\", ICML 2023"
+              },
+              {
+                "k": "GGUF spec",
+                "v": "github.com/ggml-org/ggml/blob/master/docs/gguf.md (Georgi Gerganov, llama.cpp)"
+              },
+              {
+                "k": "Marlin kernel",
+                "v": "Frantar et al., \"Marlin: Mixed-Precision Auto-Regressive Parallel Inference\", IST Austria 2024"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

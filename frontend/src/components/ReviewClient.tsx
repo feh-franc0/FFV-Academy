@@ -15,7 +15,21 @@ interface SessionStats {
   xpGained: number;
 }
 
-export function ReviewClient() {
+/**
+ * ReviewClient props — configuração opcional para sessões customizadas
+ * (ex.: Maratona). Sem props, comportamento padrão = todos os cards due
+ * ordenados por dueDate.
+ */
+export interface ReviewClientProps {
+  /** Limite de cards na sessão. null/undefined = ilimitado. */
+  maxCards?: number;
+  /** Restringe a cards cujo slug pertença à trilha indicada. */
+  trailFilter?: string;
+  /** Resolver slug → trailId. Necessário se trailFilter for usado. */
+  slugToTrail?: (slug: string) => string | undefined;
+}
+
+export function ReviewClient(props: ReviewClientProps = {}) {
   const { state, dueCards, reviewOne } = useGameState();
   const [selected, setSelected] = useState<number | null>(null);
   const [revealed, setRevealed] = useState(false);
@@ -25,11 +39,15 @@ export function ReviewClient() {
 
   useEffect(() => {
     if (queue !== null || !state) return;
-    setQueue(
-      dueCards.length > 0
-        ? [...dueCards].sort((a, b) => a.dueDate.localeCompare(b.dueDate))
-        : []
-    );
+    let pool = [...dueCards];
+    if (props.trailFilter && props.slugToTrail) {
+      pool = pool.filter(c => props.slugToTrail!(c.slug) === props.trailFilter);
+    }
+    pool.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+    if (props.maxCards && props.maxCards > 0) {
+      pool = pool.slice(0, props.maxCards);
+    }
+    setQueue(pool);
     // Initialize once when state first loads — intentionally omit dueCards from deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);

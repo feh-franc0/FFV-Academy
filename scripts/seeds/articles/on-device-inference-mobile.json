@@ -1,0 +1,513 @@
+{
+  "slug": "on-device-inference-mobile",
+  "title": null,
+  "blocks": [
+    {
+      "id": "002527ad-1d9e-416e-b759-535917247140",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Em 2026, o LLM no seu bolso virou realidade. iPhone 16 Pro roda Apple Foundation ~3B no Neural Engine, Pixel 9 Pro roda Gemma 2 2B via MediaPipe, Galaxy S24 Ultra roda Phi-3 mini via Qualcomm AI Engine. A infraestrutura que viabiliza isso é discreta — ExecuTorch (Meta), MediaPipe LLM Inference (Google), Core ML (Apple), Qualcomm QNN, MediaTek NeuroPilot — mas cada uma resolve o mesmo problema fundamental: como rodar redes de bilhões de parâmetros em dispositivos com 8-12GB de RAM e 5W de TDP. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "3b11ae6c-d20e-4aad-903f-3184319ccdde",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O cenário 2026: SLMs dominam o mobile"
+      },
+      "children": [
+        {
+          "id": "f8c201ad-e314-4550-8e13-4d9f865b64e0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Modelo",
+              "Params",
+              "Tamanho INT4",
+              "iPhone 16 Pro",
+              "Pixel 9 Pro",
+              "S24 Ultra"
+            ],
+            "rows": [
+              [
+                "Llama 3.2 1B-Instruct",
+                "1.23B",
+                "~650 MB",
+                "~45 tok/s",
+                "~38 tok/s",
+                "~42 tok/s"
+              ],
+              [
+                "Llama 3.2 3B-Instruct",
+                "3.21B",
+                "~1.8 GB",
+                "~22 tok/s",
+                "~18 tok/s",
+                "~20 tok/s"
+              ],
+              [
+                "Gemma 2 2B",
+                "2.5B",
+                "~1.4 GB",
+                "~28 tok/s",
+                "~32 tok/s (GPU TPU)",
+                "~24 tok/s"
+              ],
+              [
+                "Phi-3.5-mini 4B",
+                "3.8B",
+                "~2.1 GB",
+                "~18 tok/s",
+                "~16 tok/s",
+                "~17 tok/s"
+              ],
+              [
+                "Qwen 2.5 1.5B",
+                "1.5B",
+                "~850 MB",
+                "~38 tok/s",
+                "~32 tok/s",
+                "~35 tok/s"
+              ],
+              [
+                "Apple Foundation ~3B",
+                "~3B",
+                "~1.5 GB ANE",
+                "Nativa, latência baixa",
+                "N/A",
+                "N/A"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "53fc4604-a39e-4e42-a4d7-9925ad2cda19",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "A regra prática: modelo INT4 com size ≤ 1/3 da RAM total do device, idealmente ≤ 2GB. Excedendo isso, pressure de memória mata o app em background, throttle térmico aparece em conversas longas, bateria drena visivelmente."
+          }
+        }
+      ]
+    },
+    {
+      "id": "8b89f26f-f62e-447c-9b1f-826053670d6e",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "ExecuTorch: o padrão multi-plataforma da Meta"
+      },
+      "children": [
+        {
+          "id": "b11d81ad-0a17-4ad3-b7f3-0bce7b938625",
+          "type": "stack_flow",
+          "position": 0,
+          "data": {
+            "title": "Fluxo de exportação ExecuTorch",
+            "items": [
+              {
+                "icon": "🐍",
+                "label": "Modelo PyTorch (eager)",
+                "sub": "nn.Module com pesos float32/16"
+              },
+              {
+                "icon": "📐",
+                "label": "torch.export()",
+                "sub": "captura graph estático com TorchDynamo, sem Python"
+              },
+              {
+                "icon": "✂️",
+                "label": "to_edge() + quantização",
+                "sub": "INT4/INT8 PTQ, partitioner por backend"
+              },
+              {
+                "icon": "🎯",
+                "label": "Delegates por backend",
+                "sub": "CoreMLBackend, MPSBackend, XNNPACK, QualcommBackend..."
+              },
+              {
+                "icon": "📦",
+                "label": ".pte file",
+                "sub": "arquivo único portátil com graph + pesos + metadados"
+              },
+              {
+                "icon": "⚡",
+                "label": "Runtime C++ (~250KB)",
+                "sub": "embarcado no app; zero deps Python"
+              }
+            ]
+          }
+        },
+        {
+          "id": "db5ae6d8-5fab-4b51-acb2-d381820e5b23",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# ExecuTorch — pipeline de exportação Llama 3.2 1B para iOS\nimport torch\nfrom executorch.examples.models.llama2 import Llama2Model\nfrom executorch.exir import to_edge\nfrom executorch.backends.apple.coreml.partition.coreml_partitioner import CoreMLPartitioner\n\n# 1. Carrega modelo PyTorch\nmodel = Llama2Model(\"Llama-3.2-1B-Instruct\", checkpoint_path=\"./consolidated.pth\")\nmodel.eval()\n\n# 2. Quantização INT4 (groupwise) via PT2E\nfrom torch.ao.quantization.quantizer.embedding_quantizer import EmbeddingQuantizer\nfrom torch.ao.quantization.quantizer.coreml_quantizer import CoreMLQuantizer\n\nquantizer = CoreMLQuantizer(bits=4, group_size=64)\nm = torch._export.capture_pre_autograd_graph(model, example_inputs)\nm = prepare_pt2e(m, quantizer)\n# calibração\nfor batch in calib_loader: m(batch)\nm = convert_pt2e(m)\n\n# 3. Exporta para Edge IR\nedge = to_edge(torch.export(m, example_inputs))\n\n# 4. Delegate para Core ML (otimiza para ANE)\nedge = edge.to_backend(CoreMLPartitioner())\n\n# 5. Salva .pte\nprog = edge.to_executorch()\nwith open(\"llama-3.2-1b-coreml-int4.pte\", \"wb\") as f:\n    f.write(prog.buffer)"
+          }
+        },
+        {
+          "id": "d2731657-7e01-4767-b23a-9e3a1d8c9e35",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "swift",
+            "code": "// Runtime em iOS (Swift) — usando ExecuTorch\nimport ExecuTorchLLM\n\nlet modelPath = Bundle.main.path(forResource: \"llama-3.2-1b-coreml-int4\", ofType: \"pte\")!\nlet tokenizerPath = Bundle.main.path(forResource: \"tokenizer\", ofType: \"json\")!\n\nlet runner = try LLMRunner(modelPath: modelPath, tokenizerPath: tokenizerPath)\n\nlet prompt = \"Resuma este email em 2 frases: ...\"\ntry await runner.generate(prompt: prompt, maxTokens: 200) { token in\n    DispatchQueue.main.async { self.streamingText += token }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "95266fe7-2862-48d0-8e8c-d1644937b324",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "MediaPipe LLM Inference (Google)"
+      },
+      "children": [
+        {
+          "id": "6f1759eb-8c44-4dbe-a232-f93374bb2575",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "kotlin",
+            "code": "// Android Kotlin — MediaPipe LLM Inference\nimport com.google.mediapipe.tasks.genai.llminference.LlmInference\n\nclass GemmaService(context: Context) {\n    private val llm: LlmInference\n\n    init {\n        val options = LlmInference.LlmInferenceOptions.builder()\n            .setModelPath(\"/data/local/tmp/gemma-2b-it-gpu-int4.task\")\n            .setMaxTokens(2048)\n            .setMaxTopK(40)\n            .setTemperature(0.7f)\n            .setPreferredBackend(LlmInference.Backend.GPU)  // ou CPU\n            .build()\n        llm = LlmInference.createFromOptions(context, options)\n    }\n\n    suspend fun generate(prompt: String): String = withContext(Dispatchers.IO) {\n        llm.generateResponse(prompt)\n    }\n}"
+          }
+        },
+        {
+          "id": "c873abbc-134c-40bb-8948-4f80e9dec1de",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "javascript",
+            "code": "// Web — MediaPipe LLM Inference no browser via WebGPU\nimport { FilesetResolver, LlmInference } from \"@mediapipe/tasks-genai\";\n\nconst genai = await FilesetResolver.forGenAiTasks(\n  \"https://cdn.jsdelivr.net/npm/@mediapipe/tasks-genai/wasm\",\n);\n\nconst llm = await LlmInference.createFromOptions(genai, {\n  baseOptions: { modelAssetPath: \"/models/gemma-2b-it-gpu-int4.bin\" },\n  maxTokens: 1024,\n  topK: 40,\n  temperature: 0.7,\n  randomSeed: 101,\n});\n\nconst response = await llm.generateResponse(\"Explique RAG em 2 frases.\");"
+          }
+        }
+      ]
+    },
+    {
+      "id": "275d0524-6f01-452e-9b4b-f8379dca44e2",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Apple Foundation Models (iOS 26+)"
+      },
+      "children": [
+        {
+          "id": "8a46fc5c-5c81-49aa-aec3-996419cfb35f",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Anunciada na WWDC 2025 e disponível em iOS 26+, a "
+              },
+              {
+                "text": "FoundationModels.framework",
+                "bold": true
+              },
+              {
+                "text": " expõe o LLM on-device do Apple Intelligence para apps de terceiros. Modelo base ~3B parâmetros INT4 no ANE, adapters específicos por tarefa (~10-50MB) baixados sob demanda e ativados em runtime. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "c6106eb7-d4b3-4efb-9806-75c713b68cbc",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "swift",
+            "code": "// Apple Foundation Models — iOS 26+\nimport FoundationModels\n\n// 1. Verifica disponibilidade (iPhone 15 Pro+, iPad M-series, todos Mac)\nguard SystemLanguageModel.default.availability == .available else { return }\n\n// 2. Sessão com guided generation (Swift macros para schema-aware output)\n@Generable struct EmailSummary {\n    @Guide(description: \"Resumo em 2 frases, PT-BR\")\n    let summary: String\n\n    @Guide(description: \"Lista de action items\")\n    let actions: [String]\n\n    let urgency: Urgency\n\n    enum Urgency: String, Generable {\n        case low, medium, high\n    }\n}\n\nlet session = LanguageModelSession(instructions: \"\"\"\nVocê resume emails profissionais em português.\n\"\"\")\n\nlet result = try await session.respond(\n    to: emailContent,\n    generating: EmailSummary.self,\n)\n\nprint(result.content.summary)        // typed!\nprint(result.content.actions)\nprint(result.content.urgency)"
+          }
+        },
+        {
+          "id": "938eab87-4f2f-463e-a5f2-92a57e01402d",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "A FoundationModels.framework usa guided generation: o sistema garante que o output obedece o schema declarado via macros Swift, fazendo constrained decoding por baixo. Permite que apps tratem o LLM como uma função typed sem regex parsing nem JSON validation manual."
+          }
+        }
+      ]
+    },
+    {
+      "id": "1885b6e8-b7f0-44fb-8a54-ea829512afb5",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Comparativo de runtimes"
+      },
+      "children": [
+        {
+          "id": "28821397-0c97-4b0f-9298-d71a68be4db0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Runtime",
+              "Maintainer",
+              "Plataformas",
+              "Formato",
+              "Force"
+            ],
+            "rows": [
+              [
+                "ExecuTorch",
+                "Meta",
+                "iOS, Android, Linux, embedded",
+                ".pte",
+                "Cross-platform, runtime tiny (~250KB), PyTorch direto"
+              ],
+              [
+                "MediaPipe LLM",
+                "Google",
+                "Android, iOS, Web (WebGPU), Linux",
+                ".task",
+                "Integração Google, GPU delegate maduro, web first-class"
+              ],
+              [
+                "Core ML",
+                "Apple",
+                "iOS, macOS, watchOS, visionOS",
+                ".mlpackage",
+                "Apple-only, ANE total, App Store nativo"
+              ],
+              [
+                "Apple Foundation",
+                "Apple",
+                "iOS 26+, macOS 15+",
+                "Embarcado SO",
+                "Sem download, swift macros, gratuito"
+              ],
+              [
+                "llama.cpp + bindings",
+                "Comunidade",
+                "Todas",
+                ".gguf",
+                "Flexibilidade total, modelos OSS abertos"
+              ],
+              [
+                "Qualcomm QNN",
+                "Qualcomm",
+                "Android Snapdragon",
+                ".dlc",
+                "NPU Hexagon dedicado, latência mínima Android premium"
+              ],
+              [
+                "MediaTek NeuroPilot",
+                "MediaTek",
+                "Android Dimensity",
+                ".dla",
+                "NPU MediaTek; mercado Asia/Europa"
+              ],
+              [
+                "ONNX Runtime Mobile",
+                "Microsoft",
+                "iOS, Android, Web",
+                ".onnx",
+                "Polígrafo de formatos; menos otimizado em mobile que ET/MediaPipe"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "d32ed8a1-9788-4601-84c8-122b594c02e8",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Padrões de uso e arquitetura híbrida"
+      },
+      "children": [
+        {
+          "id": "6e0f7db5-3b91-45ad-9c47-dfa8d066732e",
+          "type": "flow_diagram",
+          "position": 0,
+          "data": {
+            "title": "Decisão: on-device vs cloud por task",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "icon": "🔒",
+                "label": "Privacy crítica (medical, legal, PII)",
+                "desc": "→ SEMPRE on-device. Não envie ao cloud, mesmo que perca qualidade"
+              },
+              {
+                "icon": "⚡",
+                "label": "Latência <100ms exigida",
+                "desc": "→ on-device (cloud sempre tem >150ms round-trip)"
+              },
+              {
+                "icon": "📶",
+                "label": "App precisa funcionar offline",
+                "desc": "→ on-device obrigatório"
+              },
+              {
+                "icon": "🧠",
+                "label": "Reasoning multi-step, código, pesquisa longa",
+                "desc": "→ cloud (LLM topo de linha vence SLM em raciocínio)"
+              },
+              {
+                "icon": "💸",
+                "label": "Free tier / sem custo de token",
+                "desc": "→ on-device preferível, fallback cloud para tasks pesadas"
+              },
+              {
+                "icon": "🔄",
+                "label": "Híbrido (best of both)",
+                "desc": "→ Apple Intelligence pattern: SLM local → escala para LLM cloud se necessário"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b07df6a6-1e18-46a6-b81e-5c8223cd3afc",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Limites reais e armadilhas"
+      },
+      "children": [
+        {
+          "id": "24a16b06-b924-4817-9f56-ef7cce77f71a",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Thermal throttling: gerar texto contínuo em mobile aquece. Após 2-5 minutos de uso sustentado, OS reduz freq → tok/s cai 30-50%. Mitigar com batches curtos, streaming, dar respiros."
+          }
+        },
+        {
+          "id": "5e802daa-d6ae-43a6-a5a9-1a8143d83b52",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Memória de KV cache: contexto de 4k tokens em Llama 3.2 3B INT4 já come ~600MB. Em mobile com 8GB RAM, isso pressiona o sistema. Use ctx-size enxuto (1-2k típico) ou KV cache quantizado quando suportado."
+          }
+        },
+        {
+          "id": "1c314529-0df6-4bb1-85c6-efb79839205c",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Bateria: inferência GPU sustentada consome 3-5W. 10 minutos contínuos = 5-8% da bateria. Apps devem usar com parcimônia ou em background com cota."
+          }
+        }
+      ]
+    },
+    {
+      "id": "8a7aeef2-abe2-4009-88d2-efaa81b739f3",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "eca77d38-f7b6-4db2-a9de-34f7824a0146",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Posso usar ExecuTorch e Core ML juntos?",
+            "answer": "Sim — ExecuTorch tem o que delega partes do graph para Core ML/ANE. Combina portabilidade do ExecuTorch com performance Core ML em Apple."
+          }
+        },
+        {
+          "id": "ae4b215f-b505-4cb5-bb60-792b91d92468",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "React Native ou Flutter têm bindings?",
+            "answer": "RN: , . Flutter: , . Funcionam, mas latência via bridge é pior que nativo (Swift/Kotlin)."
+          }
+        },
+        {
+          "id": "d250a8da-b9c6-4d07-988c-c33781cc0986",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Como atualizar modelo sem app update?",
+            "answer": "Apple permite OTA model download via (adapters baixados sob demanda). Em ExecuTorch/MediaPipe, baixe .pte/.task do seu CDN no primeiro launch. Cuidado com tamanho de download (1-2GB) e App Store guidelines."
+          }
+        },
+        {
+          "id": "4c567243-94c8-4384-9ff5-da82bcf1c276",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Modelos com vision (multimodal) em mobile?",
+            "answer": "Sim, viáveis. Phi-3.5-vision-instruct (4B), Gemma 2B vision, Qwen2-VL 2B. Funcionam para OCR, captioning, leitura de documentos. Latência ~3-8s por imagem em flagship. Vision encoders são pesados — quantize-os agressivamente."
+          }
+        }
+      ]
+    },
+    {
+      "id": "1170d939-65b6-49d6-ab66-08b5d1d71061",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Referências"
+      },
+      "children": [
+        {
+          "id": "db4e33b4-ac69-4082-95ce-517abf71c5ef",
+          "type": "key_value",
+          "position": 0,
+          "data": {
+            "items": [
+              {
+                "k": "ExecuTorch",
+                "v": "pytorch.org/executorch — Meta, docs e exemplos LLM"
+              },
+              {
+                "k": "MediaPipe LLM Inference",
+                "v": "developers.google.com/mediapipe/solutions/genai/llm_inference"
+              },
+              {
+                "k": "Apple Foundation Models",
+                "v": "developer.apple.com/documentation/foundationmodels (iOS 26+)"
+              },
+              {
+                "k": "Core ML Tools",
+                "v": "github.com/apple/coremltools"
+              },
+              {
+                "k": "Qualcomm AI Hub",
+                "v": "aihub.qualcomm.com — modelos pré-otimizados para Snapdragon"
+              },
+              {
+                "k": "Phi-3 paper",
+                "v": "Abdin et al., \"Phi-3 Technical Report\", arXiv:2404.14219"
+              },
+              {
+                "k": "Apple Intelligence Foundation",
+                "v": "machinelearning.apple.com/research/introducing-apple-foundation-models"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

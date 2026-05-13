@@ -1,0 +1,533 @@
+{
+  "slug": "llm-apis-producao",
+  "title": null,
+  "blocks": [
+    {
+      "id": "a795605e-683e-4c60-ace2-66c062f640bd",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Chamar "
+          },
+          {
+            "text": "client.messages.create()",
+            "code": true
+          },
+          {
+            "text": " no notebook é fácil. Fazer isso em produção com 100k req/dia, SLOs de latência, custo sob controle e sem romper o banco em deploy ruim — é outra história. Este módulo cobre os padrões que separam protótipo de sistema: streaming, structured output, batch API, prompt caching, retry, rate limit e idempotência. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "409da17f-0184-46e7-8ac7-14ba4bb2ee3d",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Streaming SSE: reduzir percepção de latência"
+      },
+      "children": [
+        {
+          "id": "f60b95b9-23b7-467e-a47a-5d06cdbda8cc",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Server-Sent Events (SSE) é um fluxo HTTP unidirecional onde o servidor manda "
+              },
+              {
+                "text": "data:",
+                "code": true
+              },
+              {
+                "text": "  eventos conforme tokens chegam. Em chat UI, o usuário vê a resposta sendo digitada — percepção de latência despenca. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "2b0aba80-9144-4b4e-b824-c8bbbaa0e96b",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# Streaming com Anthropic SDK\nfrom anthropic import Anthropic\nclient = Anthropic()\n\nwith client.messages.stream(\n    model=\"claude-sonnet-4-6\",\n    max_tokens=1024,\n    messages=[{\"role\": \"user\", \"content\": \"Explique quantum tunneling.\"}],\n) as stream:\n    for text in stream.text_stream:\n        print(text, end=\"\", flush=True)\n    final = stream.get_final_message()\n\n# Passando adiante em FastAPI/Hono como SSE para o browser\nfrom fastapi import FastAPI\nfrom fastapi.responses import StreamingResponse\n\napp = FastAPI()\n\n@app.post(\"/chat\")\nasync def chat(body: dict):\n    async def gen():\n        async with client.messages.stream(\n            model=\"claude-sonnet-4-6\",\n            max_tokens=1024,\n            messages=body[\"messages\"],\n        ) as stream:\n            async for text in stream.text_stream:\n                yield f\"data: {json.dumps({'delta': text})}\\n\\n\"\n            yield \"data: [DONE]\\n\\n\"\n    return StreamingResponse(gen(), media_type=\"text/event-stream\")"
+          }
+        },
+        {
+          "id": "b25a8436-f4b3-4a7c-83e3-27f5d2169809",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Streaming complica retry: você já entregou parte da resposta quando o stream quebra. Estratégia comum é abortar e reiniciar no cliente (mostrar \"tentando novamente\"), ou persistir o request_id e reenviar do zero em 5xx no primeiro chunk. Em meio de stream, raramente vale retry."
+          }
+        }
+      ]
+    },
+    {
+      "id": "7085699f-c648-46e4-8360-c3936d370ea9",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Structured output: JSON schema no sampler"
+      },
+      "children": [
+        {
+          "id": "d8e76989-c4cd-4fca-9595-5c821cf3ce84",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Em vez de pedir JSON por prompt e torcer, passe o schema para o provider. O decoder aplica gramática (constrained sampling) — a saída é garantidamente válida. Fim do parse com try/except. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "3c1407a6-d340-4ce9-8b57-d9ba65a15126",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# OpenAI Structured Outputs com Pydantic\nfrom openai import OpenAI\nfrom pydantic import BaseModel\nfrom typing import Literal\n\nclient = OpenAI()\n\nclass Extract(BaseModel):\n    customer_name: str\n    sentiment: Literal[\"positive\", \"neutral\", \"negative\"]\n    urgency: int   # 1-5\n    categories: list[str]\n\nresp = client.responses.parse(\n    model=\"gpt-5\",\n    input=[\n        {\"role\": \"system\", \"content\": \"Extraia dados estruturados do ticket.\"},\n        {\"role\": \"user\",   \"content\": ticket_text},\n    ],\n    text_format=Extract,\n)\nextracted: Extract = resp.output_parsed     # tipado, válido\n\n# Anthropic: usar tool_use como mecanismo (pattern comum)\nschema = {\n    \"name\": \"extract_ticket\",\n    \"description\": \"Extrai dados estruturados do ticket.\",\n    \"input_schema\": Extract.model_json_schema(),\n}\nr = client.messages.create(\n    model=\"claude-sonnet-4-6\",\n    max_tokens=500,\n    tools=[schema],\n    tool_choice={\"type\": \"tool\", \"name\": \"extract_ticket\"},   # força uso\n    messages=[{\"role\": \"user\", \"content\": ticket_text}],\n)\nparsed = next(b for b in r.content if b.type == \"tool_use\").input"
+          }
+        },
+        {
+          "id": "f20ff351-d1ee-4d8e-816b-8579e5c4dcb1",
+          "type": "decision_box",
+          "position": 2,
+          "data": {
+            "scenario": "Extrair dados estruturados de texto em pipeline ETL",
+            "winner": "Structured output com schema (tool_use ou responses.parse)",
+            "why": "Garantia de validade elimina camada de retry/parse defensivo. Código downstream assume tipos corretos. Reduz bugs invisíveis em dados.",
+            "alternatives": [
+              {
+                "name": "JSON in prompt + try/except",
+                "note": "funciona mas 1-5% quebra; custo de debug acumula"
+              },
+              {
+                "name": "Function calling \"livre\"",
+                "note": "ok se a API aceita mas structured output é mais direto"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "7815b519-7f90-4115-8c02-84f45c2deeb3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Batch API: 50% off em jobs offline"
+      },
+      "children": [
+        {
+          "id": "6460fb29-087f-4bd3-8248-b2779e896cc4",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Anthropic, OpenAI e Google têm Batch API: você envia JSONL com N requests, recebe JSONL com N responses em até 24h (tipicamente minutos). Preço de input/output: 50% do normal. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "254a1b66-97a6-4215-bcd2-889fc84a7c10",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# Anthropic Batch API (Message Batches)\nfrom anthropic import Anthropic\nclient = Anthropic()\n\nbatch = client.messages.batches.create(\n    requests=[\n        {\n            \"custom_id\": f\"item-{i}\",\n            \"params\": {\n                \"model\": \"claude-sonnet-4-6\",\n                \"max_tokens\": 512,\n                \"messages\": [{\"role\": \"user\", \"content\": prompt}],\n            },\n        }\n        for i, prompt in enumerate(prompts)      # pode ter 10k+ itens\n    ],\n)\n\n# Poll até terminar\nimport time\nwhile True:\n    status = client.messages.batches.retrieve(batch.id)\n    if status.processing_status in (\"ended\", \"failed\", \"canceled\"):\n        break\n    time.sleep(30)\n\n# Ler resultados (JSONL streamed)\nfor line in client.messages.batches.results(batch.id):\n    if line.result.type == \"succeeded\":\n        save_result(line.custom_id, line.result.message)"
+          }
+        },
+        {
+          "id": "d1a2f615-e620-4134-83e8-a40794e4ca44",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Caso",
+              "Batch",
+              "Synchronous"
+            ],
+            "rows": [
+              [
+                "Eval harness (golden set de 1k)",
+                "✓ — desconto compensa",
+                "ok para dev"
+              ],
+              [
+                "Reembedding de 10M chunks",
+                "✓ — economia enorme",
+                "× custo x2"
+              ],
+              [
+                "Enriquecimento noturno de dados",
+                "✓",
+                "×"
+              ],
+              [
+                "Resposta em UI",
+                "×",
+                "✓ (streaming)"
+              ],
+              [
+                "Pipeline event-driven em tempo real",
+                "×",
+                "✓"
+              ],
+              [
+                "Score de risco por request",
+                "×",
+                "✓"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "012c4754-9909-49cc-b1f3-c6711d9816d7",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Prompt caching em APIs (revisão rápida)"
+      },
+      "children": [
+        {
+          "id": "8b3ef747-cd82-4fd7-a2dd-a442a205a236",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Coberto em detalhe no módulo de context engineering. O resumo operacional para APIs: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "3d512e51-4049-4f11-864b-74fa0f5d7c97",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "items": [
+              "Anthropic: marque blocos com ; write 125% / read 10%.",
+              "OpenAI: automático para prefixos repetidos ≥1024 tokens; read ~50%.",
+              "Google Gemini: cachedContent API explícita; read ~25% + taxa de storage.",
+              "TTL típico: ~5min. Volume baixo + janelas esparsas perdem o benefício."
+            ],
+            "ordered": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "69333e67-3dff-4e41-b4cc-0b8764adadeb",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Retry, backoff e jitter"
+      },
+      "children": [
+        {
+          "id": "55ab8a8b-9f32-4476-abc5-ca0aabf3259c",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "# Retry robusto com tenacity\nfrom tenacity import retry, stop_after_attempt, wait_exponential_jitter, retry_if_exception_type\nfrom anthropic import APIStatusError, APITimeoutError, RateLimitError\n\n@retry(\n    stop=stop_after_attempt(5),\n    wait=wait_exponential_jitter(initial=1, max=30, jitter=2),\n    retry=retry_if_exception_type((APITimeoutError, RateLimitError, APIStatusError)),\n    reraise=True,\n)\ndef llm_call(messages, **kwargs):\n    try:\n        return client.messages.create(messages=messages, **kwargs)\n    except APIStatusError as e:\n        # Retry só em 5xx e 429; 4xx persistente não resolve\n        if e.status_code < 500 and e.status_code != 429:\n            raise StopRetry() from e\n        raise"
+          }
+        },
+        {
+          "id": "41e2ef43-0b79-48f5-ab43-ecd8faf24634",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Status",
+              "Retry?",
+              "Por que"
+            ],
+            "rows": [
+              [
+                "408 Request Timeout",
+                "Sim, backoff",
+                "Servidor estourou tempo — pode passar em nova tentativa"
+              ],
+              [
+                "429 Too Many Requests",
+                "Sim, respeitar retry-after",
+                "Rate limit ou quota"
+              ],
+              [
+                "500 Internal Server Error",
+                "Sim, backoff",
+                "Erro transiente do provider"
+              ],
+              [
+                "502/503/504 Gateway",
+                "Sim, backoff",
+                "Upstream transiente"
+              ],
+              [
+                "400 Bad Request",
+                "Não",
+                "Seu request está inválido — retry não corrige"
+              ],
+              [
+                "401 Unauthorized",
+                "Não",
+                "Token inválido/expirado — gere novo fora do retry"
+              ],
+              [
+                "403 Forbidden",
+                "Não",
+                "Permission; abra ticket"
+              ],
+              [
+                "404 Not Found",
+                "Não",
+                "Recurso inexistente"
+              ],
+              [
+                "Connect timeout",
+                "Sim, backoff",
+                "Rede — pode passar"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "8cd71d7c-7c53-4fe8-ba8d-a1165027f079",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Rate limits e backpressure"
+      },
+      "children": [
+        {
+          "id": "75259ee7-71e3-49d4-a20e-9a632a7bf264",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Providers têm limits por minuto (RPM) e por tokens/min (TPM). Ultrapassar → 429. Em volume, você precisa de um gateway/cliente que: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "11d69d61-5a0e-40f9-9571-93d2ca0db2f1",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "items": [
+              "Estime tokens antes de enviar (tiktoken, @anthropic-ai/tokenizer).",
+              "Use token bucket local para não estourar RPM/TPM.",
+              "Aplique backpressure: quando cheio, responda 429 ou enfileire com queue (SQS, Redis).",
+              "Priorize queries críticas (UI) sobre jobs (batch/analytics) — separe por API key se possível."
+            ],
+            "ordered": false
+          }
+        },
+        {
+          "id": "0a44d887-1ace-4ee3-93c0-3d6881f46aac",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "typescript",
+            "code": "// Token bucket simples (RPM=60) para não bater 429 no provider\nclass TokenBucket {\n  private tokens: number;\n  private last: number;\n  constructor(private rate: number, private capacity: number) {\n    this.tokens = capacity;\n    this.last = Date.now();\n  }\n  async acquire(n = 1): Promise<void> {\n    while (true) {\n      this.refill();\n      if (this.tokens >= n) { this.tokens -= n; return; }\n      const need = (n - this.tokens) / this.rate;\n      await new Promise(r => setTimeout(r, need * 1000));\n    }\n  }\n  private refill() {\n    const now = Date.now();\n    const add = ((now - this.last) / 1000) * this.rate;\n    this.tokens = Math.min(this.capacity, this.tokens + add);\n    this.last = now;\n  }\n}\n\nconst bucket = new TokenBucket(60 / 60, 60);  // 60 RPM\nawait bucket.acquire();\nconst r = await client.messages.create(...);"
+          }
+        }
+      ]
+    },
+    {
+      "id": "c6109e7b-a463-4cb4-bf6c-7acfdba98852",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Idempotência e deduplicação"
+      },
+      "children": [
+        {
+          "id": "0e3bbd7c-23d5-448c-ba9d-c17d15d098be",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Retry depois de resposta perdida é comum (proxy errou, timeout na última milha). Sem idempotency key, você cobra duas vezes o cliente. LLM APIs usam "
+              },
+              {
+                "text": "anthropic-idempotency-key",
+                "code": true
+              },
+              {
+                "text": " (Anthropic), "
+              },
+              {
+                "text": "idempotency-key",
+                "code": true
+              },
+              {
+                "text": " (OpenAI) — UUID v4 por request lógico, reutilizado em retries. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "a25c8802-4492-49b8-8ac0-2f919e491e9e",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "import uuid\nfrom anthropic import Anthropic\nclient = Anthropic()\n\ndef generate_for_request(request_id: str, prompt: str):\n    # idempotency_key estável → provider dedupe no seu lado\n    r = client.messages.create(\n        model=\"claude-sonnet-4-6\",\n        max_tokens=1024,\n        messages=[{\"role\": \"user\", \"content\": prompt}],\n        extra_headers={\"anthropic-idempotency-key\": request_id},\n    )\n    return r\n\n# Em jobs async: persista (request_id, response) no seu lado.\n# Antes de chamar LLM, consulte cache; só chama se não tiver."
+          }
+        }
+      ]
+    },
+    {
+      "id": "3624d59d-e930-4d4b-8a6d-a72a19d4a1fa",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Observability mínima para LLM API"
+      },
+      "children": [
+        {
+          "id": "76b911a8-b917-4b95-841e-a16ac9de90b9",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Métrica",
+              "Por que logar",
+              "Onde"
+            ],
+            "rows": [
+              [
+                "input_tokens / output_tokens",
+                "Custo e anomalias de tamanho",
+                "Por request, agregado por endpoint"
+              ],
+              [
+                "model",
+                "Drift de versão silencioso",
+                "Alert se mudar sem release"
+              ],
+              [
+                "ttft (time to first token)",
+                "UX streaming",
+                "Em UI, p50/p95"
+              ],
+              [
+                "latency_total",
+                "SLO",
+                "p50/p95/p99 por endpoint"
+              ],
+              [
+                "stop_reason",
+                "Detectar truncation (max_tokens)",
+                "Alert se taxa &gt; 5%"
+              ],
+              [
+                "cache_read / cache_write",
+                "Efetividade do prompt caching",
+                "Calcular hit ratio"
+              ],
+              [
+                "finish_reason = \"content_filter\"",
+                "Violação de policy",
+                "Investigar casos"
+              ],
+              [
+                "retry_count",
+                "Saúde do provider",
+                "Alert se subir persistente"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "40701ec0-7172-4220-bc26-cf99d50d27c0",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Ferramentas prontas: Langfuse, LangSmith, Phoenix (Arize), Helicone. Todas instrumentam LLM calls com tags, traces e dashboards. Se preferir rolar no OpenTelemetry, use as semantic conventions para — padronização recente (2025)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "f49094cb-095d-473a-9dc6-a616d0269437",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Perguntas típicas"
+      },
+      "children": [
+        {
+          "id": "276636eb-3e44-4522-94a3-4ee9900836f9",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Como escolher entre streaming e non-streaming em um endpoint?",
+            "answer": "Pela UX e pelo consumo. Chat UI, assistente, geração longa → streaming (melhor TTFT). Extração estruturada, classificação curta, job async → non-streaming (simplifica parse e retry). Regra: se usuário está olhando, streaming; se é pipeline, não."
+          }
+        },
+        {
+          "id": "3aa6f88d-bb6f-4a08-976f-dacea38537fb",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Posso misturar providers no mesmo app?",
+            "answer": "Pode e é recomendado para resiliência. Padrão: abstrair atrás de uma interface (\"generate(messages)\") e fallback entre Anthropic/OpenAI/Google. Cuidado com diferenças de tool schema e prompt caching — cada provider tem particularidades. LiteLLM, OpenRouter, Portkey são gateways que ajudam."
+          }
+        },
+        {
+          "id": "26cc6a04-d355-4a66-b6a7-6ffbae86a083",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Preciso mesmo de structured output, ou JSON mode basta?",
+            "answer": "Structured output com schema é mais forte que JSON mode. JSON mode garante JSON válido, mas não garante o schema (campos, tipos). Structured output força ambos. Para extração séria, sempre vá no schema explícito."
+          }
+        },
+        {
+          "id": "99056333-279c-4cfc-a6c9-ef9e8a078c37",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Batch API é sempre mais barato?",
+            "answer": "É ~50% off, mas SLA é até 24h. Se seu job pode aceitar delay, sempre use. Se precisar em minutos consistentes (ex: onboarding de clientes), synchronous com rate-limit controlado pode ser o certo. Não misture — job crítico em batch vira incident quando demora mais que o esperado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "ba2c474a-c0ad-4762-b423-fce62aa9c4f9",
+      "type": "callout",
+      "position": 10,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Take-aways. Streaming reduz percepção de latência em UIs. Structured output com schema elimina retry de parse. Batch API dá 50% off em jobs offline. Prompt caching corta custo em agents repetitivos. Retry: exponential backoff + jitter, respeite retry-after, não retry em 4xx. Rate limit é seu problema — token bucket no cliente evita 429. Idempotency key é obrigatório em endpoints que criam estado. Observability (tokens, latência, stop_reason, cache ratio) é a base. Próximo: LLMOps — como operar tudo isso em produção com eval, drift, canary."
+      }
+    }
+  ]
+}

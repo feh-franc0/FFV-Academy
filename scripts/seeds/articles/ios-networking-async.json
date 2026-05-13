@@ -1,0 +1,150 @@
+{
+  "slug": "ios-networking-async",
+  "title": null,
+  "blocks": [
+    {
+      "id": "ec1116b1-1f2b-4b92-ab0c-f4c6ea674fa5",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Padrão base 2026: URLSession + async/await + Codable"
+      },
+      "children": [
+        {
+          "id": "f146333a-a946-4d6f-9489-73f9a277281c",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "swift",
+            "code": "struct User: Codable, Identifiable, Sendable {\n    let id: UUID\n    let name: String\n    let email: String\n}\n\nenum APIError: Error {\n    case badStatus(Int)\n    case decoding(Error)\n    case network(Error)\n}\n\nactor APIClient {\n    private let base = URL(string: \"https://api.exemplo.com\")!\n    private let session: URLSession\n    private let decoder: JSONDecoder\n\n    init() {\n        let cfg = URLSessionConfiguration.default\n        cfg.timeoutIntervalForRequest = 15\n        cfg.waitsForConnectivity = true\n        self.session = URLSession(configuration: cfg)\n        let d = JSONDecoder()\n        d.keyDecodingStrategy = .convertFromSnakeCase\n        d.dateDecodingStrategy = .iso8601\n        self.decoder = d\n    }\n\n    func user(id: UUID) async throws -> User {\n        let url = base.appending(path: \"users/\\(id.uuidString)\")\n        let (data, resp) = try await session.data(from: url)\n        guard let http = resp as? HTTPURLResponse, 200..<300 ~= http.statusCode else {\n            throw APIError.badStatus((resp as? HTTPURLResponse)?.statusCode ?? -1)\n        }\n        do { return try decoder.decode(User.self, from: data) }\n        catch { throw APIError.decoding(error) }\n    }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "5042661d-829d-46fa-98fd-70af6149bb66",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Request builder tipado"
+      },
+      "children": [
+        {
+          "id": "9c50577f-b0e4-4044-ba65-610932cffdbc",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "swift",
+            "code": "struct Endpoint<Response: Decodable & Sendable>: Sendable {\n    let path: String\n    let method: String\n    let body: Data?\n}\n\nextension Endpoint where Response == User {\n    static func user(id: UUID) -> Self {\n        .init(path: \"users/\\(id.uuidString)\", method: \"GET\", detail: nil)\n    }\n}\n\nextension APIClient {\n    func send<R>(_ ep: Endpoint<R>) async throws -> R {\n        var req = URLRequest(url: base.appending(path: ep.path))\n        req.httpMethod = ep.method\n        req.httpBody = ep.body\n        req.setValue(\"application/json\", forHTTPHeaderField: \"Content-Type\")\n        let (data, resp) = try await session.data(for: req)\n        try validate(resp)\n        return try decoder.decode(R.self, from: data)\n    }\n    private func validate(_ resp: URLResponse) throws {\n        guard let http = resp as? HTTPURLResponse, 200..<300 ~= http.statusCode else {\n            throw APIError.badStatus((resp as? HTTPURLResponse)?.statusCode ?? -1)\n        }\n    }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "178c7192-5c6f-45b6-997a-6174ce6d0bae",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Retry com backoff exponencial"
+      },
+      "children": [
+        {
+          "id": "afa34838-3c67-446e-89bf-908c2bb89edc",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "swift",
+            "code": "func retrying<T>(_ op: () async throws -> T, attempts: Int = 3) async throws -> T {\n    var lastError: Error?\n    for attempt in 0..<attempts {\n        do { return try await op() }\n        catch {\n            lastError = error\n            let delay = UInt64(pow(2.0, Double(attempt))) * 500_000_000   // 0.5s, 1s, 2s\n            try await Task.sleep(nanoseconds: delay)\n        }\n    }\n    throw lastError ?? APIError.badStatus(-1)\n}\n\n// Uso:\nlet u = try await retrying { try await api.user(id: userId) }"
+          }
+        }
+      ]
+    },
+    {
+      "id": "41fc2c4e-d03f-4a65-8a15-e9091b4cd308",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Certificate pinning (SPKI)"
+      },
+      "children": [
+        {
+          "id": "6dc7f457-8aed-4427-ae14-4bb7b28061db",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "swift",
+            "code": "final class PinnedSessionDelegate: NSObject, URLSessionDelegate {\n    let pinnedHashes: Set<String>   // base64 dos SPKI sha256\n\n    init(hashes: Set<String>) { self.pinnedHashes = hashes }\n\n    func urlSession(_ session: URLSession,\n                    didReceive challenge: URLAuthenticationChallenge,\n                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {\n        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,\n              let trust = challenge.protectionSpace.serverTrust else {\n            return completionHandler(.cancelAuthenticationChallenge, nil)\n        }\n        // Extrair SPKI, hashear e comparar com pinnedHashes.\n        // Se bater: completionHandler(.useCredential, URLCredential(trust: trust))\n        // Caso contrario: cancelAuthenticationChallenge\n        completionHandler(.performDefaultHandling, nil)\n    }\n}"
+          }
+        },
+        {
+          "id": "a8d0186a-295c-45d4-bb6b-0423a2405155",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Sempre embarque pelo menos dois pins (atual + next) e tenha mecanismo remoto para desabilitar pinning se algo catastrófico acontecer. Pin quebrado em produção = app morto até update na App Store (dias de review)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "2e3ec902-09fa-4ff8-a043-508b614bf245",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Background downloads"
+      },
+      "children": [
+        {
+          "id": "cc9faab8-745c-4e3d-a642-22014a0115bb",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "swift",
+            "code": "final class UploadService: NSObject {\n    private lazy var session: URLSession = {\n        let cfg = URLSessionConfiguration.background(withIdentifier: \"com.ffv.bg.upload\")\n        cfg.isDiscretionary = false\n        cfg.sessionSendsLaunchEvents = true\n        return URLSession(configuration: cfg, delegate: self, delegateQueue: nil)\n    }()\n\n    func upload(_ fileURL: URL, to target: URL) {\n        var req = URLRequest(url: target)\n        req.httpMethod = \"POST\"\n        let task = session.uploadTask(with: req, fromFile: fileURL)\n        task.resume()\n    }\n}\nextension UploadService: URLSessionTaskDelegate {\n    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {\n        // gravar resultado; app pode ter sido relaunched\n    }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "005eb204-ac1e-48a9-87e9-558ecdaae97a",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "WebSocket nativo"
+      },
+      "children": [
+        {
+          "id": "026dc3e1-232c-4acc-bf0c-f2e29cdd5fd8",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "swift",
+            "code": "let task = URLSession.shared.webSocketTask(with: URL(string: \"wss://ws.exemplo.com/feed\")!)\ntask.resume()\n\nTask {\n    while task.state == .running {\n        let msg = try await task.receive()\n        switch msg {\n        case .string(let text): print(text)\n        case .data(let bin):    print(bin.count)\n        @unknown default:       break\n        }\n    }\n}\n\ntry await task.send(.string(\"ping\"))"
+          }
+        }
+      ]
+    },
+    {
+      "id": "18a2b5e2-81fe-42cc-82a4-e29b54628f5e",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Observabilidade"
+      },
+      "children": [
+        {
+          "id": "43a5331b-4b11-4ae0-821c-7ae9fe171c5c",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Instrumente com os_log / Logger (nativo, baixo custo) e exporte métricas via MetricKit. Para traces distribuídos com o backend, use OpenTelemetry-Swift e propague traceparent em todo request. Nunca logar headers de Authorization nem body de endpoint sensível."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,136 @@
+{
+  "slug": "kafka-streams-ksqldb",
+  "title": null,
+  "blocks": [
+    {
+      "id": "f4c2c20b-882b-4811-aa1f-32cfea69594a",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Stream processing como library, não cluster"
+      },
+      "children": [
+        {
+          "id": "145d3a17-33cc-4b54-834f-9d3bd340725b",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Kafka Streams é uma library Java/Scala que roda dentro do seu microserviço. Sem JobManager, sem cluster separado. Escala por partition do input topic: mais instâncias = mais tasks. State local com RocksDB, backed por changelog topic para recovery. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "e1ad8f44-e688-469b-898e-efe9c723c6c3",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Topologia típica: KStream + join + agregação por janela"
+      },
+      "children": [
+        {
+          "id": "a4f946ca-674b-43b4-9b2a-4c7421317b17",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "java",
+            "code": "StreamsBuilder b = new StreamsBuilder();\n\nKStream<String, OrderEvent> orders = b.stream(\"orders\",\n  Consumed.with(Serdes.String(), orderSerde));\n\nKTable<String, Customer> customers = b.table(\"customers\",\n  Consumed.with(Serdes.String(), customerSerde));\n\nKStream<String, EnrichedOrder> enriched = orders\n  .join(customers,\n        (order, customer) -> new EnrichedOrder(order, customer),\n        Joined.with(Serdes.String(), orderSerde, customerSerde));\n\nKTable<Windowed<String>, Long> ordersPer5min = enriched\n  .groupBy((k, v) -> v.getCustomer().getRegion(),\n           Grouped.with(Serdes.String(), enrichedSerde))\n  .windowedBy(TimeWindows.ofSizeAndGrace(Duration.ofMinutes(5), Duration.ofMinutes(1)))\n  .count(Materialized.as(\"orders-per-region-5min\"));\n\nordersPer5min.toStream().to(\"orders.agg.5min\",\n  Produced.with(WindowedSerdes.timeWindowedSerdeFrom(String.class), Serdes.Long()));\n\nKafkaStreams app = new KafkaStreams(b.build(), props);\napp.start();"
+          }
+        }
+      ]
+    },
+    {
+      "id": "e4492ffa-b1e0-49d8-b114-7b51593dd601",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "State store + interactive queries"
+      },
+      "children": [
+        {
+          "id": "847dc7a2-0e10-4c59-b90d-62ca8157e9d4",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Materialized.as cria um state store consultável de dentro da aplicação (interactive queries). Útil para expor agregações via HTTP sem ir até o broker. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "dc99c069-8cf8-4625-8fb0-5dc00cba5381",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "java",
+            "code": "ReadOnlyWindowStore<String, Long> store = app.store(\n  StoreQueryParameters.fromNameAndType(\n    \"orders-per-region-5min\",\n    QueryableStoreTypes.windowStore()));\n\nInstant from = Instant.now().minus(Duration.ofHours(1));\nInstant to   = Instant.now();\ntry (WindowStoreIterator<Long> it = store.fetch(\"SP\", from, to)) {\n  while (it.hasNext()) {\n    KeyValue<Long, Long> kv = it.next();\n    log.info(\"window {} = {}\", Instant.ofEpochMilli(kv.key), kv.value);\n  }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "fc936d87-b66f-49f9-b388-074d9aa92a2c",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "ksqlDB: SQL sobre streams"
+      },
+      "children": [
+        {
+          "id": "2b716c28-ec7f-45d0-9949-b0b03c6a57b6",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "sql",
+            "code": "CREATE STREAM orders (order_id STRING KEY, user_id STRING, total_cents BIGINT, ts BIGINT)\n  WITH (KAFKA_TOPIC='orders', VALUE_FORMAT='AVRO', TIMESTAMP='ts');\n\nCREATE TABLE customers (user_id STRING PRIMARY KEY, region STRING, tier STRING)\n  WITH (KAFKA_TOPIC='customers', VALUE_FORMAT='AVRO');\n\nCREATE STREAM enriched_orders AS\n  SELECT o.order_id, o.user_id, c.region, c.tier, o.total_cents\n  FROM orders o\n  LEFT JOIN customers c ON o.user_id = c.user_id\n  EMIT CHANGES;\n\nCREATE TABLE revenue_5min AS\n  SELECT region, WINDOWSTART AS window_start, SUM(total_cents) AS total\n  FROM enriched_orders\n  WINDOW TUMBLING (SIZE 5 MINUTES, GRACE PERIOD 1 MINUTE)\n  GROUP BY region EMIT CHANGES;"
+          }
+        },
+        {
+          "id": "076953c8-f33c-4e3f-818c-066644038e1b",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "ksqlDB é stream processing sem código Java. Ótimo para data engineers e exploração rápida; internamente gera topologias Kafka Streams."
+          }
+        }
+      ]
+    },
+    {
+      "id": "7061ed8e-63af-461a-b183-cb65bdc3a354",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Streams vs Flink vs Spark Streaming"
+      },
+      "children": [
+        {
+          "id": "0b6e5d74-8fc2-464d-a94c-c0700a9c6c7f",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "Kafka Streams:\n  - library JVM, roda no seu app\n  - scaling por partition, zero cluster extra\n  - EOS v2 nativo\nFlink:\n  - plataforma completa, JobManager/TaskManager\n  - CEP (complex event processing), SQL rico\n  - conectores amplos (S3, JDBC, Kinesis)\n  - melhor para workloads pesadas e multi-tenant\nSpark Streaming (Structured):\n  - micro-batches, latência 100ms+\n  - ótimo se já tem Spark para batch e quer unificar"
+          }
+        },
+        {
+          "id": "e80555dc-86a9-48d8-ae48-8ab4257b7dc2",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Default pragmático: Streams para microservices que já são owners do stream. Flink quando o pipeline é plataforma compartilhada. Spark quando analytics manda."
+          }
+        }
+      ]
+    }
+  ]
+}

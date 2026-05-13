@@ -1,0 +1,601 @@
+{
+  "slug": "rlhf-fundamentos-ppo",
+  "title": null,
+  "blocks": [
+    {
+      "id": "84344163-4c74-4cbf-a5bd-6b70bf016243",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " RLHF (Reinforcement Learning from Human Feedback) é a técnica que transformou o GPT-3 em ChatGPT — e também o algoritmo mais incompreendido do alinhamento. Não é \"treinar com feedback humano\" de forma difusa: é uma pipeline RL específica com três etapas (SFT, reward model, PPO), uma loss matemática precisa e um conjunto de patologias bem documentadas. Este módulo entra na matemática de cada componente, com referências aos papers originais. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "49bf493d-4505-4692-80ec-0c45f8190224",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "A pipeline de três estágios"
+      },
+      "children": [
+        {
+          "id": "f54ad083-f267-4f6b-a224-73bee583ce10",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " O InstructGPT (Ouyang et al., NeurIPS 2022) cristalizou o pipeline canônico que ainda governa GPT-4, Claude, Llama-Instruct e Gemini em 2026 (com variações). Cada etapa tem um objetivo matemático distinto: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "28cdc209-d640-4d49-895d-caa673fd387d",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Pipeline RLHF (InstructGPT, 2022)",
+            "orientation": "horizontal",
+            "steps": [
+              {
+                "icon": "🧱",
+                "label": "Pre-train",
+                "desc": "LLM base via next-token prediction (não tocado)"
+              },
+              {
+                "icon": "✍️",
+                "label": "SFT",
+                "desc": "~13k demos humanas, cross-entropy loss"
+              },
+              {
+                "icon": "⚖️",
+                "label": "Reward Model",
+                "desc": "~33k preferências pareadas, Bradley-Terry loss"
+              },
+              {
+                "icon": "🎯",
+                "label": "PPO",
+                "desc": "Policy gradient + KL penalty contra SFT"
+              }
+            ]
+          }
+        },
+        {
+          "id": "67530978-57d8-4531-8583-d66989b53ad5",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "O modelo SFT serve duplo papel: (1) ponto de partida para a policy do PPO (π_θ ← π_SFT) e (2) referência fixa π_ref usada na KL penalty. É a âncora de distribuição."
+          }
+        }
+      ]
+    },
+    {
+      "id": "4530db20-4cef-4c8b-b785-eea1ad293269",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Stage 2 — Reward Model: aprendendo preferências"
+      },
+      "children": [
+        {
+          "id": "d12b2b15-af4e-44d7-ba34-e0ee8b759524",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " O reward model é um classificador escalar: dado (prompt, response), retorna r ∈ ℝ. É treinado via comparações pareadas usando a loss Bradley-Terry — modelagem clássica de preferências (Bradley & Terry, Biometrika 1952) adaptada para LLMs por Christiano et al. 2017 (\"Deep RL from Human Preferences\", NeurIPS): "
+              }
+            ]
+          }
+        },
+        {
+          "id": "36374e8b-8915-4004-8c61-db5fbf6f9c10",
+          "type": "annotated_formula",
+          "position": 1,
+          "data": {
+            "title": "Reward Model Loss (Bradley-Terry pareada)",
+            "formula": "L_RM = -E[log σ(r_θ(x, y_w) - r_θ(x, y_l))]",
+            "parts": [
+              {
+                "text": "σ",
+                "annotation": "sigmoid"
+              },
+              {
+                "text": "r_θ",
+                "annotation": "reward model (LLM com cabeça escalar)",
+                "highlight": true
+              },
+              {
+                "text": "y_w",
+                "annotation": "winner (resposta preferida)"
+              },
+              {
+                "text": "y_l",
+                "annotation": "loser (resposta rejeitada)"
+              },
+              {
+                "text": "x",
+                "annotation": "prompt comum"
+              }
+            ]
+          }
+        },
+        {
+          "id": "a60ce4b0-39e5-4ea2-9d9f-6b9a47d35a77",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "O reward model é tipicamente inicializado a partir do SFT (mesma arquitetura, mesmos pesos) com a cabeça LM substituída por uma cabeça linear → ℝ. Para Claude e GPT-4, RMs têm tamanho comparável ao modelo policy. Tamanho do RM importa: RMs pequenos são fáceis de hackear."
+          }
+        },
+        {
+          "id": "963c996d-381b-43be-b996-486489dbfcc4",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "python",
+            "code": "# Pseudocódigo do RM training (TRL HuggingFace style)\nimport torch\nimport torch.nn.functional as F\n\ndef reward_loss(model, batch):\n    # batch contém pares (chosen, rejected) com mesmo prompt\n    rewards_chosen = model(batch[\"input_ids_chosen\"]).logits  # [B, 1]\n    rewards_rejected = model(batch[\"input_ids_rejected\"]).logits  # [B, 1]\n\n    # Bradley-Terry pareada\n    loss = -F.logsigmoid(rewards_chosen - rewards_rejected).mean()\n\n    # Margem de loss accuracy (diagnóstico, não otimizado)\n    accuracy = (rewards_chosen > rewards_rejected).float().mean()\n    return loss, accuracy",
+            "filename": "train_reward_model.py"
+          }
+        }
+      ]
+    },
+    {
+      "id": "ee820adf-4538-4b34-84d2-5c72eff84397",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Stage 3 — PPO: a loss completa"
+      },
+      "children": [
+        {
+          "id": "7f77e69d-332a-4f2b-96d5-b73e14b19863",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " PPO foi proposto por Schulman et al. 2017 (\"Proximal Policy Optimization Algorithms\", "
+              },
+              {
+                "text": "arxiv.org/abs/1707.06347",
+                "code": true
+              },
+              {
+                "text": ") para resolver um problema do TRPO: cálculo custoso da trust region via problema quadrático com restrição. PPO substitui a restrição por um clipping na função objetivo — first-order, sem Hessiana, otimizável com Adam. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "9f3ae379-cda7-4864-9275-a455baf4ac28",
+          "type": "annotated_formula",
+          "position": 1,
+          "data": {
+            "title": "PPO Clipped Objective (per-token)",
+            "formula": "L^CLIP(θ) = E_t[ min(r_t(θ)·A_t, clip(r_t(θ), 1-ε, 1+ε)·A_t) ]",
+            "parts": [
+              {
+                "text": "r_t(θ)",
+                "annotation": "π_θ(a_t|s_t) / π_θ_old(a_t|s_t) — ratio",
+                "highlight": true
+              },
+              {
+                "text": "A_t",
+                "annotation": "advantage estimado via GAE"
+              },
+              {
+                "text": "ε",
+                "annotation": "clipping range, tipicamente 0.2"
+              },
+              {
+                "text": "min",
+                "annotation": "lower bound pessimista"
+              }
+            ]
+          }
+        },
+        {
+          "id": "cd70d5d9-72ba-4a08-949c-4d979c967122",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": " Em RLHF, a loss total combina o objective PPO com a KL penalty contra a referência SFT e um value function loss para o critic: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "a8e9afd5-5a85-4a80-bcd5-143e58af96a7",
+          "type": "annotated_formula",
+          "position": 3,
+          "data": {
+            "title": "RLHF PPO Loss Completa",
+            "formula": "L = L^CLIP − c_1·L^VF + c_2·H[π_θ] − β·KL(π_θ || π_ref)",
+            "parts": [
+              {
+                "text": "L^CLIP",
+                "annotation": "policy objective (acima)"
+              },
+              {
+                "text": "L^VF",
+                "annotation": "MSE do value head: (V_θ - V_target)²"
+              },
+              {
+                "text": "H[π_θ]",
+                "annotation": "entropy bonus (exploração)"
+              },
+              {
+                "text": "β·KL",
+                "annotation": "KL penalty anti-Goodhart",
+                "highlight": true
+              },
+              {
+                "text": "π_ref",
+                "annotation": "modelo SFT congelado"
+              }
+            ]
+          }
+        },
+        {
+          "id": "030f63f2-8609-4dde-b06e-7ed760071cf6",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "O β da KL penalty é o hiperparâmetro mais sensível do RLHF. β baixo (0.001) → policy se afasta muito, reward hacking. β alto (0.5) → policy mal sai do SFT, ganho marginal. InstructGPT usou β=0.02. Implementações modernas usam adaptive KL controller (Ziegler et al. 2019)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "ef0776d3-0562-45ca-b403-14f248e32427",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Implementação prática: TRL e DeepSpeed-Chat"
+      },
+      "children": [
+        {
+          "id": "c844cb2e-8180-4bea-bef3-53e5d65c09fd",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Em 2026 as duas referências open-source são "
+              },
+              {
+                "text": "trl",
+                "code": true
+              },
+              {
+                "text": " da HuggingFace ("
+              },
+              {
+                "text": "github.com/huggingface/trl",
+                "code": true
+              },
+              {
+                "text": ") e DeepSpeed-Chat da Microsoft. Ambas implementam PPO + KL adaptativo + value head sobre transformers. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "ecd9e80f-08ef-48c2-b745-44cf8b6db8cd",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead\nfrom transformers import AutoTokenizer\nimport torch\n\n# Modelo policy com value head adicionada\npolicy = AutoModelForCausalLMWithValueHead.from_pretrained(\"sft-model\")\nref_model = AutoModelForCausalLMWithValueHead.from_pretrained(\"sft-model\")  # frozen\nreward_model = AutoModelForSequenceClassification.from_pretrained(\"reward-model\")\ntokenizer = AutoTokenizer.from_pretrained(\"sft-model\")\n\nconfig = PPOConfig(\n    model_name=\"sft-model\",\n    learning_rate=1e-5,\n    batch_size=128,\n    mini_batch_size=4,\n    ppo_epochs=4,            # K épocas por batch (clipping importa aqui)\n    cliprange=0.2,           # ε do PPO\n    cliprange_value=0.2,     # clipping do value\n    vf_coef=0.1,             # c_1\n    init_kl_coef=0.2,        # β inicial (adaptativo)\n    target_kl=6.0,           # alvo do KL controller\n    gamma=1.0,\n    lam=0.95,                # λ do GAE\n)\n\ntrainer = PPOTrainer(config, policy, ref_model, tokenizer)\n\nfor batch in dataloader:\n    # 1. Sample da policy\n    query_tensors = batch[\"input_ids\"]\n    response_tensors = trainer.generate(query_tensors, max_new_tokens=200)\n\n    # 2. Compute rewards via reward model\n    texts = [tokenizer.decode(r) for r in response_tensors]\n    rewards = [reward_model(t).logits[0] for t in texts]\n\n    # 3. PPO step (computa advantage via GAE, aplica clipping, KL penalty)\n    stats = trainer.step(query_tensors, response_tensors, rewards)\n    print(f\"kl={stats['objective/kl']:.3f} reward={stats['ppo/mean_scores']:.3f}\")",
+            "filename": "ppo_rlhf.py"
+          }
+        }
+      ]
+    },
+    {
+      "id": "5f3a4887-1e8b-4dd6-9563-d2023e1666fa",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Reward hacking: a lei de Goodhart aplicada"
+      },
+      "children": [
+        {
+          "id": "8d077d64-65bb-418e-9f16-12e8a75df5e3",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " \"When a measure becomes a target, it ceases to be a good measure\" (Charles Goodhart, 1975). O reward model é um proxy do julgamento humano — não o julgamento em si. Quando a policy tem capacidade de otimização suficiente, encontra regiões de alto reward que humanos não validariam. Skalse et al. 2022 (\"Defining and Characterizing Reward Hacking\", NeurIPS) formalizou o fenômeno. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "392a795a-71cd-4c61-ad19-1a5ceb9e68c3",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Sintoma observado",
+              "Causa provável",
+              "Mitigação"
+            ],
+            "rows": [
+              [
+                "Respostas excessivamente longas",
+                "RM correlaciona length com qualidade",
+                "Length normalization no reward"
+              ],
+              [
+                "Sycophancy (\"você está certo!\")",
+                "Raters humanos preferem concordância",
+                "Diversidade de raters, contrastive data"
+              ],
+              [
+                "Hedging exagerado (\"pode ser que...\")",
+                "RM premia respostas defensivas",
+                "KL alta + curadoria de raters"
+              ],
+              [
+                "Repetição de keywords (\"vamos analisar\")",
+                "Pattern de open-class no RM",
+                "RM ensembles com voting"
+              ],
+              [
+                "Recusa excessiva",
+                "Harmlessness RM domina helpfulness RM",
+                "Tradeoff explícito (Constitutional AI)"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "4477d656-6f52-4e0f-90fb-9deff92c786c",
+          "type": "decision_box",
+          "position": 2,
+          "data": {
+            "scenario": "Você observa que reward aumenta ao longo do treino mas eval humano piora — clássico do reward hacking começando.",
+            "winner": "Aumentar β da KL penalty + adicionar eval humano contínuo",
+            "why": "A divergência entre proxy (RM) e objetivo (humano) é o sinal definitivo de hacking. KL maior ancora a policy ao SFT. Eval humano em loop pega o problema antes do modelo ficar não-recuperável.",
+            "alternatives": [
+              {
+                "name": "Reduzir learning rate",
+                "note": "Adia o hacking mas não previne — só te dá tempo de detectar"
+              },
+              {
+                "name": "Ensemble de RMs",
+                "note": "Reduz variância do reward, dificulta atalhos mas custa 2–4× mais"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "67372e53-c26b-4d63-8240-cc0bf184732d",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Linha do tempo do RLHF"
+      },
+      "children": [
+        {
+          "id": "13d0aca6-953e-4c9f-888c-74347f036167",
+          "type": "timeline",
+          "position": 0,
+          "data": {
+            "title": "",
+            "events": [
+              {
+                "when": "2017",
+                "label": "PPO — Schulman et al.",
+                "detail": "Proximal Policy Optimization, OpenAI. arxiv.org/abs/1707.06347"
+              },
+              {
+                "when": "2017",
+                "label": "Deep RL from Human Preferences",
+                "detail": "Christiano et al. (OpenAI/DeepMind), NeurIPS — primeira aplicação de RLHF moderno"
+              },
+              {
+                "when": "2019",
+                "label": "Fine-Tuning LMs from Human Preferences",
+                "detail": "Ziegler et al., aplica RLHF a GPT-2 — embrião do InstructGPT"
+              },
+              {
+                "when": "2020",
+                "label": "Learning to Summarize from Feedback",
+                "detail": "Stiennon et al., RLHF para sumarização, primeira melhoria clara via RLHF"
+              },
+              {
+                "when": "2022",
+                "label": "InstructGPT",
+                "detail": "Ouyang et al., NeurIPS — pipeline SFT+RM+PPO canonizado, base do ChatGPT",
+                "highlight": true
+              },
+              {
+                "when": "2022",
+                "label": "Constitutional AI",
+                "detail": "Bai et al. (Anthropic), introduz RLAIF — feedback de AI em vez de humano"
+              },
+              {
+                "when": "2023",
+                "label": "DPO",
+                "detail": "Rafailov et al., NeurIPS — alinhamento sem reward model explícito"
+              },
+              {
+                "when": "2025",
+                "label": "GRPO / DeepSeek-R1",
+                "detail": "Group Relative Policy Optimization desbloqueia reasoning emergente"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "28b20bc1-b7f8-4979-bedb-ab86de4b66d4",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Arquitetura de runtime no PPO step"
+      },
+      "children": [
+        {
+          "id": "ae2919d9-83cf-4b7c-ae7b-ef1baead869a",
+          "type": "arch_flow",
+          "position": 0,
+          "data": {
+            "title": "Componentes ativos durante 1 step PPO",
+            "columns": [
+              {
+                "header": "Modelos",
+                "items": [
+                  "Policy π_θ — LLM treinável (actor + value head)",
+                  "Reference π_ref — SFT congelado (KL penalty)",
+                  "Reward model — classificador escalar, frozen",
+                  "Value V_φ (shared) — cabeça linear sobre policy"
+                ]
+              },
+              {
+                "header": "Computação por step",
+                "items": [
+                  "1. Rollout — sample responses de π_θ_old",
+                  "2. Score — r = RM(prompt, response) − β·KL",
+                  "3. Advantage — A_t via GAE(γ=1, λ=0.95)",
+                  "4. PPO update — K épocas, clipping ε=0.2"
+                ]
+              },
+              {
+                "header": "Memória",
+                "items": [
+                  "~4× LLM size — π_θ + π_ref + RM + optimizer states",
+                  "Activation checkpoint — obrigatório para 7B+",
+                  "FSDP / ZeRO-3 — sharding para 70B",
+                  "vLLM rollout — generation 5–10× faster"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "438cac0d-bafb-4221-a8a0-c8100e2e0a54",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "d0c7c1cc-8f9a-4f58-bc5f-c2c6a74fff76",
+          "type": "key_value",
+          "position": 0,
+          "data": {
+            "items": [
+              {
+                "k": "RLHF vs SFT puro?",
+                "v": "SFT ensina formato/estilo; RLHF otimiza para preferências comparativas que humanos têm dificuldade de demonstrar diretamente (ex.: \"qual das duas é melhor?\")"
+              },
+              {
+                "k": "Custo computacional?",
+                "v": "PPO consome 4× memória do modelo (policy + ref + RM + critic) e 3–5× compute do SFT. Para 70B: facilmente 256 GPUs A100 por dias"
+              },
+              {
+                "k": "Reward é por token ou por sequência?",
+                "v": "Reward é por sequência (no token de EOS), distribuído via GAE backward. KL penalty é por token"
+              },
+              {
+                "k": "Posso pular o reward model?",
+                "v": "Sim — DPO (próximos módulos) formula tudo como classificação direta sobre preferências, sem RM explícito"
+              }
+            ]
+          }
+        },
+        {
+          "id": "90b28f12-173c-4fd3-9cc6-a6fe42e98347",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Por que PPO e não Q-learning ou DDPG?",
+            "answer": "Espaço de ação em LLM é discreto e gigantesco (vocab ≈ 50k tokens). Q-learning seria intratável (tabela Q gigante). Policy gradient methods como PPO escalam naturalmente — a policy é o próprio LLM. DDPG é para ação contínua, não se aplica."
+          }
+        },
+        {
+          "id": "9adc7929-5286-4b49-ac3e-b1b4e90c7b03",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Por que 4 épocas de PPO por batch?",
+            "answer": "O clipping de PPO assume que π_θ_old ≈ π_θ. Reuso de dados (K=4 épocas) acelera sample efficiency, mas K muito alto faz o ratio escapar do clipping range e degrada — Schulman 2017 reportou K=3–10 como sweet spot."
+          }
+        }
+      ]
+    },
+    {
+      "id": "72daee42-ea88-4c94-b504-69b9a5fc437c",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Referências"
+      },
+      "children": [
+        {
+          "id": "a36ab636-365a-4b2b-b86f-4da161eaaf20",
+          "type": "key_value",
+          "position": 0,
+          "data": {
+            "items": [
+              {
+                "k": "PPO",
+                "v": "Schulman, Wolski, Dhariwal, Radford, Klimov. \"Proximal Policy Optimization Algorithms\". arXiv:1707.06347 (2017)"
+              },
+              {
+                "k": "InstructGPT",
+                "v": "Ouyang et al. \"Training language models to follow instructions with human feedback\". NeurIPS 2022"
+              },
+              {
+                "k": "GAE",
+                "v": "Schulman, Moritz, Levine, Jordan, Abbeel. \"High-Dimensional Continuous Control Using Generalized Advantage Estimation\". arXiv:1506.02438 (2015)"
+              },
+              {
+                "k": "Reward Hacking",
+                "v": "Skalse et al. \"Defining and Characterizing Reward Hacking\". NeurIPS 2022"
+              },
+              {
+                "k": "Deep RL from Preferences",
+                "v": "Christiano et al. \"Deep reinforcement learning from human preferences\". NeurIPS 2017"
+              },
+              {
+                "k": "TRL",
+                "v": "github.com/huggingface/trl — implementação canônica em PyTorch"
+              },
+              {
+                "k": "Adaptive KL",
+                "v": "Ziegler et al. \"Fine-Tuning Language Models from Human Preferences\". arXiv:1909.08593 (2019)"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

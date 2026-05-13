@@ -1,0 +1,933 @@
+{
+  "slug": "db-producao-ssh-tunnel",
+  "title": null,
+  "blocks": [
+    {
+      "id": "427b2b3c-42e3-4f0c-95dd-2f64029552cf",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema que vamos resolver"
+      },
+      "children": [
+        {
+          "id": "75bbfac1-388b-4288-a7af-f1e2050f4ace",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Você precisa acessar o Postgres de produção do seu Mac — rodar queries de análise, debugar um bug, ver dados reais de usuários. A pergunta certa não é \"como conectar?\", é "
+              },
+              {
+                "text": "\"como conectar sem expor o banco para a internet?\"",
+                "bold": true
+              },
+              {
+                "text": ". "
+              }
+            ]
+          }
+        },
+        {
+          "id": "dce353c8-923d-4a3b-82e4-a8c58cee1ce1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " A resposta para um dev solo com uma VPS é direta: "
+              },
+              {
+                "text": "SSH tunnel com autenticação por chave ed25519",
+                "bold": true
+              },
+              {
+                "text": ", e o Postgres nunca exposto à internet. É o setup mais seguro que existe para esse cenário — mais simples que VPN, e a superfície de ataque é só a porta SSH (que vamos endurecer). "
+              }
+            ]
+          }
+        },
+        {
+          "id": "ea52bed7-6219-41b8-ab8c-8c84ebf23962",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Este módulo cobre o setup completo de produção: hardening do Postgres, firewall UFW, sshd_config endurecido, chave dedicada, ~/.ssh/config com LocalForward, usuário read-only para análise e backups automatizados. Tudo rodável em ~15 minutos uma única vez."
+          }
+        }
+      ]
+    },
+    {
+      "id": "683aa634-4cc7-4d84-a0b1-26ce2db11139",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Por que SSH tunnel é a escolha certa aqui (vs alternativas)"
+      },
+      "children": [
+        {
+          "id": "12c209da-450c-4794-9522-01969423f8d8",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Solução",
+              "Quando faz sentido",
+              "Complexidade",
+              "Veredito para dev solo"
+            ],
+            "rows": [
+              [
+                "SSH tunnel",
+                "Acesso individual a banco/serviço em VPS",
+                "Mínima — SSH já vem no SO",
+                "✅ Padrão da indústria"
+              ],
+              [
+                "Tailscale / WireGuard",
+                "Time com 5+ devs, múltiplos dispositivos, vários servidores",
+                "Média — gerenciar rede privada",
+                "❌ Overkill para 1 pessoa"
+              ],
+              [
+                "VPN (OpenVPN, etc)",
+                "Empresas grandes com compliance específico",
+                "Alta — servidor VPN + certificados",
+                "❌ Complexidade desnecessária"
+              ],
+              [
+                "Banco exposto + senha forte",
+                "Nunca em produção",
+                "Zero",
+                "❌ Bots acham em minutos"
+              ],
+              [
+                "pgBouncer público + TLS",
+                "SaaS oferecendo banco como serviço",
+                "Alta — pool de conexões + TLS certs",
+                "❌ Não é seu caso"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "a03ef072-e49c-45b4-a150-33934e112a59",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Para você sozinho: SSH tunnel ganha por simplicidade, segurança e zero overhead operacional. Tailscale brilha quando o time cresce ou quando vários servidores precisam falar entre si — mas para um dev + uma VPS, é complexidade que não compra nada."
+          }
+        }
+      ]
+    },
+    {
+      "id": "6ec1b596-24f5-4808-980d-96b17569de12",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Os 4 princípios de segurança aplicados aqui"
+      },
+      "children": [
+        {
+          "id": "79a57222-9230-4ca2-a9b4-26866baf1400",
+          "type": "key_value",
+          "position": 0,
+          "data": {
+            "items": [
+              {
+                "k": "Banco invisível pra internet",
+                "v": "Postgres escuta só em 127.0.0.1. UFW fecha a porta 5432. Bot scanner nem detecta que existe banco ali."
+              },
+              {
+                "k": "Criptografia ponta-a-ponta",
+                "v": "Todo o tráfego passa dentro do túnel SSH (AES-256). Wi-Fi público, café da esquina, hotel — irrelevante."
+              },
+              {
+                "k": "Autenticação por posse, não por conhecimento",
+                "v": "Chave ed25519 + passphrase. Sem senha trafegando, sem brute force possível."
+              },
+              {
+                "k": "Auditável",
+                "v": "Cada acesso fica em /var/log/auth.log da VPS — você sabe quem entrou, quando, de onde."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "a3002ec1-3783-474a-8f9c-84af49db4474",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Passo 1 — Postgres só em localhost (na VPS)"
+      },
+      "children": [
+        {
+          "id": "8d345d49-260a-4217-835c-9310f3133d6a",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Primeiro garantimos que o Postgres não escuta em interfaces públicas. Mesmo se a firewall falhar, o banco simplesmente não responde para o IP externo. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "21b72fef-f04c-4538-948e-fba94db0ed5b",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Edite :",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "c18d65cf-c383-4a22-a86e-a1fce3ae0a74",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "conf",
+            "code": "listen_addresses = 'localhost'\nssl = on"
+          }
+        },
+        {
+          "id": "5539f8ec-fd6c-4337-8ecc-c88049b4e660",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": "Edite — só estas duas linhas:",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "053d5fa0-b389-4f9f-80a5-e84dbd2c74dc",
+          "type": "code_block",
+          "position": 4,
+          "data": {
+            "language": "conf",
+            "code": "local   all   all                  scram-sha-256\nhost    all   all   127.0.0.1/32   scram-sha-256"
+          }
+        },
+        {
+          "id": "1ddf6d04-60a9-4dfb-b9f6-b29a5b6afba2",
+          "type": "paragraph",
+          "position": 5,
+          "data": {
+            "content": [
+              {
+                "text": "Reinicie o serviço:"
+              }
+            ]
+          }
+        },
+        {
+          "id": "a25e2ba6-b63e-4ce4-877d-8b61bd3e5b29",
+          "type": "code_block",
+          "position": 6,
+          "data": {
+            "language": "bash",
+            "code": "sudo systemctl restart postgresql"
+          }
+        },
+        {
+          "id": "32bacf14-7cfa-4ef2-bb9d-df2819de62b0",
+          "type": "callout",
+          "position": 7,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "No nosso setup Docker (visto no módulo \"Docker Compose em produção\"), isso já está feito via no . Se for Postgres nativo (não Docker), siga os passos acima diretamente."
+          }
+        }
+      ]
+    },
+    {
+      "id": "d939b867-919b-497e-a227-90e306368aaf",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Passo 2 — Firewall UFW fechando tudo menos SSH"
+      },
+      "children": [
+        {
+          "id": "487b4d92-05ea-446b-90a1-2c6c0a068fd6",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " UFW (Uncomplicated Firewall) é o frontend amigável do iptables no Ubuntu. Política padrão: "
+              },
+              {
+                "text": "nega tudo, libera só o necessário",
+                "italic": true
+              },
+              {
+                "text": ". "
+              }
+            ]
+          }
+        },
+        {
+          "id": "853c5e3d-d15e-41ce-a9be-8087a04acd3c",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "sudo ufw default deny incoming\nsudo ufw default allow outgoing\nsudo ufw allow 22/tcp        # SSH\nsudo ufw allow 80/tcp        # HTTP (Let's Encrypt + redirect)\nsudo ufw allow 443/tcp       # HTTPS\nsudo ufw enable\n\n# Confirme — 5432 NÃO deve aparecer:\nsudo ufw status verbose"
+          }
+        },
+        {
+          "id": "c03c6306-421d-4ec0-9bf8-1147bce161b9",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Antes de rodar , confirme que o SSH (22) está liberado — caso contrário você perde acesso à VPS e precisa entrar pelo console web da Hostinger para corrigir."
+          }
+        }
+      ]
+    },
+    {
+      "id": "8e59f7ec-052a-49cf-8c5e-bfe2dcd4c6f1",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Passo 3 — Endurecer o SSH (sshd_config)"
+      },
+      "children": [
+        {
+          "id": "c058ad5e-0f08-44bc-a596-52d7ff2a8c7b",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " A porta SSH é a única superfície de ataque que sobra. Vamos endurecer. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "c795e3c8-9f1e-4e86-9a3c-3ac841ece46c",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Edite :",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "90690625-e596-40d6-822d-37f7434d80b3",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "conf",
+            "code": "PasswordAuthentication no       # só chave, nunca senha\nPermitRootLogin no              # root nunca loga via SSH\nPubkeyAuthentication yes        # autenticação por chave pública\nMaxAuthTries 3                  # 3 tentativas e desconecta\nClientAliveInterval 300         # mata conexões idle após 5min\nClientAliveCountMax 0\nProtocol 2                      # só SSH v2 (v1 é inseguro)"
+          }
+        },
+        {
+          "id": "697060bc-43b8-4cbb-a82f-14edff37ca35",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": "Aplique e instale fail2ban (bloqueia IPs que tentam força bruta):"
+              }
+            ]
+          }
+        },
+        {
+          "id": "c71f1f0a-2181-45aa-8fb0-9ddddefa4f80",
+          "type": "code_block",
+          "position": 4,
+          "data": {
+            "language": "bash",
+            "code": "sudo systemctl restart ssh\nsudo apt install fail2ban -y\nsudo systemctl enable fail2ban --now"
+          }
+        },
+        {
+          "id": "9b75a8ea-6f18-4d04-9968-c02c16cefd7d",
+          "type": "callout",
+          "position": 5,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "monitora e adiciona ao UFW IPs que falham N vezes em M minutos. Configuração padrão já é razoável (5 falhas em 10min → ban de 10min)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "a4694d68-b1c5-46aa-9fa2-dbcfd09d5f93",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Passo 4 — Chave SSH dedicada no Mac"
+      },
+      "children": [
+        {
+          "id": "f605d51c-41b3-4295-9bdd-1d01c8195e90",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "NUNCA reutilize a chave do GitHub Actions para acesso pessoal. Princípio do menor privilégio: uma chave por destino. Se a do CI vazar, você revoga sem perder acesso ao seu workflow pessoal."
+          }
+        },
+        {
+          "id": "9657a136-67d2-4eff-8c8f-6f1141ec9852",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "# 1. Gerar chave dedicada com passphrase forte\nssh-keygen -t ed25519 -f ~/.ssh/ffv_vps -C \"macbook-ffv\"\n# (digite uma passphrase forte — o macOS guarda no Keychain depois)\n\n# 2. Copiar a chave pública para a VPS\nssh-copy-id -i ~/.ssh/ffv_vps.pub deploy@72.60.28.82\n\n# 3. Testar\nssh -i ~/.ssh/ffv_vps deploy@72.60.28.82 \"whoami\"\n# Esperado: deploy"
+          }
+        },
+        {
+          "id": "ffd01ff9-66b4-4857-bdb4-d0587f0190e5",
+          "type": "key_value",
+          "position": 2,
+          "data": {
+            "items": [
+              {
+                "k": "Por que ed25519 e não RSA?",
+                "v": "ed25519 é mais rápido, mais curto e usa criptografia moderna baseada em curvas elípticas. RSA 2048 é OK, mas ed25519 é o padrão recomendado em 2026."
+              },
+              {
+                "k": "Por que passphrase?",
+                "v": "Se alguém roubar seu Mac e tirar o arquivo da chave, sem a passphrase ela é inútil. macOS guarda no Keychain — você digita uma vez por sessão."
+              },
+              {
+                "k": "Comment (-C)",
+                "v": "Aparece no authorized_keys da VPS, ajuda a identificar qual dispositivo é dono daquela chave quando você for revogar."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "8aa61fa0-4dc1-4fd5-887c-63a2dcbf3960",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Passo 5 — ~/.ssh/config no Mac (o atalho mágico)"
+      },
+      "children": [
+        {
+          "id": "ebf21859-b27a-49ce-84a8-9d9193bb17ed",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Em vez de digitar "
+              },
+              {
+                "text": "ssh -i ~/.ssh/ffv_vps -L 5433:127.0.0.1:5432 deploy@72.60.28.82",
+                "code": true
+              },
+              {
+                "text": "  toda vez, declare o host uma vez: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "f6ceca41-bd35-4d0f-96b2-848a6d651b07",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "conf",
+            "code": "Host ffv-vps\n    HostName 72.60.28.82\n    User deploy\n    Port 22\n    IdentityFile ~/.ssh/ffv_vps\n    IdentitiesOnly yes\n    LocalForward 5433 127.0.0.1:5432\n    ServerAliveInterval 60\n    ServerAliveCountMax 3\n    AddKeysToAgent yes\n    UseKeychain yes",
+            "filename": "~/.ssh/config"
+          }
+        },
+        {
+          "id": "e0d30884-8f12-4d97-a20b-05559481ffa3",
+          "type": "key_value",
+          "position": 2,
+          "data": {
+            "items": [
+              {
+                "k": "IdentitiesOnly yes",
+                "v": "Usa SÓ a chave especificada. Sem isso, o ssh-agent oferece todas as chaves e pode causar \"Too many authentication failures\"."
+              },
+              {
+                "k": "LocalForward",
+                "v": "Cria o túnel automaticamente toda vez que conectar nesse host. localhost:5433 (Mac) → 127.0.0.1:5432 (VPS)."
+              },
+              {
+                "k": "ServerAliveInterval",
+                "v": "Manda keep-alive a cada 60s — evita NAT timeout do roteador derrubando conexões idle."
+              },
+              {
+                "k": "AddKeysToAgent + UseKeychain",
+                "v": "Guarda a passphrase no Keychain do macOS — você digita uma vez e ela fica desbloqueada até reboot."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "1abff4ab-4a38-4439-9764-ed6741b278fd",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Uso no dia a dia (depois de configurado)"
+      },
+      "children": [
+        {
+          "id": "ab38e605-8a80-4ebf-a900-191ab3dc9b6c",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "# Abrir o túnel (background, sem shell)\nssh -fN ffv-vps\n\n# Verificar que está rodando\nps aux | grep \"ssh -fN\"\n\n# Conectar do TablePlus / DBeaver / psql\n#   Host:  127.0.0.1\n#   Porta: 5433\n#   User:  ffv\n#   Senha: a POSTGRES_PASSWORD do .env\n\n# Fechar quando terminar\npkill -f \"ssh -fN ffv-vps\""
+          }
+        },
+        {
+          "id": "546e14fc-f637-4647-97e8-8b26dccd6c6b",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "E se o Wi-Fi cair? Use autossh para reconectar sozinho. Trocou de rede, café, voltou pra casa — o túnel cai. Para reconectar automaticamente, monitora e reabre sozinho:"
+          }
+        },
+        {
+          "id": "e25c727f-3605-4a7a-acf9-e62200cc5f2c",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "code": "brew install autossh\nautossh -M 0 -fN ffv-vps"
+          }
+        }
+      ]
+    },
+    {
+      "id": "7598f09b-f63e-4e07-8d3a-044213529b32",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Configurando o DBeaver"
+      },
+      "children": [
+        {
+          "id": "4a6b659f-310e-46e7-9fcf-799f52f2868e",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " O DBeaver tem duas formas de conectar. Recomendo a "
+              },
+              {
+                "text": "Opção A",
+                "bold": true
+              },
+              {
+                "text": "  (túnel externo) — fica mais simples e o mesmo túnel serve para psql, TablePlus, etc. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "e6ba0460-c97b-4bcf-aeac-876bb094d256",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Opção A — Túnel aberto no terminal (recomendado):",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "791eb54c-cfba-48bf-be45-471d8bbed04f",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "code": "# Terminal sempre aberto (ou em background com -f)\nssh -N ffv-vps\n# (deixa rodando — o LocalForward do ~/.ssh/config já criou o túnel)"
+          }
+        },
+        {
+          "id": "9f04c1b8-9491-41ca-8c8e-23f9334be0ce",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": "No DBeaver, apenas configure a conexão Postgres:"
+              }
+            ]
+          }
+        },
+        {
+          "id": "63e550ea-2062-4d1c-a1bb-c7994bba4a65",
+          "type": "key_value",
+          "position": 4,
+          "data": {
+            "items": [
+              {
+                "k": "Host",
+                "v": "127.0.0.1"
+              },
+              {
+                "k": "Port",
+                "v": "5433"
+              },
+              {
+                "k": "Database",
+                "v": "ffv_prod"
+              },
+              {
+                "k": "Username",
+                "v": "ffv (ou ffv_readonly — ver próxima seção)"
+              },
+              {
+                "k": "Password",
+                "v": "POSTGRES_PASSWORD do .env"
+              }
+            ]
+          }
+        },
+        {
+          "id": "79343249-8d4f-4703-9d07-3488af46bebb",
+          "type": "paragraph",
+          "position": 5,
+          "data": {
+            "content": [
+              {
+                "text": "Opção B — SSH tunnel nativo do DBeaver:",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "dae392c1-4af1-4d32-83d4-35d2046d115f",
+          "type": "paragraph",
+          "position": 6,
+          "data": {
+            "content": [
+              {
+                "text": " Se preferir que o DBeaver gerencie o túnel internamente, vá em "
+              },
+              {
+                "text": "Connection settings → SSH",
+                "code": true
+              },
+              {
+                "text": ": "
+              }
+            ]
+          }
+        },
+        {
+          "id": "8e4cdbec-6462-4137-ac71-a58a0fee35b5",
+          "type": "key_value",
+          "position": 7,
+          "data": {
+            "items": [
+              {
+                "k": "Use SSH tunnel",
+                "v": "✅ marcado"
+              },
+              {
+                "k": "Host/IP",
+                "v": "72.60.28.82"
+              },
+              {
+                "k": "Port",
+                "v": "22"
+              },
+              {
+                "k": "User",
+                "v": "deploy"
+              },
+              {
+                "k": "Auth method",
+                "v": "Public key"
+              },
+              {
+                "k": "Private key",
+                "v": "~/.ssh/ffv_vps"
+              }
+            ]
+          }
+        },
+        {
+          "id": "4ca58b68-0269-424f-8472-47f2b57e0116",
+          "type": "paragraph",
+          "position": 8,
+          "data": {
+            "content": [
+              {
+                "text": " Na aba Main use "
+              },
+              {
+                "text": "localhost:5432",
+                "code": true
+              },
+              {
+                "text": " — o DBeaver cria o túnel internamente quando a conexão abre. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "a4c22de0-fd9a-4378-8310-169a806b1aef",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Camada extra: usuário Postgres read-only para análise"
+      },
+      "children": [
+        {
+          "id": "37f4e07a-bf71-4275-9c11-17d56177644e",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "A maioria dos incidentes em banco de produção não é hack — é erro humano. Um sem , um copiado de uma janela errada do DBeaver. Defesa: usuário read-only."
+          }
+        },
+        {
+          "id": "35d86c91-1105-46c1-a848-8da81d19cb12",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "sql",
+            "code": "-- Conecte como superuser (ffv) e crie um usuário só-leitura\nCREATE USER ffv_readonly WITH PASSWORD 'senha_forte_diferente_aqui';\n\nGRANT CONNECT ON DATABASE ffv_prod TO ffv_readonly;\nGRANT USAGE   ON SCHEMA public      TO ffv_readonly;\nGRANT SELECT  ON ALL TABLES   IN SCHEMA public TO ffv_readonly;\nGRANT SELECT  ON ALL SEQUENCES IN SCHEMA public TO ffv_readonly;\n\n-- Garante que tabelas FUTURAS também sejam acessíveis (sem precisar refazer GRANT)\nALTER DEFAULT PRIVILEGES IN SCHEMA public\n  GRANT SELECT ON TABLES TO ffv_readonly;\n\nALTER DEFAULT PRIVILEGES IN SCHEMA public\n  GRANT SELECT ON SEQUENCES TO ffv_readonly;"
+          }
+        },
+        {
+          "id": "2d9bb009-a40c-4cd2-8ac8-e217a22ebd2f",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": " No DBeaver, crie "
+              },
+              {
+                "text": "duas conexões",
+                "bold": true
+              },
+              {
+                "text": ": "
+              }
+            ]
+          }
+        },
+        {
+          "id": "a0340e2f-6845-4a89-a706-1c71230e2ba0",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "ffv-prod-readonly",
+                "v": "Conexão padrão para análise. Um DELETE acidental falha com \"permission denied\"."
+              },
+              {
+                "k": "ffv-prod-admin",
+                "v": "Conexão com o usuário ffv. Só abrir quando você realmente precisa escrever."
+              }
+            ]
+          }
+        },
+        {
+          "id": "22249e44-6c04-4df2-9aa1-64c53ae53103",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Renomeie as conexões com cores diferentes no DBeaver (botão direito → Edit Connection → Connection Type → escolha \"Production\" em vermelho para a admin). Vermelho no header é um lembrete visual: cuidado com o que você está rodando."
+          }
+        }
+      ]
+    },
+    {
+      "id": "1d60d616-8172-4c9b-b0b2-2ad1e517eaf5",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Camada extra: backups automatizados"
+      },
+      "children": [
+        {
+          "id": "c2c98b08-e00d-4093-9cfa-3359ef82b4b5",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Segurança não é só impedir invasão — é também sobreviver a um "
+              },
+              {
+                "text": "DROP TABLE",
+                "code": true
+              },
+              {
+                "text": " seu mesmo. Backup diário + retenção é o mínimo. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "24cf4bc9-8683-48c0-8945-80fd8a382029",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "#!/usr/bin/env bash\nset -euo pipefail\n\nBACKUP_DIR=\"/opt/ffv/backups\"\nRETENTION_DAYS=14\nTIMESTAMP=$(date +%Y%m%d_%H%M%S)\nBACKUP_FILE=\"$BACKUP_DIR/ffv_prod_$TIMESTAMP.sql.gz\"\n\nmkdir -p \"$BACKUP_DIR\"\n\n# Dump comprimido\ndocker compose -f /opt/ffv/docker-compose.prod.yml exec -T postgres \\\n  pg_dump -U ffv -d ffv_prod --clean --if-exists \\\n  | gzip > \"$BACKUP_FILE\"\n\n# Remove backups mais antigos que RETENTION_DAYS\nfind \"$BACKUP_DIR\" -name \"ffv_prod_*.sql.gz\" -mtime +$RETENTION_DAYS -delete\n\n# Opcional: upload pra S3/B2/Backblaze\n# aws s3 cp \"$BACKUP_FILE\" s3://ffv-backups/$(basename \"$BACKUP_FILE\")\n\necho \"Backup OK: $BACKUP_FILE\"",
+            "filename": "/opt/ffv/bin/backup-db.sh"
+          }
+        },
+        {
+          "id": "b7a13e0e-1bcc-43ed-96bc-57263b4151bd",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Agende no cron da VPS (rodar como root):"
+              }
+            ]
+          }
+        },
+        {
+          "id": "857e4ba9-7d62-475a-be30-05c8ab98b624",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "bash",
+            "code": "sudo chmod +x /opt/ffv/bin/backup-db.sh\nsudo crontab -e\n\n# Adicione (executa toda madrugada às 3h):\n0 3 * * * /opt/ffv/bin/backup-db.sh >> /var/log/ffv-backup.log 2>&1"
+          }
+        },
+        {
+          "id": "aafdf7e0-4b03-4711-ba68-dde7e2e5760f",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Backup que você nunca testou não é backup. Uma vez por mês, restaure um dump num banco local de teste: . Se não rodar, você descobriu o problema antes de precisar de verdade."
+          }
+        }
+      ]
+    },
+    {
+      "id": "abbd4cb0-fd8a-4f79-a2b8-f42163896364",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "O que NÃO fazer (anti-padrões comuns)"
+      },
+      "children": [
+        {
+          "id": "b7f9b005-d054-4d01-9c84-18aee253fac0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "❌ Anti-padrão",
+              "Por que é perigoso"
+            ],
+            "rows": [
+              [
+                "Abrir 5432 na firewall \"só pra testar com pgAdmin\"",
+                "Bots Shodan/Censys mapeiam IPs com portas Postgres abertas. Você aparece numa lista pública em minutos."
+              ],
+              [
+                "\"Ninguém vai descobrir o IP da minha VPS\"",
+                "IPv4 é finito (~4 bilhões). Scanners varrem a internet inteira em <24h. Segurança por obscuridade = sem segurança."
+              ],
+              [
+                "Autenticação SSH por senha (PasswordAuthentication yes)",
+                "Brute force é trivial. Mesmo senha de 16 chars cai com botnet. Chave é a única opção em 2026."
+              ],
+              [
+                "Mesma chave SSH para GitHub Actions e acesso pessoal",
+                "Se a chave do CI vaza num log mal configurado, o atacante tem acesso a tudo. Chave dedicada por destino limita o estrago."
+              ],
+              [
+                "Commitar .env no repositório",
+                "Search no GitHub por \"STRIPE_SECRET_KEY=sk_live\" retorna milhares de hits. Bots automatizam roubo de credenciais expostas."
+              ],
+              [
+                "Postgres com senha \"ffv2026\" e listen_addresses = \"*\"",
+                "Mesmo com firewall, defesa em camadas exige que o banco também esteja blindado por si só."
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "844d76f8-513c-4187-9656-4b15fe686d31",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Checklist final de segurança"
+      },
+      "children": [
+        {
+          "id": "34334611-8e8d-476b-862d-39c7766178ce",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "# 1. Postgres só em localhost\ndocker compose -f /opt/ffv/docker-compose.prod.yml exec postgres \\\n  netstat -tlnp 2>/dev/null | grep 5432\n# Esperado: 127.0.0.1:5432 (NUNCA 0.0.0.0:5432)\n\n# 2. UFW ativo e 5432 fechada\nsudo ufw status verbose\n# Esperado: Status: active, 22/tcp ALLOW, 80/tcp ALLOW, 443/tcp ALLOW\n\n# 3. SSH só por chave\nsudo grep -E \"^(PasswordAuthentication|PermitRootLogin)\" /etc/ssh/sshd_config\n# Esperado: PasswordAuthentication no / PermitRootLogin no\n\n# 4. fail2ban rodando\nsudo systemctl status fail2ban\n\n# 5. Testar túnel completo\nssh -fN ffv-vps\npsql -h 127.0.0.1 -p 5433 -U ffv -d ffv_prod -c \"SELECT version();\"\npkill -f \"ssh -fN ffv-vps\"\n\n# 6. Backups rodando\nls -lh /opt/ffv/backups/\ntail /var/log/ffv-backup.log"
+          }
+        },
+        {
+          "id": "f128b76a-f922-424c-aa97-fa82eae45558",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Depois de configurado, no dia a dia você só roda e abre o cliente. A segurança fica invisível, e a porta do Postgres permanece fechada para o mundo. Esse é o padrão da indústria para acesso pessoal a banco em VPS."
+          }
+        }
+      ]
+    }
+  ]
+}

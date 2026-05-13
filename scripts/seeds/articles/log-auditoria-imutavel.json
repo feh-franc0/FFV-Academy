@@ -1,0 +1,507 @@
+{
+  "slug": "log-auditoria-imutavel",
+  "title": null,
+  "blocks": [
+    {
+      "id": "84d4abf7-bc8f-413c-8359-1b4704f04722",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Art. 37 LGPD: controlador e operador "
+          },
+          {
+            "text": "devem manter registro",
+            "bold": true
+          },
+          {
+            "text": " das operações. Em fiscalização, é o documento mais pedido. Em incidente, é a única prova de cadeia de eventos. Audit log é "
+          },
+          {
+            "text": "append-only, autenticado, imutável e auditável",
+            "bold": true
+          },
+          {
+            "text": " — três garantias técnicas, não três intenções. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "cea3da13-a4d8-48ec-830e-0a6aa80acc8d",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que registrar — schema canônico"
+      },
+      "children": [
+        {
+          "id": "8d3cf72a-e4d5-4632-93fb-18ea593cba4a",
+          "type": "key_value",
+          "position": 0,
+          "data": {
+            "items": [
+              {
+                "k": "event_id",
+                "v": "UUID v7 (ordenado no tempo) — único, ordenável"
+              },
+              {
+                "k": "timestamp",
+                "v": "ISO 8601 UTC com precisão microssegundo"
+              },
+              {
+                "k": "actor",
+                "v": "{ type: user|service|cron, id, ip, session_id, user_agent }"
+              },
+              {
+                "k": "action",
+                "v": "enum verb (read, write, update, delete, export, login, consent_grant, consent_revoke)"
+              },
+              {
+                "k": "resource",
+                "v": "{ type: user_profile|transaction|kyc_doc, id, owner_user_id }"
+              },
+              {
+                "k": "changes",
+                "v": "lista de campos alterados (nomes); valor antigo/novo criptografado separado"
+              },
+              {
+                "k": "context",
+                "v": "{ purpose, legal_basis, dpia_ref, request_id, correlation_id }"
+              },
+              {
+                "k": "result",
+                "v": "success | denied | error + reason_code"
+              },
+              {
+                "k": "prev_hash",
+                "v": "SHA-256 do registro anterior — hash chain"
+              },
+              {
+                "k": "self_hash",
+                "v": "SHA-256 de (prev_hash || canonical_json(payload))"
+              },
+              {
+                "k": "signature",
+                "v": "Opcional — assinatura HSM/KMS sobre self_hash; força não-repúdio externo"
+              }
+            ]
+          }
+        },
+        {
+          "id": "06016b71-51a1-4df5-900c-663394263897",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "sql",
+            "code": "CREATE TABLE audit_log (\n  event_id        UUID PRIMARY KEY,\n  ts              TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),\n  actor           JSONB NOT NULL,\n  action          TEXT NOT NULL,\n  resource        JSONB NOT NULL,\n  changes         TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],\n  context         JSONB NOT NULL,\n  result          TEXT NOT NULL,\n  prev_hash       BYTEA NOT NULL,\n  self_hash       BYTEA NOT NULL,\n  signature       BYTEA\n);\n\n-- Imutabilidade no DB: revoga DML; INSERT só via função SECURITY DEFINER\nREVOKE INSERT, UPDATE, DELETE ON audit_log FROM PUBLIC;\n\n-- Trigger antifraude — nega UPDATE/DELETE mesmo de roles privilegiadas\nCREATE OR REPLACE FUNCTION audit_log_block_mutation() RETURNS TRIGGER AS $$\nBEGIN\n  RAISE EXCEPTION 'audit_log is append-only (event_id=%)', OLD.event_id;\nEND;\n$$ LANGUAGE plpgsql;\n\nCREATE TRIGGER audit_log_no_update BEFORE UPDATE ON audit_log\n  FOR EACH ROW EXECUTE FUNCTION audit_log_block_mutation();\nCREATE TRIGGER audit_log_no_delete BEFORE DELETE ON audit_log\n  FOR EACH ROW EXECUTE FUNCTION audit_log_block_mutation();\n\nCREATE INDEX idx_audit_actor ON audit_log USING GIN (actor jsonb_path_ops);\nCREATE INDEX idx_audit_resource ON audit_log USING GIN (resource jsonb_path_ops);\nCREATE INDEX idx_audit_ts ON audit_log (ts);",
+            "filename": "migrations/audit_log.sql"
+          }
+        }
+      ]
+    },
+    {
+      "id": "987a615d-3a0a-424c-8a5b-aa941200d9a4",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Hash chain — detecção de tampering em O(n)"
+      },
+      "children": [
+        {
+          "id": "f67d1da2-329c-4a0d-8b13-2209951d7e0f",
+          "type": "annotated_formula",
+          "position": 0,
+          "data": {
+            "title": "Hash chain de logs",
+            "formula": "self_hash_i = SHA-256( prev_hash_{i-1} || canonical_json(entry_i) )",
+            "parts": [
+              {
+                "text": "entry_i",
+                "annotation": "Registro i",
+                "highlight": true
+              },
+              {
+                "text": "prev_hash",
+                "annotation": "self_hash do anterior; primeiro = zero"
+              },
+              {
+                "text": "canonical_json",
+                "annotation": "JSON ordenado, sem espaços — determinístico"
+              },
+              {
+                "text": "SHA-256",
+                "annotation": "32 bytes; resistente a colisão"
+              }
+            ]
+          }
+        },
+        {
+          "id": "06091ff4-0e1b-4e7e-8da7-7c1f2d3b26fb",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "typescript",
+            "code": "import { createHash } from 'crypto';\nimport { canonicalize } from 'json-canonicalize'; // RFC 8785 JCS\n\nexport type AuditEntry = {\n  event_id: string;\n  ts: string;\n  actor: object; action: string; resource: object;\n  changes: string[]; context: object; result: string;\n};\n\nexport function hashEntry(prevHash: Buffer, entry: AuditEntry): Buffer {\n  const payload = canonicalize(entry);\n  return createHash('sha256').update(prevHash).update(payload).digest();\n}\n\nexport async function appendAudit(db: Pool, entry: AuditEntry) {\n  // SELECT FOR UPDATE serializa appends (1 writer); para alta vazão, particione por dia\n  const { rows } = await db.query<{ self_hash: Buffer }>(\n    'SELECT self_hash FROM audit_log ORDER BY ts DESC LIMIT 1 FOR UPDATE'\n  );\n  const prev = rows[0]?.self_hash ?? Buffer.alloc(32);\n  const selfHash = hashEntry(prev, entry);\n  await db.query(\n    `INSERT INTO audit_log (event_id, ts, actor, action, resource, changes, context, result, prev_hash, self_hash)\n     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,\n    [entry.event_id, entry.ts, entry.actor, entry.action, entry.resource,\n     entry.changes, entry.context, entry.result, prev, selfHash]\n  );\n}\n\nexport async function verifyChain(db: Pool, fromTs?: string): Promise<{ ok: boolean; brokenAt?: string }> {\n  const cur = db.query(\n    `DECLARE c CURSOR FOR SELECT * FROM audit_log WHERE ts >= COALESCE($1, '-infinity') ORDER BY ts`,\n    [fromTs]\n  );\n  let prev = Buffer.alloc(32);\n  for await (const row of cur as unknown as AsyncIterable<{ event_id: string; self_hash: Buffer; [k: string]: unknown }>) {\n    const expected = hashEntry(prev, row as unknown as AuditEntry);\n    if (!expected.equals(row.self_hash)) return { ok: false, brokenAt: row.event_id };\n    prev = row.self_hash;\n  }\n  return { ok: true };\n}",
+            "filename": "lib/audit.ts"
+          }
+        }
+      ]
+    },
+    {
+      "id": "242480e6-bb45-4db0-b2be-263f1d3b9885",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "WORM externo — S3 Object Lock"
+      },
+      "children": [
+        {
+          "id": "375b1a80-0945-4fb1-b13b-ec675f85d458",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Hash chain detecta tampering, mas não impede deleção física. Replique o log para storage WORM (Write Once Read Many) em outra conta/região. S3 Object Lock no modo "
+              },
+              {
+                "text": "Compliance",
+                "bold": true
+              },
+              {
+                "text": " impede deleção até a retention expirar — nem o root account remove. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "1a2bfc9a-18a2-4376-8d80-69ccb084d2b2",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Pipeline de audit log → WORM",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "icon": "🧩",
+                "label": "App grava entry",
+                "desc": "INSERT em audit_log (Postgres) com hash chain"
+              },
+              {
+                "icon": "🛰️",
+                "label": "CDC stream",
+                "desc": "Debezium → Kafka topic audit.append (idempotente por event_id)"
+              },
+              {
+                "icon": "📦",
+                "label": "Sink S3",
+                "desc": "Particionado por dia: s3://audit/prod/dt=2026-05-10/part-*.parquet"
+              },
+              {
+                "icon": "🔒",
+                "label": "Object Lock Compliance",
+                "desc": "Retention 6 anos. Account dedicado (não root). MFA Delete ativo"
+              },
+              {
+                "icon": "🛡️",
+                "label": "Verificação diária",
+                "desc": "Job lê do S3, recalcula hash chain, alerta se mismatch"
+              }
+            ]
+          }
+        },
+        {
+          "id": "9c8681fc-c928-432f-baf1-2b1bdb6a8fa7",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "code": "# Bucket dedicado para audit, Object Lock habilitado na criação (irreversível)\naws s3api create-bucket --bucket acme-audit-prod-sa-east-1 \\\n  --create-bucket-configuration LocationConstraint=sa-east-1 \\\n  --object-lock-enabled-for-bucket\n\naws s3api put-object-lock-configuration --bucket acme-audit-prod-sa-east-1 \\\n  --object-lock-configuration '{\n    \"ObjectLockEnabled\": \"Enabled\",\n    \"Rule\": {\n      \"DefaultRetention\": { \"Mode\": \"COMPLIANCE\", \"Years\": 6 }\n    }\n  }'\n\n# Bucket Policy: nega DeleteObjectVersion para todos exceto role específico\naws s3api put-public-access-block --bucket acme-audit-prod-sa-east-1 \\\n  --public-access-block-configuration \"BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true\"\n\naws s3api put-bucket-versioning --bucket acme-audit-prod-sa-east-1 \\\n  --versioning-configuration Status=Enabled,MFADelete=Enabled \\\n  --mfa \"arn:aws:iam::ACCOUNT:mfa/audit-admin 123456\"",
+            "filename": "setup-object-lock.sh"
+          }
+        }
+      ]
+    },
+    {
+      "id": "320c771e-c905-4156-8bc0-ac13e6e95c4b",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Alternativas: ledger databases"
+      },
+      "children": [
+        {
+          "id": "dbabfb3f-e08b-4b4a-ab8d-5f2101cfcd41",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Solução",
+              "Modelo",
+              "Trade-off",
+              "Quando faz sentido"
+            ],
+            "rows": [
+              [
+                "Postgres + hash chain + S3 Lock",
+                "DIY",
+                "Controle total, código simples, dependência baixa",
+                "Maioria dos casos LGPD"
+              ],
+              [
+                "AWS QLDB",
+                "Managed ledger (Merkle)",
+                "Verificação criptográfica nativa, query SQL-like (PartiQL)",
+                "Audit compliance heavy (finanças)"
+              ],
+              [
+                "AWS CloudTrail Lake",
+                "Managed query layer",
+                "Apenas eventos AWS; agora aceita custom events",
+                "Ambiente AWS-centric"
+              ],
+              [
+                "ImmuDB",
+                "Open source Merkle ledger",
+                "API K/V e SQL, prova criptográfica, self-host",
+                "Você precisa rodar, mas quer ledger pronto"
+              ],
+              [
+                "Azure Confidential Ledger",
+                "Managed, com SGX",
+                "Hardware attestation",
+                "Compliance regulado pesado"
+              ],
+              [
+                "Hyperledger Fabric",
+                "Blockchain consortium",
+                "Pesado, multi-org",
+                "Apenas se múltiplas entidades co-auditam"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "f6695284-c9f9-40ac-b794-ac0cdcca878b",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "O que NÃO logar — minimização também aqui"
+      },
+      "children": [
+        {
+          "id": "81a2507b-f8fc-4272-9baf-e60469212e3b",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Audit log é alvo de alta atratividade — atacante quer apagar trace. Minimize o blast radius caso comprometido."
+          }
+        },
+        {
+          "id": "a9aaa42d-d8ae-4aac-8287-a184f0733a18",
+          "type": "key_value",
+          "position": 1,
+          "data": {
+            "items": [
+              {
+                "k": "Não logar",
+                "v": "Senha (mesmo hash), token, cookie, número de cartão, CVV, conteúdo de mensagens privadas, biometria"
+              },
+              {
+                "k": "Logar referência",
+                "v": "Em vez de \"old_email=joao@x.com\", logue \"field=email, changed=true\"; cofre auxiliar guarda valor cifrado se precisar"
+              },
+              {
+                "k": "PII pseudoanonimizada",
+                "v": "Use user_id (UUID), não CPF/email no payload do log"
+              },
+              {
+                "k": "Retenção",
+                "v": "6 anos é típico (Lei 12.965 + ANPD); documente no DPIA. Após, deletar — apesar de WORM, retention expira"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "f635af35-0126-49fd-b11e-6273778e1749",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "AWS CloudTrail + Lake — para infra"
+      },
+      "children": [
+        {
+          "id": "61477dc5-8b5b-4b5c-9356-42fca924f00b",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Para eventos de infraestrutura (RDS snapshot, IAM AssumeRole, S3 GetObject de PII), use "
+              },
+              {
+                "text": "CloudTrail Lake",
+                "bold": true
+              },
+              {
+                "text": ". É audit log gerenciado pela AWS, com retenção até 10 anos, SQL queryable e integrity validation built-in. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "8cb9fb28-4905-45b0-9181-8b85d2b6066b",
+          "type": "stack_flow",
+          "position": 1,
+          "data": {
+            "title": "Camadas de audit log",
+            "items": [
+              {
+                "icon": "🧩",
+                "label": "App-level audit",
+                "sub": "L7",
+                "detail": "Postgres audit_log com hash chain — quem leu PII X, quem revogou consent",
+                "connector": "CDC"
+              },
+              {
+                "icon": "🛰️",
+                "label": "Infra audit",
+                "sub": "AWS CloudTrail Lake",
+                "detail": "API calls AWS — quem assumiu role, leu secret, mudou IAM",
+                "connector": "Convergir"
+              },
+              {
+                "icon": "🌐",
+                "label": "Network audit",
+                "sub": "VPC Flow Logs + WAF logs",
+                "detail": "Fluxo de pacotes, requests bloqueados; útil em incidente",
+                "connector": "Sink"
+              },
+              {
+                "icon": "📦",
+                "label": "WORM externo",
+                "sub": "S3 Object Lock",
+                "detail": "Sink final imutável; conta separada; retention 6+ anos"
+              },
+              {
+                "icon": "🔎",
+                "label": "Query / SIEM",
+                "sub": "Athena, OpenSearch",
+                "detail": "Investigação forense; integra com Datadog Security, Splunk"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "817f868d-ae8a-41df-a201-c5e093657591",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Decisão: tabela Postgres vs QLDB vs CloudTrail Lake"
+      },
+      "children": [
+        {
+          "id": "3029b7b0-eb74-4b75-8430-218feb918090",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Startup BR, foco LGPD, stack Postgres + AWS, ainda sem requisitos de auditoria externa pesada",
+            "winner": "Postgres append-only + hash chain + sink S3 Object Lock",
+            "why": "Custo baixo, controle total, código simples e auditável por você mesmo. Hash chain dá tamper detection, S3 Object Lock dá WORM. ANPD aceita. Se virar banco/fintech sob BCB, migra para QLDB ou amplia. Não comece com complexidade que pode não precisar.",
+            "alternatives": [
+              {
+                "name": "AWS QLDB",
+                "when": "Setor financeiro/saúde com exigência regulatória explícita de ledger criptográfico"
+              },
+              {
+                "name": "CloudTrail Lake",
+                "when": "Foco em audit de infra; ótimo complemento, não substituto do app-level"
+              },
+              {
+                "name": "Apenas logs em CloudWatch",
+                "when": "Insuficiente — não é imutável, não há prova de integridade"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "27e05bdc-e9b0-45a8-9333-24077c6d7406",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Verificação periódica — sem isso, audit log é teatro"
+      },
+      "children": [
+        {
+          "id": "6bc00772-f013-4133-adca-7f1078eaccc3",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "#!/usr/bin/env bash\n# Roda diariamente via cron. Falha = alerta P1 (potential tampering)\nset -euo pipefail\nRESULT=$(psql \"$DB_URL\" -At -c \"SELECT * FROM verify_audit_chain();\")\nif [ \"$RESULT\" != \"ok\" ]; then\n  echo \"AUDIT CHAIN BROKEN: $RESULT\" >&2\n  # Notifica PagerDuty\n  curl -X POST -H \"Authorization: Token token=$PD_TOKEN\" \\\n    -d \"{\\\"event_action\\\":\\\"trigger\\\",\\\"payload\\\":{\\\"summary\\\":\\\"Audit hash chain broken: $RESULT\\\"}}\" \\\n    https://events.pagerduty.com/v2/enqueue\n  exit 1\nfi\n# Verifica sink S3 — checksum recalculado\naws s3 sync s3://acme-audit-prod-sa-east-1/dt=$(date -d yesterday +%F)/ ./tmp/audit/\npython verify_s3_chain.py ./tmp/audit/",
+            "filename": "verify-audit.sh"
+          }
+        }
+      ]
+    },
+    {
+      "id": "36d0f369-b5ae-4d15-9071-312f08d6571c",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Recursos canônicos"
+      },
+      "children": [
+        {
+          "id": "9fa4e4b7-4ab1-4e08-830a-092eb9503e73",
+          "type": "key_value",
+          "position": 0,
+          "data": {
+            "items": [
+              {
+                "k": "NIST SP 800-92",
+                "v": "Guide to Computer Security Log Management"
+              },
+              {
+                "k": "ISO/IEC 27002:2022 §8.15",
+                "v": "Logging"
+              },
+              {
+                "k": "RFC 8785",
+                "v": "JSON Canonicalization Scheme (JCS) — base para hash determinístico"
+              },
+              {
+                "k": "S3 Object Lock",
+                "v": "docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html"
+              },
+              {
+                "k": "AWS QLDB",
+                "v": "aws.amazon.com/qldb"
+              },
+              {
+                "k": "ImmuDB",
+                "v": "codenotary.com/technologies/immudb"
+              },
+              {
+                "k": "Certificate Transparency (RFC 6962)",
+                "v": "Merkle log distribuído — referência conceitual"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

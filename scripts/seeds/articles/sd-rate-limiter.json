@@ -1,0 +1,306 @@
+{
+  "slug": "sd-rate-limiter",
+  "title": null,
+  "blocks": [
+    {
+      "id": "81d431c6-7a10-44ba-a289-3ea7a88d72e5",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Por que rate limiter é pergunta padrão em entrevista sênior"
+      },
+      "children": [
+        {
+          "id": "95e52285-ab90-40b6-a21c-d53c1bebb4e7",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Rate limiter testa 4 skills simultaneamente: "
+              },
+              {
+                "text": "escolha de algoritmo",
+                "bold": true
+              },
+              {
+                "text": " (fixed vs sliding vs token bucket), "
+              },
+              {
+                "text": "consistência distribuída",
+                "bold": true
+              },
+              {
+                "text": " (Redis atomic ops), "
+              },
+              {
+                "text": "operação",
+                "bold": true
+              },
+              {
+                "text": " (rollout seguro, observability), e "
+              },
+              {
+                "text": "APIs",
+                "bold": true
+              },
+              {
+                "text": " (headers HTTP corretos, semântica). "
+              }
+            ]
+          }
+        },
+        {
+          "id": "7022ad54-9b22-4f37-92e7-7b001a60bc57",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Quase toda API pública (Stripe, Twitter, GitHub, OpenAI) tem. Saber construir uma é requisito pra qualquer engenheiro de backend sênior. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "60e844d0-c0dc-4d4c-b11f-9195db8446fe",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Os 4 algoritmos clássicos"
+      },
+      "children": [
+        {
+          "id": "19eef17f-c700-4236-826b-81cd87a93fa8",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Algoritmo",
+              "Memória",
+              "Precisão",
+              "Burst",
+              "Complexidade"
+            ],
+            "rows": [
+              [
+                "Fixed window",
+                "O(1) contador",
+                "Baixa (burst doubling)",
+                "Não permite",
+                "Baixíssima"
+              ],
+              [
+                "Sliding window log",
+                "O(N req)",
+                "Alta",
+                "Limitado",
+                "Média"
+              ],
+              [
+                "Sliding window counter",
+                "O(1) + interpolação",
+                "Alta",
+                "Limitado",
+                "Média"
+              ],
+              [
+                "Token bucket",
+                "O(1) tokens + last_refill",
+                "Alta",
+                "Permite (até capacity)",
+                "Baixa"
+              ],
+              [
+                "Leaky bucket",
+                "O(N queue)",
+                "Alta (smoothing)",
+                "Não permite",
+                "Média"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "dbbd3125-42ae-4b95-99aa-dce5605c388a",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Token bucket na prática — o padrão vencedor"
+      },
+      "children": []
+    },
+    {
+      "id": "6629f189-62aa-4847-9e75-653e8a90e87e",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Rate limiter distribuído com Redis atômico"
+      },
+      "children": [
+        {
+          "id": "315ccf67-8bb7-4005-a547-d8a26ceea46e",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Em cluster com múltiplos servidores, cada um mantendo bucket local = limite global X vezes maior que desejado. Solução: bucket em Redis compartilhado, operação atômica via Lua script. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "b1bd62d0-0f4f-4c2c-ac54-15a95e1fac04",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# Lua script atômico — evita race condition entre GET + SET\nTOKEN_BUCKET_LUA = \"\"\"\nlocal key = KEYS[1]\nlocal capacity = tonumber(ARGV[1])\nlocal refill = tonumber(ARGV[2])\nlocal now = tonumber(ARGV[3])\nlocal cost = tonumber(ARGV[4])\n\nlocal data = redis.call('HMGET', key, 'tokens', 'last_refill')\nlocal tokens = tonumber(data[1]) or capacity\nlocal last_refill = tonumber(data[2]) or now\n\n-- Refill proporcional\nlocal elapsed = math.max(0, now - last_refill)\ntokens = math.min(capacity, tokens + elapsed * refill)\n\nif tokens >= cost then\n  tokens = tokens - cost\n  redis.call('HMSET', key, 'tokens', tokens, 'last_refill', now)\n  redis.call('EXPIRE', key, 3600)  -- garbage collect chaves inativas\n  return {1, tokens}\nelse\n  redis.call('HMSET', key, 'tokens', tokens, 'last_refill', now)\n  redis.call('EXPIRE', key, 3600)\n  return {0, tokens}\nend\n\"\"\"\n\nimport redis, time\nr = redis.Redis()\nallow_script = r.register_script(TOKEN_BUCKET_LUA)\n\ndef allow(user_id: str, capacity: int, refill: float, cost: int = 1):\n    result = allow_script(\n        keys=[f\"rl:{user_id}\"],\n        args=[capacity, refill, time.time(), cost],\n    )\n    allowed, remaining = result[0] == 1, result[1]\n    return allowed, remaining"
+          }
+        },
+        {
+          "id": "114aeda8-a326-489d-a412-3a09448d0de5",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Lua script no Redis é atômico — roda no thread único do Redis, zero race condition. Custa ~1ms round-trip + ~0.1ms execução. Escala para milhões de usuários com cluster Redis."
+          }
+        }
+      ]
+    },
+    {
+      "id": "68726ad0-22b4-4d0d-9b1c-57db78c66e1e",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Decisão: limites por chave (user, IP, API key, endpoint?)"
+      },
+      "children": [
+        {
+          "id": "b878f81a-ec31-4bc0-80fa-c0178547b31b",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Como identificar quem rate-limitar?",
+            "winner": "Múltiplas chaves combinadas em camadas",
+            "why": "Abuse pode vir de ângulos diferentes: mesmo user batendo rápido, mesmo IP gerando contas descartáveis, endpoint específico sobrecarregando DB. Aplicar uma camada por vez: global → por IP → por user → por endpoint.",
+            "alternatives": [
+              {
+                "label": "Só por user_id",
+                "note": "ataca com contas descartáveis e bypassa"
+              },
+              {
+                "label": "Só por IP",
+                "note": "affeta NAT corporativo (muitos users atrás de 1 IP)"
+              },
+              {
+                "label": "Só por endpoint",
+                "note": "não isola abuser individual"
+              }
+            ]
+          }
+        },
+        {
+          "id": "0aba0c09-a539-4f71-9753-395101be6b1e",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Headers HTTP corretos",
+                "bold": true
+              },
+              {
+                "text": ":"
+              }
+            ]
+          }
+        },
+        {
+          "id": "52a2c8bc-ee0b-4e6e-abf9-dafcba101ea0",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "text",
+            "code": "HTTP/1.1 200 OK\nX-RateLimit-Limit: 1000\nX-RateLimit-Remaining: 783\nX-RateLimit-Reset: 1714068000\n\n# Quando ultrapassa:\nHTTP/1.1 429 Too Many Requests\nRetry-After: 42\nX-RateLimit-Limit: 1000\nX-RateLimit-Remaining: 0\nX-RateLimit-Reset: 1714068042\nContent-Type: application/json\n\n{\n  \"error\": \"rate_limit_exceeded\",\n  \"retry_after\": 42,\n  \"docs\": \"https://docs.api.com/rate-limits\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "92615e88-8cfd-4999-a604-92bbfdfab75f",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Rollout: como não fazer outage com seu próprio rate limiter"
+      },
+      "children": [
+        {
+          "id": "03e929f5-dca8-4a1a-b70d-ebce004c6a09",
+          "type": "list",
+          "position": 0,
+          "data": {
+            "items": [
+              "Shadow mode primeiro — lógica conta e loga mas não bloqueia. Compara baseline real de tráfego: quantos users seriam bloqueados no limite proposto? Ajusta limite antes de enforçar.",
+              "Canary enforce — 1% do tráfego → 10% → 100% com pausas de 1h entre. Monitor: taxa de 429, reclamações, regressões em métricas de negócio.",
+              "Feature flag kill switch — desabilitar em 30s se comportamento inesperado (spike de 429 em tráfego normal = bug no limiter, não abuse).",
+              "Allowlist pra integrações críticas — webhooks de parceiros, serviços internos. Nada pior que rate-limit bloquear sua própria infra."
+            ],
+            "ordered": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "0d90d889-8af5-4bf9-87ac-a480f9a02751",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Observability obrigatória"
+      },
+      "children": [
+        {
+          "id": "1460bf7a-cb20-4526-8dd3-079918437ea9",
+          "type": "list",
+          "position": 0,
+          "data": {
+            "items": [
+              "Métrica por chave: taxa de 429 por (endpoint, tier de user). Se subir inesperado → ou abuse ou bug.",
+              "Top-N blocked: quem está mais perto do limite? IPs/users mais bloqueados nas últimas 24h → candidatos a suspender ou aumentar tier.",
+              "Latency do rate check: rate-limiter adicionou 3ms p99? Redis pode estar degradado.",
+              "Baseline automática: alerta se taxa de 429 desvia > 2σ do normal — detecta problema cedo."
+            ],
+            "ordered": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "8a3c9879-fd19-4261-80ca-a6af185d1c72",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Take-aways"
+      },
+      "children": [
+        {
+          "id": "68fa10d1-454d-4986-9078-d0de9d58749b",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Rate limiter bem feito é invisível — user legítimo nunca sente, abuser é bloqueado antes de causar dano. Mal feito, é causa de incidente próprio. Token bucket via Redis Lua + shadow mode + canary é a receita conservadora que nunca te trai."
+          }
+        }
+      ]
+    }
+  ]
+}

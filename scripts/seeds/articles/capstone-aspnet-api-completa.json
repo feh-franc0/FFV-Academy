@@ -1,0 +1,163 @@
+{
+  "slug": "capstone-aspnet-api-completa",
+  "title": null,
+  "blocks": [
+    {
+      "id": "979e94e5-b5d7-4cd0-94a2-f395752c6ad6",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Missão"
+      },
+      "children": [
+        {
+          "id": "d3a377eb-eaa1-4a7c-9ef1-00864f183617",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Entregue uma API REST ASP.NET Core 9 \"production-ready\" para um domínio real (ex: gestão de pedidos, biblioteca, cadastro de eventos). O critério não é complexidade de negócio — é rigor operacional. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "df15c0a0-be9b-426b-84eb-2e92e35926f5",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Stack mandatória"
+      },
+      "children": [
+        {
+          "id": "3b56c20a-78c1-453b-9854-00e6583fe516",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "ASP.NET Core 9 Minimal APIs · EF Core com migrations · Postgres · Serilog em JSON · OpenTelemetry (OTLP) · JWT auth · Rate limiting · HealthChecks · xUnit + TestContainers · Dockerfile multi-stage · GitHub Actions CI · docker-compose para dev local."
+          }
+        }
+      ]
+    },
+    {
+      "id": "448bf306-b5a7-43fa-810e-b31e89e30e42",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Layout de repo"
+      },
+      "children": [
+        {
+          "id": "5bca4714-50c2-4079-976c-64c44b34a8eb",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": ".\n├── src/\n│   ├── MyApi/\n│   │   ├── Program.cs\n│   │   ├── Endpoints/\n│   │   ├── Domain/\n│   │   ├── Infrastructure/\n│   │   │   ├── AppDb.cs\n│   │   │   └── Migrations/\n│   │   └── appsettings.json\n│   └── MyApi.Contracts/         # DTOs públicos\n├── tests/\n│   ├── MyApi.UnitTests/\n│   └── MyApi.IntegrationTests/  # TestContainers\n├── docker/\n│   ├── Dockerfile\n│   └── docker-compose.yml       # api + postgres + jaeger\n├── .github/workflows/\n│   ├── ci.yml\n│   └── deploy.yml\n└── README.md"
+          }
+        }
+      ]
+    },
+    {
+      "id": "682e72f2-a3ba-4f17-a58d-72064c3c8d64",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Program.cs mínimo"
+      },
+      "children": [
+        {
+          "id": "9df8764d-cf30-4be9-ac1a-690aa57f71b9",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "csharp",
+            "code": "var builder = WebApplication.CreateBuilder(args);\n\nbuilder.Host.UseSerilog((ctx, cfg) => cfg\n    .ReadFrom.Configuration(ctx.Configuration)\n    .Enrich.FromLogContext()\n    .WriteTo.Console(new JsonFormatter()));\n\nbuilder.Services.AddDbContext<AppDb>(o => o\n    .UseNpgsql(builder.Configuration.GetConnectionString(\"Db\")));\nbuilder.Services.AddScoped<IOrderService, OrderService>();\n\nbuilder.Services.AddAuthentication().AddJwtBearer();\nbuilder.Services.AddAuthorization();\nbuilder.Services.AddRateLimiter(o => o.AddFixedWindowLimiter(\"api\", w => {\n    w.PermitLimit = 100; w.Window = TimeSpan.FromMinutes(1);\n}));\nbuilder.Services.AddHealthChecks().AddDbContextCheck<AppDb>();\nbuilder.Services.AddOpenApi();\nbuilder.Services.AddOpenTelemetry()\n    .WithTracing(t => t.AddAspNetCoreInstrumentation()\n                       .AddEntityFrameworkCoreInstrumentation()\n                       .AddOtlpExporter())\n    .WithMetrics(m => m.AddAspNetCoreInstrumentation().AddOtlpExporter());\n\nvar app = builder.Build();\napp.UseExceptionHandler();\napp.UseSerilogRequestLogging();\napp.UseAuthentication();\napp.UseAuthorization();\napp.UseRateLimiter();\napp.MapOpenApi();\napp.MapHealthChecks(\"/health\");\napp.MapOrderEndpoints();\n\nawait app.MigrateDatabaseAsync();\napp.Run();"
+          }
+        }
+      ]
+    },
+    {
+      "id": "e52bfd87-4a33-4148-b7a9-d94af72431c3",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Teste de integração com TestContainers"
+      },
+      "children": [
+        {
+          "id": "fc96f31c-7c8c-4874-bd8a-52b2be04148a",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "csharp",
+            "code": "public class OrdersApiFixture : IAsyncLifetime\n{\n    public PostgreSqlContainer Db { get; } = new PostgreSqlBuilder()\n        .WithImage(\"postgres:16\")\n        .Build();\n\n    public WebApplicationFactory<Program> Factory = null!;\n\n    public async Task InitializeAsync()\n    {\n        await Db.StartAsync();\n        Factory = new WebApplicationFactory<Program>()\n            .WithWebHostBuilder(b => b.ConfigureAppConfiguration((_, cfg) =>\n                cfg.AddInMemoryCollection(new Dictionary<string, string?>\n                {\n                    [\"ConnectionStrings:Db\"] = Db.GetConnectionString()\n                })));\n    }\n\n    public async Task DisposeAsync() => await Db.DisposeAsync();\n}\n\npublic class OrdersApiTests(OrdersApiFixture fx) : IClassFixture<OrdersApiFixture>\n{\n    [Fact]\n    public async Task PostOrder_Creates_And_Returns_201()\n    {\n        var client = fx.Factory.CreateClient();\n        var resp = await client.PostAsJsonAsync(\"/orders\", new { Total = 99.9m });\n        resp.StatusCode.Should().Be(HttpStatusCode.Created);\n    }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "89ee3210-4ada-4ff7-8317-1e0f41e147c6",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Dockerfile chiseled"
+      },
+      "children": [
+        {
+          "id": "bc09fdf5-3866-46cb-b1f3-e8cb829b4ac8",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build\nWORKDIR /src\nCOPY src/MyApi/*.csproj MyApi/\nRUN dotnet restore MyApi/MyApi.csproj\nCOPY src/MyApi MyApi\nRUN dotnet publish MyApi/MyApi.csproj -c Release -o /out \\\n    /p:PublishReadyToRun=true\n\nFROM mcr.microsoft.com/dotnet/aspnet:9.0-jammy-chiseled\nWORKDIR /app\nCOPY --from=build /out .\nEXPOSE 8080\nENTRYPOINT [\"dotnet\", \"MyApi.dll\"]"
+          }
+        }
+      ]
+    },
+    {
+      "id": "08422b42-04c6-4fe1-9453-6c8b293765ff",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "CI GitHub Actions"
+      },
+      "children": [
+        {
+          "id": "13228888-b2fa-4b59-8fab-8a8ab111cd9d",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "name: ci\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    services:\n      docker:\n        image: docker:dind\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-dotnet@v4\n        with: { dotnet-version: '9.0.x' }\n      - run: dotnet build -c Release --nologo\n      - run: dotnet test -c Release --logger \"trx;LogFileName=test.trx\"\n      - uses: dorny/test-reporter@v1\n        if: always()\n        with:\n          name: dotnet tests\n          path: '**/test.trx'\n          reporter: dotnet-trx"
+          }
+        }
+      ]
+    },
+    {
+      "id": "f8f4aa16-6506-463d-88c0-ff1aa46e9130",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Checklist final"
+      },
+      "children": [
+        {
+          "id": "34ac963d-122d-4a6b-a7c9-c0441d1d4870",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "(1) README com setup em <5 min (clone + docker-compose up). (2) /health e /health/ready respondendo. (3) OpenAPI em /openapi/v1.json. (4) Migrations aplicadas automaticamente no startup. (5) Logs em JSON com TraceId. (6) Testes passam em CI com TestContainers. (7) Imagem Docker <100MB. (8) Rate limit por endpoint crítico. (9) Load test com k6 ou NBomber documentado. (10) Tag v0.1.0."
+          }
+        }
+      ]
+    }
+  ]
+}

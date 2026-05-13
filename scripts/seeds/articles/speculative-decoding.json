@@ -1,0 +1,545 @@
+{
+  "slug": "speculative-decoding",
+  "title": null,
+  "blocks": [
+    {
+      "id": "a4254a90-59f0-41fc-b12f-b9c42c804c15",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Em julho de 2023, Leviathan, Kalman e Matias (Google Research) publicaram "
+          },
+          {
+            "text": "\"Fast Inference from Transformers via Speculative Decoding\"",
+            "italic": true
+          },
+          {
+            "text": " na ICML. O paper resolveu um problema que parecia fundamental: decoding autoregressive é inerentemente sequencial — cada token depende do anterior. A genialidade foi notar que "
+          },
+          {
+            "text": "a maioria dos tokens é fácil",
+            "bold": true
+          },
+          {
+            "text": ": um modelo 50× menor consegue prever a continuação correta na maior parte do tempo. Validar essa previsão custa quase nada. Resultado: 2-3× speedup sem mexer no modelo, sem perder qualidade. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "f4f87694-8b3f-4d3d-a2dc-d2d2c0bfca4c",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Por que decoding é lento"
+      },
+      "children": [
+        {
+          "id": "e5fd2939-469b-47a0-8fb3-46bfe75839d9",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Em uma GPU H100 com Llama 3.1 70B em FP16, gerar 1 token leva ~30ms. Disso, "
+              },
+              {
+                "text": "99% é tempo de mover pesos da HBM para SRAM",
+                "bold": true
+              },
+              {
+                "text": " — apenas 1% é compute real. A GPU está ociosa 99% do tempo processando matemática que cabe num celular. É memory-bound, não compute-bound. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "fe8a2d15-ee83-4a87-963a-c37b46a260cc",
+          "type": "annotated_formula",
+          "position": 1,
+          "data": {
+            "title": "Arithmetic intensity (FLOPs / bytes lidos)",
+            "formula": "AI_decode ≈ 2 (1 multiply-add por peso lido por token);  AI_GPU ≈ 200+",
+            "parts": [
+              {
+                "text": "AI_decode",
+                "annotation": "baixíssimo — 2 FLOPs/byte"
+              },
+              {
+                "text": "AI_GPU",
+                "annotation": "H100 precisa 200+ para saturar",
+                "highlight": true
+              },
+              {
+                "text": "ratio 1:100",
+                "annotation": "99% do tempo movendo pesos",
+                "highlight": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "27c137e5-9569-406a-817e-570ce05ae4c8",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Essa diferença é o que speculative explora. Validar 5 tokens em paralelo via 1 forward não custa 5× — os pesos são lidos UMA vez e fazem 5× mais trabalho. O custo extra é desprezível em decoding single-batch."
+          }
+        }
+      ]
+    },
+    {
+      "id": "21723ebf-57b5-4349-9042-7a706b813e5a",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Algoritmo: draft + validate + accept"
+      },
+      "children": [
+        {
+          "id": "1e7535df-b656-4052-976a-4d313f24be11",
+          "type": "flow_diagram",
+          "position": 0,
+          "data": {
+            "title": "Speculative decoding clássico (Leviathan, ICML 2023)",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "icon": "⚡",
+                "label": "1. Draft gera N tokens",
+                "desc": "modelo pequeno (ex: 1B) gera tokens x₁..xₙ sequencialmente, rapidamente"
+              },
+              {
+                "icon": "🔍",
+                "label": "2. Target valida em 1 forward",
+                "desc": "target (ex: 70B) processa x₀, x₁..xₙ; retorna prob_target para cada posição"
+              },
+              {
+                "icon": "🎲",
+                "label": "3. Aceita por rejection sampling",
+                "desc": "para cada i: aceita com prob min(1, p_t/p_d). Para o primeiro rejeitado, sample do residual"
+              },
+              {
+                "icon": "➕",
+                "label": "4. Bonus token",
+                "desc": "se aceitou todos N, gera grátis o (n+1)-ésimo via prob target já computada"
+              },
+              {
+                "icon": "🔁",
+                "label": "5. Repete",
+                "desc": "novo ciclo de draft+validate"
+              }
+            ]
+          }
+        },
+        {
+          "id": "ddad53c7-308e-4836-8a48-aa86d9655b4c",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# Speculative decoding — implementação conceitual\nimport torch\n\ndef speculative_decode(target, draft, prompt, max_tokens=200, gamma=5):\n    \"\"\"gamma = quantos tokens o draft propõe por iteração\"\"\"\n    tokens = prompt.clone()\n    generated = 0\n\n    while generated < max_tokens:\n        # 1. Draft gera gamma tokens auto-regressivamente\n        draft_tokens = []\n        draft_probs = []\n        x = tokens.clone()\n        for _ in range(gamma):\n            logits = draft(x)[:, -1]\n            probs = logits.softmax(-1)\n            tok = torch.multinomial(probs, 1)\n            draft_tokens.append(tok)\n            draft_probs.append(probs.gather(-1, tok))\n            x = torch.cat([x, tok], dim=-1)\n\n        draft_tokens = torch.cat(draft_tokens, dim=-1)  # [batch, gamma]\n\n        # 2. Target valida todos em 1 forward\n        candidate = torch.cat([tokens, draft_tokens], dim=-1)\n        target_logits = target(candidate)[:, -gamma-1:]  # logits nas posições candidatas\n        target_probs = target_logits.softmax(-1)\n\n        # 3. Aceitação token a token\n        accepted = 0\n        for i in range(gamma):\n            tok = draft_tokens[:, i]\n            p_t = target_probs[:, i].gather(-1, tok.unsqueeze(-1)).squeeze()\n            p_d = draft_probs[i].squeeze()\n            r = torch.rand_like(p_t)\n\n            if r < min(1.0, p_t / p_d):\n                # aceita\n                tokens = torch.cat([tokens, tok.unsqueeze(-1)], dim=-1)\n                accepted += 1\n                generated += 1\n            else:\n                # rejeita: sample do residual (p_t - p_d)+\n                residual = torch.relu(target_probs[:, i] - draft_probs[i])\n                residual = residual / residual.sum()\n                new_tok = torch.multinomial(residual, 1)\n                tokens = torch.cat([tokens, new_tok], dim=-1)\n                generated += 1\n                break\n\n        # 4. Bonus token se aceitou todos\n        if accepted == gamma and generated < max_tokens:\n            bonus = torch.multinomial(target_probs[:, -1], 1)\n            tokens = torch.cat([tokens, bonus], dim=-1)\n            generated += 1\n\n    return tokens"
+          }
+        },
+        {
+          "id": "560dda9b-c2d0-4846-975c-632ad6290e64",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "A regra é o que preserva a distribuição. Não é \"aceite se draft está confiante\" ou \"aceite se top-1 bate\" — é rejection sampling probabilístico exato. Qualquer outra regra introduz viés de qualidade."
+          }
+        }
+      ]
+    },
+    {
+      "id": "69912857-12d9-46f2-8882-19fd7a7ea3b0",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Escolha do draft model"
+      },
+      "children": [
+        {
+          "id": "9f0dcb44-ceaf-4030-a673-dcf7f96732c2",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Target",
+              "Draft recomendado",
+              "Acceptance rate típica",
+              "Speedup esperado"
+            ],
+            "rows": [
+              [
+                "Llama 3.1 70B",
+                "Llama 3.2 1B-Instruct (Q8)",
+                "70-85% em texto técnico",
+                "2.2-2.8×"
+              ],
+              [
+                "Llama 3.1 70B",
+                "Llama 3.2 3B-Instruct",
+                "78-90%",
+                "2.0-2.5× (draft mais pesado)"
+              ],
+              [
+                "Llama 3.1 405B",
+                "Llama 3.1 8B",
+                "60-75%",
+                "1.8-2.4×"
+              ],
+              [
+                "Qwen 2.5 72B",
+                "Qwen 2.5 0.5B ou 1.5B",
+                "65-80%",
+                "2.0-2.7×"
+              ],
+              [
+                "Mistral Large 2",
+                "Mistral 7B (mesmo tokenizer)",
+                "55-70%",
+                "1.5-2.0×"
+              ],
+              [
+                "DeepSeek V3 (MoE)",
+                "EAGLE head treinado",
+                "80-92%",
+                "3-5× (EAGLE)"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "d3a1c645-427e-4f12-a9a2-3385c21c0bd6",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Regra prática: draft com 1-3% dos parâmetros do target costuma ser o sweet spot. Draft muito pequeno (0.1%) tem acceptance rate baixa; muito grande (10%) come o ganho com seu próprio custo. Sempre meça com tráfego real antes de fixar gamma."
+          }
+        }
+      ]
+    },
+    {
+      "id": "13e175eb-c3dd-496c-8020-11535a8c5f9e",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "EAGLE: state of the art 2025-2026"
+      },
+      "children": [
+        {
+          "id": "c6c9810c-1d21-4a9d-9060-407fb7ffd540",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "EAGLE",
+                "bold": true
+              },
+              {
+                "text": " (Li et al., 2024; v2/v3 em 2024-2025) representa o estado da arte. Em vez de treinar um modelo draft inteiro separado, treina um "
+              },
+              {
+                "text": "auto-regression head",
+                "bold": true
+              },
+              {
+                "text": " compacto que prediz a próxima "
+              },
+              {
+                "text": "hidden state",
+                "bold": true
+              },
+              {
+                "text": " (não token) baseada em hidden states anteriores e embeddings de tokens já gerados. Compartilha o lm_head do target. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "a74a55b9-e1e9-496b-94ca-b766c83d91ee",
+          "type": "stack_flow",
+          "position": 1,
+          "data": {
+            "title": "EAGLE-2 — arquitetura",
+            "items": [
+              {
+                "icon": "🎯",
+                "label": "Target model (frozen)",
+                "sub": "Llama 70B, Qwen 72B, DeepSeek V3 — extrai hidden states"
+              },
+              {
+                "icon": "🪶",
+                "label": "EAGLE head (~10-20M params)",
+                "sub": "pequena rede que prediz próxima hidden state"
+              },
+              {
+                "icon": "🌳",
+                "label": "Tree expansion",
+                "sub": "cada step propõe múltiplas continuações via top-k branching"
+              },
+              {
+                "icon": "⚡",
+                "label": "Tree attention validation",
+                "sub": "target valida toda a árvore em 1 forward com attention masked"
+              },
+              {
+                "icon": "✂️",
+                "label": "Path selection",
+                "sub": "escolhe melhor caminho válido por rejection sampling"
+              }
+            ]
+          }
+        },
+        {
+          "id": "7bd553c2-d340-4724-be31-f1b723a01d04",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "EAGLE-3 (2025) chega a 4-6× speedup em Llama 3.1 70B com acceptance rate de 90%+. vLLM 0.6+ suporta EAGLE nativamente. O custo: treinar o head (~1 GPU-day numa A100). Para quem controla o modelo final, é o ganho mais barato disponível."
+          }
+        }
+      ]
+    },
+    {
+      "id": "47005d49-b51d-4a82-82cc-ee1f5aba5308",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Medusa: heads paralelos no target"
+      },
+      "children": [
+        {
+          "id": "6401fe55-a3bb-46c8-968e-ad2968b033d8",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cai et al. (Princeton, Together AI 2024)",
+                "bold": true
+              },
+              {
+                "text": " propuseram Medusa: adicionar K heads ao target. Head 1 prediz token na posição t+1 (normal). Head 2 prediz t+2 dado o estado em t. Head k prediz t+k. Em decoding: target faz 1 forward, todos K heads geram em paralelo — produzindo K candidatos. Tree attention seleciona a continuação válida. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "e548feaa-1d28-449f-805b-d553e4611c17",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Técnica",
+              "Draft separado?",
+              "Treina target?",
+              "Speedup típico",
+              "Quando preferir"
+            ],
+            "rows": [
+              [
+                "Speculative clássico",
+                "Sim (modelo menor)",
+                "Não",
+                "1.5-2.5×",
+                "Modelos OSS já existentes; gratuito"
+              ],
+              [
+                "Medusa",
+                "Não (heads no target)",
+                "Sim (fine-tune heads)",
+                "2-3×",
+                "Você controla o target; simples"
+              ],
+              [
+                "EAGLE-2/3",
+                "Não (head compacto)",
+                "Sim (treina head)",
+                "3-6×",
+                "Quer ganho máximo; tem GPU para treinar"
+              ],
+              [
+                "Lookahead decoding",
+                "N-grams locais",
+                "Não",
+                "1.3-1.8×",
+                "Zero treino; speedup modesto"
+              ],
+              [
+                "SpS / Self-speculation",
+                "Mesmo modelo com layers skip",
+                "Não",
+                "1.3-1.7×",
+                "Não tem modelo draft compatível"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "782bb08a-90c8-4604-83d4-eb0138ec4f36",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Ativação prática nos engines"
+      },
+      "children": [
+        {
+          "id": "563485ac-3151-4829-aa34-86e4df49749c",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "# vLLM com speculative decoding clássico\nvllm serve meta-llama/Meta-Llama-3.1-70B-Instruct \\\n    --tensor-parallel-size 4 \\\n    --speculative-model meta-llama/Llama-3.2-1B-Instruct \\\n    --num-speculative-tokens 5 \\\n    --use-v2-block-manager \\\n    --enable-prefix-caching\n\n# vLLM com EAGLE\nvllm serve meta-llama/Meta-Llama-3.1-70B-Instruct \\\n    --speculative-model yuhuili/EAGLE-LLaMA3.1-70B \\\n    --speculative-draft-tensor-parallel-size 1 \\\n    --num-speculative-tokens 5\n\n# llama.cpp — binário dedicado\n./llama-speculative \\\n    -m models/llama-3.1-70b-Q4_K_M.gguf \\\n    -md models/llama-3.2-1b-Q8_0.gguf \\\n    --draft 8 \\\n    --gpu-layers 80 --gpu-layers-draft 16 \\\n    -p \"Explique consenso Raft em sistemas distribuídos.\"\n\n# MLX (Apple Silicon)\nmlx_lm.server \\\n    --model mlx-community/Meta-Llama-3.1-70B-Instruct-4bit \\\n    --draft-model mlx-community/Llama-3.2-1B-Instruct-4bit \\\n    --num-draft-tokens 5"
+          }
+        }
+      ]
+    },
+    {
+      "id": "93b0a627-0091-4605-b542-8bfc1c57a1ee",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Métricas: o que medir"
+      },
+      "children": [
+        {
+          "id": "72775722-e568-4e35-ba3b-7a15e6980551",
+          "type": "key_value",
+          "position": 0,
+          "data": {
+            "items": [
+              {
+                "k": "Acceptance rate (α)",
+                "v": "fração de tokens draft aceitos. <40% = overhead líquido, ajustar draft"
+              },
+              {
+                "k": "Mean accepted length",
+                "v": "tokens aceitos por iteração. Esperado: γ·α + 1 (bonus)"
+              },
+              {
+                "k": "Speedup vs baseline",
+                "v": "tokens/s com spec / tokens/s sem spec; ground truth do ganho"
+              },
+              {
+                "k": "Latency overhead per rejection",
+                "v": "em rejeições altas, custa o draft sem ganhar; medir p99"
+              },
+              {
+                "k": "Draft compute fraction",
+                "v": "tempo no draft / tempo total. <10% ideal"
+              },
+              {
+                "k": "Output distribution drift",
+                "v": "KS test ou MMD em outputs com/sem spec — DEVE ser ~0"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "59d25d00-001a-4190-9b9d-be8a7fc1d18d",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "15ce599f-32e5-4db0-845f-5b0bcd1d0196",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Speculative funciona em batch size grande?",
+            "answer": "Não tão bem. Em batch grande, a GPU já está saturada e validar N candidatos extras custa proporcional ao N. Speculative brilha em batch=1 ou pequeno, onde há FLOPs ociosos. vLLM por default desativa speculative quando batch atinge certo threshold."
+          }
+        },
+        {
+          "id": "08af71e6-bd91-4ae2-aeef-46c5bafaded1",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Como saber se draft e target compartilham tokenizer?",
+            "answer": "Cheque ou — deve ter mesmo vocab size e mesmas merges. Llama 3.x family compartilha (1B, 3B, 8B, 70B, 405B). Llama 3 ≠ Llama 2 (vocab diferente: 128k vs 32k). Sempre validar com hash do tokenizer antes de prod."
+          }
+        },
+        {
+          "id": "086dcae2-76c8-4eba-9740-5f011cf4d89a",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Speculative + quantização?",
+            "answer": "Compatíveis. Target em INT4 (AWQ/GPTQ) com draft em INT8 ou FP16 funciona — quantização afeta as probabilities mas o critério de aceitação se ajusta. Speedups combinam multiplicativamente: 4× de INT4 × 2.2× de spec ≈ 8.8× tokens/s vs FP16 sem spec."
+          }
+        },
+        {
+          "id": "b072453c-87de-4709-987b-67255a10b705",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Speculative reduz custo OU latência?",
+            "answer": "Ambos, mas principalmente latência (TTFT e ITL). Custo por token cai proporcional ao speedup, então sim — custo também cai. Em serving SaaS, isso significa mais requests/GPU sem trocar hardware."
+          }
+        }
+      ]
+    },
+    {
+      "id": "6161a0f4-30ed-419d-a8b8-d3e7e18edd06",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Referências"
+      },
+      "children": [
+        {
+          "id": "ff3d4de1-9a53-4ebd-b8eb-41771852c75b",
+          "type": "key_value",
+          "position": 0,
+          "data": {
+            "items": [
+              {
+                "k": "Speculative paper",
+                "v": "Leviathan, Kalman, Matias, \"Fast Inference from Transformers via Speculative Decoding\", ICML 2023, arXiv:2211.17192"
+              },
+              {
+                "k": "Concurrent work (DeepMind)",
+                "v": "Chen et al., \"Accelerating LLM Inference with Speculative Sampling\", arXiv:2302.01318"
+              },
+              {
+                "k": "Medusa",
+                "v": "Cai et al., \"Medusa: Simple LLM Inference Acceleration Framework with Multiple Decoding Heads\", arXiv:2401.10774"
+              },
+              {
+                "k": "EAGLE",
+                "v": "Li et al., \"EAGLE: Speculative Sampling Requires Rethinking Feature Uncertainty\", arXiv:2401.15077"
+              },
+              {
+                "k": "EAGLE-2",
+                "v": "Li et al., \"EAGLE-2: Faster Inference of Language Models with Dynamic Draft Trees\", arXiv:2406.16858"
+              },
+              {
+                "k": "Lookahead decoding",
+                "v": "Fu et al., \"Break the Sequential Dependency of LLM Inference Using Lookahead Decoding\", arXiv:2402.02057"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

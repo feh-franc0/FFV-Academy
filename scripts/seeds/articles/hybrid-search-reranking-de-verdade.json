@@ -1,0 +1,125 @@
+{
+  "slug": "hybrid-search-reranking-de-verdade",
+  "title": null,
+  "blocks": [
+    {
+      "id": "d7564b1d-91f6-4743-9ea9-4c916d462339",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "BM25 e vector têm forças complementares"
+      },
+      "children": [
+        {
+          "id": "1d6162f7-aafa-4e0e-b52c-edbb25110a15",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " BM25 domina em matches lexicais exatos — nomes próprios, códigos SKU, termos técnicos raros, acrônimos. Falha em paráfrase. Vector search domina em semântica — captura sinônimos, intent, idiomas diferentes. Falha em termos fora da distribuição do modelo de embedding (jargão novo, nomes únicos). Hybrid search combina os dois estágios e bate ambos sozinhos. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "6fd0b111-5f31-4f49-9805-f07a565c3b80",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Arquitetura típica em 3 estágios"
+      },
+      "children": [
+        {
+          "id": "311131a3-12e2-4403-a57a-f959fec76054",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "# ┌────────────────────────────────────────┐\n# │ Query: \"como ajustar memoria do heap\"  │\n# └────────────────────────────────────────┘\n#         │\n#  ┌──────┴──────┐  paralelo\n#  ▼             ▼\n# BM25         Vector Search\n# top-100      top-100\n#  │             │\n#  └──────┬──────┘\n#         ▼\n#   RRF Fusion\n#   (merge top-100 de cada)\n#         │\n#         ▼\n#  Reranker cross-encoder\n#  (top-50 → top-10)\n#         │\n#         ▼\n#   Resultado final"
+          }
+        }
+      ]
+    },
+    {
+      "id": "4fb4dd1e-eb53-4129-93d0-d7209e8902b7",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Reciprocal Rank Fusion em código"
+      },
+      "children": [
+        {
+          "id": "fe418c09-da37-4ad4-8a74-3c84da0df8e7",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "from collections import defaultdict\n\ndef rrf_fusion(rankings: list[list[str]], k: int = 60, top_n: int = 100) -> list[tuple[str, float]]:\n    \"\"\"\n    rankings: lista de rankings, cada ranking é lista de doc_ids ordenada\n    k: constante RRF (60 é default do paper Cormack 2009)\n    top_n: quantos resultados finais devolver\n    \"\"\"\n    scores = defaultdict(float)\n    for ranking in rankings:\n        for rank, doc_id in enumerate(ranking, start=1):\n            scores[doc_id] += 1 / (k + rank)\n    return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_n]\n\n# Uso\nbm25_ranking   = bm25_search(query, top=100)\nvector_ranking = vector_search(query_emb, top=100)\nfused = rrf_fusion([bm25_ranking, vector_ranking], k=60, top_n=50)\n\n# Observações:\n# - RRF ignora magnitude dos scores originais\n# - Robusto em qualquer escala\n# - Pode receber N rankings (ex: + reranker pré-fusion)\n# - k=60 funciona bem; tuning marginal via golden set"
+          }
+        }
+      ]
+    },
+    {
+      "id": "0a9f37f8-0fb4-43bd-a3f5-5b3327a71845",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Reranking com cross-encoder"
+      },
+      "children": [
+        {
+          "id": "6e7c063d-6937-448f-9fe4-368f2f935f4f",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "# Opção 1: API gerenciada (Cohere Rerank)\nimport cohere\nco = cohere.Client()\n\ncandidates = [d[\"text\"] for d in fused[:50]]  # top-50 pós-fusão\nreranked = co.rerank(\n    model=\"rerank-multilingual-v3.0\",\n    query=query,\n    documents=candidates,\n    top_n=10,\n)\nfinal = [fused[r.index] for r in reranked.results]\n\n# Opção 2: Modelo local (BGE-reranker, Qwen Reranker, etc)\nfrom sentence_transformers import CrossEncoder\nmodel = CrossEncoder(\"BAAI/bge-reranker-v2-m3\")\npairs = [[query, doc[\"text\"]] for doc in fused[:50]]\nscores = model.predict(pairs)\nfinal = sorted(zip(fused[:50], scores), key=lambda x: x[1], reverse=True)[:10]\n\n# Custo/latência:\n# - Cohere API: ~50-100ms + $$ por 1k calls\n# - Local BGE em GPU: ~20-50ms, sem custo por query\n# - Trade-off: ops vs custo fixo"
+          }
+        }
+      ]
+    },
+    {
+      "id": "4996235f-406e-4428-8145-21b4b240125f",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Medir o ganho honestamente"
+      },
+      "children": [
+        {
+          "id": "223e4f84-2649-4dd6-af37-9ff86a140cf9",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Benchmark clássico em corpus real: BM25 sozinho NDCG@10 ~0.55. Vector sozinho ~0.60. Hybrid com RRF ~0.68. Hybrid + reranker ~0.78. Ganhos compostos reais — mas variam por domínio. Meça SEMPRE no seu golden set, não no benchmark de outro."
+          }
+        },
+        {
+          "id": "6e6fbac4-d9ae-4bdc-8298-42baa6f3a39c",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Não adicione reranker sem medir impacto. Adiciona latência (100-300ms) e custo. Em queries técnicas bem formuladas (SKU, error code), pode não mudar quase nada — e aí só custa. Decida com dados."
+          }
+        },
+        {
+          "id": "d0f762d6-2518-452b-bdb3-1069dd0490fc",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Stack completa: BM25 (Postgres tsvector ou Elasticsearch) + vector (pgvector ou Qdrant) em paralelo + RRF em memória + reranker opcional no topo. Esse é o state of the art 2026 em busca que não é só hype."
+          }
+        }
+      ]
+    }
+  ]
+}

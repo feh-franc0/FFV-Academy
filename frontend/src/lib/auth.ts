@@ -27,11 +27,13 @@ import {
 } from './api-client';
 
 export interface UserProfile {
+  id: string;
   name: string;
   email: string;
   phone: string;
   createdAt: string;
   marketingConsent: boolean;
+  role: string;
   /** Slugs de produtos pagos (ex: ["simulado-aws-practitioner"]). */
   paidProducts: string[];
 }
@@ -52,11 +54,13 @@ interface UserDTO {
 
 function dtoToProfile(dto: UserDTO): UserProfile {
   return {
+    id: dto.id,
     name: dto.name,
     email: dto.email,
     phone: dto.phone ?? '',
     createdAt: dto.createdAt,
     marketingConsent: dto.marketingConsent,
+    role: dto.role ?? 'user',
     paidProducts: dto.products,
   };
 }
@@ -138,11 +142,13 @@ export async function verifyToken(
     if (!pendingRegistration) return { ok: false };
 
     const user: UserProfile = {
+      id: `mock-${email}`,
       name: pendingRegistration.name.trim(),
       email,
       phone: pendingRegistration.phone,
       createdAt: new Date().toISOString(),
       marketingConsent: pendingRegistration.marketingConsent,
+      role: 'user',
       paidProducts: [],
     };
     if (!setUser(user)) return { ok: false };

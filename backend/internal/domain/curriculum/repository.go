@@ -29,4 +29,14 @@ type Repository interface {
 	// SoftDelete marca o artigo como deletado (deleted_at = NOW()).
 	// O artigo não é removido do banco — preserva histórico (LGPD).
 	SoftDelete(ctx context.Context, slug string) error
+
+	// FindBlocksBySlug retorna todos os blocos do artigo em uma única query
+	// (CTE recursivo), pré-organizados em árvore (children populados).
+	// Lista vazia se o artigo não tem blocks ainda.
+	FindBlocksBySlug(ctx context.Context, slug string) ([]*Block, error)
+
+	// SaveBlocks substitui todos os blocos de um artigo (DELETE + INSERT em
+	// transação). Caller é responsável por validar block_data por tipo antes.
+	// Mantém atomicidade: ou todos os blocks novos entram, ou nenhum entra.
+	SaveBlocks(ctx context.Context, slug string, blocks []*Block) error
 }

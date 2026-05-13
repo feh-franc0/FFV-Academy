@@ -1,0 +1,542 @@
+{
+  "slug": "distributed-tracing",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b5d92c45-80ee-47cf-8964-558411aba648",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Métricas dizem "
+          },
+          {
+            "text": "que",
+            "italic": true
+          },
+          {
+            "text": " algo está errado. Logs mostram "
+          },
+          {
+            "text": "o que",
+            "italic": true
+          },
+          {
+            "text": " aconteceu num serviço. Traces revelam "
+          },
+          {
+            "text": "por que",
+            "italic": true
+          },
+          {
+            "text": " uma requisição foi lenta ou falhou — rastreando o caminho completo por todos os serviços envolvidos. Em sistemas distribuídos com dezenas de microserviços, tracing é a única técnica que dá visibilidade ponta-a-ponta. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "f21230b0-9262-4f87-8514-219b92a482a1",
+      "type": "paragraph",
+      "position": 1,
+      "data": {
+        "content": [
+          {
+            "text": " Neste módulo você vai entender a estrutura de spans e traces, como o W3C Trace Context propaga contexto por HTTP/gRPC/filas, o que é baggage e quando usar, e a diferença crucial entre head sampling (simples) e tail sampling (inteligente). Ao final, você saberá configurar tracing em serviços reais e escolher entre Jaeger e Grafana Tempo. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "31bdfd39-3d2b-40e6-b351-99536a8e80e2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Anatomia de um trace: spans e árvore"
+      },
+      "children": [
+        {
+          "id": "5b670c95-9f8a-411d-b929-e79ae4d9e889",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Um "
+              },
+              {
+                "text": "trace",
+                "bold": true
+              },
+              {
+                "text": " é a representação completa de uma requisição distribuída — do momento em que entra no sistema até a resposta. É composto de "
+              },
+              {
+                "text": "spans",
+                "bold": true
+              },
+              {
+                "text": ": unidades de trabalho com duração, atributos e relação parent-child. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3ab17fc-f133-4277-a4f6-f34511e37bcf",
+          "type": "node_graph",
+          "position": 1,
+          "data": {
+            "title": "Trace: POST /checkout — 450ms total",
+            "columns": [
+              {
+                "label": "Root",
+                "nodes": [
+                  {
+                    "icon": "🌐",
+                    "label": "HTTP POST /checkout",
+                    "sub": "api-gateway · 450ms · OK",
+                    "tone": "emphasis"
+                  }
+                ]
+              },
+              {
+                "label": "Services",
+                "nodes": [
+                  {
+                    "label": "validate-order",
+                    "sub": "order-service · 20ms · OK",
+                    "tone": "default"
+                  },
+                  {
+                    "label": "reserve-inventory",
+                    "sub": "inventory-service · 80ms · OK",
+                    "tone": "default"
+                  },
+                  {
+                    "label": "process-payment",
+                    "sub": "payment-service · 340ms · ERROR",
+                    "tone": "danger"
+                  }
+                ]
+              },
+              {
+                "label": "Downstream",
+                "nodes": [
+                  {
+                    "label": "db.query SELECT",
+                    "sub": "postgres · 75ms · db.system=postgresql",
+                    "tone": "muted"
+                  },
+                  {
+                    "label": "stripe-api-call",
+                    "sub": "http.client · 300ms · HTTP 408",
+                    "tone": "danger"
+                  },
+                  {
+                    "label": "payment-service.compensate",
+                    "sub": "35ms · OK",
+                    "tone": "default"
+                  }
+                ]
+              }
+            ],
+            "legend": []
+          }
+        },
+        {
+          "id": "3e30d90c-f6b3-4a6c-a19d-6b6467797257",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": " Cada span contém: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "b596d388-5ffe-4667-b9bd-5c3efec93254",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "python",
+            "code": "# Estrutura de um span OpenTelemetry\n{\n    \"trace_id\": \"4bf92f3577b34da6a3ce929d0e0e4736\",  # 128 bits, único por trace\n    \"span_id\": \"i9j0c2d4e6f8a0b2\",                  # 64 bits, único por span\n    \"parent_span_id\": \"a1b2c3d4e5f6a7b8\",            # None = root span\n    \"name\": \"process-payment\",\n    \"kind\": \"SERVER\",              # CLIENT | SERVER | PRODUCER | CONSUMER | INTERNAL\n    \"start_time\": 1705329791.350,\n    \"end_time\": 1705329791.690,    # duration = 340ms\n    \"status\": {\"code\": \"ERROR\", \"message\": \"Stripe timeout\"},\n\n    # Atributos — dados de contexto do span\n    \"attributes\": {\n        \"service.name\": \"payment-service\",\n        \"http.method\": \"POST\",\n        \"http.url\": \"https://api.stripe.com/v1/charges\",\n        \"http.status_code\": 408,\n        \"payment.amount\": 9990,\n        \"payment.currency\": \"BRL\",\n    },\n\n    # Eventos — logs point-in-time dentro do span\n    \"events\": [\n        {\n            \"name\": \"exception\",\n            \"timestamp\": 1705329791.645,\n            \"attributes\": {\n                \"exception.type\": \"stripe.error.APIConnectionError\",\n                \"exception.message\": \"Connection timeout after 300s\",\n                \"exception.stacktrace\": \"...\",\n            }\n        }\n    ],\n\n    # Links — referências a outros traces (ex: mensagem de fila)\n    \"links\": [],\n    \"resource\": {\"service.name\": \"payment-service\", \"service.version\": \"2.1.0\"}\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "02912fb9-254c-498d-92d6-1371b2b57021",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "W3C Trace Context: propagação por HTTP"
+      },
+      "children": [
+        {
+          "id": "c36b8848-8b68-4dbd-8c7f-6a1740b57e19",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Para que spans de serviços diferentes compartilhem o mesmo trace_id, o contexto precisa ser propagado nos headers HTTP. O padrão W3C Trace Context define dois headers: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "2f072780-34b6-4d36-bc5d-c4142cf75e56",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "# traceparent — obrigatório\n# Formato: versão-trace_id-parent_span_id-flags\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\n#             ^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ^^^^^^^^^^^^^^^^ ^^\n#             v0  trace_id (32 hex chars / 128 bits) parent_span_id  sampled=1\n\n# tracestate — opcional, vendor-specific key-value\ntracestate: rojo=00f067aa0ba902b7,congo=t61rcWkgMzE\n\n# Flags (último byte):\n# 01 = sampled (este trace está sendo coletado)\n# 00 = not sampled (propaga contexto mas sem coletar dados)"
+          }
+        },
+        {
+          "id": "5718edf8-317b-460b-8472-8d6f0430108c",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": " O OpenTelemetry propaga isso automaticamente com auto-instrumentação. Para propagação manual: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "773f0e3f-4d9e-424c-b8cd-1931e922f0ff",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "python",
+            "code": "# Python: propagação manual (útil em filas, workers assíncronos)\nfrom opentelemetry import trace, propagate\nfrom opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator\n\npropagator = TraceContextTextMapPropagator()\n\n# === PRODUTOR (quem cria a mensagem) ===\ndef publish_to_queue(payload: dict, queue):\n    carrier = {}\n    propagator.inject(carrier)  # Extrai contexto ativo → dict\n\n    message = {\n        \"payload\": payload,\n        \"otel_context\": carrier,  # {\"traceparent\": \"00-4bf9...\", \"tracestate\": \"\"}\n    }\n    queue.publish(message)\n\n# === CONSUMIDOR (worker que processa a mensagem) ===\ndef process_queue_message(message: dict):\n    carrier = message.get(\"otel_context\", {})\n    ctx = propagator.extract(carrier)  # Restaura contexto do produtor\n\n    tracer = trace.get_tracer(__name__)\n    with tracer.start_as_current_span(\n        \"process-order-event\",\n        context=ctx,  # Continua o trace do produtor\n        kind=trace.SpanKind.CONSUMER,\n    ) as span:\n        span.set_attribute(\"messaging.system\", \"rabbitmq\")\n        span.set_attribute(\"messaging.destination\", \"orders\")\n        process(message[\"payload\"])"
+          }
+        }
+      ]
+    },
+    {
+      "id": "5c69a2d9-af4f-4e7d-a762-3a581bb32d67",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Baggage: metadados de negócio no contexto"
+      },
+      "children": [
+        {
+          "id": "5a392b6a-7197-4610-9bd2-832262228b74",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Baggage",
+                "bold": true
+              },
+              {
+                "text": " é um mecanismo para propagar key-value pairs pelo contexto de trace — além do trace_id. Qualquer serviço downstream pode ler sem receber como parâmetro explícito. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "4631dc0f-d727-423a-8fe5-8a9d04e86bd7",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "from opentelemetry import baggage, context\n\n# === Injetar no início da requisição (ex: middleware de auth) ===\nctx = baggage.set_baggage(\"user.tier\", \"premium\")\nctx = baggage.set_baggage(\"tenant.id\", \"acme-corp\", context=ctx)\nctx = baggage.set_baggage(\"feature.flags\", \"new-checkout\", context=ctx)\n\n# Attach ao contexto da thread/coroutine\ntoken = context.attach(ctx)\n\n# === Ler em qualquer serviço downstream ===\nuser_tier = baggage.get_baggage(\"user.tier\")      # \"premium\"\ntenant_id = baggage.get_baggage(\"tenant.id\")      # \"acme-corp\"\n\n# Usar para decisões sem parâmetro explícito\nif user_tier == \"premium\":\n    rate_limit = 1000  # req/min\nelse:\n    rate_limit = 100\n\n# Baggage é propagado no header:\n# baggage: user.tier=premium,tenant.id=acme-corp,feature.flags=new-checkout"
+          }
+        },
+        {
+          "id": "58003a4b-1983-4da4-aed4-7a139ad70b84",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Limites do Baggage: Baggage é propagado em clear text no header HTTP e vai para TODOS os serviços downstream — incluindo serviços de terceiros. Nunca coloque PII, tokens ou dados sensíveis em baggage. Mantenha o payload pequeno (recomendado: < 8KB total)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "222c67ee-fdac-4085-a968-94e26d19fd77",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Instrumentação manual: quando auto-instrumentation não basta"
+      },
+      "children": [
+        {
+          "id": "eba0c67c-1d57-40f9-84e9-6220daf7c48f",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Auto-instrumentação cobre HTTP, DB, gRPC. Para lógica de negócio interna (processamento de arquivo, algoritmo customizado, call externo não-suportado), instrumentação manual é necessária. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "0040e983-4bfe-4c4a-9c4f-b56a95c568d4",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "from opentelemetry import trace\nfrom opentelemetry.trace import StatusCode\n\ntracer = trace.get_tracer(__name__, schema_url=\"https://semconv.org/\")\n\ndef process_checkout(cart_id: str, user_id: str) -> Order:\n    with tracer.start_as_current_span(\"checkout.process\") as span:\n        # Atributos descrevem o que o span representa\n        span.set_attribute(\"checkout.cart_id\", cart_id)\n        span.set_attribute(\"checkout.user_id\", user_id)\n        span.set_attribute(\"checkout.item_count\", len(cart.items))\n\n        try:\n            # Sub-operação — span filho automático\n            with tracer.start_as_current_span(\"checkout.validate_inventory\") as inv_span:\n                inventory = check_inventory(cart.items)\n                inv_span.set_attribute(\"inventory.items_available\", len(inventory))\n\n            # Evento point-in-time dentro do span pai\n            span.add_event(\"inventory.validated\", {\"available\": len(inventory)})\n\n            order = create_order(cart, user_id)\n            span.set_attribute(\"checkout.order_id\", order.id)\n            span.set_status(StatusCode.OK)\n            return order\n\n        except InventoryError as e:\n            # Registrar exceção — aparece na timeline do span no Jaeger/Tempo\n            span.record_exception(e)\n            span.set_status(StatusCode.ERROR, f\"Inventory unavailable: {e}\")\n            raise\n\n        except Exception as e:\n            span.record_exception(e)\n            span.set_status(StatusCode.ERROR, str(e))\n            raise"
+          }
+        },
+        {
+          "id": "0d7a5324-5e02-4018-8041-38c3a14c551e",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "typescript",
+            "code": "// Node.js: instrumentação manual\nimport { trace, SpanStatusCode, SpanKind } from '@opentelemetry/api';\n\nconst tracer = trace.getTracer('checkout-service', '1.0.0');\n\nasync function processCheckout(cartId: string, userId: string): Promise<Order> {\n  return tracer.startActiveSpan(\n    'checkout.process',\n    {\n      kind: SpanKind.SERVER,\n      attributes: { 'checkout.cart_id': cartId, 'checkout.user_id': userId },\n    },\n    async (span) => {\n      try {\n        const order = await createOrder(cartId, userId);\n        span.setAttributes({ 'checkout.order_id': order.id });\n        span.setStatus({ code: SpanStatusCode.OK });\n        return order;\n      } catch (err) {\n        span.recordException(err as Error);\n        span.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });\n        throw err;\n      } finally {\n        span.end(); // SEMPRE chamar end() — mesmo em erro\n      }\n    }\n  );\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "d652ad63-3f0e-435b-8539-140671d97bcc",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Sampling: head vs tail"
+      },
+      "children": [
+        {
+          "id": "85fa435c-95c5-42aa-982a-11f48b13dd3c",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Em produção, coletar 100% dos traces é inviável (custo, storage, ingestão). Sampling define quais traces guardar. Existem duas estratégias fundamentais: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "21871b37-afd1-464a-b253-fe748dffda94",
+          "type": "comparison_flow",
+          "position": 1,
+          "data": {
+            "title": "Head Sampling vs Tail Sampling",
+            "left": [],
+            "right": []
+          }
+        },
+        {
+          "id": "9fbb3192-606e-4050-93e9-c1e7ef143b5a",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "yaml",
+            "code": "# Tail sampling no OTel Collector\nprocessors:\n  tail_sampling:\n    decision_wait: 30s          # Aguarda trace completar\n    num_traces: 100000          # Buffer de traces em memória\n    expected_new_traces_per_sec: 1000\n\n    policies:\n      # SEMPRE guardar traces com erro\n      - name: errors-policy\n        type: status_code\n        status_code: {status_codes: [ERROR]}\n\n      # SEMPRE guardar traces lentos (> 2s)\n      - name: slow-traces-policy\n        type: latency\n        latency: {threshold_ms: 2000}\n\n      # SEMPRE guardar traces com header de debug\n      - name: debug-policy\n        type: string_attribute\n        string_attribute:\n          key: \"sampling.debug\"\n          values: [\"true\"]\n\n      # 5% dos restantes aleatoriamente\n      - name: baseline-policy\n        type: probabilistic\n        probabilistic: {sampling_percentage: 5}\n\n      # Composta: todos os spans de um trace devem satisfazer\n      - name: composite-policy\n        type: composite\n        composite:\n          max_total_spans_per_second: 10000\n          policy_order: [errors-policy, slow-traces-policy, debug-policy, baseline-policy]"
+          }
+        }
+      ]
+    },
+    {
+      "id": "39c6ac15-6cc4-44d0-8de4-4091c27c0135",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Jaeger vs Grafana Tempo"
+      },
+      "children": [
+        {
+          "id": "fb05c390-b2cd-48a2-a44b-85633a32b4e5",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Critério",
+              "Jaeger",
+              "Grafana Tempo"
+            ],
+            "rows": [
+              [
+                "Storage backend",
+                "Elasticsearch, Cassandra, Badger",
+                "Object storage (S3, GCS, MinIO) — muito mais barato"
+              ],
+              [
+                "Query language",
+                "Jaeger Query (simples)",
+                "TraceQL — como PromQL mas para traces"
+              ],
+              [
+                "Integração Grafana",
+                "Plugin separado",
+                "Nativa — mesma UI que Loki e Mimir"
+              ],
+              [
+                "Escalabilidade",
+                "Limitada pelo ES/Cassandra",
+                "Horizontal via object storage — barato em escala"
+              ],
+              [
+                "Quando usar",
+                "Já tem ES na stack; time pequeno; familiar",
+                "Stack LGTM completa; custo é preocupação; TraceQL"
+              ],
+              [
+                "Managed",
+                "Jaeger no Kubernetes | sem SaaS oficial",
+                "Grafana Cloud Traces (serverless)"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "fc95be61-31bf-4e8a-974a-9bbd9301a57a",
+          "type": "decision_box",
+          "position": 1,
+          "data": {
+            "scenario": "Nova stack de observabilidade, time de 5-20 engenheiros, custo importa",
+            "winner": "Grafana Tempo + Loki + Mimir (LGTM stack)",
+            "why": "Object storage é 10-50× mais barato que Elasticsearch para dados de trace. TraceQL permite queries avançadas. Integração nativa entre traces (Tempo), logs (Loki) e métricas (Mimir) no Grafana — link direto de log para trace via trace_id.",
+            "alternatives": [
+              {
+                "label": "Jaeger + Elasticsearch",
+                "when": "Já tem ES operado internamente, time familiarizado com Jaeger"
+              },
+              {
+                "label": "Datadog APM / Honeycomb (SaaS)",
+                "when": "Time pequeno sem capacidade de operar infra de observabilidade; aceita custo SaaS"
+              },
+              {
+                "label": "Zipkin",
+                "when": "Legacy — evitar para novas stacks; sem suporte a OTLP nativo"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "d45ae6d4-a752-4f1a-a4d8-3e4420f28f7a",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "TraceQL: consultando traces como dados"
+      },
+      "children": [
+        {
+          "id": "c09f589f-6984-4b5b-9f06-7b745e45bce8",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " TraceQL (Grafana Tempo) permite queries poderosas sobre atributos de spans — muito além de buscar por trace_id. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "6731a960-7732-436f-8cdc-b63418854cbf",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "# TraceQL — exemplos práticos\n\n# Todos os traces com erro no payment-service\n{service.name=\"payment-service\" && status=error}\n\n# Traces com duração > 2s no checkout\n{span.name=\"checkout.process\" && duration > 2s}\n\n# Traces onde payment falhou com status HTTP 500\n{service.name=\"payment-service\" && http.status_code=500}\n\n# Traces de usuário premium com latência > 1s (via baggage/atributo)\n{span.user.tier=\"premium\" && duration > 1s}\n\n# Buscar por atributo de negócio\n{span.checkout.order_id=\"ORD-12345\"}\n\n# Agrupar por serviço + contar erros (Tempo 2.4+)\n{status=error} | by(service.name) | count() > 10\n\n# Rate de erros por serviço\nrate({status=error}[5m]) by (service.name)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "d269c021-34b2-49d1-a8bd-09351695d381",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Semantic Conventions: nomes padronizados"
+      },
+      "children": [
+        {
+          "id": "aa678a93-89e5-49fa-bde7-49bf9afb4d11",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " OpenTelemetry Semantic Conventions define nomes de atributos padronizados. Seguir essas convenções permite que ferramentas como Jaeger e Tempo reconheçam e exibam dados automaticamente. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "090496f5-7e2f-4e7f-88ad-5ddb52d82b9d",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Domínio",
+              "Atributo",
+              "Exemplo"
+            ],
+            "rows": [
+              [
+                "HTTP",
+                "http.method, http.url, http.status_code, http.route",
+                "POST, /checkout, 200, /checkout"
+              ],
+              [
+                "Database",
+                "db.system, db.name, db.statement, db.operation",
+                "postgresql, orders_db, SELECT..., query"
+              ],
+              [
+                "Messaging",
+                "messaging.system, messaging.destination, messaging.operation",
+                "rabbitmq, orders, publish"
+              ],
+              [
+                "RPC",
+                "rpc.system, rpc.service, rpc.method",
+                "grpc, OrderService, CreateOrder"
+              ],
+              [
+                "Serviço",
+                "service.name, service.version, service.namespace",
+                "payment-service, 2.1.0, production"
+              ],
+              [
+                "Runtime",
+                "process.runtime.name, process.pid",
+                "python, 12345"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "d6d25154-68b9-4cd3-89f3-639d20d3981a",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Q&A — perguntas típicas de entrevista SRE"
+      },
+      "children": []
+    },
+    {
+      "id": "6db3e73e-1009-491c-902d-fe130f55a1c1",
+      "type": "callout",
+      "position": 11,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Take-aways:"
+      }
+    }
+  ]
+}

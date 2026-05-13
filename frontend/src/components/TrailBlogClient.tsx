@@ -1,4 +1,5 @@
 'use client';
+import { safeJsonLd } from '@/lib/safe-json';
 
 import Link from 'next/link';
 import { useGameState } from '@/hooks/useGameState';
@@ -42,7 +43,7 @@ export function TrailBlogClient({ trail }: Props) {
 
   return (
     <div className="max-w-2xl mx-auto px-6 pb-24">
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(courseJsonLd) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: safeJsonLd(courseJsonLd) }} />
 
       {/* ── Breadcrumb ── */}
       <nav className="flex items-center gap-2 text-xs pt-10 mb-8" style={{ color: 'var(--ffv-muted)' }}>

@@ -1,0 +1,633 @@
+{
+  "slug": "vllm-paged-attention",
+  "title": null,
+  "blocks": [
+    {
+      "id": "8c7a2c9a-7333-40c0-a65a-d62d381c9e33",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Em setembro de 2023, Woosuk Kwon e equipe (Sky Computing Lab, UC Berkeley) publicaram "
+          },
+          {
+            "text": "\"Efficient Memory Management for Large Language Model Serving with PagedAttention\"",
+            "italic": true
+          },
+          {
+            "text": " no SOSP. O paper trouxe ao mundo de LLM serving uma técnica que sistemas operacionais usam há 50 anos: memória virtual paginada. O resultado — vLLM — entrega 10-24× mais throughput que HuggingFace TGI antigo e tornou-se a infraestrutura padrão para self-hosted serving em 2026. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "128bea3e-0609-4962-bb20-ed92c647dec7",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O problema: KV cache desperdiça memória"
+      },
+      "children": [
+        {
+          "id": "3f5e1219-1088-4ce5-b2fc-10e8f3c9b150",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Em LLM serving tradicional, alocava-se KV cache como tensor contíguo de tamanho "
+              },
+              {
+                "text": "[max_seq_len × n_heads × d_head]",
+                "code": true
+              },
+              {
+                "text": " por sequência. Problemas: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "08a6284c-9bbb-42f2-81a2-b21ed8642c32",
+          "type": "node_graph",
+          "position": 1,
+          "data": {
+            "title": "Tipos de waste em KV cache (pré-vLLM)",
+            "columns": [
+              {
+                "label": "Internal fragmentation",
+                "nodes": [
+                  {
+                    "icon": "🗑️",
+                    "label": "Reserva 2048, usa 200",
+                    "sub": "90% memória reservada não-utilizada",
+                    "tone": "danger"
+                  },
+                  {
+                    "icon": "🗑️",
+                    "label": "Pior em outputs variáveis",
+                    "sub": "impossível prever quantos tokens vão sair",
+                    "tone": "danger"
+                  }
+                ]
+              },
+              {
+                "label": "External fragmentation",
+                "nodes": [
+                  {
+                    "icon": "🧩",
+                    "label": "Buracos não-contíguos",
+                    "sub": "cada seq exige bloco contíguo grande",
+                    "tone": "danger"
+                  },
+                  {
+                    "icon": "🧩",
+                    "label": "Cabe 4× 500MB mas não 1× 1.5GB",
+                    "sub": "memória total existe mas inutilizável",
+                    "tone": "danger"
+                  }
+                ]
+              },
+              {
+                "label": "Reservation overhead",
+                "nodes": [
+                  {
+                    "icon": "📦",
+                    "label": "Pre-allocate max worst-case",
+                    "sub": "até 60-80% waste em workloads reais",
+                    "tone": "muted"
+                  }
+                ]
+              }
+            ],
+            "legend": []
+          }
+        },
+        {
+          "id": "d60c0264-bd7b-4477-b3d4-424a3c0e6b30",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Resultado prático: HuggingFace TGI v1 conseguia ~10 sequências concorrentes em uma A100 80GB com Llama 13B em FP16. vLLM com PagedAttention atinge 50-80 sequências no mesmo hardware. 5-8× mais throughput pela mesma memória."
+          }
+        }
+      ]
+    },
+    {
+      "id": "72db2b02-54d6-4ea2-b082-12c2639b1b53",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "PagedAttention: KV cache em blocos"
+      },
+      "children": [
+        {
+          "id": "f62cf244-536c-4250-92cc-05f6b78fc83a",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " A inovação central: tratar KV cache como "
+              },
+              {
+                "text": "memória virtual paginada",
+                "bold": true
+              },
+              {
+                "text": ". Divide-se em "
+              },
+              {
+                "text": "blocos físicos",
+                "bold": true
+              },
+              {
+                "text": " de tamanho fixo (default 16 tokens). Cada sequência mantém uma "
+              },
+              {
+                "text": "block table",
+                "bold": true
+              },
+              {
+                "text": " mapeando posições lógicas (token 0..n) para blocos físicos arbitrários. Os blocos físicos não precisam ser contíguos na VRAM. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "95a0f39f-e252-47c5-9cb3-ec8defc640e7",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Allocação PagedAttention",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "icon": "🆕",
+                "label": "Nova request com prompt 200 tokens",
+                "desc": "precisa de ⌈200/16⌉ = 13 blocos"
+              },
+              {
+                "icon": "🎯",
+                "label": "Allocator entrega 13 blocos físicos livres",
+                "desc": "IDs arbitrários (ex: 47, 12, 99, 3, ...)"
+              },
+              {
+                "icon": "📋",
+                "label": "Block table da seq A = [47, 12, 99, 3, ...]",
+                "desc": "mapeamento lógico→físico"
+              },
+              {
+                "icon": "🔁",
+                "label": "Decode: gera token 201",
+                "desc": "precisa de novo bloco (16°). Allocator dá um livre."
+              },
+              {
+                "icon": "🏁",
+                "label": "Sequência termina",
+                "desc": "libera 14 blocos para a pool — outras requests reusam"
+              }
+            ]
+          }
+        },
+        {
+          "id": "2212078a-3474-4f9d-876a-bd40c9ea4157",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "python",
+            "code": "# Pseudocódigo de PagedAttention CUDA kernel (simplificado)\n# Cada thread block processa attention para 1 sequência, varrendo seus blocos físicos\ndef paged_attention_kernel(\n    Q,                # [num_seqs, num_heads, head_dim]\n    K_cache,          # [num_blocks, num_heads, head_dim, block_size]\n    V_cache,          # idem\n    block_tables,     # [num_seqs, max_num_blocks_per_seq] → physical block id\n    seq_lens,         # [num_seqs]\n):\n    seq_idx = block_idx_x\n    head_idx = block_idx_y\n\n    q = Q[seq_idx, head_idx]                         # carrega Q em registradores\n    block_table = block_tables[seq_idx]\n    seq_len = seq_lens[seq_idx]\n\n    # online softmax (FlashAttention-style)\n    m = -inf; l = 0.0; o = 0.0\n\n    for logical_block_idx in range(ceil(seq_len / block_size)):\n        physical_block_id = block_table[logical_block_idx]\n        K_block = K_cache[physical_block_id, head_idx]  # [head_dim, block_size]\n        V_block = V_cache[physical_block_id, head_idx]\n\n        scores = q @ K_block / sqrt(head_dim)         # [block_size]\n        m_new = max(m, scores.max())\n        l_new = exp(m - m_new) * l + sum(exp(scores - m_new))\n        o = exp(m - m_new) * o + V_block @ exp(scores - m_new)\n        m, l = m_new, l_new\n\n    output[seq_idx, head_idx] = o / l"
+          }
+        },
+        {
+          "id": "e3d6e4ed-ab62-42ab-94a2-c9e824a6c092",
+          "type": "annotated_formula",
+          "position": 3,
+          "data": {
+            "title": "Throughput ganho via menos waste",
+            "formula": "capacity_seqs = (VRAM_total - weights) / (avg_seq_len · KV_per_token)",
+            "parts": [
+              {
+                "text": "antes",
+                "annotation": "avg_seq_len ≈ max_seq_len (reserva)",
+                "highlight": false
+              },
+              {
+                "text": "depois",
+                "annotation": "avg_seq_len = real (paginação)",
+                "highlight": true
+              },
+              {
+                "text": "~4× mais seqs",
+                "annotation": "em workloads heterogêneos",
+                "highlight": true
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "c51c3e84-2892-4ca5-8bfb-e2bd41945a5f",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Continuous batching + chunked prefill"
+      },
+      "children": [
+        {
+          "id": "60bd868a-deaa-4c25-9a4e-4cd9a7834e93",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " PagedAttention sozinho economiza memória. O segundo pilar do throughput é o "
+              },
+              {
+                "text": "scheduler",
+                "bold": true
+              },
+              {
+                "text": ": a cada step do GPU, o vLLM scheduler reavalia qual conjunto de sequências formar o próximo batch. Sequências que terminaram saem; novas entram; prefills longos são fatiados. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "afdf2e09-2a5e-43f2-a45e-98c8b4240c20",
+          "type": "stack_flow",
+          "position": 1,
+          "data": {
+            "title": "Scheduler vLLM por step",
+            "items": [
+              {
+                "icon": "📥",
+                "label": "1. Coleta requests pendentes",
+                "sub": "da queue HTTP + retomadas (swap-out)"
+              },
+              {
+                "icon": "🧮",
+                "label": "2. Verifica orçamento de tokens",
+                "sub": "max_num_batched_tokens (ex: 8192)"
+              },
+              {
+                "icon": "✂️",
+                "label": "3. Chunked prefill",
+                "sub": "prefill de 10k tokens vira chunks de 2k intercalados com decodes"
+              },
+              {
+                "icon": "🚄",
+                "label": "4. Forma batch hetero (prefill+decode)",
+                "sub": "maximiza FLOPs sem ultrapassar orçamento"
+              },
+              {
+                "icon": "🎯",
+                "label": "5. Executa step CUDA",
+                "sub": "forward unificado prefill+decode"
+              },
+              {
+                "icon": "🔄",
+                "label": "6. Pós-step: decisão sobre swap",
+                "sub": "se memória apertar, swap-out blocks de baixa prioridade"
+              }
+            ]
+          }
+        },
+        {
+          "id": "cd6a7bf9-db51-4b33-b584-8cddb86b6f05",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Chunked prefill (vLLM v0.5+, paper \"Sarathi-Serve\") evita que um prompt longo de 30k tokens bloqueie todo o batch durante seu prefill. O prefill é dividido em chunks de N tokens e cada chunk roda junto de decodes de outras sequências. Resultado: latência por token (decode) cai mesmo quando há prefills enormes na fila."
+          }
+        }
+      ]
+    },
+    {
+      "id": "9df0506c-37b8-4e62-8eac-a0b25cf333bd",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Prefix caching: o segredo dos chatbots multi-tenant"
+      },
+      "children": [
+        {
+          "id": "c4553af9-91ac-4f8c-90f5-bb448b94754b",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "# Ativar prefix caching\nvllm serve meta-llama/Meta-Llama-3.1-70B-Instruct \\\n    --tensor-parallel-size 4 \\\n    --enable-prefix-caching \\\n    --block-size 16 \\\n    --max-model-len 32768 \\\n    --gpu-memory-utilization 0.92"
+          }
+        },
+        {
+          "id": "f375b0d9-c7cc-4bb9-944e-7cda3dd63178",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Cada bloco físico recebe um "
+              },
+              {
+                "text": "hash",
+                "bold": true
+              },
+              {
+                "text": " do seu conteúdo lógico (tokens + hash do bloco anterior). Duas sequências que começam com o mesmo prefixo apontam para os mesmos blocos físicos — prefill é pulado para a parte compartilhada. Workloads que beneficiam: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "5371e66a-110d-4b91-86d4-0e74aa623194",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Workload",
+              "Padrão de prefixo",
+              "Ganho típico TTFT"
+            ],
+            "rows": [
+              [
+                "Chatbot com system prompt 2k tokens",
+                "system prompt repetido em 100% das requests",
+                "60-80% redução"
+              ],
+              [
+                "RAG com mesmo doc base (FAQ)",
+                "doc base repetido em 70% das requests",
+                "40-60% redução"
+              ],
+              [
+                "Code assistant com prelúdio (linguagem, libs)",
+                "prelúdio repetido em sessions",
+                "30-50% redução"
+              ],
+              [
+                "Chat multi-turn",
+                "histórico cresce; cada turn reusa anterior",
+                "50-90% por turn"
+              ],
+              [
+                "Requests aleatórias sem prefixo comum",
+                "baixíssima reutilização",
+                "~0% (overhead negligível)"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "a774460c-2f33-4bcc-b84e-fc268552f090",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Tensor parallelism para modelos gigantes"
+      },
+      "children": [
+        {
+          "id": "d4f78134-59cc-463d-a471-2d0437f5fded",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "# Llama 3.1 70B em 4× A100 80GB com TP=4\nvllm serve meta-llama/Meta-Llama-3.1-70B-Instruct \\\n    --tensor-parallel-size 4 \\\n    --quantization awq_marlin \\           # INT4 AWQ + Marlin kernel\n    --kv-cache-dtype fp8_e5m2 \\           # KV cache em FP8 (Hopper+)\n    --max-model-len 32768 \\\n    --max-num-seqs 128 \\\n    --enable-prefix-caching \\\n    --enable-chunked-prefill \\\n    --gpu-memory-utilization 0.93 \\\n    --port 8000\n\n# Throughput esperado (chat tipico 256 in / 256 out):\n# - sem otimizações: ~50 req/min\n# - com PagedAttention + cont batching: ~600 req/min\n# - + AWQ INT4 + FP8 KV + prefix cache: ~1200-1800 req/min"
+          }
+        },
+        {
+          "id": "e39a2ed0-ccf5-40dd-9f71-c4e5e3a61c1c",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Estratégia paralelismo",
+              "Granularidade",
+              "Bandwidth crítica",
+              "Quando usar"
+            ],
+            "rows": [
+              [
+                "Tensor Parallelism (TP)",
+                "Split intra-layer",
+                "NVLink alto (300+ GB/s)",
+                "Single node multi-GPU, baixa latência"
+              ],
+              [
+                "Pipeline Parallelism (PP)",
+                "Split inter-layer",
+                "Inter-node OK (10-100 GB/s)",
+                "Multi-node, throughput-oriented"
+              ],
+              [
+                "Data Parallelism (DP)",
+                "Replica modelo, divide batch",
+                "Mínima (só gradients em training)",
+                "Múltiplas réplicas inferência"
+              ],
+              [
+                "Expert Parallelism (EP)",
+                "MoE experts em GPUs diferentes",
+                "All-to-all",
+                "Mixtral, DeepSeek-V3"
+              ],
+              [
+                "Sequence Parallelism",
+                "Split sequência longa",
+                "Inter-GPU",
+                "Long context (>128k)"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "445aa240-b51c-4463-ae8b-bf5f2b29a252",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "OpenAI API compat e SDK"
+      },
+      "children": [
+        {
+          "id": "ea17edac-7a68-4712-a91d-14b5c7f0de5d",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "# Cliente OpenAI apontando para vLLM\nfrom openai import OpenAI\n\nclient = OpenAI(\n    base_url=\"http://localhost:8000/v1\",\n    api_key=\"not-needed\",   # vLLM ignora; configure auth no proxy\n)\n\nresp = client.chat.completions.create(\n    model=\"meta-llama/Meta-Llama-3.1-70B-Instruct\",\n    messages=[\n        {\"role\": \"system\", \"content\": \"Você é tutor da FFV Academy.\"},\n        {\"role\": \"user\", \"content\": \"Explique PagedAttention em 3 bullets.\"},\n    ],\n    temperature=0.5,\n    stream=True,\n    extra_body={\n        \"min_p\": 0.05,\n        \"repetition_penalty\": 1.0,\n        \"use_beam_search\": False,\n    },\n)\nfor chunk in resp:\n    print(chunk.choices[0].delta.content or \"\", end=\"\", flush=True)"
+          }
+        },
+        {
+          "id": "7a2df8ec-109a-47d0-8639-fd4f5e3bb212",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Endpoints suportados (≈parity com OpenAI): , , , . Extras vLLM via : min_p, top_k, repetition_penalty, guided_json (JSON schema), guided_regex, guided_choice."
+          }
+        }
+      ]
+    },
+    {
+      "id": "a78b1dc1-98df-43f2-9314-56c9cdcb8de2",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Quando escolher cada serving engine"
+      },
+      "children": [
+        {
+          "id": "e4fc999a-8b38-4408-b7e1-f54f4ad42658",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Engine",
+              "Stack",
+              "Force",
+              "Use quando"
+            ],
+            "rows": [
+              [
+                "vLLM",
+                "Python + CUDA/ROCm/TPU",
+                "PagedAttn, prefix cache, multi-GPU TP",
+                "Self-hosted alta concorrência, throughput >100 req/s"
+              ],
+              [
+                "TensorRT-LLM",
+                "C++ + CUDA (NVIDIA)",
+                "Fused kernels, FP8 nativo",
+                "Datacenter NVIDIA, latência mínima absoluta"
+              ],
+              [
+                "TGI (HuggingFace)",
+                "Python + Rust + CUDA",
+                "Integração HF Hub, AMD ROCm",
+                "Quem já vive no ecossistema HF"
+              ],
+              [
+                "SGLang",
+                "Python + CUDA",
+                "RadixAttention (better prefix), constrained gen",
+                "Workloads agentes complexos, JSON-heavy"
+              ],
+              [
+                "Ollama",
+                "Go + llama.cpp",
+                "UX, multi-model, CPU/GPU consumer",
+                "Dev local, multi-model com baixo QPS"
+              ],
+              [
+                "llama.cpp",
+                "C++ puro",
+                "Edge, CPU-only, hardware misto",
+                "Edge devices, CPU-only, fallback universal"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "cece80f5-c367-40b5-bfd7-13b1162fadad",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "03834e0a-dcf0-4d76-b619-06cacf06c737",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "vLLM funciona em AMD ou só NVIDIA?",
+            "answer": "Sim, vLLM suporta AMD ROCm (MI300X) desde v0.4. Builds com . Também suporta TPU (via PyTorch XLA), AWS Inferentia2, e CPU-only experimental. Mas NVIDIA continua o backend mais maduro e otimizado."
+          }
+        },
+        {
+          "id": "591f188b-369d-4616-962c-9374164b7c00",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Posso quantizar KV cache no vLLM?",
+            "answer": "Sim, em Hopper+ (H100/H200/B200) com ou . Reduz pela metade vs FP16, sem perda mensurável em quase todos benchmarks. Em Ampere (A100) o FP8 cache também funciona mas via emulação."
+          }
+        },
+        {
+          "id": "ff062b2e-a7c3-4aa4-aa74-30e3c1be0def",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Como ativar speculative decoding no vLLM?",
+            "answer": "v0.5+ via . Target e draft devem compartilhar tokenizer. Ganho 1.5-2.5× em texto previsível. Coberto em detalhe no próximo módulo."
+          }
+        },
+        {
+          "id": "1ca0e6be-5d4c-46de-bfc8-c06d72467034",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "vLLM tem benchmark padrão para comparar?",
+            "answer": "Sim: simula tráfego Poisson com prompts ShareGPT. Métricas: TTFT, ITL (inter-token latency), throughput (tokens/s server), request throughput. Use isso para comparar configs antes de prod, não LLMperf etc."
+          }
+        }
+      ]
+    },
+    {
+      "id": "f69dfe10-17eb-4023-9d62-711eeab4d028",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Referências"
+      },
+      "children": [
+        {
+          "id": "ab7bb0ef-a150-4b39-a84e-4f96fb64f0b2",
+          "type": "key_value",
+          "position": 0,
+          "data": {
+            "items": [
+              {
+                "k": "PagedAttention paper",
+                "v": "Kwon et al., \"Efficient Memory Management for LLM Serving with PagedAttention\", SOSP 2023, arXiv:2309.06180"
+              },
+              {
+                "k": "Repo",
+                "v": "github.com/vllm-project/vllm (Sky Computing Lab → comunidade vLLM)"
+              },
+              {
+                "k": "Orca (continuous batching)",
+                "v": "Yu et al., \"Orca: A Distributed Serving System...\", OSDI 2022"
+              },
+              {
+                "k": "Chunked prefill / Sarathi-Serve",
+                "v": "Agrawal et al., \"Taming Throughput-Latency Tradeoff in LLM Inference\", OSDI 2024"
+              },
+              {
+                "k": "Megatron-LM (TP)",
+                "v": "Shoeybi et al., \"Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism\", arXiv:1909.08053"
+              },
+              {
+                "k": "Marlin kernel",
+                "v": "Frantar et al., \"Marlin: Mixed-Precision Auto-Regressive Parallel Inference\", IST Austria 2024"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

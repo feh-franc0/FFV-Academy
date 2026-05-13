@@ -16,10 +16,12 @@ import (
 // PADRÃO: protegido pelo middleware RequireAdmin (role=admin no JWT).
 // Acesso restrito — nunca exposto publicamente.
 type AdminHandler struct {
-	userRepo     domidentity.UserRepository
-	attemptRepo  domsim.AttemptRepository
-	eventIngest  *appevent.IngestEventUseCase
-	auditLogRepo postgresinfra.AdminAuditReader
+	userRepo       domidentity.UserRepository
+	attemptRepo    domsim.AttemptRepository
+	eventIngest    *appevent.IngestEventUseCase
+	auditLogRepo   postgresinfra.AdminAuditReader
+	adminStatsRepo AdminStatsRepository
+	usersRepo      AdminUsersRepository
 }
 
 func NewAdminHandler(
@@ -41,9 +43,14 @@ func (h *AdminHandler) WithAuditLog(repo postgresinfra.AdminAuditReader) *AdminH
 	return h
 }
 
-// GetStats retorna métricas gerais do sistema.
-// GET /api/v1/admin/stats
+// GetStats — fallback legado, mantido pra compat com testes existentes que
+// dependem da rota retornando 200. A versão rica vive em GetAdminStats
+// (admin_stats.go) e é wireada quando AdminStatsRepository é injetado.
 func (h *AdminHandler) GetStats(w http.ResponseWriter, r *http.Request) {
+	if h.adminStatsRepo != nil {
+		h.GetAdminStats(w, r)
+		return
+	}
 	WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"status": "operational",
 	})

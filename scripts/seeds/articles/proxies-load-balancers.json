@@ -1,0 +1,149 @@
+{
+  "slug": "proxies-load-balancers",
+  "title": null,
+  "blocks": [
+    {
+      "id": "585b4cbb-0b25-4e26-8a4c-d21bca2d8993",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Entre o cliente e o servidor existem múltiplas camadas de intermediários — cada um com responsabilidade específica. Entender proxies e load balancers é o que diferencia \"sobe numa VPS\" de \"opera em alta disponibilidade\". "
+          }
+        ]
+      }
+    },
+    {
+      "id": "d091f671-f96c-4e03-a6f5-41dc6c5f0c50",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Forward proxy vs reverse proxy"
+      },
+      "children": [
+        {
+          "id": "c9d6d500-0c46-4e1e-9f2e-a8213c0edb3b",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "# Forward proxy: serve o CLIENTE (fala em nome dos clientes)\n# Cliente → [Forward Proxy] → Internet\n# Servidor vê: IP do proxy, não do cliente\n\n# Reverse proxy: serve o SERVIDOR (fala em nome dos servidores)\n# Internet → [Reverse Proxy] → Backends\n# Cliente vê: IP do reverse proxy, não do backend\n\n# Nginx como reverse proxy simples:\nnginx_config = \"\"\"\nserver {\n    listen 80;\n    server_name api.example.com;\n\n    location / {\n        proxy_pass http://localhost:8000;    # encaminha para backend\n        proxy_set_header Host $host;\n        proxy_set_header X-Real-IP $remote_addr;\n        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n        proxy_set_header X-Forwarded-Proto $scheme;\n    }\n}\n\"\"\"\n\n# X-Forwarded-For: lista de IPs que o request atravessou\n# \"X-Forwarded-For: 203.0.113.1, 10.0.0.1\"\n# 203.0.113.1 = IP real do cliente\n# 10.0.0.1   = IP do primeiro proxy interno\n\n# Cuidado: X-Forwarded-For pode ser forjado pelo cliente!\n# Confie apenas no ÚLTIMO IP adicionado por um proxy CONFIÁVEL\n# AWS ALB adiciona o IP real do cliente como último entry\n\n# Verificar IP real do cliente em Flask/FastAPI:\nfrom fastapi import Request\n\ndef get_real_ip(request: Request) -> str:\n    \"\"\"Extrai IP real do cliente considerando proxies.\"\"\"\n    forwarded_for = request.headers.get(\"X-Forwarded-For\")\n    if forwarded_for:\n        # O IP mais à esquerda é o do cliente (mas pode ser forjado)\n        # Em produção: confie apenas em IPs adicionados por seu proxy\n        return forwarded_for.split(\",\")[0].strip()\n    return request.client.host"
+          }
+        }
+      ]
+    },
+    {
+      "id": "19ca3f2a-5129-44d5-b02f-e4c887055497",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "L4 vs L7: comparação e casos de uso"
+      },
+      "children": [
+        {
+          "id": "1e2dabfe-55cd-4cfc-8dd2-8f703bf216bb",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Aspecto",
+              "L4 (TCP/UDP)",
+              "L7 (HTTP/HTTPS)"
+            ],
+            "rows": [
+              [
+                "Visibilidade",
+                "IP, porta, protocolo TCP",
+                "Headers, URL, body, cookies"
+              ],
+              [
+                "Velocidade",
+                "Mais rápido (sem parsing)",
+                "Overhead de parse HTTP"
+              ],
+              [
+                "Roteamento",
+                "Por IP/porta apenas",
+                "Por path, header, host, cookie"
+              ],
+              [
+                "TLS termination",
+                "Passthrough (não inspeciona)",
+                "Termina TLS, reinspeciona"
+              ],
+              [
+                "WebSocket",
+                "Transparente",
+                "Requer configuração explícita"
+              ],
+              [
+                "Banco de dados",
+                "Sim (qualquer protocolo)",
+                "Não (sem protocolo DB)"
+              ],
+              [
+                "WAF / rate limit",
+                "Não possível",
+                "Sim"
+              ],
+              [
+                "Exemplos",
+                "AWS NLB, HAProxy TCP, IPVS",
+                "AWS ALB, Nginx, Envoy, Traefik"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "c60faeea-179e-4d40-9fe4-113842638899",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "text",
+            "code": "# Nginx como load balancer L7:\nnginx_upstream_config = \"\"\"\nupstream api_backends {\n    # Algoritmos de balanceamento:\n    # (sem declaração) = round robin  ← padrão, simples\n    # least_conn;                     ← menor número de conexões ativas\n    # ip_hash;                        ← sticky por IP do cliente\n    # random two least_conn;          ← escolhe 2 aleatórios, menor conexão\n\n    server backend1:8000 weight=3;  # recebe 3x mais tráfego\n    server backend2:8000 weight=1;\n    server backend3:8000 backup;    # só recebe se os outros falharem\n\n    keepalive 32;   # pool de conexões persistentes para os backends\n}\n\nserver {\n    listen 443 ssl http2;\n\n    # Roteamento por path (L7):\n    location /api/ {\n        proxy_pass http://api_backends;\n    }\n\n    location /static/ {\n        root /var/www;  # serve arquivos locais (sem proxy)\n        expires 1y;\n        add_header Cache-Control \"public, immutable\";\n    }\n\n    # Roteamento por header (canary deployment):\n    location /v2/ {\n        if ($http_x_version = \"beta\") {\n            proxy_pass http://beta_backend;\n            break;\n        }\n        proxy_pass http://stable_backend;\n    }\n}\n\"\"\"\n\n# HAProxy como L4/L7:\nhaproxy_config = \"\"\"\nfrontend http_in\n    bind *:80\n    mode http\n    default_backend app_servers\n\nbackend app_servers\n    mode http\n    balance roundrobin\n    option httpchk GET /health\n    http-check expect status 200\n    server app1 10.0.0.1:8000 check inter 2s fall 3 rise 2\n    server app2 10.0.0.2:8000 check inter 2s fall 3 rise 2\n    server app3 10.0.0.3:8000 check inter 2s fall 3 rise 2\n\"\"\""
+          }
+        }
+      ]
+    },
+    {
+      "id": "acd5c5ec-2683-4dcb-9cb0-0fba2f68fd79",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Health checks e algoritmos de balanceamento"
+      },
+      "children": [
+        {
+          "id": "0c36d1c0-738c-4fea-8263-2738a97ac67c",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "# Health checks: detectar backends doentes antes que usuários sofram\n\nfrom fastapi import FastAPI\nimport time\nimport psutil\n\napp = FastAPI()\n\n# Endpoint de health check — deve ser leve e rápido:\n@app.get(\"/health\")\ndef health():\n    return {\"status\": \"ok\", \"ts\": time.time()}\n\n# Endpoint de readiness (K8s) — verifica dependências:\n@app.get(\"/ready\")\nasync def ready():\n    checks = {}\n\n    # Verificar banco de dados:\n    try:\n        # await db.execute(\"SELECT 1\")\n        checks[\"database\"] = \"ok\"\n    except Exception as e:\n        checks[\"database\"] = f\"error: {e}\"\n\n    # Verificar Redis:\n    try:\n        # await redis.ping()\n        checks[\"redis\"] = \"ok\"\n    except Exception as e:\n        checks[\"redis\"] = f\"error: {e}\"\n\n    all_ok = all(v == \"ok\" for v in checks.values())\n    status = 200 if all_ok else 503\n    return checks  # retorna 200 = pronto, 503 = não pronto\n\n# Algoritmos de balanceamento:\n# Round Robin:   distribui sequencialmente — simples, funciona bem se requests são iguais\n# Weighted RR:   versão com pesos — útil quando backends têm capacidades diferentes\n# Least Conn:    envia para backend com menos conexões ativas — ideal para long-polling\n# Random:        escolha aleatória — simples, funciona bem estatisticamente\n# IP Hash:       hash do IP do cliente → mesmo backend (sticky, frágil)\n# Consistent Hash: hash do request key → mesmo backend (estável com adição/remoção)\n\n# Consistent hashing (usado em Redis Cluster, Cassandra, CDNs):\nimport hashlib\n\nclass ConsistentHashRing:\n    def __init__(self, nodes: list, replicas: int = 100):\n        self.ring = {}\n        self.sorted_keys = []\n        for node in nodes:\n            for i in range(replicas):\n                key = self._hash(f\"{node}:{i}\")\n                self.ring[key] = node\n                self.sorted_keys.append(key)\n        self.sorted_keys.sort()\n\n    def _hash(self, s: str) -> int:\n        return int(hashlib.md5(s.encode()).hexdigest(), 16)\n\n    def get_node(self, key: str) -> str:\n        if not self.ring:\n            return None\n        h = self._hash(key)\n        for ring_key in self.sorted_keys:\n            if h <= ring_key:\n                return self.ring[ring_key]\n        return self.ring[self.sorted_keys[0]]  # wrap around\n\nring = ConsistentHashRing([\"backend1\", \"backend2\", \"backend3\"])\nprint(ring.get_node(\"user:123\"))  # sempre o mesmo backend para este user"
+          }
+        }
+      ]
+    },
+    {
+      "id": "4839e526-b647-443e-b990-1734268e44ee",
+      "type": "callout",
+      "position": 4,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Modelo mental: forward proxy = fala em nome dos clientes (filtro corporativo, privacidade). Reverse proxy = fala em nome dos servidores (TLS termination, cache, LB). L4 = mais rápido, qualquer protocolo TCP/UDP, sem inspeção de payload. L7 = roteamento por conteúdo HTTP, WAF, rate limiting. Sticky sessions são uma muleta — a solução certa é state externo (Redis). Health checks (fall 3, rise 2) garantem que backends doentes saem do pool antes de usuários sofrerem."
+      }
+    },
+    {
+      "id": "a7c07064-7ab9-4a1a-a1a8-2b5982857904",
+      "type": "callout",
+      "position": 5,
+      "data": {
+        "variant": "info",
+        "title": "",
+        "content": "Próximo: WebSocket, SSE e streaming — comunicação bidirecional e push do servidor para o cliente."
+      }
+    }
+  ]
+}

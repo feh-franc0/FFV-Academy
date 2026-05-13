@@ -1,0 +1,208 @@
+{
+  "slug": "cloudflare-workers-profundo",
+  "title": null,
+  "blocks": [
+    {
+      "id": "cef78ddb-9bfd-42a4-85b0-a5def5724e3b",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O ecossistema Workers"
+      },
+      "children": [
+        {
+          "id": "783b01cc-a95f-4490-8faa-ff27edf8bac0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Workers sozinho é compute stateless. A plataforma real são Workers + bindings: KV (kv global), D1 (SQL), R2 (object storage), Durable Objects (stateful), Queues (message queue), Analytics Engine (time-series), AI (inference on-edge). Você compõe isso via "
+              },
+              {
+                "text": "wrangler.toml",
+                "code": true
+              },
+              {
+                "text": " e consome como variáveis injetadas no "
+              },
+              {
+                "text": "env",
+                "code": true
+              },
+              {
+                "text": ". "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "e06d8b97-6b63-4899-9f98-a614c5ea6e70",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "wrangler.toml com bindings"
+      },
+      "children": [
+        {
+          "id": "047b3b3c-8dd4-42ff-8f6c-957ba6d7447f",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "name = \"ffv-api\"\nmain = \"src/index.ts\"\ncompatibility_date = \"2026-04-01\"\ncompatibility_flags = [\"nodejs_compat\"]\n\n[[kv_namespaces]]\nbinding = \"CACHE\"\nid = \"abc123\"\n\n[[d1_databases]]\nbinding = \"DB\"\ndatabase_name = \"ffv\"\ndatabase_id = \"xyz789\"\n\n[[r2_buckets]]\nbinding = \"ASSETS\"\nbucket_name = \"ffv-assets\"\n\n[[durable_objects.bindings]]\nname = \"RATE_LIMITER\"\nclass_name = \"RateLimiter\"\n\n[[queues.producers]]\nbinding = \"JOBS\"\nqueue = \"background-jobs\""
+          }
+        }
+      ]
+    },
+    {
+      "id": "e4e30a58-8106-4ab1-859a-784b3b84eeb4",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Worker típico consumindo bindings"
+      },
+      "children": [
+        {
+          "id": "01abb5c3-d16b-4399-a242-6bd1ee6970e1",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "ts",
+            "code": "interface Env {\n  CACHE: KVNamespace;\n  DB: D1Database;\n  ASSETS: R2Bucket;\n  RATE_LIMITER: DurableObjectNamespace;\n  JOBS: Queue;\n}\n\nexport default {\n  async fetch(req: Request, env: Env, ctx: ExecutionContext) {\n    const url = new URL(req.url);\n\n    // KV: cache de config\n    const config = await env.CACHE.get('app-config', 'json');\n\n    // D1: query parametrizada\n    const { results } = await env.DB.prepare(\n      'SELECT id, title FROM posts WHERE slug = ?'\n    ).bind(url.pathname).all();\n\n    // R2: servir asset\n    if (url.pathname.startsWith('/assets/')) {\n      const key = url.pathname.replace('/assets/', '');\n      const obj = await env.ASSETS.get(key);\n      if (!obj) return new Response('not found', { status: 404 });\n      return new Response(obj.body, { headers: { 'Content-Type': obj.httpMetadata?.contentType ?? '' } });\n    }\n\n    // Queue: enfileirar job pesado\n    ctx.waitUntil(env.JOBS.send({ kind: 'email', to: 'user@ffv.com' }));\n\n    return Response.json({ results });\n  },\n} satisfies ExportedHandler<Env>;"
+          }
+        }
+      ]
+    },
+    {
+      "id": "4f9e3fea-88ee-48c4-a352-ec90ff031c61",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "KV: quando e como"
+      },
+      "children": [
+        {
+          "id": "a7e156a9-db82-4776-b69d-b1e012b8c005",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " KV é key-value distribuído globalmente com eventual consistency (~60s). Read barato e rápido no edge; write se propaga devagar. Use pra: config do app, feature flags, sessões não críticas, caches de resposta, rate-limit best-effort. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "bbce6d5b-0a6d-4610-b328-6ada46fd3deb",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "ts",
+            "code": "// Write global (lento de propagar)\nawait env.CACHE.put('flag:dark-mode', 'true', { expirationTtl: 3600 });\n\n// Read local no POP (super rápido, eventual)\nconst flag = await env.CACHE.get('flag:dark-mode');\n\n// List + pagination (não é index SQL — é prefix scan)\nconst list = await env.CACHE.list({ prefix: 'session:', limit: 100, cursor });"
+          }
+        },
+        {
+          "id": "359945ba-b8fc-4615-90a2-01afbee80458",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Não use KV pra contadores exatos ou locks — eventual consistency fura. Use Durable Objects."
+          }
+        }
+      ]
+    },
+    {
+      "id": "c1287b61-5473-4262-9a66-a5f46d6d6842",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "D1: SQLite no edge"
+      },
+      "children": [
+        {
+          "id": "546c3b36-eb0d-42f1-b972-b238ce06c773",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "ts",
+            "code": "// Criação via wrangler:\n// npx wrangler d1 create ffv\n// npx wrangler d1 execute ffv --file=./schema.sql\n\n// schema.sql:\n// CREATE TABLE posts (id INTEGER PRIMARY KEY, slug TEXT UNIQUE, title TEXT, body TEXT);\n// CREATE INDEX idx_slug ON posts(slug);\n\n// Query com prepared statement (SQL injection-safe):\nconst stmt = env.DB.prepare('SELECT * FROM posts WHERE slug = ?').bind(slug);\nconst { results } = await stmt.all<Post>();\n\n// Batch em transação:\nawait env.DB.batch([\n  env.DB.prepare('INSERT INTO posts (slug, title) VALUES (?, ?)').bind('a', 'A'),\n  env.DB.prepare('INSERT INTO posts (slug, title) VALUES (?, ?)').bind('b', 'B'),\n]);"
+          }
+        }
+      ]
+    },
+    {
+      "id": "24032f5e-191b-4d61-8558-95de319ae321",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "R2: object storage sem egress"
+      },
+      "children": [
+        {
+          "id": "4cca1789-b74c-4c5a-9603-0366af4d508f",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "ts",
+            "code": "// Upload\nawait env.ASSETS.put('imagens/hero.jpg', req.body, {\n  httpMetadata: { contentType: 'image/jpeg' },\n  customMetadata: { uploadedBy: 'admin' },\n});\n\n// Download\nconst obj = await env.ASSETS.get('imagens/hero.jpg');\nconst data = await obj?.arrayBuffer();\n\n// List\nconst listed = await env.ASSETS.list({ prefix: 'imagens/', limit: 50 });"
+          }
+        },
+        {
+          "id": "b4d413eb-b8cb-4d6f-adbc-e2c8b0d51b9f",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "R2 é S3-compatible, sem egress fee. Pra site com tráfego alto de mídia, diferença de custo vs S3 pode ser dramática (AWS cobra ~$0.09/GB, R2 cobra zero)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "f1a06071-cb1d-480c-a888-a67baf7e6a26",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Durable Objects: o único stateful"
+      },
+      "children": [
+        {
+          "id": "663c60f3-e119-4b48-8341-e3f5346c10f0",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "ts",
+            "code": "export class RateLimiter {\n  state: DurableObjectState;\n  constructor(state: DurableObjectState) { this.state = state; }\n\n  async fetch(req: Request) {\n    const key = 'count';\n    const windowMs = 60_000;\n    const limit = 100;\n\n    const now = Date.now();\n    const stored = await this.state.storage.get<{ count: number; reset: number }>(key);\n    const data = stored && stored.reset > now\n      ? stored\n      : { count: 0, reset: now + windowMs };\n\n    data.count += 1;\n    await this.state.storage.put(key, data);\n\n    if (data.count > limit) {\n      return new Response('rate limited', { status: 429 });\n    }\n    return new Response('ok');\n  }\n}\n\n// No worker:\nconst id = env.RATE_LIMITER.idFromName(userIp);\nconst stub = env.RATE_LIMITER.get(id);\nconst res = await stub.fetch(req);"
+          }
+        }
+      ]
+    },
+    {
+      "id": "57394dc9-4662-421a-a6de-4418576df3da",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Trade-offs e custos"
+      },
+      "children": [
+        {
+          "id": "4f45018b-0dcc-4ee1-8434-ba899b17650c",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Workers Paid ($5/mês): 10M req incluídos, depois $0.30/M. KV: 1M read incluídos. D1: 5M reads, 100k writes. R2: sem egress. DO: 1M req + 1GB-s incluídos. Comparado com Lambda + DynamoDB + S3 em tráfego equivalente, Cloudflare custa geralmente 3-10x menos. Contrapartida: lock-in (DO não tem equivalente AWS nativo)."
+          }
+        }
+      ]
+    }
+  ]
+}

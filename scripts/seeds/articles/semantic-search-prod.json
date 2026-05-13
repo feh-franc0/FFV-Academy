@@ -1,0 +1,572 @@
+{
+  "slug": "semantic-search-prod",
+  "title": "Source",
+  "blocks": [
+    {
+      "id": "40a202ef-d4c0-4eb9-8ff1-334d6707d2b2",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Do POC ao billion-scale"
+      },
+      "children": [
+        {
+          "id": "cc14b8b8-90ed-441a-9458-a402f6ad0867",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Em demo é fácil: 1k docs, embed com OpenAI, push no pgvector, query. Em produção sério, é outro mundo: bilhões de docs, freshness em minutos, latência sub-100ms p99, custo controlado, reindex sem downtime, golden set evoluindo. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "06b62402-4772-4e11-8d82-707878da23e8",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Este módulo cobre o que separa demo de produção: pipelines de ingest (Airflow/Prefect), sharding strategy, hot/cold tiers, freshness lag, blue-green reindex, e o custo real de embedding 1B docs. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "f7daa058-70d8-45e6-9a12-06afa58aadf6",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Referências: Pinecone, Qdrant, Weaviate engineering blogs (todos têm posts excelentes sobre escala); \"Designing Data-Intensive Applications\" (Kleppmann) cap. 11 (stream processing) e 12 (future of data systems)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "9ed765b3-f63d-4751-bbb3-dbc7d190ea4d",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Arquitetura completa de produção"
+      },
+      "children": [
+        {
+          "id": "25883fb9-aee5-43fb-844b-8cba427e1eb3",
+          "type": "arch_flow",
+          "position": 0,
+          "data": {
+            "title": "Stack típica em escala",
+            "columns": [
+              {
+                "title": "Source",
+                "items": [
+                  "CRM / CMS / DB — Docs originais",
+                  "CDC (Debezium) — Postgres → Kafka",
+                  "Files (S3/GCS) — PDFs, HTML, docs"
+                ]
+              },
+              {
+                "title": "Ingest",
+                "items": [
+                  "Kafka / Pulsar — Stream de mudanças",
+                  "Airflow / Prefect — Batch reindex",
+                  "Parser workers — PDF → texto, HTML clean"
+                ]
+              },
+              {
+                "title": "Transform",
+                "items": [
+                  "Chunker — Fixed / semantic / hierarchical",
+                  "Embedder (GPU) — BGE-M3, Voyage, Cohere",
+                  "Metadata enrichment — lang, date, tags"
+                ]
+              },
+              {
+                "title": "Index",
+                "items": [
+                  "Vector DB — Qdrant / Weaviate / pgvector",
+                  "Search engine — Elasticsearch / OpenSearch",
+                  "Cache — Redis para query results"
+                ]
+              },
+              {
+                "title": "Serve",
+                "items": [
+                  "Retrieval API — gRPC / REST, hybrid + rerank",
+                  "Observability — Prometheus + golden set CI",
+                  "A/B testing — split traffic, mede NDCG"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "c21d305d-49df-4811-9488-9e0da24180ef",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Ingestion: stream vs batch"
+      },
+      "children": [
+        {
+          "id": "6037d58e-1af8-4851-89e5-005239972d98",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Critério",
+              "Stream (Kafka + workers)",
+              "Batch (Airflow / Spark)"
+            ],
+            "rows": [
+              [
+                "Freshness",
+                "Minutos",
+                "Horas a dias"
+              ],
+              [
+                "Throughput",
+                "Limitado por workers ativos",
+                "Pode escalar massivamente"
+              ],
+              [
+                "Complexidade",
+                "Alta (state, retries, exactly-once)",
+                "Média (DAGs)"
+              ],
+              [
+                "Custo",
+                "GPUs sempre ligadas (caro)",
+                "GPUs sob demanda (mais barato)"
+              ],
+              [
+                "Falha tolerance",
+                "Kafka retém eventos, retry trivial",
+                "Idempotente, reprocessa partições"
+              ],
+              [
+                "Quando usar",
+                "Hot data (últimas 24-48h), updates críticos",
+                "Backfill, cold data, reindex periódico"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "025ee8d4-7fbe-4024-8e37-45a3b2275346",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Padrão híbrido: stream para dados quentes (últimos 7 dias) + batch noturno para cold tier (corpus completo, reembed se modelo mudou). Equilibra freshness, custo e ops."
+          }
+        }
+      ]
+    },
+    {
+      "id": "0663e55e-f787-4ce1-94e2-a04033b87671",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Chunking: a decisão mais subestimada"
+      },
+      "children": [
+        {
+          "id": "d23f1ca4-990b-4265-8605-cd6ef5afcc19",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "# Estratégia 1: Fixed-size com overlap (default razoável)\nfrom langchain.text_splitter import RecursiveCharacterTextSplitter\n\nsplitter = RecursiveCharacterTextSplitter(\n    chunk_size=500,         # tokens, não chars (usar tiktoken)\n    chunk_overlap=100,      # 20% típico\n    separators=[\"\\n\\n\", \"\\n\", \". \", \" \"],  # tenta quebrar em fronteiras naturais\n)\nchunks = splitter.split_text(doc_text)\n\n# Estratégia 2: Semantic (sentence + semantic similarity)\nfrom llama_index.core.node_parser import SemanticSplitterNodeParser\n\nsplitter = SemanticSplitterNodeParser(\n    buffer_size=1,\n    breakpoint_percentile_threshold=95,\n    embed_model=OpenAIEmbedding(),\n)\n# Quebra onde a similaridade entre sentenças vizinhas cai abruptamente\n\n# Estratégia 3: Hierarchical (chunk + parent context)\nfrom llama_index.core.node_parser import HierarchicalNodeParser\n\nparser = HierarchicalNodeParser.from_defaults(\n    chunk_sizes=[2048, 512, 128],  # 3 níveis\n)\n# Retrieval no chunk de 128t (preciso)\n# Resposta inclui parent de 512t ou 2048t (contexto)\n# AutoMergingRetriever junta automaticamente"
+          }
+        },
+        {
+          "id": "12f5cb8c-f46d-4ae5-8ae5-d1ba16cdc404",
+          "type": "key_value",
+          "position": 1,
+          "data": {
+            "items": [
+              {
+                "k": "Chunk muito pequeno (< 100t)",
+                "v": "Falta contexto. Match relevante perde semântica."
+              },
+              {
+                "k": "Chunk muito grande (> 1500t)",
+                "v": "Dilui sinal. Muitos tópicos no mesmo vetor. NDCG cai."
+              },
+              {
+                "k": "Sweet spot empírico",
+                "v": "300-600 tokens com 10-20% overlap. Funciona em 80% dos casos."
+              },
+              {
+                "k": "Quando usar hierarchical",
+                "v": "RAG com docs longos (papers, manuais) onde contexto amplo importa"
+              },
+              {
+                "k": "Validação",
+                "v": "Sempre A/B testar 2-3 estratégias no golden set antes de commit"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "638f9355-8ea2-494a-980d-53e6a49cb86a",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Sharding em vector DBs"
+      },
+      "children": [
+        {
+          "id": "c3abd598-887b-4668-ac4f-b5766d313384",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Vector DBs modernos sharding por hash ou por range. Trade-offs distintos do mundo SQL/ES: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "605a0f60-3129-460b-9e3b-b17fda3eac93",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Estratégia",
+              "Como funciona",
+              "Quando usar"
+            ],
+            "rows": [
+              [
+                "Hash shard (default)",
+                "hash(doc_id) % N → shard",
+                "Distribuição uniforme, sem hot shards"
+              ],
+              [
+                "Range / tenant shard",
+                "shard por tenant_id ou date range",
+                "Multi-tenancy isolado, queries filtradas por tenant"
+              ],
+              [
+                "Geo shard",
+                "shard por região do usuário",
+                "Latência baixa por região, compliance (GDPR)"
+              ],
+              [
+                "Tiered (hot/cold)",
+                "Hot tier: SSD/RAM; cold tier: HDD/S3",
+                "Corpora com long tail temporal (logs, news)"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "3cbed2e7-2173-477e-b359-7b3be9f4e1b4",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Vector queries com filtros (e.g., \"buscar entre docs do tenant X criados em Y\") podem degradar performance se o filtro reduzir muito o set candidato — ANN HNSW é desenhado para corpus inteiro. Vector DBs modernos (Qdrant, Weaviate) implementam \"filterable HNSW\" ou payload-filtered search para mitigar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "41f8fae0-a7b6-4cb6-854f-983e97a8695b",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Freshness lag: o trade-off escondido"
+      },
+      "children": [
+        {
+          "id": "ade5c5d2-9327-4f26-86f9-77d68fa1ec11",
+          "type": "flow_diagram",
+          "position": 0,
+          "data": {
+            "title": "Caminho de freshness",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1. Doc criado/atualizado",
+                "desc": "T=0 no source system"
+              },
+              {
+                "label": "2. CDC captura mudança",
+                "desc": "T+1s via Debezium / triggers"
+              },
+              {
+                "label": "3. Kafka topic",
+                "desc": "T+2s, ordenado por partition"
+              },
+              {
+                "label": "4. Worker consome",
+                "desc": "T+5s, parse e chunk"
+              },
+              {
+                "label": "5. Embedding (GPU batch)",
+                "desc": "T+30s-2min, depende do batch size"
+              },
+              {
+                "label": "6. Upsert no vector DB",
+                "desc": "T+35s, mas refresh do índice HNSW pode adicionar segundos"
+              },
+              {
+                "label": "7. Visível em queries",
+                "desc": "T+1-5 minutos, depende do throughput de updates"
+              }
+            ]
+          }
+        },
+        {
+          "id": "0b0054cd-2a3f-435a-86a1-9a18cbca4e12",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Lag típico em pipelines streaming bem feitos: 30s a 5min. Em batch noturno: até 24h. Decida pelo SLA: chat de suporte aguenta 5min? Probably. Catálogo e-commerce aguenta 24h? Probably not."
+          }
+        }
+      ]
+    },
+    {
+      "id": "dfba2522-2491-4576-9a9f-929b65850244",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Blue-green reindex (mudança de modelo)"
+      },
+      "children": [
+        {
+          "id": "a491fd33-c6ac-4ccf-be25-cef85f475ebf",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "# Exemplo: troca de BGE-large-v1.5 para BGE-M3 sem downtime\n# Vector DB: Qdrant\n\nfrom qdrant_client import QdrantClient\nclient = QdrantClient(url=\"https://qdrant.internal\")\n\n# Step 1: criar coleção \"green\" com mesmo schema\nclient.create_collection(\n    collection_name=\"docs_v2_green\",\n    vectors_config={\"size\": 1024, \"distance\": \"Cosine\"},\n)\n\n# Step 2: reindex corpus em \"green\" com novo modelo (job batch separado)\n# Pode levar horas-dias. Roda em paralelo com tráfego em \"blue\" (atual).\n# - Worker pool de N GPUs lendo do source\n# - Embeddings com BGE-M3\n# - Upsert em docs_v2_green\n\n# Step 3: golden set validation (CI step antes do switch)\n# Roda N=100 queries no green e no blue, compara NDCG@10 e MRR.\n# Bloqueio: green precisa estar >= blue em pelo menos 3/4 métricas.\n\n# Step 4: switch atomic via alias\nclient.update_collection_aliases(\n    change_aliases_operations=[\n        {\"delete_alias\": {\"alias_name\": \"docs\"}},\n        {\"create_alias\": {\"collection_name\": \"docs_v2_green\", \"alias_name\": \"docs\"}},\n    ]\n)\n# A partir daqui, todas as queries para \"docs\" atingem v2.\n\n# Step 5: manter blue por N dias para rollback\n# Se algo der errado: reverter o alias é uma chamada API.\n# Após N dias estáveis, drop blue: client.delete_collection(\"docs_v1_blue\")"
+          }
+        },
+        {
+          "id": "f323b35f-1da3-4510-b47a-a22710fd669b",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Este padrão é aplicável a qualquer mudança não-trivial: troca de modelo, troca de chunking, mudança de schema, re-fine-tune do encoder. Zero downtime, rollback em 1 chamada API, validação rigorosa antes do switch."
+          }
+        }
+      ]
+    },
+    {
+      "id": "5b158969-6808-4d55-bbfc-54acbb73907d",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Custo real: embedding 1B documentos"
+      },
+      "children": [
+        {
+          "id": "5670d404-9179-43f3-8c08-a82abd0d0855",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "Cenário: 1B documentos, doc médio 200 tokens\n=============================================\n\nOPÇÃO A: Voyage AI v3 ($0.12 / 1M tokens)\n  Total tokens: 1B × 200 = 200B\n  Custo: 200,000 × $0.12 = $24,000\n  Tempo: paralelo de chamadas API, ~1-2 dias com 100 workers concorrentes\n\nOPÇÃO B: Cohere embed v3 ($0.10 / 1M tokens)\n  Total tokens: 200B\n  Custo: $20,000\n  Tempo: similar a Voyage\n\nOPÇÃO C: OpenAI text-embedding-3-large ($0.13 / 1M tokens)\n  Custo: $26,000\n\nOPÇÃO D: Self-hosted BGE-M3 em GPU AWS g5.xlarge ($1.006/h)\n  Throughput BGE-M3 fp16 batch 32: ~500 docs/s\n  Tempo: 1B / 500 = 2M segundos = 23 dias single-GPU\n  Custo: 23 × 24 × $1.006 = $555\n  COM 10 GPUs em paralelo (autoscale): 2.3 dias, ~$555 total\n\nOPÇÃO E: Self-hosted BGE-M3 em A100 (g5 não é o ideal)\n  Throughput: ~2000 docs/s em A100 (4× mais)\n  10× A100 em paralelo: 1B em ~14 horas\n  Custo (Lambda Labs A100 $1.10/h): 14 × 10 × $1.10 = $154\n\nCONCLUSÃO:\n- < 100M docs: API é simples e custo aceitável\n- 100M - 1B: avaliar caso a caso (DX vs custo)\n- > 1B: self-hosted GPU vence por ~100x em custo"
+          }
+        }
+      ]
+    },
+    {
+      "id": "7679df47-88e7-41aa-9564-85e6b07872c4",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Hot/cold tier strategy"
+      },
+      "children": [
+        {
+          "id": "892f61aa-6c85-47a7-9757-a33629a4a15e",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Em corpora com distribuição temporal (notícias, logs, tickets), 95% das queries atingem 5% dos docs (mais recentes). Não faz sentido manter tudo em SSD/RAM. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "6ad17420-6a73-4fd0-859b-ae25ee0d68db",
+          "type": "key_value",
+          "position": 1,
+          "data": {
+            "items": [
+              {
+                "k": "Hot tier",
+                "v": "Últimos 30-90 dias. NVMe + RAM. ANN HNSW. Latência sub-50ms."
+              },
+              {
+                "k": "Warm tier",
+                "v": "90 dias - 2 anos. SSD. Indexado, mas com cache menor."
+              },
+              {
+                "k": "Cold tier",
+                "v": "> 2 anos. Object storage (S3) + lazy load. Latência segundos quando atingido."
+              },
+              {
+                "k": "Routing",
+                "v": "Query primeiro hot; se < K resultados, expande para warm; cold só sob demanda explícita"
+              },
+              {
+                "k": "Economia",
+                "v": "Reduz custo de RAM/SSD em 5-10× para corpora de bilhões"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "9e6de333-2207-4058-9643-9cc4ebbd75e0",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Observabilidade essencial"
+      },
+      "children": [
+        {
+          "id": "8a8179bf-7e4b-495e-bd44-d6acd962b79a",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "Métricas que TODO pipeline de semantic search deve emitir:\n\nINGESTION\n  ingest_lag_seconds         (T_doc_chegou_at_index - T_doc_criado_no_source)\n  embedding_queue_depth      (backlog do worker pool)\n  embedding_throughput_dps   (docs/segundo embarcados)\n  embedding_error_rate       (% de docs que falharam)\n\nINDEX\n  index_size_bytes           (por shard)\n  index_doc_count\n  index_segments_count       (Lucene: alerta se > 100 por shard)\n  hnsw_recall_proxy          (recall vs força bruta em sample)\n\nQUERY\n  query_latency_p50/p95/p99  (separar BM25 / dense / rerank / total)\n  query_qps\n  query_error_rate\n  cache_hit_rate\n  golden_set_ndcg_at_10      (rolling, calculado por CI)\n  golden_set_mrr             (rolling)\n\nALERTAS CRÍTICOS\n  ingest_lag > 5min          → page (freshness SLA quebrado)\n  golden_set_ndcg drop > 10%  → page (regressão de qualidade)\n  query_latency_p99 > 500ms  → page (UX comprometida)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "71466fb2-2b13-40a9-9a02-a5c8ed1d944b",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Quando NÃO usar vector search"
+      },
+      "children": [
+        {
+          "id": "27bd2762-24cc-4fe1-8805-cea8bcf3b2af",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Busca em produção",
+            "winner": "Hybrid (BM25 + vector + rerank)",
+            "why": "Vector sozinho falha em out-of-vocabulary; BM25 sozinho falha em paráfrase; Hybrid + rerank é estado da arte sem trade-offs",
+            "alternatives": [
+              {
+                "name": "Só BM25: ok para busca em logs, código fonte, dados estruturados onde queries são literais"
+              },
+              {
+                "name": "Sem busca, só filtros: às vezes basta filtrar por metadados (tag, data, autor)"
+              },
+              {
+                "name": "Vector puro: ok para corpora puramente conversacionais, mas raramente competitivo"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "a55e4cb8-6cb1-4fc2-914a-75edaf0b22b4",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "2fdcb9f3-388c-44f8-bcfa-7dcc146b71a4",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Quanto tempo leva um reindex em produção?",
+            "answer": "Depende do tamanho do corpus e GPUs disponíveis. 100M docs em 1 GPU A100: ~20-30 horas. 1B em 10× A100: ~14 horas. Sempre paralelizar embeddings em workers, não fazer single-thread."
+          }
+        },
+        {
+          "id": "855183c5-9127-4b75-80d8-7ef8a8771b8c",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Vector DB ou Postgres pgvector?",
+            "answer": "pgvector ok para até dezenas de milhões de vetores e quando você já tem Postgres. Acima disso, vector DBs dedicados (Qdrant, Weaviate) ganham em throughput, features (named vectors, payload filtering, multi-tenant) e ops."
+          }
+        },
+        {
+          "id": "477648b5-8428-44d5-8c1b-e7e5514ec108",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Como sei se meu chunking está bom?",
+            "answer": "Métrica indireta: NDCG@10 no golden set. Métrica qualitativa: amostrar 20 queries, ver se os chunks retornados fazem sentido como standalone. Chunks que perdem contexto são red flag."
+          }
+        },
+        {
+          "id": "7d5f0eed-1ada-4b94-bb71-55510b922443",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Reranker antes ou depois do hybrid?",
+            "answer": "Depois. Pipeline: hybrid retrieval (top-100 cada, RRF top-50) → reranker (top-50 → top-10). Rerankear antes do hybrid não faz sentido — você quer aumentar recall primeiro, refinar depois."
+          }
+        }
+      ]
+    },
+    {
+      "id": "e548a556-1d7b-4dc9-98b7-fa80c1cb156d",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Resumo executivo"
+      },
+      "children": [
+        {
+          "id": "56b6a254-fe80-4168-91df-fe26c5d081cf",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Produção em semantic search exige pipeline robusto: stream + batch híbrido, chunking validado, sharding estratégico, blue-green para mudanças não-triviais, hot/cold tiers para corpora temporais, observabilidade que detecta regressões antes do user reclamar."
+          }
+        },
+        {
+          "id": "6721fc66-b69f-43a8-8a2e-e7fed815f8c7",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Próximo: comparativo dos principais vector DBs — Qdrant, Weaviate, Pinecone, pgvector, LanceDB — e quando escolher cada um."
+          }
+        }
+      ]
+    }
+  ]
+}

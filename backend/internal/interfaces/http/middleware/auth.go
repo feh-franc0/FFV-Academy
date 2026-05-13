@@ -82,6 +82,14 @@ func UserIDFromContext(ctx context.Context) shared.UserID {
 	return id
 }
 
+// IsAdminFromContext retorna true se o usuário autenticado tem role=admin.
+// Útil para handlers que precisam de check condicional (ex: delete próprio
+// comentário vs. admin moderando) sem segregar rota.
+func IsAdminFromContext(ctx context.Context) bool {
+	role, _ := ctx.Value(CtxKeyRole).(string)
+	return role == "admin"
+}
+
 func extractBearerToken(r *http.Request) string {
 	h := r.Header.Get("Authorization")
 	if !strings.HasPrefix(h, "Bearer ") {

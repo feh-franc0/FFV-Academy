@@ -1,0 +1,436 @@
+{
+  "slug": "js-garbage-collection",
+  "title": null,
+  "blocks": [
+    {
+      "id": "aa873a37-76d8-41f9-94fd-78315f568d0c",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " O Orinoco — nome do projeto de GC do V8 — não é “um garbage collector”. É um conjunto de algoritmos coordenados: Scavenger generational para young gen, Mark-Compact incremental e concurrent para old gen, write barriers, idle-time work scheduling. Entender quando cada um roda é o que separa quem otimiza por sorte de quem otimiza por causa. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "00b0a6b7-9fc6-4a1d-8bd1-33ad8d60f1f9",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "A hipótese geracional"
+      },
+      "children": [
+        {
+          "id": "d056d1ae-6aae-4d7d-a0f4-cdd2d74ea71c",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Estudos clássicos (Ungar 1984, Lieberman & Hewitt 1983) mostraram que em linguagens orientadas a objetos, ~80–95% dos objetos morrem jovem. A weak generational hypothesis embute essa observação no design: separe o heap em “young” e “old”, colete o young com frequência e o old raramente. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "3f7dc6b5-d045-43be-9ecf-7c8fff5492e6",
+          "type": "stack_flow",
+          "position": 1,
+          "data": {
+            "title": "Layout do heap V8 (simplificado)",
+            "items": [
+              {
+                "icon": "🌱",
+                "label": "Young generation (new space)",
+                "sub": "~1–8 MB total",
+                "detail": "Dividida em from-space e to-space (semi-space). Aloca-se sempre no from. Scavenger coleta quando enche (~ms). Sobreviventes a 2 scavenges são promovidos.",
+                "connector": "promoção após 2 scavenges"
+              },
+              {
+                "icon": "🌳",
+                "label": "Old generation (old space)",
+                "sub": "GBs em apps grandes",
+                "detail": "Objetos longevos. Coletada por Mark-Compact, intensificada por incremental marking + concurrent sweeping. Roda raro mas é “a” GC pause percebida.",
+                "connector": "objetos > 1MB"
+              },
+              {
+                "icon": "📦",
+                "label": "Large object space (LOS)",
+                "sub": "Objetos > limite (~512KB)",
+                "detail": "ArrayBuffers grandes, strings enormes. Não copiados (caros demais), coletados in-place com Mark-Sweep."
+              }
+            ]
+          }
+        },
+        {
+          "id": "7826cff7-43f7-4a62-b6a0-c6761621ca89",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "“Trash talk: The Orinoco garbage collector” em é a leitura canônica. “Concurrent marking in V8”, “Parallel scavenger” e “Concurrent marking in V8” no mesmo blog cobrem cada fase em detalhe."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b80b5ebf-8fde-404c-8beb-2035c03df586",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Scavenger — minor GC"
+      },
+      "children": [
+        {
+          "id": "9d4d9502-11d7-4ef9-adc8-ac7c00a8d4e9",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " O Scavenger é uma implementação paralela do algoritmo Cheney (1970). Quando o young gen enche: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "725184a4-466d-4d35-9fca-f0fb6c618486",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Algoritmo do Scavenger (Cheney semi-space)",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "icon": "1️⃣",
+                "label": "Pause curta",
+                "desc": "Tipicamente <1ms para young gen pequeno"
+              },
+              {
+                "icon": "2️⃣",
+                "label": "Identificar roots",
+                "desc": "Stack, globais, remembered set (old→young refs)"
+              },
+              {
+                "icon": "3️⃣",
+                "label": "Copy live objects",
+                "desc": "Do from-space para o to-space (BFS via worklist)"
+              },
+              {
+                "icon": "4️⃣",
+                "label": "Atualizar ponteiros",
+                "desc": "Old refs apontando para from passam a apontar para to"
+              },
+              {
+                "icon": "5️⃣",
+                "label": "Promover sobreviventes",
+                "desc": "Objetos que sobreviveram 2 scavenges → old gen"
+              },
+              {
+                "icon": "6️⃣",
+                "label": "Trocar spaces",
+                "desc": "From-space inteiro é descartado; to-space vira novo from"
+              }
+            ]
+          }
+        },
+        {
+          "id": "bb204e45-fddc-43b1-8aed-f9cf8cf80857",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "O Scavenger custa O(sobreviventes), não O(alocados). Por isso “alocar muito mas a maior parte morre jovem” é OK — é exatamente o caso para o qual o algoritmo foi feito."
+          }
+        }
+      ]
+    },
+    {
+      "id": "d8c46520-8086-45cf-bf1f-104f946f00c9",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Mark-Compact — major GC"
+      },
+      "children": [
+        {
+          "id": "77349a39-2b6a-477f-a304-8d0fbaacdc25",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " A old gen usa Mark-Compact, composto por três fases. O Orinoco torna cada uma incremental e/ou concurrent. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "972c2f0c-241d-4434-bfe9-e0a87da83f1b",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Fase",
+              "O que faz",
+              "Como o Orinoco a otimiza"
+            ],
+            "rows": [
+              [
+                "Marking",
+                "Marca todos os objetos alcançáveis a partir das roots (tri-color)",
+                "Incremental (fatias de ~5ms) + concurrent (helper threads em paralelo ao JS)"
+              ],
+              [
+                "Sweeping",
+                "Libera memória dos objetos não marcados (adiciona à free list)",
+                "Concurrent — roda em background threads sem pausar o main"
+              ],
+              [
+                "Compaction",
+                "Move objetos vivos para juntar espaço livre contíguo (combate fragmentação)",
+                "Paralela em múltiplas threads, só páginas mais fragmentadas"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "d0d27739-3485-4161-a2e9-e30712dcdfb8",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "code": "# Node.js: ver GC events\nnode --trace-gc --trace-gc-verbose app.js\n\n# Saída típica:\n# [12345:0x...] 100 ms: Scavenge 1.2 (1.5) -> 0.3 (1.5) MB, 0.5 / 0.0 ms\n# [12345:0x...] 500 ms: Mark-sweep 3.1 (4.0) -> 1.2 (4.0) MB, 12.4 / 0.0 ms\n#                              ^ heap antes (committed) → depois, tempo gasto\n\n# Diferencias minor vs major:\n# Scavenge       = young gen (rápido, frequente)\n# Mark-sweep     = old gen (lento, raro)\n# Incremental    = fatias incrementais de marking",
+            "filename": "trace-gc.sh"
+          }
+        },
+        {
+          "id": "7534f54e-902d-4a4e-b56c-685eda557bdc",
+          "type": "key_value",
+          "position": 3,
+          "data": {
+            "items": [
+              {
+                "k": "Pause budget V8",
+                "v": "~5ms target para incremental marking slices"
+              },
+              {
+                "k": "Write barrier",
+                "v": "Toda atribuição ptr → ptr é checada; old→young refs vão no remembered set"
+              },
+              {
+                "k": "Concurrent",
+                "v": "“Em outra thread, paralelo ao JS” (não pausa)"
+              },
+              {
+                "k": "Incremental",
+                "v": "“Em fatias pequenas no main thread” (pausa curta repetida)"
+              },
+              {
+                "k": "Idle GC",
+                "v": "V8 usa requestIdleCallback do browser para rodar GC em tempo ocioso"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "5cc6e6eb-4a09-4c02-8df5-869c05bc9a56",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "WeakMap, WeakSet, WeakRef, FinalizationRegistry"
+      },
+      "children": [
+        {
+          "id": "64f77631-d7b3-4bd7-b768-8a9459e6e4aa",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Quando você precisa associar metadata a um objeto sem prendê-lo vivo, use referências fracas. O GC pode coletar livremente; as entradas “somem” automaticamente. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "5533bdc8-0554-4750-aceb-8099be6068d3",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "javascript",
+            "code": "// WeakMap: chaves fracas. Útil para metadata por instância.\nconst metadata = new WeakMap();\nfunction tagNode(node, meta) {\n  metadata.set(node, meta);\n}\n// Quando o DOM node é removido e ninguém mais aponta para ele,\n// a entry sai do WeakMap automaticamente — zero leak.\n\n// WeakRef (ES2021): ref fraca a qualquer objeto\nconst ref = new WeakRef(someObject);\nconst obj = ref.deref();  // pode ser undefined se já foi coletado\nif (obj) {\n  // use obj — mas sem garantir que estará vivo no próximo tick\n}\n\n// FinalizationRegistry: callback quando objeto é coletado\nconst registry = new FinalizationRegistry((heldValue) => {\n  console.log(`Objeto com tag ${heldValue} foi coletado`);\n});\nlet target = { big: 'data' };\nregistry.register(target, 'minhaTag');\ntarget = null;  // agora elegível para GC; callback rodará \"em breve\"\n\n// ⚠️ Comportamento NÃO é determinístico. Não use para liberar recursos críticos\n// (file handles, sockets). Use AbortController/disposal explícito.",
+            "filename": "weak-refs.js"
+          }
+        },
+        {
+          "id": "a3f8c0f7-fa18-422b-818d-1fe8b6687b26",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "WeakRef e FinalizationRegistry têm semântica “best effort”. O TC39 explicitamente alerta: “correctness should not depend on when finalizers run”. Para recursos críticos use disposers explícitos (try/finally, AbortController, ou o futuro Explicit Resource Management — proposal, stage 3 em 2026)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "60a3a03b-f0da-45c4-be9c-5b3a5143cdec",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Detectando memory leaks"
+      },
+      "children": [
+        {
+          "id": "cdcd84d7-9cd3-4bd4-9d5c-6d61e7e95462",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Sua SPA Next.js cresce 5MB/min em uso normal — clientes reclamam de lentidão após horas",
+            "winner": "Chrome DevTools → Memory → Heap snapshots + 3-snapshot technique",
+            "why": "Snapshot capture o estado vivo do heap. Comparar dois snapshots identifica o que cresceu. A técnica de 3 snapshots (snap → ação → snap → ação → snap) destaca objetos que crescem linearmente — sinal claro de leak. Filter “Detached” no class filter mostra DOM nodes presos por closures/listeners.",
+            "alternatives": [
+              {
+                "name": "Performance.memory",
+                "note": "Apenas Chrome, dá só o total. Útil para alerta, não diagnóstico"
+              },
+              {
+                "name": "node --inspect + Chrome",
+                "note": "Mesma técnica server-side; clinic.js heap profile também ajuda"
+              },
+              {
+                "name": "why-is-node-running",
+                "note": "Para Node — mostra event loop holders, não heap leaks"
+              }
+            ]
+          }
+        },
+        {
+          "id": "10f74f5c-2eaa-4a20-9dbe-db2eb8efbb2a",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "javascript",
+            "code": "// ❌ LEAK 1: listener não removido\nfunction setupModal() {\n  const handler = () => console.log('click');\n  document.addEventListener('click', handler);\n  // ...modal abre/fecha mas handler nunca removeEventListener\n}\n\n// ✅ FIX: AbortController centraliza limpeza\nfunction setupModal() {\n  const ctrl = new AbortController();\n  document.addEventListener('click', () => {}, { signal: ctrl.signal });\n  return () => ctrl.abort();  // chame ao fechar\n}\n\n// ❌ LEAK 2: closure capturando big data\nfunction createHandler(bigArray) {\n  return () => console.log('clicked');  // bigArray fica retido!\n}\n\n// ✅ FIX: capturar só o necessário\nfunction createHandler(bigArray) {\n  const len = bigArray.length;  // captura só primitive\n  return () => console.log('clicked', len);\n}\n\n// ❌ LEAK 3: cache crescendo sem limite\nconst cache = new Map();\nfunction get(key) {\n  if (!cache.has(key)) cache.set(key, expensive(key));\n  return cache.get(key);\n}\n\n// ✅ FIX: WeakMap se chaves são objetos, ou LRU bounded\nconst cache = new Map();\nconst MAX = 1000;\nfunction get(key) {\n  if (cache.has(key)) return cache.get(key);\n  if (cache.size >= MAX) cache.delete(cache.keys().next().value);\n  const v = expensive(key);\n  cache.set(key, v);\n  return v;\n}",
+            "filename": "common-leak-patterns.js"
+          }
+        }
+      ]
+    },
+    {
+      "id": "4476a366-dc12-4487-91ca-bb0db9227d2d",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Timeline do Orinoco"
+      },
+      "children": [
+        {
+          "id": "19e3836e-cff7-4614-b0f2-f3d5ffc2985a",
+          "type": "timeline",
+          "position": 0,
+          "data": {
+            "title": "",
+            "events": [
+              {
+                "when": "2011",
+                "label": "Original V8 GC",
+                "detail": "Stop-the-world mark-sweep. Pauses de 50–200ms em apps grandes — dor real."
+              },
+              {
+                "when": "2016",
+                "label": "Concurrent marking",
+                "detail": "Marking sai do main thread, roda em paralelo. Pauses caem ~50%."
+              },
+              {
+                "when": "2017",
+                "label": "Orinoco oficial",
+                "detail": "Conjunto coordenado: parallel scavenger, concurrent marking, concurrent sweeping, idle GC.",
+                "highlight": true
+              },
+              {
+                "when": "2018",
+                "label": "Parallel scavenger",
+                "detail": "Scavenger ganha helper threads. Young GC fica 20–50% mais rápido."
+              },
+              {
+                "when": "2020",
+                "label": "Concurrent young GC",
+                "detail": "Experimento de young gen concurrent (Major GC menos disruptivo)."
+              },
+              {
+                "when": "2024–26",
+                "label": "Refinamentos contínuos",
+                "detail": "Tuning para WebGPU/SharedArrayBuffer workloads, melhorias para Workers de Edge runtimes."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "0f61b426-d4ea-4c59-a92d-157a284e5fd4",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "90de063a-90f2-4b05-8f1d-d277be0f72fa",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Por que chamar `gc()` manualmente é antipattern?",
+            "answer": "Só funciona com (não em browser/produção). Força full Mark-Compact sincronamente — pausa MAIOR que o Orinoco ofereceria incrementalmente. Você está se sabotando."
+          }
+        },
+        {
+          "id": "e086a76c-8910-42d2-a390-48ce4a9a7137",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "`Array(1e6).fill(0)` aloca tudo de uma vez? Vai para old gen direto?",
+            "answer": "Sim, alocação grande (≥ 512KB) vai direto para o Large Object Space, pulando o young gen. Não é copiada, é coletada in-place no major GC. Útil saber em hot loops: prealocar buffers grandes uma vez evita allocation churn."
+          }
+        },
+        {
+          "id": "4366b517-fee5-4341-8587-e9f509d44e18",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "`--max-old-space-size` afeta o que exatamente?",
+            "answer": "Limita o tamanho da old gen. Default ~1.5GB em 64-bit. Apps que crescem além precisam aumentar (ex: = 4GB). Não afeta young gen (controlado por )."
+          }
+        },
+        {
+          "id": "33d3d7de-59b3-4d60-952f-ad437a50b52b",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Object pooling vale a pena em 2026?",
+            "answer": "Depende. Para hot paths que alocam 100k+ objetos/s do mesmo shape (ex: game loop, parsers), sim — reduz GC pressure dramaticamente. Para código “normal”, não — o Scavenger já lida bem e pooling adiciona complexidade. Profile antes."
+          }
+        }
+      ]
+    },
+    {
+      "id": "d0b6c6ab-5ad8-4507-b604-72205186f39e",
+      "type": "callout",
+      "position": 8,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Próximo: como o event loop coordena execução com micro/macrotasks, RIC, animation frames. Veja ."
+      }
+    }
+  ]
+}

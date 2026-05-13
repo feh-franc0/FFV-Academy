@@ -1,0 +1,131 @@
+{
+  "slug": "ci-cd-para-modelos",
+  "title": null,
+  "blocks": [
+    {
+      "id": "46a04a35-823d-4870-97a5-3895a8dea817",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "CI/CD de modelo é diferente de CI/CD de serviço"
+      },
+      "children": [
+        {
+          "id": "f5a4429d-81ce-42fa-8d04-b36cccbef007",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " CI/CD tradicional testa código. CI/CD de modelo precisa testar também "
+              },
+              {
+                "text": "o artifact treinado",
+                "bold": true
+              },
+              {
+                "text": ": métrica em golden set, métricas em slices sensíveis, custo por inferência, latência p99 em hardware-alvo. Só depois disso vai para o deploy progressivo. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "6a7c9bc3-7045-4f8a-b5ff-fc9de07fd364",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "GitHub Actions — workflow de ML"
+      },
+      "children": [
+        {
+          "id": "45136560-3319-4245-9334-8bd35e497fb6",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "# .github/workflows/model-ci.yml\nname: model-ci\non:\n  pull_request:\n    paths: [\"src/**\", \"dvc.yaml\", \"params.yaml\"]\n\njobs:\n  reproduce:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: iterative/setup-dvc@v1\n      - uses: actions/setup-python@v5\n        with: { python-version: \"3.12\" }\n\n      - run: pip install -r requirements.txt\n      - run: dvc pull\n      - run: dvc repro\n\n      - name: Eval em golden set\n        run: python src/eval_golden.py --report metrics/pr.json\n\n      - name: Gate estatistico vs baseline\n        run: python src/gate.py --pr metrics/pr.json --baseline metrics/main.json\n\n      - name: Publicar modelo candidato no MLflow\n        env:\n          MLFLOW_TRACKING_URI: ${'$'}{{ secrets.MLFLOW_URI }}\n        run: python src/register_candidate.py"
+          }
+        },
+        {
+          "id": "94d80609-d675-4012-9f33-e0e414dc6fb3",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "O step gate.py deve falhar o PR se a melhora não for estatisticamente significativa ou se houver regressão em qualquer slice monitorado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "788f625b-d85e-49e5-a62e-e33639714e9c",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Deploy progressivo — shadow, canary, rollout"
+      },
+      "children": [
+        {
+          "id": "65c6e9be-2843-46a3-9350-bfffa1008ef1",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "# argo rollouts — canary strategy\napiVersion: argoproj.io/v1alpha1\nkind: Rollout\nmetadata:\n  name: churn-serving\nspec:\n  strategy:\n    canary:\n      steps:\n        - setWeight: 5\n        - pause: { duration: 2h }\n        - analysis:\n            templates: [ { templateName: churn-metrics } ]\n        - setWeight: 25\n        - pause: { duration: 4h }\n        - analysis:\n            templates: [ { templateName: churn-metrics } ]\n        - setWeight: 50\n        - pause: { duration: 6h }\n        - setWeight: 100"
+          }
+        }
+      ]
+    },
+    {
+      "id": "2bc2e5b8-c702-4750-bdfc-29b63b0ace77",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Drift detection com Evidently"
+      },
+      "children": [
+        {
+          "id": "77fe4535-e7ae-4d15-ad6e-293b779db751",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "from evidently.report import Report\nfrom evidently.metric_preset import DataDriftPreset, TargetDriftPreset\n\nreport = Report(metrics=[DataDriftPreset(), TargetDriftPreset()])\nreport.run(reference_data=df_ref, current_data=df_live)\n\nresult = report.as_dict()\ndrift_share = result[\"metrics\"][0][\"result\"][\"drift_share\"]\n\nif drift_share &gt; 0.3:\n    trigger_retraining_pipeline(reason=f\"drift_share={drift_share:.2f}\")\n    alert_slack(channel=\"#ml-ops\", message=\"Drift detectado em churn-v7\")\nelse:\n    log_ok(drift_share)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "7b060593-44fd-4727-bfc7-e69b01e086c8",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Retraining automation"
+      },
+      "children": [
+        {
+          "id": "9784c932-14c5-4bbd-aaa3-4d5116d4763a",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "# retraining triggers — documentados e versionados\ntriggers:\n  schedule: \"0 3 * * 1\"          # piso: toda segunda 03:00\n  drift:\n    metric: evidently.drift_share\n    threshold: 0.30\n  online_quality:\n    metric: f1_weekly\n    delta_vs_baseline: -0.02\nactions:\n  on_trigger:\n    - run_pipeline: kubeflow/churn-training\n    - open_pr_with_mlflow_link: true\n    - require_human_approval_for_production: true"
+          }
+        },
+        {
+          "id": "0ebd2007-affb-4daa-bb54-5add0f2157c6",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Meta de maturidade Level 2: pipeline inteiro é entregue por CI/CD e promoção para Production exige aprovação humana com evidência anexada."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,147 @@
+{
+  "slug": "clickhouse-analytics",
+  "title": null,
+  "blocks": [
+    {
+      "id": "d9e0a577-6f99-4a1c-9789-548c3e25e372",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Por que ClickHouse existe"
+      },
+      "children": [
+        {
+          "id": "86166253-88ee-4699-a76c-7571d046a3a2",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Postgres é row-oriented: uma row vive junta em disco. Excelente para OLTP (ler/atualizar 1 row inteira). Péssimo para analytics (SELECT SUM(x) em 1B rows lê todas as colunas, mesmo usando só x). ClickHouse inverte: colunar. Cada coluna é um arquivo comprimido. Query agregada lê só as colunas necessárias. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "37247bcb-1b14-41ab-b9ad-4f1bc5c5bd46",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Schema real: eventos de analytics"
+      },
+      "children": [
+        {
+          "id": "1d155adb-cd7d-4a65-ad2a-765a975a20fc",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "sql",
+            "code": "CREATE TABLE events\n(\n    event_time  DateTime64(3) CODEC(DoubleDelta, LZ4),\n    event_name  LowCardinality(String),\n    user_id     UInt64,\n    session_id  UUID,\n    country     LowCardinality(FixedString(2)),\n    device      LowCardinality(String),\n    url         String CODEC(ZSTD(3)),\n    referrer    String CODEC(ZSTD(3)),\n    properties  Map(String, String)\n)\nENGINE = MergeTree\nPARTITION BY toYYYYMM(event_time)\nORDER BY (event_name, event_time, user_id)\nTTL event_time + INTERVAL 18 MONTH\nSETTINGS index_granularity = 8192;"
+          }
+        },
+        {
+          "id": "f9393121-942c-4fd9-b68e-3eff0e158b94",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "LowCardinality é dicionário automático para colunas com < 10k valores únicos (event_name, country). Reduz tamanho em 10x. CODEC(DoubleDelta, LZ4) em timestamp aproveita que eventos são quase sequenciais — compressão 50x+. Essas decisões de schema têm impacto brutal em custo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "3f977fcd-9bc5-47dd-8582-aa49c287fcc1",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Query analítica real"
+      },
+      "children": [
+        {
+          "id": "c17d6618-6500-49dc-844a-da3b3bc00fec",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "sql",
+            "code": "-- Top 10 paginas por unique users nos ultimos 7 dias,\n-- com conversion rate, segmentado por pais\nSELECT\n    url,\n    country,\n    uniqExact(user_id)                                     AS unique_users,\n    countIf(event_name = 'page_view')                      AS views,\n    countIf(event_name = 'purchase')                       AS purchases,\n    round(purchases / unique_users * 100, 2)               AS conversion_pct\nFROM events\nWHERE event_time >= now() - INTERVAL 7 DAY\n  AND country IN ('BR', 'US', 'PT')\nGROUP BY url, country\nHAVING unique_users > 100\nORDER BY conversion_pct DESC\nLIMIT 10\nSETTINGS max_threads = 8;"
+          }
+        },
+        {
+          "id": "d515a6e7-485c-40f6-837c-c3f010869a17",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Em tabela de 2 bilhões de rows, essa query roda em ~3-5s num nó de 8 cores. Postgres mesmo com índices levaria minutos. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "4b52ab9e-7518-498f-bf56-efdaaad07f62",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Materialized views para rollups"
+      },
+      "children": [
+        {
+          "id": "8ec3bee8-4ff3-4ed2-a652-6b704c9b785c",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "sql",
+            "code": "-- Rollup diario por pais (atualiza em tempo real)\nCREATE MATERIALIZED VIEW events_daily\nENGINE = SummingMergeTree\nPARTITION BY toYYYYMM(day)\nORDER BY (day, country, event_name)\nAS SELECT\n    toDate(event_time) AS day,\n    country,\n    event_name,\n    count()            AS events,\n    uniqState(user_id) AS users_state\nFROM events\nGROUP BY day, country, event_name;\n\n-- Query sobre o rollup (instantanea)\nSELECT day, country, sum(events) AS total\nFROM events_daily\nWHERE day >= today() - 30\nGROUP BY day, country\nORDER BY day DESC;"
+          }
+        },
+        {
+          "id": "b76be760-a291-48bd-a61d-b77858265d7d",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Materialized view em ClickHouse é trigger: cada insert na tabela base alimenta a MV. Diferente de Postgres, onde MV precisa REFRESH."
+          }
+        }
+      ]
+    },
+    {
+      "id": "77125085-8e8f-43e8-908a-ea92010c9e73",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Ingestion: sempre em batch"
+      },
+      "children": [
+        {
+          "id": "f4b18aa1-3db1-48ba-bf26-13d85ca75ba1",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Nunca faça single-row INSERT em ClickHouse em produção. Mínimo ~10k rows por batch, idealmente 100k+. Use Kafka engine, Buffer tables, ou aplicação com buffering em memória. Single inserts geram too-many-parts e matam a performance."
+          }
+        },
+        {
+          "id": "d2bee04e-a56b-47f8-bf90-2f6bed47c517",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "ClickHouse é a resposta quando Postgres gasta horas numa query analítica. Mas não é substituto — é complemento via CDC. OLTP fica no Postgres, analytics vai para ClickHouse."
+          }
+        }
+      ]
+    }
+  ]
+}

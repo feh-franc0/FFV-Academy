@@ -1,0 +1,765 @@
+{
+  "slug": "stable-diffusion-3-flux",
+  "title": null,
+  "blocks": [
+    {
+      "id": "f37ed0be-c0ea-4b6b-850b-8b7a1bb7107f",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "A virada: por que U-Net não escala mais"
+      },
+      "children": [
+        {
+          "id": "4c00c8a7-bfde-4b1e-8ae8-74e8da06f8ea",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " De 2020 a 2023 a U-Net foi a arquitetura padrão. Funcionou em SD 1.5 (859M), SD 2.x e até SDXL (2.6B). Mas a partir de ~3B de parâmetros, U-Net começou a apresentar diminishing returns: mais compute não melhorava FID na mesma taxa. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "52df6924-480d-40ed-85f3-76d819fa1799",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Em janeiro de 2023, Peebles & Xie (ICCV — \"Scalable Diffusion Models with Transformers\") publicaram o DiT (Diffusion Transformer). A tese era simples: substituir completamente U-Net por um transformer puro patchificando o latente, e a escala se comportaria como NLP. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "7510ac41-62ac-4f3e-ab33-404ec5f07721",
+          "type": "node_graph",
+          "position": 2,
+          "data": {
+            "title": "DiT em uma frase",
+            "columns": [
+              {
+                "label": "Entrada",
+                "nodes": [
+                  {
+                    "icon": "📥",
+                    "label": "Latente z_t",
+                    "sub": "64×64×4 (ex: SD)"
+                  },
+                  {
+                    "icon": "🔪",
+                    "label": "Patchify",
+                    "sub": "patches 2×2 → tokens",
+                    "tone": "emphasis"
+                  }
+                ]
+              },
+              {
+                "label": "Processamento",
+                "nodes": [
+                  {
+                    "icon": "🧱",
+                    "label": "N × Transformer blocks",
+                    "sub": "self-attention + adaLN(t,c)",
+                    "tone": "emphasis"
+                  },
+                  {
+                    "icon": "⏱️",
+                    "label": "Conditioning",
+                    "sub": "t_emb + c_emb via adaLN-Zero"
+                  }
+                ]
+              },
+              {
+                "label": "Saída",
+                "nodes": [
+                  {
+                    "icon": "🧵",
+                    "label": "Unpatchify",
+                    "sub": "tokens → 64×64×4"
+                  },
+                  {
+                    "icon": "📤",
+                    "label": "ε predito",
+                    "sub": "mesmo shape do latente",
+                    "tone": "success"
+                  }
+                ]
+              }
+            ],
+            "legend": []
+          }
+        },
+        {
+          "id": "dcd4c005-7767-413a-9fa6-2d0d6984ac8e",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Resultado central do paper: dobrar compute em DiT diminui FID quase linearmente em log-log até 675M params. O U-Net satura. A diferença prática vira óbvia em modelos > 3B — daí o uso em Sora, SD3, Flux, Stable Video."
+          }
+        }
+      ]
+    },
+    {
+      "id": "3e1c4a9f-e0f9-4938-8973-635f72bf68a5",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "adaLN-Zero: a injeção de condicionamento que DiT inventou"
+      },
+      "children": [
+        {
+          "id": "5a8423c3-ec9a-497a-a518-bdf351a760b0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " U-Net injeta timestep via FiLM em GroupNorm. DiT usa "
+              },
+              {
+                "text": "adaLN-Zero",
+                "bold": true
+              },
+              {
+                "text": " (Adaptive Layer Norm com pesos inicializados em zero): "
+              }
+            ]
+          }
+        },
+        {
+          "id": "2dbbb4c1-87b9-4517-b7e7-4298bff55533",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "class DiTBlock(nn.Module):\n    def __init__(self, dim, heads, mlp_ratio=4):\n        self.norm1 = nn.LayerNorm(dim, elementwise_affine=False)\n        self.attn  = MultiHeadAttention(dim, heads)\n        self.norm2 = nn.LayerNorm(dim, elementwise_affine=False)\n        self.mlp   = FeedForward(dim, mlp_ratio * dim)\n\n        # adaLN-Zero: 6 modulações (γ, β, α) × 2 (attn, mlp)\n        self.modulation = nn.Sequential(\n            nn.SiLU(),\n            nn.Linear(dim, 6 * dim, bias=True),\n        )\n        # CRÍTICO: pesos zerados na inicialização → bloco vira identidade no início\n        nn.init.zeros_(self.modulation[-1].weight)\n        nn.init.zeros_(self.modulation[-1].bias)\n\n    def forward(self, x, c):     # c = t_emb + class/text_emb\n        shift1, scale1, gate1, shift2, scale2, gate2 = self.modulation(c).chunk(6, dim=-1)\n        # Attention com modulação\n        x = x + gate1.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift1, scale1))\n        # MLP com modulação\n        x = x + gate2.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift2, scale2))\n        return x\n\ndef modulate(x, shift, scale):\n    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)",
+            "filename": "adaln_zero.py"
+          }
+        },
+        {
+          "id": "c3d7d30a-981c-4b2f-ba93-d6b93c2dc597",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "A escolha de inicializar com zero é deliberada — no início do treino, cada bloco vira identidade (não atrapalha), e gradativamente aprende a modular. Reduz instabilidade em modelos profundos. É hoje padrão em DiT, MMDiT, Sora."
+          }
+        }
+      ]
+    },
+    {
+      "id": "4c18a1e5-9b1f-4ac1-a1e0-f5ba62a30eaa",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "MMDiT: a contribuição do SD3"
+      },
+      "children": [
+        {
+          "id": "65c557ee-88df-49ba-9b8c-968d8e3e5275",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Esser, Kulal, Lorenz et al. 2024 (paper técnico do Stable Diffusion 3) propuseram uma evolução: dois streams paralelos de tokens — um para imagem, outro para texto — que se misturam via "
+              },
+              {
+                "text": "joint attention",
+                "bold": true
+              },
+              {
+                "text": " em cada bloco. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "1e04142d-6e8b-4d15-bf56-6a58e06a6165",
+          "type": "stack_flow",
+          "position": 1,
+          "data": {
+            "title": "Bloco MMDiT (SD3)",
+            "items": [
+              {
+                "icon": "📝",
+                "label": "Stream Texto",
+                "sub": "T5-XXL tokens",
+                "detail": "LayerNorm separado, modulação separada — pesos próprios para texto"
+              },
+              {
+                "icon": "🖼️",
+                "label": "Stream Imagem",
+                "sub": "Patches do latente",
+                "detail": "LayerNorm separado, modulação separada — pesos próprios para imagem",
+                "connector": "concat de Q/K/V"
+              },
+              {
+                "icon": "🤝",
+                "label": "Joint Attention",
+                "sub": "attention sobre tokens concatenados",
+                "detail": "Q = [Q_text ; Q_img]; K = [K_text ; K_img]; V = [V_text ; V_img]. softmax(Q·Kᵀ) faz texto e imagem se misturarem em cada bloco",
+                "connector": "split de volta"
+              },
+              {
+                "icon": "📝",
+                "label": "MLP texto",
+                "sub": "pesos próprios",
+                "detail": "Cada modal mantém capacidade de processamento próprio"
+              },
+              {
+                "icon": "🖼️",
+                "label": "MLP imagem",
+                "sub": "pesos próprios",
+                "detail": "Saídas independentes por modal"
+              }
+            ]
+          }
+        },
+        {
+          "id": "d604107f-8af1-46ab-9711-1488a6bee20c",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Aspecto",
+              "DiT (Peebles & Xie)",
+              "MMDiT (SD3)"
+            ],
+            "rows": [
+              [
+                "Streams",
+                "Único (imagem)",
+                "Dois (imagem + texto)"
+              ],
+              [
+                "Texto entra via",
+                "adaLN-Zero (vetor pooled)",
+                "Token sequence em joint attention"
+              ],
+              [
+                "Capacity para texto",
+                "Limitada (vetor único)",
+                "Plena (tokens com pesos próprios)"
+              ],
+              [
+                "Custo computacional",
+                "Menor",
+                "~1.3-1.5× (tokens extras)"
+              ],
+              [
+                "Qualidade prompt-image alignment",
+                "Boa",
+                "Melhor — especialmente prompts complexos"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "f72c6eab-c2ed-4b96-ac44-dc7a42d5d0dc",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Rectified Flow: o objetivo de treino"
+      },
+      "children": [
+        {
+          "id": "af5e00aa-9c2e-4ef8-9a2c-90d85e6b61b3",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " SD3 e Flux abandonaram o ε-prediction do DDPM em favor de Rectified Flow (Liu et al. 2022) / Flow Matching (Lipman et al. 2023). A intuição: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "78416351-8d42-4e99-9ca0-8a51e4717b4b",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Em vez de pensar em \"ruído sendo removido\", pense em um "
+              },
+              {
+                "text": "fluxo",
+                "bold": true
+              },
+              {
+                "text": " que transporta uma amostra de ruído z₁ ~ N(0, I) até uma amostra de dado z₀ ~ p_data ao longo do tempo t ∈ [0, 1]. O caminho mais simples é a interpolação linear: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "56e2b246-8b0f-4e69-b211-e9f93d511edb",
+          "type": "annotated_formula",
+          "position": 2,
+          "data": {
+            "title": "Interpolação linear (rectified flow)",
+            "formula": "z_t = (1 − t) · z_0 + t · z_1",
+            "parts": [
+              {
+                "text": "z_0",
+                "annotation": "amostra real (dado)",
+                "highlight": true
+              },
+              {
+                "text": "z_1",
+                "annotation": "ruído puro"
+              },
+              {
+                "text": "t ∈ [0,1]",
+                "annotation": "tempo no fluxo"
+              }
+            ]
+          }
+        },
+        {
+          "id": "dc6bd7db-6184-4418-9507-ace73b61153e",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": " O "
+              },
+              {
+                "text": "vector field alvo",
+                "bold": true
+              },
+              {
+                "text": " ao longo dessa trajetória é simplesmente v(z_t, t) = z_1 − z_0 (derivada da interpolação). O modelo aprende: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "4985dd62-73de-414d-b4a6-412216cce009",
+          "type": "annotated_formula",
+          "position": 4,
+          "data": {
+            "title": "Loss do Rectified Flow",
+            "formula": "L(θ) = E_{t, z_0, z_1} [ ‖ v_θ(z_t, t) − (z_1 − z_0) ‖² ]",
+            "parts": [
+              {
+                "text": "v_θ",
+                "annotation": "rede neural prevê velocidade",
+                "highlight": true
+              },
+              {
+                "text": "(z_1 − z_0)",
+                "annotation": "velocidade alvo (constante na linha)"
+              }
+            ]
+          }
+        },
+        {
+          "id": "7608637e-dde4-4ae9-86d5-752bf7704f90",
+          "type": "paragraph",
+          "position": 5,
+          "data": {
+            "content": [
+              {
+                "text": "Para amostrar, integra-se a ODE inversa partindo de z_1 ~ N(0, I):"
+              }
+            ]
+          }
+        },
+        {
+          "id": "d7e78176-1dd2-4383-8171-ad48d478df9f",
+          "type": "code_block",
+          "position": 6,
+          "data": {
+            "language": "python",
+            "code": "def sample(model, n_steps=20):\n    z = torch.randn(1, 4, 64, 64)               # z_1 ~ N(0, I)\n    timesteps = torch.linspace(1, 0, n_steps + 1)\n    for i in range(n_steps):\n        t = timesteps[i]; t_next = timesteps[i + 1]\n        v = model(z, t)                          # predição de velocidade\n        z = z + (t_next - t) * v                 # Euler step\n    return z                                     # z ≈ z_0 (latente da imagem)",
+            "filename": "rectified_flow_sample.py"
+          }
+        },
+        {
+          "id": "89e19e15-2cd2-40b7-9c30-47c3ed8c981f",
+          "type": "callout",
+          "position": 7,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Como a trajetória é quase reta, Euler simples com 20 passos basta. Para distillation extrema (Flux Schnell, SDXL Turbo) dá pra chegar em 1-4 passos com adversarial distillation por cima."
+          }
+        }
+      ]
+    },
+    {
+      "id": "283d42cd-c5f3-4cc1-8d19-f6a8e736c198",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Os players principais hoje"
+      },
+      "children": [
+        {
+          "id": "9383e64d-45a8-4bf8-9e2b-81522e931404",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Modelo",
+              "Arquitetura",
+              "Params",
+              "Text encoder",
+              "Licença",
+              "Destaque"
+            ],
+            "rows": [
+              [
+                "SD 1.5",
+                "U-Net",
+                "859M",
+                "CLIP-L",
+                "OpenRAIL",
+                "Padrão de fine-tune comunitário"
+              ],
+              [
+                "SDXL",
+                "U-Net (maior)",
+                "2.6B",
+                "CLIP-L + bigG",
+                "OpenRAIL",
+                "Última geração U-Net forte"
+              ],
+              [
+                "SD 3 / 3.5",
+                "MMDiT",
+                "2B–8B",
+                "CLIP-L + CLIP-G + T5-XXL",
+                "Stability Community",
+                "Text rendering excelente"
+              ],
+              [
+                "Flux.1 Pro",
+                "DiT (proprietário)",
+                "~12B",
+                "CLIP-L + T5-XXL",
+                "API only",
+                "Topo de qualidade em 2024-25"
+              ],
+              [
+                "Flux.1 Dev",
+                "DiT",
+                "12B",
+                "CLIP-L + T5-XXL",
+                "Non-commercial",
+                "Open weights, 20-50 steps"
+              ],
+              [
+                "Flux.1 Schnell",
+                "DiT distilled",
+                "12B",
+                "CLIP-L + T5-XXL",
+                "Apache 2.0",
+                "1-4 steps; livre comercial"
+              ],
+              [
+                "Ideogram 2.0",
+                "Proprietário",
+                "N/A",
+                "N/A",
+                "API",
+                "Best-in-class para texto em imagem"
+              ],
+              [
+                "Imagen 3 (Google)",
+                "DiT-like + T5",
+                "N/A",
+                "T5-XXL",
+                "API only",
+                "Topo em alinhamento textual"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "48fcf56c-c6f0-461c-9aa4-c9848fd2ed61",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Por que o ecossistema migrou para Flux"
+      },
+      "children": [
+        {
+          "id": "8752de1a-6077-49f5-a3dc-7d41c4167b34",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Novembro 2024: você precisa escolher um modelo open weights para um produto comercial",
+            "winner": "Flux.1 Schnell (Apache 2.0)",
+            "why": "Schnell tem qualidade quase igual a Dev, gera em 4 passos (latência baixa), e licença totalmente livre — único 'big' modelo open com licença permissiva em fim de 2024. SDXL ainda funciona mas qualidade visivelmente inferior. SD3 Medium tem licença Stability Community (gratuita só para receita ≤$1M).",
+            "alternatives": [
+              {
+                "name": "SDXL"
+              },
+              {
+                "name": "Qualidade inferior em 2024+; ecosystem ainda forte mas em declínio"
+              },
+              {
+                "name": "Flux Dev"
+              },
+              {
+                "name": "Licença non-commercial — só prototipagem"
+              },
+              {
+                "name": "SD 3.5 Large"
+              },
+              {
+                "name": "Boa licença mas qualidade ligeiramente abaixo de Flux Pro/Dev em geral"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "7680a376-792a-44a6-bb78-4912cf2b3214",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Timeline da transição U-Net → DiT"
+      },
+      "children": [
+        {
+          "id": "4f33dfad-d6a5-4814-a400-2ee76deeb1a4",
+          "type": "timeline",
+          "position": 0,
+          "data": {
+            "title": "",
+            "events": [
+              {
+                "when": "2020",
+                "label": "DDPM (U-Net)",
+                "detail": "Ho et al. estabelece o padrão."
+              },
+              {
+                "when": "2022",
+                "label": "Latent Diffusion / SD 1.x",
+                "detail": "U-Net + VAE no latente democratiza o acesso.",
+                "highlight": true
+              },
+              {
+                "when": "2022",
+                "label": "Flow Matching (Lipman et al.)",
+                "detail": "Generalização do objetivo de diffusion para vector fields."
+              },
+              {
+                "when": "2022",
+                "label": "Rectified Flow (Liu et al.)",
+                "detail": "Trajetórias retas → poucos passos."
+              },
+              {
+                "when": "2023",
+                "label": "SDXL",
+                "detail": "Último U-Net forte da Stability AI."
+              },
+              {
+                "when": "2023",
+                "label": "DiT (Peebles & Xie)",
+                "detail": "ICCV — Diffusion Transformer puro.",
+                "highlight": true
+              },
+              {
+                "when": "2024 jan",
+                "label": "Sora (OpenAI)",
+                "detail": "Vídeo com DiT — confirma escalabilidade da arquitetura.",
+                "highlight": true
+              },
+              {
+                "when": "2024 fev",
+                "label": "SD3 / MMDiT",
+                "detail": "Esser et al. — dual stream com joint attention.",
+                "highlight": true
+              },
+              {
+                "when": "2024 ago",
+                "label": "Flux.1 (Black Forest Labs)",
+                "detail": "Time ex-Stability lança DiT 12B com qualidade topo.",
+                "highlight": true
+              },
+              {
+                "when": "2024 out",
+                "label": "SD 3.5 Large",
+                "detail": "Stability rebate com modelo melhorado."
+              },
+              {
+                "when": "2025",
+                "label": "Flow-based padrão",
+                "detail": "Quase todos os modelos novos usam Flow Matching / Rectified Flow."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "af6910b2-a83f-420a-9bdb-9e559acf7300",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Patchify e position embedding"
+      },
+      "children": [
+        {
+          "id": "ccd894f2-cf44-4471-ac37-fd6da9adbba5",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Detalhe importante: o latente 64×64×4 vira sequência de tokens via patchify. Patches 2×2 produzem 32×32 = 1024 tokens de dim 16 (=2·2·4). DiT-XL/2 usa patches 2×2 (n_patches=256 num latente 32×32). SD3 usa esquema similar mas com patches menores em alta resolução. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "d21c8d15-1265-4511-a018-6298ca64ce1d",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Position embeddings: DiT original usa sinusoidal 2D (mesma do ViT). MMDiT e Flux usam "
+              },
+              {
+                "text": "RoPE 2D",
+                "bold": true
+              },
+              {
+                "text": " (Rotary Position Embedding extendido para grade), seguindo Su et al. 2021. RoPE é mais bem-comportado para extrapolação para resoluções maiores que o treino. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "2b29a3f3-8b3e-4d81-97f6-e6830495e015",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "RoPE multiplica Q e K por uma matriz de rotação dependente de posição — preserva produto interno relativo. Permite a Flux gerar em 1024×1024 mesmo se treinado majoritariamente em resoluções menores, sem retreinar position embeddings."
+          }
+        }
+      ]
+    },
+    {
+      "id": "51d02661-4c96-4885-b49b-051954d07c3c",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Perguntas que sobram"
+      },
+      "children": [
+        {
+          "id": "d654fd73-4e20-48fe-86e0-ef6cd5d8c16c",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Por que SD3 demorou tanto para sair depois do SDXL?",
+            "answer": "Stability AI passou por reorganizações internas e perda de talentos (vários core researchers saíram para fundar Black Forest Labs, criando o Flux). Quando SD3 saiu (fev 2024), Flux já estava em desenvolvimento adiantado. Houve sobreposição de equipes e expertise."
+          }
+        },
+        {
+          "id": "570e6b9d-92b2-4fe4-9566-6cc3ef214e1d",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Posso fazer fine-tune em Flux Dev como faço em SDXL?",
+            "answer": "Sim, com cuidado: LoRA funciona (tools como kohya_ss, ai-toolkit, SimpleTuner suportam Flux). Full fine-tune exige bem mais VRAM (~80GB para 12B em bf16). Atenção à licença: fine-tune de Flux Dev permanece non-commercial; Flux Schnell permite uso comercial mas é distilled — fine-tunes podem perder a propriedade de poucos passos."
+          }
+        },
+        {
+          "id": "681184d0-784c-45b6-b467-f665da6fd182",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "DiT funciona para vídeo igual para imagem?",
+            "answer": "Sim, e foi exatamente o que Sora demonstrou: estende o patchify para espaço-tempo (cubelets ao invés de patches 2D). DiT 3D processa sequências (frames × patches espaciais). Veo, Kling e Runway Gen-4 usam variantes desse mesmo princípio."
+          }
+        },
+        {
+          "id": "178f6f79-f78c-408e-bdae-fd4b5740e259",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "MMDiT é compatível com ControlNet?",
+            "answer": "Sim — existem ControlNets para SD3 e para Flux, embora demoraram alguns meses para emergir após o lançamento dos modelos base. A integração é arquiteturalmente similar à de U-Net (zero-init em camadas paralelas), mas precisa adaptar aos blocos de transformer em vez de blocos convolucionais."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1175533-ce09-42d2-ba05-c3814a6c4d50",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Papers que você precisa ler"
+      },
+      "children": [
+        {
+          "id": "ca5ca506-1e5b-4a19-b20a-0f251210170a",
+          "type": "key_value",
+          "position": 0,
+          "data": {
+            "items": [
+              {
+                "k": "DiT",
+                "v": "Peebles & Xie 2023 — \"Scalable Diffusion Models with Transformers\" (ICCV)."
+              },
+              {
+                "k": "SD3 / MMDiT",
+                "v": "Esser, Kulal, Lorenz et al. 2024 — \"Scaling Rectified Flow Transformers for High-Resolution Image Synthesis\"."
+              },
+              {
+                "k": "Rectified Flow",
+                "v": "Liu, Gong, Liu 2022 — \"Flow Straight and Fast: Learning to Generate and Transfer Data with Rectified Flow\" (NeurIPS)."
+              },
+              {
+                "k": "Flow Matching",
+                "v": "Lipman, Chen, Ben-Hamu, Nickel, Le 2023 — \"Flow Matching for Generative Modeling\" (ICLR)."
+              },
+              {
+                "k": "Sora technical report",
+                "v": "OpenAI 2024 — \"Video generation models as world simulators\" (blog/relatório técnico)."
+              },
+              {
+                "k": "RoPE",
+                "v": "Su, Lu, Pan, Murtadha, Wen, Liu 2021 — \"RoFormer: Enhanced Transformer with Rotary Position Embedding\"."
+              }
+            ]
+          }
+        },
+        {
+          "id": "9fc28233-1bc6-49b9-af08-3cbe54d8fc04",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Próximo: como controlar de verdade essas máquinas. ControlNet (Zhang & Agrawala 2023, ICCV best paper) adiciona condicionamento espacial preciso — canny, depth, pose, scribble. Vamos ver o truque do zero-conv e por que ele se mantém o estado da arte."
+          }
+        }
+      ]
+    }
+  ]
+}

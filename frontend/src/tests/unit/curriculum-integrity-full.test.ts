@@ -38,15 +38,9 @@ describe('Curriculum integrity — links e arquivos', () => {
     expect(broken, `prerequisites quebrado:\n${broken.join('\n')}`).toEqual([]);
   });
 
-  it('todo módulo tem arquivo src/app/aprenda/<slug>/page.tsx', () => {
-    const root = resolve(__dirname, '../../..');
-    const missing: string[] = [];
-    for (const m of allModules) {
-      const path = resolve(root, 'src/app/aprenda', m.slug, 'page.tsx');
-      if (!existsSync(path)) missing.push(`${m.trailId}/${m.slug}`);
-    }
-    expect(missing, `artigos faltando (${missing.length}):\n${missing.join('\n')}`).toEqual([]);
-  });
+  // Pós-migração CMS: artigos não vivem mais em arquivos .tsx no repo.
+  // A presença de cada slug no backend é validada pela suíte de auditoria
+  // CMS_AUDIT=1 (src/tests/integration/cms-backend-audit.test.ts).
 
   it('toda trail com href tem landing page em src/app/<href>/page.tsx', () => {
     const root = resolve(__dirname, '../../..');

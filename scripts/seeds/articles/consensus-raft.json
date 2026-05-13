@@ -1,0 +1,1180 @@
+{
+  "slug": "consensus-raft",
+  "title": null,
+  "blocks": [
+    {
+      "id": "8774c507-9584-42b6-88c3-ee4c45843dc6",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Consensus é o problema mais fundamental dos sistemas distribuídos: como N máquinas "
+          },
+          {
+            "text": "que podem falhar, mentir sobre o tempo e perder mensagens",
+            "bold": true
+          },
+          {
+            "text": " conseguem concordar em um único valor? A resposta dessa pergunta decide se o seu Kubernetes sobrevive a um reboot, se o seu CockroachDB não perde uma linha durante um failover, e se o seu sistema bancário pode aceitar débitos duplicados. Raft é o algoritmo mais influente dos últimos 15 anos — mais simples que Paxos, provado correto, usado em produção por etcd, Consul, Kubernetes, CockroachDB, TiKV, MongoDB, Redpanda, RabbitMQ (quorum queues) e dezenas de outros. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "5436df8c-2d89-482d-abe6-c48a6496e837",
+      "type": "paragraph",
+      "position": 1,
+      "data": {
+        "content": [
+          {
+            "text": " Este módulo vai do "
+          },
+          {
+            "text": "FLP impossibility",
+            "bold": true
+          },
+          {
+            "text": " (o teorema que diz que o impossível é possível se você for esperto) até uma implementação didática em Python. No fim, você vai saber por que 3 ou 5 é um número mágico, por que split-brain não acontece no Raft, e como debugar um cluster etcd quando ele trava. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "47fd3547-ef27-4510-b2a3-99d62f301bd7",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O problema do consenso"
+      },
+      "children": [
+        {
+          "id": "63240943-20af-4e71-b29d-a4c9269c6d60",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Consenso: um conjunto de processos precisa "
+              },
+              {
+                "text": "concordar em um único valor",
+                "bold": true
+              },
+              {
+                "text": ", dado que cada processo propõe um valor e alguns podem falhar. Sons simples? Em teoria, é. Na prática — com rede não confiável, timeouts, máquinas que congelam por GC, e relógios que divergem — é o pesadelo que levou 30 anos de pesquisa pra domar. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "e5fc9907-8652-4628-accf-02c6cfcd1ca8",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "As 3 propriedades de consenso:"
+          }
+        }
+      ]
+    },
+    {
+      "id": "6ad69f83-a7dc-4f2e-a869-0945f5fcf0e8",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "FLP Impossibility (1985): o teorema que mudou tudo"
+      },
+      "children": [
+        {
+          "id": "443af205-1eda-4f7f-9ef1-7d6b67def48d",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Fischer, Lynch e Paterson provaram em 1985 o resultado mais importante de sistemas distribuídos: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "c106924f-f798-4a0f-b750-7f4a5c7ba1a0",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "danger",
+            "title": "",
+            "content": "Teorema FLP: em um sistema assíncrono (mensagens podem demorar arbitrariamente, processos podem ser arbitrariamente lentos), nenhum protocolo determinístico pode resolver consenso se pelo menos 1 processo pode falhar (crash fault)."
+          }
+        },
+        {
+          "id": "a9e6962c-7a9e-45d4-b382-f711b8462502",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": " A intuição: sem limite superior no tempo de mensagens, você não consegue distinguir um processo "
+              },
+              {
+                "text": "morto",
+                "italic": true
+              },
+              {
+                "text": " de um processo "
+              },
+              {
+                "text": "lento",
+                "italic": true
+              },
+              {
+                "text": ". Se você espera, pode esperar pra sempre. Se não espera, pode decidir sem contar com ele e quebrar agreement. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "45fa72af-e57f-415d-909a-044292b7e93b",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": "Como a prática contornou FLP?",
+                "bold": true
+              },
+              {
+                "text": " Três escapes principais:"
+              }
+            ]
+          }
+        },
+        {
+          "id": "044ac86e-aa02-4f88-ad19-5f3c5eb22fb8",
+          "type": "comparison_table",
+          "position": 4,
+          "data": {
+            "columns": [
+              "Escape",
+              "Ideia",
+              "Quem usa"
+            ],
+            "rows": [
+              [
+                "Modelo parcialmente síncrono",
+                "Assume que mensagens eventualmente chegam em tempo limitado. Na prática: timeouts.",
+                "Raft, Paxos, PBFT"
+              ],
+              [
+                "Protocolos randomizados",
+                "Usa aleatoriedade pra quebrar simetria — termina com probabilidade 1 (não determinístico).",
+                "Ben-Or, Avalanche"
+              ],
+              [
+                "Failure detectors",
+                "Oracle externo que \"diz\" quem falhou. Chandra-Toueg (1996) mostrou que ◇S é suficiente.",
+                "Paxos (implicitamente)"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "fb2e5f47-928f-46f1-a197-3417a700c6b8",
+          "type": "paragraph",
+          "position": 5,
+          "data": {
+            "content": [
+              {
+                "text": "Raft e Paxos pagam o preço assumindo timeouts.",
+                "bold": true
+              },
+              {
+                "text": " Isso significa: em uma partição de rede muito longa, o cluster "
+              },
+              {
+                "text": "pode ficar indisponível",
+                "italic": true
+              },
+              {
+                "text": " (escolhe consistência — CP no CAP). É uma escolha deliberada. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "d12464ee-b527-4874-b83c-fd6ebd2f09f3",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Paxos: o pai (difícil) de todos"
+      },
+      "children": [
+        {
+          "id": "9f66ca04-8263-4ba2-9160-7aaa30f6b890",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Paxos foi proposto por Leslie Lamport em 1989 e publicado formalmente em 1998 (\"The Part-Time Parliament\"). Ganhou Turing Award, inspirou uma geração de sistemas — e "
+              },
+              {
+                "text": "todo mundo acha horrível de entender",
+                "bold": true
+              },
+              {
+                "text": ". Lamport escreveu o paper como uma alegoria sobre um parlamento na Grécia antiga. Foi rejeitado. Reescreveu simples (\"Paxos Made Simple\", 2001) e ainda assim é difícil. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "cb9c07ad-5587-4f55-966d-63ec7b103153",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Intuição em 3 fases",
+                "bold": true
+              },
+              {
+                "text": ":"
+              }
+            ]
+          }
+        },
+        {
+          "id": "a0a7eda2-4ecd-438c-b1a7-e8d498c7cd58",
+          "type": "flow_diagram",
+          "position": 2,
+          "data": {
+            "title": "Paxos — 3 fases",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "icon": "👤",
+                "label": "Cliente → Proposer",
+                "desc": "Proposer recebe valor a propor"
+              },
+              {
+                "icon": "1️⃣",
+                "label": "PREPARE(n)",
+                "desc": "Proposer envia PREPARE com número n para todos os Acceptors"
+              },
+              {
+                "icon": "🤝",
+                "label": "PROMISE(n, valor anterior)",
+                "desc": "Acceptors prometem não aceitar propostas < n, devolvem maior valor já aceito"
+              },
+              {
+                "icon": "2️⃣",
+                "label": "ACCEPT(n, v)",
+                "desc": "Proposer envia ACCEPT com valor v (maior prometido ou próprio) para quórum"
+              },
+              {
+                "icon": "✅",
+                "label": "ACCEPTED(n, v) de quórum",
+                "desc": "Quórum de Acceptors confirma"
+              },
+              {
+                "icon": "3️⃣",
+                "label": "LEARN(v) → Valor decidido",
+                "desc": "Learners aplicam o valor v na state machine"
+              }
+            ]
+          }
+        },
+        {
+          "id": "70bb6372-0b44-45fb-8954-389880d838c8",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": " A "
+              },
+              {
+                "text": "complexidade real",
+                "bold": true
+              },
+              {
+                "text": " do Paxos vem de Multi-Paxos (sequência de decisões), reconfigurações dinâmicas e otimizações. Ninguém implementa Paxos do paper — todas as implementações usam variantes (Zab, Raft, Viewstamped Replication). Isso levou Ongaro e Ousterhout a criarem o Raft em 2014 com um objetivo explícito: "
+              },
+              {
+                "text": "ser entendível",
+                "italic": true
+              },
+              {
+                "text": ". "
+              }
+            ]
+          }
+        },
+        {
+          "id": "922e9637-c355-413c-b980-15831f1f752d",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Por que Paxos sobreviveu? Performance e flexibilidade. Spanner (Google), Chubby, BigTable e YugabyteDB usam Paxos por otimizações avançadas (Fast Paxos, EPaxos, Flexible Paxos). Para a maioria dos casos, Raft resolve 99% do problema com 1% da dor."
+          }
+        }
+      ]
+    },
+    {
+      "id": "1c1ffe1c-e81c-4d4b-92ea-ce1035f57f3a",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Raft: Paxos que um humano normal consegue entender"
+      },
+      "children": [
+        {
+          "id": "f8ec2bb8-fecd-4216-9e61-1504dc353d3b",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Raft foi projetado em Stanford (2014) com o objetivo explícito de ser didático. Ele decompõe o problema em 3 subproblemas independentes que você pode estudar separadamente: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "c5d22bd7-f19d-47ab-ba15-0d58756f65f3",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Subproblema",
+              "O que resolve"
+            ],
+            "rows": [
+              [
+                "Leader Election",
+                "Como escolher um único leader por term (período de tempo)"
+              ],
+              [
+                "Log Replication",
+                "Como o leader propaga entries para os followers em ordem"
+              ],
+              [
+                "Safety",
+                "Invariantes que garantem que duas máquinas nunca aplicam decisões diferentes"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "2b1449a2-9414-4d8f-8be5-f8560e2edacc",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Estados de um nó Raft",
+                "bold": true
+              },
+              {
+                "text": ":"
+              }
+            ]
+          }
+        },
+        {
+          "id": "d16ddedd-57bd-46cd-b112-6230b660e4f4",
+          "type": "flow_diagram",
+          "position": 3,
+          "data": {
+            "title": "Estados de um nó Raft",
+            "orientation": "horizontal",
+            "steps": [
+              {
+                "icon": "👥",
+                "label": "FOLLOWER",
+                "desc": "Estado inicial. Recebe heartbeats do leader. Se timeout → vira Candidate"
+              },
+              {
+                "icon": "🗳️",
+                "label": "CANDIDATE",
+                "desc": "Incrementa term, pede votos. Se maioria → LEADER. Se recebe heartbeat válido → FOLLOWER"
+              },
+              {
+                "icon": "👑",
+                "label": "LEADER",
+                "desc": "Envia heartbeats, replica log. Se descobre term maior → FOLLOWER"
+              }
+            ]
+          }
+        },
+        {
+          "id": "0b9ca7c1-5138-4cb0-8240-22b17d296cc3",
+          "type": "paragraph",
+          "position": 4,
+          "data": {
+            "content": [
+              {
+                "text": " A vida inteira do cluster é dividida em "
+              },
+              {
+                "text": "terms",
+                "bold": true
+              },
+              {
+                "text": " (períodos numerados monotonicamente). Cada term tem "
+              },
+              {
+                "text": "no máximo 1 leader",
+                "italic": true
+              },
+              {
+                "text": ". Se um term não eleger leader (split vote), um novo term começa. O número do term é carimbado em cada RPC e entry — e é a "
+              },
+              {
+                "text": "chave da safety do Raft",
+                "bold": true
+              },
+              {
+                "text": ". "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "544f8c0d-bb73-4499-8c6d-7aa0f260b34a",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Leader Election: como escolher o chefe"
+      },
+      "children": [
+        {
+          "id": "856b96c1-862f-4ec0-b5bc-513a60b06f2b",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Quando um follower não recebe heartbeat do leader em "
+              },
+              {
+                "text": "electionTimeout",
+                "code": true
+              },
+              {
+                "text": " (tipicamente 150-300ms, randomizado pra evitar split votes), ele: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "9ec3af0d-71f1-4541-a178-192074a246a8",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "items": [
+              "Vira candidate",
+              "Incrementa seu",
+              "Vota em si mesmo",
+              "Envia pra todos",
+              "Se recebe maioria → vira leader, começa a mandar heartbeats",
+              "Se recebe heartbeat de leader legítimo (term >= seu) → volta a follower",
+              "Se timeout sem decisão → novo term, nova eleição"
+            ],
+            "ordered": true
+          }
+        },
+        {
+          "id": "878ca63c-60aa-459f-8682-588a856f516c",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Regras de voto (garantia de safety): um nó só vota em um candidato se:"
+          }
+        },
+        {
+          "id": "96f8e757-ec9b-443f-9400-613f83ef8406",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": "Implementação didática de RequestVote",
+                "bold": true
+              },
+              {
+                "text": " (Python):"
+              }
+            ]
+          }
+        },
+        {
+          "id": "759aeb62-8aa6-4048-adc2-d08fd72cb890",
+          "type": "code_block",
+          "position": 4,
+          "data": {
+            "language": "python",
+            "code": "# request_vote.py — mostra as regras de voto do Raft\nfrom dataclasses import dataclass\n\n@dataclass\nclass RaftNode:\n    id: str\n    current_term: int = 0\n    voted_for: str | None = None\n    log: list = None                  # lista de (term, command)\n\n    def last_log_index(self) -> int:\n        return len(self.log or []) - 1\n\n    def last_log_term(self) -> int:\n        return self.log[-1][0] if self.log else 0\n\n    def handle_request_vote(\n        self,\n        candidate_id: str,\n        candidate_term: int,\n        candidate_last_idx: int,\n        candidate_last_term: int,\n    ) -> tuple[int, bool]:\n        # Rule 1: term antigo — recusa\n        if candidate_term < self.current_term:\n            return (self.current_term, False)\n\n        # Rule 2: term maior — atualiza e volta a follower\n        if candidate_term > self.current_term:\n            self.current_term = candidate_term\n            self.voted_for = None\n\n        # Rule 3: já votou em outro candidato neste term — recusa\n        if self.voted_for not in (None, candidate_id):\n            return (self.current_term, False)\n\n        # Rule 4: log do candidato é atualizado o suficiente?\n        # \"up-to-date\": maior term vence; mesmo term → maior índice vence\n        my_last_term = self.last_log_term()\n        my_last_idx = self.last_log_index()\n        log_ok = (\n            candidate_last_term > my_last_term\n            or (candidate_last_term == my_last_term and candidate_last_idx >= my_last_idx)\n        )\n        if not log_ok:\n            return (self.current_term, False)\n\n        # Concede voto\n        self.voted_for = candidate_id\n        return (self.current_term, True)"
+          }
+        },
+        {
+          "id": "35ededbb-d0c9-43ea-8744-eb02a6f9746a",
+          "type": "callout",
+          "position": 5,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Por que randomizar o electionTimeout? Se dois followers timed out ao mesmo tempo, os dois viram candidate e split votam. Com timeout aleatório (ex: 150-300ms uniforme), a probabilidade de colisão repetida cai exponencialmente. É por isso que Raft quase sempre elege um leader em 1-2 rodadas."
+          }
+        }
+      ]
+    },
+    {
+      "id": "4b4827a6-4116-49f4-9b17-5188f7ef16ee",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Log Replication: como o leader replica entries"
+      },
+      "children": [
+        {
+          "id": "adc62884-6dfd-4816-8c54-c12ddbdc1162",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Uma vez eleito, o leader começa a atender clientes. Cada comando vira uma "
+              },
+              {
+                "text": "log entry",
+                "bold": true
+              },
+              {
+                "text": " (term + índice + comando). O protocolo é: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "073c3a3d-0c29-4527-a5c4-8aa77a18b2b5",
+          "type": "node_graph",
+          "position": 1,
+          "data": {
+            "title": "Log Replication: como o leader replica entries",
+            "columns": [
+              {
+                "label": "Cliente",
+                "nodes": [
+                  {
+                    "icon": "👤",
+                    "label": "Envia command",
+                    "tone": "default"
+                  },
+                  {
+                    "icon": "✅",
+                    "label": "Recebe result",
+                    "sub": "após commit confirmado",
+                    "tone": "success"
+                  }
+                ]
+              },
+              {
+                "label": "Leader",
+                "nodes": [
+                  {
+                    "icon": "1️⃣",
+                    "label": "Append ao próprio log",
+                    "sub": "term=T, idx=I",
+                    "tone": "emphasis"
+                  },
+                  {
+                    "icon": "📡",
+                    "label": "AppendEntries → Followers",
+                    "sub": "em paralelo para todos",
+                    "tone": "emphasis"
+                  },
+                  {
+                    "icon": "2️⃣",
+                    "label": "Recebe ACK de quórum",
+                    "sub": "maioria confirma",
+                    "tone": "emphasis"
+                  },
+                  {
+                    "icon": "3️⃣",
+                    "label": "commitIndex = I",
+                    "sub": "aplica na state machine → responde cliente",
+                    "tone": "emphasis"
+                  }
+                ]
+              },
+              {
+                "label": "Followers (2+ em cluster de 5)",
+                "nodes": [
+                  {
+                    "label": "Valida log consistency",
+                    "sub": "prevLogIndex + prevLogTerm devem bater",
+                    "tone": "default"
+                  },
+                  {
+                    "label": "Append ao próprio log",
+                    "tone": "default"
+                  },
+                  {
+                    "label": "Envia ACK",
+                    "tone": "default"
+                  },
+                  {
+                    "label": "Aplica entries committed",
+                    "sub": "ao receber heartbeat com commitIdx",
+                    "tone": "default"
+                  }
+                ]
+              }
+            ],
+            "legend": []
+          }
+        },
+        {
+          "id": "e15c1fd3-8435-447f-83df-f4fd870ea280",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "A RPC",
+                "bold": true
+              },
+              {
+                "text": " carrega (entre outros):"
+              }
+            ]
+          }
+        },
+        {
+          "id": "f01bafe8-90f9-445f-8d41-77889ed6bba4",
+          "type": "list",
+          "position": 3,
+          "data": {
+            "items": [
+              ": term do leader",
+              ", : o índice/term da entry imediatamente antes das novas — usado pra log matching",
+              ": lista de entries novas",
+              ": o atual do leader"
+            ],
+            "ordered": false
+          }
+        },
+        {
+          "id": "6ef01cd3-76ef-4b24-aed5-83ff246f70be",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Log Matching Property: se duas entries em logs diferentes têm o mesmo (term, index), elas contêm o mesmo comando E todos os prefixos também coincidem. O follower rejeita AppendEntries se o prevLog não bate, e o leader decrementa daquele follower e tenta de novo com entry mais antiga. Eventualmente encontram um ponto comum."
+          }
+        },
+        {
+          "id": "0b9095f7-4d6b-4c4b-9e81-861220eed4d4",
+          "type": "paragraph",
+          "position": 5,
+          "data": {
+            "content": [
+              {
+                "text": "Mini-implementação do AppendEntries",
+                "bold": true
+              },
+              {
+                "text": ":"
+              }
+            ]
+          }
+        },
+        {
+          "id": "da8f9c16-1949-4aba-86e6-1db0ccb8adbb",
+          "type": "code_block",
+          "position": 6,
+          "data": {
+            "language": "python",
+            "code": "# append_entries.py — log replication do lado do follower\ndef handle_append_entries(\n    node: RaftNode,\n    leader_term: int,\n    prev_log_idx: int,\n    prev_log_term: int,\n    entries: list,          # [(term, cmd), ...]\n    leader_commit: int,\n) -> tuple[int, bool]:\n    # 1. Term antigo — rejeita\n    if leader_term < node.current_term:\n        return (node.current_term, False)\n\n    # 2. Atualiza term se o leader tem term maior\n    if leader_term > node.current_term:\n        node.current_term = leader_term\n        node.voted_for = None\n\n    # 3. Reset election timer (recebeu heartbeat válido)\n    node.reset_election_timer()\n\n    # 4. Log matching check: prevLog precisa existir e bater\n    log = node.log or []\n    if prev_log_idx >= 0:\n        if prev_log_idx >= len(log):\n            return (node.current_term, False)  # log do follower é curto demais\n        if log[prev_log_idx][0] != prev_log_term:\n            return (node.current_term, False)  # term não bate — conflito\n\n    # 5. Append entries (truncando conflitos, se houver)\n    for i, (term, cmd) in enumerate(entries):\n        idx = prev_log_idx + 1 + i\n        if idx < len(log) and log[idx][0] != term:\n            # conflito: trunca tudo a partir daqui\n            log = log[:idx]\n        if idx >= len(log):\n            log.append((term, cmd))\n    node.log = log\n\n    # 6. Avança commitIndex até o min(leaderCommit, último índice local)\n    if leader_commit > node.commit_index:\n        node.commit_index = min(leader_commit, len(log) - 1)\n        node.apply_committed_entries()\n\n    return (node.current_term, True)"
+          }
+        },
+        {
+          "id": "a2df7c44-aba3-4b32-8df6-ff2d0feca4d8",
+          "type": "callout",
+          "position": 7,
+          "data": {
+            "variant": "danger",
+            "title": "",
+            "content": "Safety: Leader Completeness. Raft tem uma regra sutil que evita corrupção: um leader só pode commit entries do seu próprio term diretamente. Entries de terms anteriores são committed indiretamente quando uma entry do term atual é committed em cima delas. Esse detalhe (descrito como \"Figure 8\" no paper) é o ponto mais confuso do Raft — mas é o que garante que safety não quebra durante falhas."
+          }
+        }
+      ]
+    },
+    {
+      "id": "e26132d0-27a5-4d37-b517-0635d2e63f81",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Safety: as 5 propriedades que Raft garante"
+      },
+      "children": [
+        {
+          "id": "612765ea-b796-4c48-b69a-3cf24690be34",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Propriedade",
+              "O que garante"
+            ],
+            "rows": [
+              [
+                "Election Safety",
+                "No máximo 1 leader por term (garantido pela regra de voto único)"
+              ],
+              [
+                "Leader Append-Only",
+                "Leader nunca sobrescreve ou deleta entries do próprio log — só adiciona"
+              ],
+              [
+                "Log Matching",
+                "Se dois logs têm uma entry com mesmo (term, index), eles são idênticos até esse ponto"
+              ],
+              [
+                "Leader Completeness",
+                "Se uma entry foi committed em term T, ela aparece no log de todos os leaders futuros"
+              ],
+              [
+                "State Machine Safety",
+                "Se um nó aplicou uma entry em índice I na state machine, nenhum outro nó aplicará uma entry diferente em I"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b1e3d170-9bb1-49ef-a8ba-054298e56e7f",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Essas 5 propriedades são provadas formalmente no paper original e verificadas em TLA+. Elas "
+              },
+              {
+                "text": "valem mesmo em cenários patológicos",
+                "bold": true
+              },
+              {
+                "text": ": crashes em rajada, partições assimétricas, reordenação de mensagens, máquinas congelando por minutos. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "81ef972d-1fa8-4278-aa7b-fd3d007fc4a4",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Quem usa Raft em produção"
+      },
+      "children": [
+        {
+          "id": "3be8eaa7-d19d-4b28-98b4-0062ad2f6306",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sistema",
+              "Uso do Raft",
+              "Observações"
+            ],
+            "rows": [
+              [
+                "etcd",
+                "Backend de metadados do Kubernetes (API server state)",
+                "Cluster 3 ou 5 nós típico. Se etcd cai, o K8s control plane para."
+              ],
+              [
+                "Consul (HashiCorp)",
+                "Service discovery, KV, leader election",
+                "Raft por datacenter; gossip entre DCs."
+              ],
+              [
+                "CockroachDB",
+                "Raft por range (cada shard tem seu próprio cluster Raft)",
+                "Milhares de grupos Raft por cluster — escala horizontal real."
+              ],
+              [
+                "TiKV / TiDB",
+                "Raft por region (shard)",
+                "Mesmo padrão do CockroachDB."
+              ],
+              [
+                "MongoDB (4.0+)",
+                "Replica set election baseada em Raft",
+                "Antes era protocolo próprio; migraram pra Raft por simplicidade."
+              ],
+              [
+                "Redpanda",
+                "Kafka-compatible usando Raft (não ZooKeeper/KRaft)",
+                "Uma partição Kafka = um grupo Raft."
+              ],
+              [
+                "RabbitMQ",
+                "Quorum queues (substituem mirror queues antigas)",
+                "Raft garante no-data-loss mesmo com crash do leader."
+              ],
+              [
+                "Kafka (KRaft)",
+                "Substituto do ZooKeeper desde 3.3",
+                "Usa Kafka Raft Metadata Mode em vez de ZK."
+              ]
+            ]
+          }
+        },
+        {
+          "id": "3caaac07-9eab-4300-acba-728970643323",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Se você usa Kubernetes, você "
+              },
+              {
+                "text": "já depende de Raft",
+                "italic": true
+              },
+              {
+                "text": ". Quando o etcd fica lento, seu API server responde 500. Quando o quórum do etcd quebra (2 de 3 nós mortos), o K8s vira read-only e depois morre. Entender Raft = entender o chão onde seu cluster anda. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "aebc7d01-e7b0-4469-887d-f6a93bd7441c",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Decisões reais"
+      },
+      "children": [
+        {
+          "id": "9ba36f61-f1ef-481b-8918-eb552e5035ab",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Cluster etcd do Kubernetes: 3 ou 5 nós?",
+            "winner": "5 nós em produção séria",
+            "why": "3 nós tolera 1 falha — se você perde 1 num reboot planejado e outro falha inesperado, o cluster congela. 5 nós tolera 2 falhas simultâneas e permite rolling upgrade sem janela de risco. O custo adicional (2 VMs) é desprezível contra a dor de recuperar um etcd morto.",
+            "alternatives": [
+              {
+                "label": "3 nós para dev/staging",
+                "note": "Tolera 1 falha, economia real."
+              },
+              {
+                "label": "7+ nós: não",
+                "note": "Cada AppendEntries vai pra mais nós → latência de escrita aumenta, throughput cai. 5 é o sweet spot."
+              }
+            ]
+          }
+        },
+        {
+          "id": "f9493c7a-495a-432b-b17b-55ad81785777",
+          "type": "decision_box",
+          "position": 1,
+          "data": {
+            "scenario": "Escolher Raft ou Paxos para um novo sistema",
+            "winner": "Raft, quase sempre",
+            "why": "Raft é mais simples de implementar, debugar e explicar. Bibliotecas maduras existem em Go (hashicorp/raft, etcd-io/raft), Rust (openraft, tikv/raft-rs), Java (atomix, copycat). Paxos faz sentido só quando você precisa de otimizações específicas (Fast Paxos, EPaxos pra latência wan, Flexible Paxos pra quóruns assimétricos) e tem time de pesquisa pra manter.",
+            "alternatives": [
+              {
+                "label": "Paxos (Multi-Paxos / EPaxos)",
+                "note": "Quando latência WAN importa muito (Spanner)."
+              },
+              {
+                "label": "Zab (ZooKeeper)",
+                "note": "Se você já tem ZK infra madura."
+              },
+              {
+                "label": "Viewstamped Replication",
+                "note": "Origem intelectual do Raft. Academicamente interessante, pouco usado em produção."
+              }
+            ]
+          }
+        },
+        {
+          "id": "c058b816-3c02-48af-9e53-0919a6d781b4",
+          "type": "decision_box",
+          "position": 2,
+          "data": {
+            "scenario": "Aplicação web precisa de 'eleição de líder' simples (ex: cron singleton)",
+            "winner": "Use Redis Redlock ou PostgreSQL advisory lock",
+            "why": "Você não precisa de Raft pra eleger quem roda uma cron todo minuto. Raft é pesado — full state machine + log durável + eleição. Pra leader election leve (cron singleton, rate limiter coordinator), advisory lock no PG ou lease com TTL no Redis resolve com 10 linhas de código.",
+            "alternatives": [
+              {
+                "label": "Redlock no Redis",
+                "note": "Com TTL + renovação. Ver papers do Kleppmann sobre limites."
+              },
+              {
+                "label": "etcd lease",
+                "note": "Se você já tem etcd (K8s), use lease com TTL."
+              },
+              {
+                "label": "Postgres pg_try_advisory_lock",
+                "note": "Se você tem PG, literalmente 1 linha."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "db9a13b0-0026-4109-a261-3271ffd9158a",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Operação: o que dói no dia a dia"
+      },
+      "children": [
+        {
+          "id": "2aaea226-2a57-453d-a9a0-c33700849c7a",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Problema",
+              "Sintoma",
+              "Como diagnosticar"
+            ],
+            "rows": [
+              [
+                "Split brain (nunca acontece em Raft real)",
+                "Dois nós se dizem leader",
+                "Verifique terms. Leader novo tem term maior — followers rejeitarão o velho. Se acontece, há bug na implementação."
+              ],
+              [
+                "Cluster sem quórum",
+                "Escritas timed out, nenhum nó respondendo",
+                "etcdctl endpoint status: veja quantos nós estão vivos. Se < ⌊N/2⌋+1, pare escritas até recuperar."
+              ],
+              [
+                "Leader flapping",
+                "Eleições constantes, muitos term changes",
+                "Rede instável (jitter alto), GC pauses longos (&gt;electionTimeout), heartbeat perdido. Aumente electionTimeout ou investigue infra."
+              ],
+              [
+                "Log compaction parada",
+                "Disco enche, escritas lentas",
+                "Raft precisa de snapshots periódicos pra compactar log. Config snapshot-count (etcd) ou equivalente."
+              ],
+              [
+                "Cluster impossível de recuperar",
+                "Quórum perdido permanentemente (3/3 corrompidos)",
+                "etcd tem etcdctl snapshot restore — reconstrói cluster de 1 snapshot. Procedimento de último recurso."
+              ]
+            ]
+          }
+        },
+        {
+          "id": "f13d9719-b8af-4c4e-aebf-454d84ba7827",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Regra de ouro operacional: nunca faça maintenance em mais de ⌊N/2⌋ nós simultaneamente. Num cluster de 5, reboote 1 por vez, espere voltar como follower saudável antes do próximo. É o erro operacional #1 que mata clusters etcd."
+          }
+        }
+      ]
+    },
+    {
+      "id": "cad6698c-0295-4695-b3d4-03d0e7168633",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Perguntas típicas (Q&A)"
+      },
+      "children": [
+        {
+          "id": "1d4ef459-0e57-4fac-96a9-c599614339cb",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Por que sempre número ímpar de nós?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "4640f059-9241-46b4-99d8-4b61792bf3b1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Um cluster de 4 nós tolera 1 falha (quórum = 3). Um cluster de 5 nós tolera 2 falhas (quórum = 3). Mesmo quórum, mesmo custo de escrita, mas o de 5 tolera mais falhas. Números pares desperdiçam 1 nó. 3, 5, 7 são os padrões. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "261aee11-63dd-4ae9-a605-b97a0a7529de",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Raft tolera bizantinos (nós mentirosos)?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "b6dd0aa3-286e-4818-af28-818d8c384d08",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": " Não. Raft assume modelo de "
+              },
+              {
+                "text": "crash fault",
+                "italic": true
+              },
+              {
+                "text": ": nós caem, mas não mentem. Se um nó é comprometido (malicious), Raft pode aceitar entries inválidas. Pra BFT, use PBFT, HotStuff, Tendermint (usado por blockchains). Custo: quórum de 2F+1 em crash fault vs 3F+1 em byzantine fault. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "5fbcee08-0ac3-47c8-9619-0c4a62dc964f",
+          "type": "paragraph",
+          "position": 4,
+          "data": {
+            "content": [
+              {
+                "text": "Por que o Raft performs pior em WAN?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "7e7725bc-7741-4937-83aa-a6984b8871e9",
+          "type": "paragraph",
+          "position": 5,
+          "data": {
+            "content": [
+              {
+                "text": " Cada escrita precisa de round-trip do leader pro quórum. Se o leader está em us-east-1 e tem follower em eu-west-1, você paga 80-100ms por escrita. Por isso Spanner usa Paxos com Commit Wait + TrueTime, e CockroachDB usa geo-partitioning (dados \"locais\" ficam em quórum local). Raft vanilla não é ótimo pra multi-region writes. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "4a12e61f-aa8c-4b97-a6e0-c86714d6a305",
+          "type": "paragraph",
+          "position": 6,
+          "data": {
+            "content": [
+              {
+                "text": "O que é \"Pre-Vote\"?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "1b85a2c2-9aee-4fc5-8d81-50fbf62d7af1",
+          "type": "paragraph",
+          "position": 7,
+          "data": {
+            "content": [
+              {
+                "text": " Extensão do Raft pra evitar \"disruptive servers\": um nó isolado volta ao cluster com term muito alto e força reeleição desnecessária. Pre-Vote faz o candidate perguntar \"eu ganharia?\" antes de incrementar o term. etcd e hashicorp/raft usam. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "65f3c1cb-d6ee-4ff8-8b95-bee36254f596",
+          "type": "paragraph",
+          "position": 8,
+          "data": {
+            "content": [
+              {
+                "text": "Quando Raft fica indisponível mesmo sem falha?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "e22643a0-8045-4224-9127-8ecdeeb1a238",
+          "type": "paragraph",
+          "position": 9,
+          "data": {
+            "content": [
+              {
+                "text": " Em partições de rede que separam o leader da maioria. O leader antigo vira follower (perde quórum de heartbeat); a maioria elege novo leader. Durante a transição (100-500ms típico), o cluster rejeita escritas. É a manifestação do CP-no-CAP. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "76b087b9-968e-4a91-9354-99adff3816f8",
+      "type": "callout",
+      "position": 13,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Take-aways:"
+      }
+    },
+    {
+      "id": "9fa1fca0-edc6-4e09-8877-c12131d85e30",
+      "type": "paragraph",
+      "position": 14,
+      "data": {
+        "content": [
+          {
+            "text": " Próximo módulo: agora que sabemos como o cluster concorda, vamos ver como "
+          },
+          {
+            "text": "o cliente",
+            "italic": true
+          },
+          {
+            "text": " sobrevive a rede quebrada — idempotência e retries. "
+          }
+        ]
+      }
+    }
+  ]
+}

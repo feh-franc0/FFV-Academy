@@ -1,0 +1,955 @@
+{
+  "slug": "postgres-mvcc-isolation",
+  "title": null,
+  "blocks": [
+    {
+      "id": "0d38af6f-f341-484f-8639-b6378b585349",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Postgres é o banco favorito do mundo moderno — e você provavelmente usa sem saber o que acontece por baixo. Este módulo é sobre o que todo engenheiro sério precisa entender: como o "
+          },
+          {
+            "text": "MVCC",
+            "bold": true
+          },
+          {
+            "text": " permite leituras e escritas concorrentes sem locks recíprocos, a diferença real entre os 4 "
+          },
+          {
+            "text": "isolation levels",
+            "bold": true
+          },
+          {
+            "text": ", quando usar "
+          },
+          {
+            "text": "SELECT FOR UPDATE",
+            "code": true
+          },
+          {
+            "text": " vs "
+          },
+          {
+            "text": "advisory locks",
+            "bold": true
+          },
+          {
+            "text": ", e por que sua tabela de 2GB virou 15GB ("
+          },
+          {
+            "text": "bloat",
+            "bold": true
+          },
+          {
+            "text": "). "
+          }
+        ]
+      }
+    },
+    {
+      "id": "be0ea21a-6c02-4c2d-b245-a57986ab5468",
+      "type": "paragraph",
+      "position": 1,
+      "data": {
+        "content": [
+          {
+            "text": " Saber isso separa dev que copia código do StackOverflow do engenheiro que diagnostica deadlock em produção às 3 da manhã. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "67ac0913-e8fe-4238-885f-09397c021740",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "MVCC: o coração do Postgres"
+      },
+      "children": [
+        {
+          "id": "20199c7c-553f-4b35-a6c9-19ab9b48e4bd",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " MVCC (Multi-Version Concurrency Control) é a técnica que permite: "
+              },
+              {
+                "text": "readers não bloqueiam writers, writers não bloqueiam readers",
+                "bold": true
+              },
+              {
+                "text": ". Cada linha pode existir em múltiplas versões simultaneamente, cada versão visível apenas pras transações cuja \"visão\" do mundo inclui essa versão. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "9302ec5c-8d93-4aaa-95e3-06d586e90ac7",
+          "type": "stack_flow",
+          "position": 1,
+          "data": {
+            "title": "",
+            "items": [
+              {
+                "label": "Toda tupla tem: ctid · xmin · xmax · dados",
+                "sub": "ctid = ponteiro · xmin = tx que criou · xmax = tx que deletou (ou null)"
+              },
+              {
+                "label": "UPDATE balance=150 WHERE id=42",
+                "sub": "marca tupla antiga: xmax = txid · insere nova tupla: xmin = txid, xmax = null"
+              },
+              {
+                "label": "Resultado: DUAS tuplas para o mesmo id",
+                "sub": "cada versão visível apenas para tx cujo snapshot inclui aquele xmin/xmax"
+              },
+              {
+                "label": "Outra tx com txid menor lendo",
+                "sub": "vê a tupla antiga — a nova foi criada por txid maior que o snapshot dela"
+              }
+            ]
+          }
+        },
+        {
+          "id": "03380af0-72a2-4bd8-976e-374af716044f",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Visibility rule simplificada",
+                "bold": true
+              },
+              {
+                "text": ": uma tupla é visível pra uma tx se:"
+              }
+            ]
+          }
+        },
+        {
+          "id": "d21ba209-53c9-4419-80c5-867049627556",
+          "type": "list",
+          "position": 3,
+          "data": {
+            "items": [
+              "xmin foi committed antes do snapshot da tx (e não é ela mesma)",
+              "xmax é null, ou aborted, ou ainda não committed"
+            ],
+            "ordered": true
+          }
+        },
+        {
+          "id": "6c2c4c59-38ce-44c5-ab6e-4245cf237fa3",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Consequência prática: SELECT nunca bloqueia outro SELECT ou um UPDATE/DELETE, e vice-versa. Só operações na mesma tupla entre si (ex: 2 UPDATEs) disputam lock. É por isso que Postgres aguenta carga altíssima de leitura concorrente."
+          }
+        }
+      ]
+    },
+    {
+      "id": "8f652672-aefe-4f5f-9d0e-720173949458",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Os 4 isolation levels (e as anomalias que previnem)"
+      },
+      "children": [
+        {
+          "id": "e273538f-5ac6-4653-8cb0-361fae6c0451",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " SQL standard define 4 níveis + 3 anomalias. Postgres "
+              },
+              {
+                "text": "na prática oferece 3",
+                "bold": true
+              },
+              {
+                "text": " (Read Uncommitted é tratado como Read Committed). "
+              }
+            ]
+          }
+        },
+        {
+          "id": "3d15072f-712c-4b22-8d30-51af902d76c6",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Isolation Level",
+              "Dirty read",
+              "Non-repeatable read",
+              "Phantom read",
+              "Serialization anomaly"
+            ],
+            "rows": [
+              [
+                "Read Uncommitted",
+                "(não aplica no PG)",
+                "Sim",
+                "Sim",
+                "Sim"
+              ],
+              [
+                "Read Committed (DEFAULT)",
+                "Não",
+                "Sim",
+                "Sim",
+                "Sim"
+              ],
+              [
+                "Repeatable Read",
+                "Não",
+                "Não",
+                "Não (PG)",
+                "Sim"
+              ],
+              [
+                "Serializable",
+                "Não",
+                "Não",
+                "Não",
+                "Não"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "717cfda3-2a25-4555-87d6-5a90c8570cab",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Anomalia",
+              "Descrição",
+              "Exemplo"
+            ],
+            "rows": [
+              [
+                "Dirty read",
+                "Tx1 lê um valor que Tx2 escreveu mas ainda não fez commit",
+                "Ler saldo 100 que Tx2 está prestes a rollback"
+              ],
+              [
+                "Non-repeatable read",
+                "Tx1 lê a mesma linha duas vezes e vê valores diferentes (Tx2 commitou entre as leituras)",
+                "SELECT balance FROM a WHERE id=1 → 100, depois 150"
+              ],
+              [
+                "Phantom read",
+                "Tx1 executa o mesmo query com WHERE duas vezes e recebe linhas diferentes (Tx2 inseriu novas)",
+                "SELECT COUNT(*) FROM a WHERE balance>0 → 5, depois 6"
+              ],
+              [
+                "Serialization anomaly",
+                "Dois txs concurrent, cada um passa sozinho, mas juntos violam invariante",
+                "Constraint \"total >= 0\": 2 débitos concorrentes que individualmente passam mas juntos estouram"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "1ad28d8c-df27-42db-bc6c-eab5bef2ab98",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Postgres Repeatable Read > SQL standard: o PG também previne phantom reads no nível RR (graças ao MVCC — usa snapshot inteiro da tx). Serializable no PG é \"Serializable Snapshot Isolation (SSI)\", detecta conflitos via predicado e aborta uma das txs com erro — você deve retriar."
+          }
+        },
+        {
+          "id": "9ebad093-e140-4d48-98c8-b3e95888ea5b",
+          "type": "paragraph",
+          "position": 4,
+          "data": {
+            "content": [
+              {
+                "text": "Setar isolation level",
+                "bold": true
+              },
+              {
+                "text": ":"
+              }
+            ]
+          }
+        },
+        {
+          "id": "6aef30fd-c6ef-45d1-9ef7-b31e781fa416",
+          "type": "code_block",
+          "position": 5,
+          "data": {
+            "language": "sql",
+            "code": "-- Por transação:\nBEGIN ISOLATION LEVEL SERIALIZABLE;\nSELECT balance FROM accounts WHERE id = 42;\nUPDATE accounts SET balance = balance - 50 WHERE id = 42;\nCOMMIT;\n\n-- Setar default da sessão:\nSET default_transaction_isolation = 'repeatable read';\n\n-- Setar como default do banco (não recomendado — caso a caso):\nALTER DATABASE mydb SET default_transaction_isolation = 'read committed';"
+          }
+        }
+      ]
+    },
+    {
+      "id": "5fb7a846-c396-420c-ac0f-e28880e724f2",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Exemplo real: lost update com Read Committed"
+      },
+      "children": [
+        {
+          "id": "d3f8f1be-df0e-4296-956e-72529fe7e4cd",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Clássico bug em CRUD: dois usuários editando o mesmo registro concorrentemente. Read Committed "
+              },
+              {
+                "text": "não previne",
+                "italic": true
+              },
+              {
+                "text": ". "
+              }
+            ]
+          }
+        },
+        {
+          "id": "1abbbc37-3691-4483-bbfb-69d602e3dca8",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "sql",
+            "code": "-- Cenário: 2 usuários editando perfil do user 42 (balance inicial: 100)\n\n-- Tx1 e Tx2 ambas em Read Committed (default)\n\n-- Tx1:\nBEGIN;\nSELECT balance FROM accounts WHERE id = 42;   -- lê 100\n-- ... app calcula novo valor: 100 + 50 = 150\n\n-- Tx2:\nBEGIN;\nSELECT balance FROM accounts WHERE id = 42;   -- lê 100\n-- ... app calcula novo valor: 100 + 30 = 130\n\n-- Tx1:\nUPDATE accounts SET balance = 150 WHERE id = 42;\nCOMMIT;                                        -- OK\n\n-- Tx2:\nUPDATE accounts SET balance = 130 WHERE id = 42;   -- sobrescreve!\nCOMMIT;                                        -- Tx1 foi PERDIDA. Balance: 130 (deveria ser 180)."
+          }
+        },
+        {
+          "id": "48a0b12d-a0b2-4a32-b956-467b2df4d7e7",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "3 soluções",
+                "bold": true
+              },
+              {
+                "text": ":"
+              }
+            ]
+          }
+        },
+        {
+          "id": "755afb32-29da-40df-a9c3-1128b271abb1",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "sql",
+            "code": "-- Solução 1: SELECT FOR UPDATE (pessimistic lock)\nBEGIN;\nSELECT balance FROM accounts WHERE id = 42 FOR UPDATE;   -- bloqueia a linha\nUPDATE accounts SET balance = balance + 50 WHERE id = 42;\nCOMMIT;\n-- Tx2 trava no SELECT FOR UPDATE até Tx1 commitar; depois lê 150 e segue.\n\n-- Solução 2: UPDATE atômico (não precisa de lock se a lógica cabe em SQL)\nUPDATE accounts SET balance = balance + 50 WHERE id = 42;\n-- Postgres executa atomicamente. Sem race, sem lock manual.\n\n-- Solução 3: Optimistic lock (version column)\n-- schema: ALTER TABLE accounts ADD COLUMN version INT DEFAULT 0;\nBEGIN;\nSELECT balance, version FROM accounts WHERE id = 42;   -- lê (100, 3)\nUPDATE accounts\n  SET balance = 150, version = version + 1\n  WHERE id = 42 AND version = 3;                       -- CAS\n-- Se rowcount = 0, alguém mudou antes → erro pro cliente / retry.\nCOMMIT;"
+          }
+        },
+        {
+          "id": "7a24b86f-beac-4cb4-a7f0-429b03267b36",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Regra: se você pode expressar a lógica inteira em um único UPDATE atômico (ex: ), essa é a solução mais simples e performante. Só recorra a FOR UPDATE ou optimistic quando a lógica envolve decisões na aplicação."
+          }
+        }
+      ]
+    },
+    {
+      "id": "53e9519c-f20a-489b-8bea-8a736e5c15e0",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Tipos de lock no Postgres"
+      },
+      "children": [
+        {
+          "id": "deb530dc-0e01-4f29-9f20-7a3434e770ac",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Postgres tem múltiplos níveis de lock — linha (tuple) e tabela. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "cd8943eb-6e88-4ce6-896c-22f29d744215",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Locks de linha",
+                "bold": true
+              },
+              {
+                "text": ":"
+              }
+            ]
+          }
+        },
+        {
+          "id": "2d6215b6-8ea7-4555-a4e6-235e4f1dbbd7",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Lock",
+              "SQL",
+              "O que bloqueia"
+            ],
+            "rows": [
+              [
+                "FOR UPDATE",
+                "SELECT ... FOR UPDATE",
+                "Outras FOR UPDATE, FOR SHARE, UPDATE, DELETE nessa linha"
+              ],
+              [
+                "FOR NO KEY UPDATE",
+                "SELECT ... FOR NO KEY UPDATE",
+                "Mais leve — permite outros FOR KEY SHARE concorrentes (usado em FKs)"
+              ],
+              [
+                "FOR SHARE",
+                "SELECT ... FOR SHARE",
+                "Outras UPDATE, DELETE, FOR UPDATE. Permite outras FOR SHARE."
+              ],
+              [
+                "FOR KEY SHARE",
+                "SELECT ... FOR KEY SHARE",
+                "Apenas UPDATE da key. Mais leve. Usado internamente por FKs."
+              ]
+            ]
+          }
+        },
+        {
+          "id": "2cee44ae-a694-4af9-a475-328227a52f87",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": "Locks de tabela",
+                "bold": true
+              },
+              {
+                "text": ":"
+              }
+            ]
+          }
+        },
+        {
+          "id": "2265f4a6-8ecc-456a-a9a8-933cfbed42f7",
+          "type": "comparison_table",
+          "position": 4,
+          "data": {
+            "columns": [
+              "Lock",
+              "Quando acontece",
+              "Bloqueia o quê"
+            ],
+            "rows": [
+              [
+                "ACCESS SHARE",
+                "SELECT simples",
+                "Só ACCESS EXCLUSIVE (ex: DROP TABLE)"
+              ],
+              [
+                "ROW SHARE",
+                "SELECT FOR UPDATE/SHARE",
+                "EXCLUSIVE, ACCESS EXCLUSIVE"
+              ],
+              [
+                "ROW EXCLUSIVE",
+                "UPDATE, DELETE, INSERT",
+                "SHARE e acima"
+              ],
+              [
+                "SHARE",
+                "CREATE INDEX",
+                "ROW EXCLUSIVE e acima"
+              ],
+              [
+                "EXCLUSIVE",
+                "REFRESH MATERIALIZED VIEW CONCURRENTLY",
+                "SHARE, ROW EXCLUSIVE e acima"
+              ],
+              [
+                "ACCESS EXCLUSIVE",
+                "DROP TABLE, TRUNCATE, ALTER TABLE (maioria), VACUUM FULL",
+                "TUDO, inclusive SELECT"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "fac84b69-356c-479e-8793-7e2e47bdeec4",
+          "type": "callout",
+          "position": 5,
+          "data": {
+            "variant": "danger",
+            "title": "",
+            "content": "Gotcha clássico de migration: em tabelas grandes adquire ACCESS EXCLUSIVE e reescreve tudo. Quebra produção em tabelas de milhões. Solução: O projeto pg-osc ou pgroll automatizam migrations zero-downtime."
+          }
+        }
+      ]
+    },
+    {
+      "id": "79aaa9d4-04b5-4794-832d-88032f7b14ed",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Advisory locks: locks application-level"
+      },
+      "children": [
+        {
+          "id": "93035278-804f-446e-aea6-222fd4527940",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Advisory locks não protegem linhas — protegem "
+              },
+              {
+                "text": "conceitos",
+                "italic": true
+              },
+              {
+                "text": ". Você passa um id (int64 ou par de int32), Postgres garante que só uma sessão detém aquele lock. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "4c7459c7-3535-4c16-bce3-9b1728f9a549",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "sql",
+            "code": "-- Exclusivo, session-level (dura até sessão terminar ou unlock explícito)\nSELECT pg_advisory_lock(12345);\n-- ... faz algo crítico ...\nSELECT pg_advisory_unlock(12345);\n\n-- Exclusivo, transaction-level (libera no COMMIT/ROLLBACK — preferido)\nBEGIN;\nSELECT pg_advisory_xact_lock(12345);\n-- ... faz algo crítico ...\nCOMMIT;  -- lock liberado automaticamente\n\n-- Non-blocking (try)\nSELECT pg_try_advisory_xact_lock(12345);\n-- retorna true se pegou, false se já tá preso — pra padrões \"rodar 1 de N\""
+          }
+        },
+        {
+          "id": "728969b7-1b3f-47e8-976e-9f1a88b1d986",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Casos de uso clássicos",
+                "bold": true
+              },
+              {
+                "text": ":"
+              }
+            ]
+          }
+        },
+        {
+          "id": "05467697-76dc-4c66-91d3-68c654226728",
+          "type": "list",
+          "position": 3,
+          "data": {
+            "items": [
+              "Leader election leve: quem pegar o lock 42 é o \"leader\" naquele momento (cron singleton, job runner).",
+              "Rate limit global: gate pra operações idempotentes custosas.",
+              "Migration coordination: apenas uma réplica executa a migration.",
+              "Evitar thundering herd: só uma tx faz o trabalho caro, outras esperam."
+            ],
+            "ordered": false
+          }
+        },
+        {
+          "id": "1b41f370-257c-48d3-b63b-28daa47a7871",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Advisory locks não sobrevivem a failover. Se Postgres master cai e um replica vira master, locks se perdem. Pra leader election em cluster, use etcd/Consul/ZooKeeper."
+          }
+        }
+      ]
+    },
+    {
+      "id": "6c0e9b3f-502d-4de0-8d23-b74735520b2e",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "VACUUM e bloat: o lixo que ninguém limpa"
+      },
+      "children": [
+        {
+          "id": "0898d648-9741-4e77-80f3-27c4a48a15b8",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " MVCC cobra preço: cada UPDATE/DELETE deixa tuplas mortas. Sem recuperação, disco enche e queries degradam. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "6222b01b-9a83-41ed-98b8-201c8294ddf9",
+          "type": "stack_flow",
+          "position": 1,
+          "data": {
+            "title": "",
+            "items": [
+              {
+                "label": "1000 rows × 10 UPDATEs sem VACUUM = 10000 tuplas no disco",
+                "sub": "1000 vivas + 9000 mortas (dead tuples)"
+              },
+              {
+                "label": "SELECT varre 10000 tuplas",
+                "sub": "filtra dead ones, retorna 1000 — 10× mais lento que tabela limpa"
+              },
+              {
+                "label": "VACUUM (normal)",
+                "sub": "marca mortas como reutilizáveis · NÃO devolve espaço ao SO · sem ACCESS EXCLUSIVE"
+              },
+              {
+                "label": "VACUUM FULL",
+                "sub": "reescreve tabela inteira · elimina espaço morto · segura ACCESS EXCLUSIVE — evitar em produção. Use pg_repack."
+              }
+            ]
+          }
+        },
+        {
+          "id": "15246d59-ec29-4813-9fae-a6134c63745e",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Autovacuum",
+                "bold": true
+              },
+              {
+                "text": ": daemon que roda VACUUM automaticamente. Por default, ativado. Mas configurado conservadoramente demais pra muitas workloads."
+              }
+            ]
+          }
+        },
+        {
+          "id": "e94c88e4-7533-4c2d-b836-8875a3fd77bd",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "sql",
+            "code": "-- Ver estatísticas de bloat (approximação)\nSELECT schemaname, relname,\n       n_live_tup, n_dead_tup,\n       round(n_dead_tup * 100.0 / NULLIF(n_live_tup + n_dead_tup, 0), 2) AS dead_pct,\n       last_autovacuum, last_autoanalyze\nFROM pg_stat_user_tables\nORDER BY n_dead_tup DESC\nLIMIT 20;\n\n-- Tunar autovacuum pra tabela hot específica:\nALTER TABLE orders SET (\n  autovacuum_vacuum_scale_factor = 0.02,    -- 2% de dead → roda (default 20%)\n  autovacuum_vacuum_cost_limit = 2000       -- mais IO permitido (default 200)\n);\n\n-- Forçar VACUUM imediato (sem ACCESS EXCLUSIVE):\nVACUUM (VERBOSE, ANALYZE) orders;"
+          }
+        },
+        {
+          "id": "2b5e0417-6d6e-49b5-bddd-7feca50d3bde",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "danger",
+            "title": "",
+            "content": "Long-running transactions são inimigas do VACUUM. Enquanto uma transação antiga tá aberta, o PG não pode recuperar tuplas mortas mais novas que ela (pra manter snapshot consistente). Resultado: bloat explodindo em tabelas hot porque alguém esqueceu aberto no psql. Monitor em state=idle in transaction."
+          }
+        }
+      ]
+    },
+    {
+      "id": "55a156e8-4d34-4349-9e99-95dc4963275f",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Dicas práticas de troubleshooting"
+      },
+      "children": [
+        {
+          "id": "504bea66-c81f-4596-adfa-53032d5e608d",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "sql",
+            "code": "-- 1. Ver queries rodando agora\nSELECT pid, usename, application_name, state, wait_event_type, wait_event,\n       now() - query_start AS duration, query\nFROM pg_stat_activity\nWHERE state != 'idle'\nORDER BY duration DESC;\n\n-- 2. Ver locks e quem espera quem\nSELECT blocked_locks.pid AS blocked_pid,\n       blocked_activity.usename AS blocked_user,\n       blocking_locks.pid AS blocking_pid,\n       blocking_activity.usename AS blocking_user,\n       blocked_activity.query AS blocked_query,\n       blocking_activity.query AS blocking_query\nFROM pg_catalog.pg_locks blocked_locks\nJOIN pg_catalog.pg_stat_activity blocked_activity\n     ON blocked_activity.pid = blocked_locks.pid\nJOIN pg_catalog.pg_locks blocking_locks\n     ON blocking_locks.locktype = blocked_locks.locktype\n    AND blocking_locks.DATABASE IS NOT DISTINCT FROM blocked_locks.DATABASE\n    AND blocking_locks.relation IS NOT DISTINCT FROM blocked_locks.relation\n    AND blocking_locks.pid != blocked_locks.pid\nJOIN pg_catalog.pg_stat_activity blocking_activity\n     ON blocking_activity.pid = blocking_locks.pid\nWHERE NOT blocked_locks.granted;\n\n-- 3. Matar query (com cuidado):\nSELECT pg_cancel_backend(pid);     -- pede educadamente\nSELECT pg_terminate_backend(pid);  -- força — aborta tx\n\n-- 4. Ver tamanho real das tabelas + bloat:\nSELECT relname, pg_size_pretty(pg_total_relation_size(relid)) AS total,\n       pg_size_pretty(pg_relation_size(relid)) AS \"table only\"\nFROM pg_catalog.pg_statio_user_tables\nORDER BY pg_total_relation_size(relid) DESC LIMIT 20;"
+          }
+        }
+      ]
+    },
+    {
+      "id": "ce277f59-a021-4643-8660-6c22ceb91bab",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Decisões reais"
+      },
+      "children": [
+        {
+          "id": "01dbef4d-7d5b-4cee-8c8e-e283fc1f336e",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Preciso de contador global (hits por produto) com alta concorrência",
+            "winner": "UPDATE atômico (counter += 1), nunca SELECT + UPDATE",
+            "why": "UPDATE é atômico por natureza no PG. SELECT seguido de UPDATE na app exige FOR UPDATE ou optimistic lock. Em volumes altos, contadores viram hot row e ainda assim gargalam — nesse caso, considere sharding do contador (10 rows, agrega no SELECT).",
+            "alternatives": [
+              {
+                "label": "Redis INCR",
+                "note": "Muito mais rápido pra contador puro. Sincroniza com PG em batch."
+              },
+              {
+                "label": "Table-level counter ser shardado",
+                "note": "counter_id % 10 → 10 rows. Reduz contenção."
+              }
+            ]
+          }
+        },
+        {
+          "id": "094fd5a4-3db5-4102-b83c-c23bac20deb2",
+          "type": "decision_box",
+          "position": 1,
+          "data": {
+            "scenario": "Leader election leve pra worker que só deve ter 1 ativo",
+            "winner": "pg_try_advisory_xact_lock em um id fixo",
+            "why": "Se você já tem Postgres, é 1 linha de código e 0 dependência nova. Em cada iteração do worker, tenta pegar o lock — se falhar, ele não é o leader, pula. Se master do PG cair, o replacement assume, lock se perde e outro worker pega. Perfeito pra cron singleton.",
+            "alternatives": [
+              {
+                "label": "Redis lease (TTL)",
+                "note": "Se já tem Redis. Cuidado com split-brain em failover."
+              },
+              {
+                "label": "etcd lease",
+                "note": "Se já tem K8s/etcd. Mais robusto que advisory lock."
+              }
+            ]
+          }
+        },
+        {
+          "id": "82f2e9c6-8b6e-4e8a-8afb-6e71a4511bde",
+          "type": "decision_box",
+          "position": 2,
+          "data": {
+            "scenario": "Transação de e-commerce: preciso subtrair estoque sem vender negativo",
+            "winner": "UPDATE com WHERE stock >= qty, checando rowcount",
+            "why": "UPDATE products SET stock = stock - $1 WHERE id = $2 AND stock >= $1. Se rowcount = 0, não havia estoque — retorna erro. Atomicidade nativa, zero lock explícito, performance excelente. Nem FOR UPDATE nem optimistic é necessário.",
+            "alternatives": [
+              {
+                "label": "SELECT FOR UPDATE + UPDATE",
+                "note": "Funciona mas mais lento e mais código."
+              }
+            ]
+          }
+        },
+        {
+          "id": "3a3bd994-f426-4952-904f-f73fc13a5b66",
+          "type": "decision_box",
+          "position": 3,
+          "data": {
+            "scenario": "Preciso Serializable Snapshot Isolation pra invariantes complexas",
+            "winner": "BEGIN ISOLATION LEVEL SERIALIZABLE + retry loop",
+            "why": "SSI no PG é a melhor implementação comercial de serializable — performance quase RR, mas previne anomalias. Custo: txs podem abortar com 40001 — sua app precisa retriar. Ótimo pra regras complexas (ex: 'soma de todas as fatias ≤ 100').",
+            "alternatives": [
+              {
+                "label": "Repeatable Read + locks explícitos",
+                "note": "Mais controle, mais código, mais bugs."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "31b8612c-64d5-46f8-9a7e-f3b6881c2f36",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Perguntas típicas (Q&A)"
+      },
+      "children": [
+        {
+          "id": "5f958c53-9aa0-4ed5-9d5a-326034eeefa1",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Por que minha query lenta ficou rápida depois de VACUUM?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "2d4f5108-2727-42b9-b9ce-18635d2d7e61",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Tabela tava cheia de tuplas mortas — cada SELECT varria muito lixo. VACUUM marcou tuplas mortas como reutilizáveis + atualizou visibility map. Bônus: ANALYZE (roda junto) atualizou estatísticas do planner, que pode ter escolhido plano melhor. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "bdb39280-1c38-44ec-b0ac-0686dfb3fe29",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "O que é \"deadlock\"?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "bd48c3ee-9846-4ff5-a2fd-fd39cd0a4772",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": " Duas txs esperando cada uma o lock da outra. PG detecta (via grafo de wait) em 1s por default e aborta uma das duas com erro 40P01. App deve retriar. Pra prevenir: sempre adquirir locks na mesma ordem (ex: ordenar por id). "
+              }
+            ]
+          }
+        },
+        {
+          "id": "5f7be847-9315-49aa-bd88-b1ea1782b84a",
+          "type": "paragraph",
+          "position": 4,
+          "data": {
+            "content": [
+              {
+                "text": "Transação ROLLBACK \"perde\" o txid?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "023167fd-c14d-4216-b7af-b5fd4e14c3b1",
+          "type": "paragraph",
+          "position": 5,
+          "data": {
+            "content": [
+              {
+                "text": " Sim — PG consome txids pra toda tx (mesmo abortada). Txid é uint32, wrap-around em ~4B. Autovacuum faz \"freeze\" pra evitar apocalipse de wraparound. Se autovacuum não dá conta, cluster entra em read-only. Monitor "
+              },
+              {
+                "text": "datfrozenxid",
+                "code": true
+              },
+              {
+                "text": ". "
+              }
+            ]
+          }
+        },
+        {
+          "id": "dfa6fa7a-6d0a-421a-b11f-e5f1f2f65161",
+          "type": "paragraph",
+          "position": 6,
+          "data": {
+            "content": [
+              {
+                "text": "FOR UPDATE funciona em SELECT com JOIN?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "96d80e29-6a37-4b55-8292-52b5327f35b9",
+          "type": "paragraph",
+          "position": 7,
+          "data": {
+            "content": [
+              {
+                "text": " Sim, mas por default trava linhas de todas as tabelas joinadas. Você pode restringir com "
+              },
+              {
+                "text": "FOR UPDATE OF tablename",
+                "code": true
+              },
+              {
+                "text": " pra travar só uma. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "b28cfe22-44ea-45d6-adc8-a8470cb6572c",
+          "type": "paragraph",
+          "position": 8,
+          "data": {
+            "content": [
+              {
+                "text": "Qual isolation level usar por default?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "1ed9054f-e27b-42e2-988e-c9dbc26ea2d4",
+          "type": "paragraph",
+          "position": 9,
+          "data": {
+            "content": [
+              {
+                "text": " Read Committed (default) é suficiente pra 95% dos casos se você escrever SQL atômico (UPDATE com expressões, SELECT FOR UPDATE onde precisa). Suba pra Repeatable Read só quando precisa de snapshot consistente da tx inteira, e Serializable quando tem invariante multi-row complexo. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "c10b9b40-ab26-4928-a874-aec8ad65379a",
+      "type": "callout",
+      "position": 11,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Take-aways:"
+      }
+    },
+    {
+      "id": "b071350e-db31-4694-a321-f60879b02fe3",
+      "type": "paragraph",
+      "position": 12,
+      "data": {
+        "content": [
+          {
+            "text": " Próximo (e último) módulo dessa trilha: quando você tem "
+          },
+          {
+            "text": "muito tráfego",
+            "italic": true
+          },
+          {
+            "text": " — rate limiting distribuído. "
+          }
+        ]
+      }
+    }
+  ]
+}

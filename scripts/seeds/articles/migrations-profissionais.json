@@ -1,0 +1,124 @@
+{
+  "slug": "migrations-profissionais",
+  "title": null,
+  "blocks": [
+    {
+      "id": "3cb0ee5d-98fa-401f-be2f-6da34057c839",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Migrations mal planejadas causam downtime. Em produção com milhões de linhas, cada DDL precisa ser analisada: adquire lock de tabela? Faz table rewrite? Quanto tempo leva? O padrão expand-migrate-contract resolve isso com deploys incrementais. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "b399df44-2dcf-498a-aea4-7188cde21f0b",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Alembic: migrations em Python"
+      },
+      "children": [
+        {
+          "id": "d6c41432-d669-4d5c-ae5c-e73f4193f262",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "# Instalação e setup\n# uv add alembic sqlalchemy\n\n# Inicializar no projeto\n# alembic init alembic\n# Gera: alembic.ini, alembic/env.py, alembic/versions/\n\n# alembic/env.py — aponta para seus modelos\nfrom myapp.models import Base\ntarget_metadata = Base.metadata\n\n# alembic.ini\n# sqlalchemy.url = postgresql://user:pass@localhost/mydb\n\n# Gerar migration automaticamente (baseado em diff dos modelos):\n# alembic revision --autogenerate -m \"add_users_email_verified\"\n\n# Arquivo gerado em alembic/versions/abc123_add_users_email_verified.py\nfrom alembic import op\nimport sqlalchemy as sa\n\ndef upgrade() -> None:\n    op.add_column(\n        'users',\n        sa.Column('email_verified', sa.Boolean(), nullable=True)\n    )\n\ndef downgrade() -> None:\n    op.drop_column('users', 'email_verified')\n\n# Executar migrations:\n# alembic upgrade head     # aplica todas pendentes\n# alembic downgrade -1     # reverte a última\n# alembic current          # mostra versão atual\n# alembic history          # histórico de migrations\n# alembic show abc123      # mostra detalhes de uma migration"
+          }
+        }
+      ]
+    },
+    {
+      "id": "299b13b9-24c5-40a0-96ba-27708e93a539",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Zero-downtime: o padrão expand-migrate-contract"
+      },
+      "children": [
+        {
+          "id": "942ea76c-660d-45e4-99ac-746048ecac93",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Passo",
+              "O que fazer",
+              "Compatibilidade com deploy anterior"
+            ],
+            "rows": [
+              [
+                "Expand (Deploy 1)",
+                "Adicionar nova estrutura (coluna nullable, nova tabela)",
+                "Código antigo ainda funciona"
+              ],
+              [
+                "Migrate (Deploy 2)",
+                "Backfill + código escreve em ambos os lugares",
+                "Backfill em background, sem lock"
+              ],
+              [
+                "Contract (Deploy 3)",
+                "Remover estrutura antiga",
+                "Código novo só usa nova estrutura"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "53cf770b-ccb4-4f89-aa06-53068b98f29f",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "text",
+            "code": "-- EXEMPLO: renomear coluna 'name' para 'full_name' sem downtime\n\n-- Deploy 1 — Expand: adicionar nova coluna\nALTER TABLE users ADD COLUMN full_name TEXT;\n-- Nullable → sem table rewrite, sem lock prolongado\n\n-- Deploy 1 — Código: escrever em ambas as colunas\n# app/models.py\ndef criar_usuario(nome):\n    db.execute(\"\"\"\n        INSERT INTO users (name, full_name)\n        VALUES (:name, :full_name)\n    \"\"\", {\"name\": nome, \"full_name\": nome})\n\n-- Deploy 2 — Migrate: backfill em lotes\n-- Script de backfill (rodar fora do deploy):\nDO $$\nDECLARE\n    batch_size INT := 10000;\n    offset_val BIGINT := 0;\n    max_id BIGINT;\nBEGIN\n    SELECT MAX(id) INTO max_id FROM users;\n    WHILE offset_val <= max_id LOOP\n        UPDATE users\n        SET full_name = name\n        WHERE id > offset_val\n          AND id <= offset_val + batch_size\n          AND full_name IS NULL;\n\n        offset_val := offset_val + batch_size;\n        PERFORM pg_sleep(0.1);  -- pausa para não stressar o banco\n    END LOOP;\nEND;\n$$;\n\n-- Deploy 2 — código: código novo lê de full_name\n-- Deploy 3 — Contract: adicionar NOT NULL e remover coluna antiga\nALTER TABLE users ALTER COLUMN full_name SET NOT NULL;\nALTER TABLE users DROP COLUMN name;"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4b72667-a61d-4919-969f-e9686f63e551",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Migrations perigosas e como fazer cada uma com segurança"
+      },
+      "children": [
+        {
+          "id": "5a4c7a8d-57b7-44da-964e-0e6a9bdc2d5e",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "-- ✅ SEGURO sem precauções especiais:\nALTER TABLE t ADD COLUMN nova TEXT;                    -- nullable = sem lock\nALTER TABLE t ADD COLUMN nova TEXT DEFAULT 'x';       -- PG 11+ = sem table rewrite\nCREATE INDEX CONCURRENTLY idx ON t(col);              -- sem lock exclusivo\nCREATE TABLE nova (...);\nDROP TABLE antiga;                                    -- se vazia e sem referências\n\n-- ⚠️ PERIGOSO sem cuidado (pode causar lock/downtime):\nALTER TABLE t ADD COLUMN nova TEXT NOT NULL;          -- PG<11: table rewrite\nALTER TABLE t ALTER COLUMN tipo SET NOT NULL;         -- table scan (mas não rewrite)\nALTER TABLE t DROP COLUMN qualquer;                    -- ok em PG, mas garanta que código não usa\nCREATE INDEX idx ON t(col);                           -- WITHOUT CONCURRENTLY: bloqueia!\nALTER TABLE t RENAME COLUMN antigo TO novo;           -- ok mas quebra queries em produção\n\n-- ⛔ NUNCA em produção sem migration:\n-- Deletar uma coluna usada pelo código ainda em produção\n-- DROP TABLE ou TRUNCATE sem verificar dependências\n-- Mudar tipo de coluna (DATE → TIMESTAMP) sem casting explícito\n\n-- Verificar locks antes de migration:\nSELECT\n    pid,\n    now() - pg_stat_activity.query_start AS duration,\n    query,\n    state\nFROM pg_stat_activity\nWHERE state != 'idle'\n  AND query NOT ILIKE '%pg_stat_activity%'\nORDER BY duration DESC;"
+          }
+        }
+      ]
+    },
+    {
+      "id": "a727f801-b7f1-4c62-a97f-cfdcde4108fa",
+      "type": "callout",
+      "position": 4,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Checklist de migration segura: (1) teste em banco com dados reais antes de produção; (2) estime tempo com EXPLAIN ANALYZE em staging; (3) use CONCURRENTLY para índices; (4) faça backfill em lotes com pausa; (5) adicione NOT NULL como passo separado após backfill completo; (6) verifique que downgrade também funciona."
+      }
+    },
+    {
+      "id": "c16b1541-ca03-4a9f-9860-b6d6fc83958e",
+      "type": "callout",
+      "position": 5,
+      "data": {
+        "variant": "info",
+        "title": "",
+        "content": "Próximo: Connection pool e N+1 — os problemas de banco de dados que matam performance de API silenciosamente."
+      }
+    }
+  ]
+}

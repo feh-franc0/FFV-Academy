@@ -40,6 +40,10 @@ type RouterConfig struct {
 	Leaderboard *handlers.LeaderboardHandler
 	Stats       *handlers.StatsHandler
 	Admin       *handlers.AdminHandler
+	ModuleView  *handlers.ModuleViewHandler     // opcional — registra views de módulos (public)
+	Comments    *handlers.CommentsHandler       // opcional — comentários por artigo/trilha/bloco
+	Trending    *handlers.TrendingHandler       // opcional — top módulos por views recentes
+	TrailLeaderboard *handlers.TrailLeaderboardHandler // opcional — top users por trilha
 	Curriculum  *handlers.CurriculumHandler     // opcional — nil desabilita rotas de currículo
 	Features    *handlers.FeaturesHandler       // opcional — expõe estado das feature flags
 	Metrics     *handlers.MetricsHandler        // opcional — se nil, /metrics não é registrado
@@ -115,6 +119,24 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// Rota search deve vir ANTES de /{slug} para não capturar "search" como slug.
 		r.Get("/api/v1/curriculum/search", cfg.Curriculum.Search)
 		r.Get("/api/v1/curriculum/{slug}", cfg.Curriculum.GetBySlug)
+		// NEW: rota CMS-driven, retorna artigo + árvore de blocks JSON estruturados.
+		// Frontend dinâmico (BlockRenderer) consome este endpoint.
+		r.Get("/api/v1/curriculum/{slug}/blocks", cfg.Curriculum.GetBlocks)
+	}
+
+	// Comments — leitura pública, escrita JWT, moderação admin.
+	if cfg.Comments != nil {
+		r.Get("/api/v1/comments", cfg.Comments.List)
+	}
+
+	// Trending — público, módulos mais acessados.
+	if cfg.Trending != nil {
+		r.Get("/api/v1/curriculum/trending", cfg.Trending.Get)
+	}
+
+	// Trail leaderboard — público, top users de uma trilha.
+	if cfg.TrailLeaderboard != nil {
+		r.Get("/api/v1/leaderboard/trail/{trailId}", cfg.TrailLeaderboard.Get)
 	}
 
 	// Body size limits por grupo de rota.
@@ -133,6 +155,17 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	authLimit := middleware.NewRateLimiter(cfg.Redis, 20, time.Minute, "rl:auth")
 	tutorLimit := middleware.NewRateLimiter(cfg.Redis, 60, time.Minute, "rl:tutor")
 	certLimit := middleware.NewRateLimiter(cfg.Redis, 120, time.Minute, "rl:cert")
+	// events/view é público — limite generoso pra usuários reais (1-2 pings/min
+	// por slug) e estrangular bots de scraping abusivo.
+	viewLimit := middleware.NewRateLimiter(cfg.Redis, 240, time.Minute, "rl:view")
+
+	// Tracking de acesso a módulo — público, fire-and-forget. Body limit
+	// pequeno + rate limit por IP previnem abuso.
+	if cfg.ModuleView != nil {
+		r.With(viewLimit.Middleware()).
+			With(middleware.BodyLimit(2*1024)).
+			Post("/api/v1/events/view", cfg.ModuleView.Record)
+	}
 
 	// Verificação pública de certificado com rate-limit — previne enumeração de hashes.
 	r.With(certLimit.Middleware()).Get("/api/v1/certificates/{hash}", cfg.Certificate.VerifyCertificate)
@@ -199,17 +232,31 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/api/v1/leaderboard/me", cfg.Leaderboard.GetMyRank)
 		r.Get("/api/v1/leaderboard/me/all", cfg.Leaderboard.GetMyRankAll)
 
+		// Comments — escrita autenticada (body ≤ 8KB para evitar dump abuse).
+		if cfg.Comments != nil {
+			r.With(middleware.BodyLimit(8*1024)).Post("/api/v1/comments", cfg.Comments.Create)
+			r.Delete("/api/v1/comments/{id}", cfg.Comments.Delete)
+		}
+
 		// Admin — requer role=admin.
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireAdmin)
 			r.Get("/api/v1/admin/stats", cfg.Admin.GetStats)
 			r.Get("/api/v1/admin/audit", cfg.Admin.GetAuditLog)
+			r.Get("/api/v1/admin/users", cfg.Admin.ListUsers)
 
 			// Endpoints admin do currículo.
 			if cfg.Curriculum != nil {
-				r.Post("/api/v1/admin/curriculum", cfg.Curriculum.Create)
-				r.Patch("/api/v1/admin/curriculum/{slug}", cfg.Curriculum.Update)
+				r.With(middleware.BodyLimit(256*1024)).Post("/api/v1/admin/curriculum", cfg.Curriculum.Create)
+				r.With(middleware.BodyLimit(256*1024)).Patch("/api/v1/admin/curriculum/{slug}", cfg.Curriculum.Update)
 				r.Delete("/api/v1/admin/curriculum/{slug}", cfg.Curriculum.Delete)
+				// Editor de blocks — limit 2MB pois árvore inteira de blocks viaja junta.
+				r.With(middleware.BodyLimit(2*1024*1024)).Put("/api/v1/admin/curriculum/{slug}/blocks", cfg.Curriculum.SaveBlocks)
+			}
+
+			// Moderação de comentários.
+			if cfg.Comments != nil {
+				r.Post("/api/v1/admin/comments/{id}/hide", cfg.Comments.Hide)
 			}
 		})
 	})

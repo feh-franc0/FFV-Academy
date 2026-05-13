@@ -1,0 +1,1107 @@
+{
+  "slug": "sagas-2pc",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b508f47b-ed35-4b17-936c-e4a7cc01f52b",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Você tem um microserviço de pedidos, um de pagamento, um de estoque. Um pedido precisa: reservar estoque, cobrar o cartão, agendar entrega. Se qualquer um falha, você precisa "
+          },
+          {
+            "text": "desfazer o que foi feito",
+            "bold": true
+          },
+          {
+            "text": ". Mas cada serviço tem seu próprio banco — não existe "
+          },
+          {
+            "text": "BEGIN TRANSACTION",
+            "code": true
+          },
+          {
+            "text": " global. O que fazer? "
+          }
+        ]
+      }
+    },
+    {
+      "id": "26cab747-ea67-4b1f-ad41-7cb443cdd364",
+      "type": "paragraph",
+      "position": 1,
+      "data": {
+        "content": [
+          {
+            "text": " Duas respostas sérias: "
+          },
+          {
+            "text": "Two-Phase Commit (2PC)",
+            "bold": true
+          },
+          {
+            "text": ", a solução clássica (e bloqueante), e "
+          },
+          {
+            "text": "Sagas",
+            "bold": true
+          },
+          {
+            "text": ", a solução moderna baseada em compensações. Este módulo explica as duas, quando cada uma faz sentido, e como implementar Sagas corretamente com orchestration, choreography e o outbox pattern. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "678d32a3-1883-4f5e-9007-9190fb858e2c",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Por que transações distribuídas são difíceis"
+      },
+      "children": [
+        {
+          "id": "cea921c8-71f4-49d4-a133-a74d3ff39766",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Numa tabela única, o banco te dá ACID de graça. Atomicidade, consistência, isolamento, durabilidade — tudo garantido. Em sistemas distribuídos com vários serviços independentes, você perde: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "6ac9ec0a-e4e8-4e9c-a442-cd8ea27468d5",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Propriedade",
+              "Monolito/Single DB",
+              "Microserviços/Multi DB"
+            ],
+            "rows": [
+              [
+                "Atomicidade",
+                "BEGIN/COMMIT do banco",
+                "Precisa coordenar múltiplos commits"
+              ],
+              [
+                "Isolamento",
+                "Locks locais + MVCC",
+                "Não existe — cada banco só vê o próprio"
+              ],
+              [
+                "Consistência global",
+                "Constraints + FKs",
+                "Impossível; precisa de eventual consistency"
+              ],
+              [
+                "Durabilidade",
+                "WAL + fsync",
+                "Por banco; o problema é orquestração"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "19fec238-79aa-4024-8c03-853ba42ed7fb",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": " O desafio real não é só técnico — é de "
+              },
+              {
+                "text": "semântica de negócio",
+                "italic": true
+              },
+              {
+                "text": ". Se \"cobrar cartão\" funciona mas \"agendar entrega\" falha, você "
+              },
+              {
+                "text": "precisa",
+                "bold": true
+              },
+              {
+                "text": " reembolsar. Isso não é infraestrutura, é fluxo de negócio que precisa ser codificado. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "f35f221f-2d6a-4661-ab2d-772e3ff9ebe2",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Two-Phase Commit (2PC)"
+      },
+      "children": [
+        {
+          "id": "2288e64a-2afd-45c2-9efe-83f6da973cfe",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " 2PC é o protocolo clássico, usado por XA (X/Open), bancos Oracle/SQL Server com DTC, JTA em Java. Dois papéis: "
+              },
+              {
+                "text": "coordinator",
+                "bold": true
+              },
+              {
+                "text": " e "
+              },
+              {
+                "text": "participants",
+                "bold": true
+              },
+              {
+                "text": ". "
+              }
+            ]
+          }
+        },
+        {
+          "id": "46c45e00-c6d8-43f7-bc45-3c13ce194220",
+          "type": "node_graph",
+          "position": 1,
+          "data": {
+            "title": "",
+            "columns": [
+              {
+                "label": "Coordinator",
+                "nodes": [
+                  {
+                    "label": "COORDINATOR",
+                    "sub": "gerencia o protocolo"
+                  }
+                ]
+              },
+              {
+                "label": "Participants",
+                "nodes": [
+                  {
+                    "label": "Payment DB",
+                    "sub": "participant"
+                  },
+                  {
+                    "label": "Order DB",
+                    "sub": "participant"
+                  },
+                  {
+                    "label": "Stock DB",
+                    "sub": "participant"
+                  }
+                ]
+              },
+              {
+                "label": "Fases",
+                "nodes": [
+                  {
+                    "label": "Fase 1: PREPARE",
+                    "sub": "\"Podem commitar?\" → executam local, seguram locks, respondem YES/NO"
+                  },
+                  {
+                    "label": "Fase 2: COMMIT/ABORT",
+                    "sub": "todos YES → commit · qualquer NO → abort · soltam locks"
+                  }
+                ]
+              }
+            ],
+            "legend": []
+          }
+        },
+        {
+          "id": "963f71ba-9b7a-422e-8331-aaff7bf19714",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Problemas do 2PC em sistemas modernos",
+                "bold": true
+              },
+              {
+                "text": ":"
+              }
+            ]
+          }
+        },
+        {
+          "id": "62d0b2f1-a6fb-4b41-9de2-d06009827c3e",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Problema",
+              "Impacto"
+            ],
+            "rows": [
+              [
+                "Blocking protocol",
+                "Se coordinator cair entre prepare e commit, participants ficam com locks presos. Não podem decidir sozinhos."
+              ],
+              [
+                "Locks durante a janela",
+                "Em transações longas, locks mantidos bloqueiam outras transações — throughput morre."
+              ],
+              [
+                "Exige 2PC em TODOS participants",
+                "Kafka, MongoDB, Redis, REST APIs não suportam. 2PC só roda em bancos XA-compliant."
+              ],
+              [
+                "Performance em WAN",
+                "Duas rodadas de mensagens + fsync. Latência cresce com a pior latência do participant."
+              ],
+              [
+                "Complexidade operacional",
+                "Coordinator requer recovery log próprio, failover, monitoring. Grande fonte de dor."
+              ]
+            ]
+          }
+        },
+        {
+          "id": "1affbce8-3b28-410d-b87e-b1e4987eba5c",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "3PC (Three-Phase Commit) adiciona uma fase \"pre-commit\" pra mitigar o blocking. Ainda é vulnerável a partições de rede, quase ninguém implementa em produção. Na prática, sistemas que precisam de 2PC em 2026 são minoria absoluta (bancos legacy, mainframe). Todo o mundo greenfield foi pra Sagas."
+          }
+        }
+      ]
+    },
+    {
+      "id": "8a4a1286-772e-4462-817c-453fe120c6d6",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Saga Pattern: compensações > 2PC"
+      },
+      "children": [
+        {
+          "id": "2c7ace2b-d606-4c59-8a52-2e8758434dec",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Saga foi proposto em 1987 (Garcia-Molina & Salem) originalmente como otimização pra transações longas em banco único. Renasceu com microserviços como o padrão dominante. A ideia central: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "a4e55059-90d5-4127-8406-b8decedca6a9",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Saga: uma transação distribuída é uma sequência de transações locais (uma por serviço). Se alguma falha, o sistema executa compensações em ordem inversa pra desfazer efeitos já aplicados."
+          }
+        },
+        {
+          "id": "1bf6e3b4-126e-4fce-b11d-4fba68c4db45",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Em vez de locks globais, você aceita que os dados "
+              },
+              {
+                "text": "temporariamente inconsistentes",
+                "italic": true
+              },
+              {
+                "text": " e desfaz com ações compensatórias. Não é rollback — é uma "
+              },
+              {
+                "text": "nova operação",
+                "italic": true
+              },
+              {
+                "text": " que anula a anterior."
+              }
+            ]
+          }
+        },
+        {
+          "id": "78c9a854-04b4-48f8-86e0-253050c736ec",
+          "type": "stack_flow",
+          "position": 3,
+          "data": {
+            "title": "",
+            "items": [
+              {
+                "label": "1. Reservar estoque ✓",
+                "sub": ""
+              },
+              {
+                "label": "2. Cobrar cartão ✓",
+                "sub": ""
+              },
+              {
+                "label": "3. Agendar entrega — falha ✗",
+                "sub": "inicia compensação em ordem inversa"
+              },
+              {
+                "label": "2'. Reembolsar cartão ✓",
+                "sub": "compensação do step 2"
+              },
+              {
+                "label": "1'. Liberar estoque ✓",
+                "sub": "compensação do step 1 → pedido cancelado, sistema consistente"
+              }
+            ]
+          }
+        },
+        {
+          "id": "aae48d87-881f-4f1d-8002-fa3485a0f529",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Cuidado: a Saga não é ACID. Durante a saga, outras operações podem ver estados intermediários (ex: dinheiro já debitado mas pedido cancelado 100ms depois). O termo é semantic consistency — você garante consistência eventual com regras de negócio, não isolamento estrito."
+          }
+        }
+      ]
+    },
+    {
+      "id": "d2860b5d-594e-45e9-98b5-221d755732f1",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Orchestration: o coordinator explícito"
+      },
+      "children": [
+        {
+          "id": "1760eef7-1d2b-44db-8ef1-4319274d28dc",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Um serviço central (o "
+              },
+              {
+                "text": "orchestrator",
+                "bold": true
+              },
+              {
+                "text": ") conhece o workflow completo e comanda cada step explicitamente. É uma state machine. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "44d6ae89-9d0c-4179-8f4a-3032f504bfa6",
+          "type": "node_graph",
+          "position": 1,
+          "data": {
+            "title": "",
+            "columns": [
+              {
+                "label": "Orchestrator",
+                "nodes": [
+                  {
+                    "label": "Order Saga Orchestrator",
+                    "sub": "state machine + persist"
+                  }
+                ]
+              },
+              {
+                "label": "Serviços",
+                "nodes": [
+                  {
+                    "label": "Stock Service",
+                    "sub": "reserve / release"
+                  },
+                  {
+                    "label": "Payment Service",
+                    "sub": "charge / refund"
+                  },
+                  {
+                    "label": "Shipping Service",
+                    "sub": "schedule"
+                  }
+                ]
+              },
+              {
+                "label": "Fluxo (falha no shipping)",
+                "nodes": [
+                  {
+                    "label": "Stock.reserve → ok",
+                    "sub": ""
+                  },
+                  {
+                    "label": "Payment.charge → ok",
+                    "sub": ""
+                  },
+                  {
+                    "label": "Shipping.schedule → FALHA",
+                    "sub": "Payment.refund + Stock.release → saga FAILED"
+                  }
+                ]
+              }
+            ],
+            "legend": []
+          }
+        },
+        {
+          "id": "c306eaae-a41a-49d0-bbaa-50479aaeb789",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Implementação com Temporal (workflow engine)",
+                "bold": true
+              },
+              {
+                "text": ":"
+              }
+            ]
+          }
+        },
+        {
+          "id": "32bd2a5a-0c5b-4ca5-8891-f9dca9faac83",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "python",
+            "code": "# order_saga_workflow.py — orchestration com Temporal (temporal.io)\nfrom datetime import timedelta\nfrom temporalio import workflow\nfrom temporalio.common import RetryPolicy\n\n@workflow.defn\nclass OrderSagaWorkflow:\n    @workflow.run\n    async def run(self, order: dict) -> dict:\n        # Passo 1: reservar estoque\n        reservation_id = await workflow.execute_activity(\n            stock_reserve, order, start_to_close_timeout=timedelta(seconds=30),\n            retry_policy=RetryPolicy(maximum_attempts=5),\n        )\n        try:\n            # Passo 2: cobrar cartão\n            charge_id = await workflow.execute_activity(\n                payment_charge, order, start_to_close_timeout=timedelta(seconds=30),\n            )\n            try:\n                # Passo 3: agendar entrega\n                shipment_id = await workflow.execute_activity(\n                    shipping_schedule, order, start_to_close_timeout=timedelta(seconds=30),\n                )\n                return {\"status\": \"ok\", \"order_id\": order[\"id\"]}\n            except Exception as e:\n                # compensa: reembolsar cartão\n                await workflow.execute_activity(\n                    payment_refund, charge_id,\n                    start_to_close_timeout=timedelta(seconds=60),\n                    retry_policy=RetryPolicy(maximum_attempts=10),  # crítico, retria muito\n                )\n                raise\n        except Exception as e:\n            # compensa: liberar estoque\n            await workflow.execute_activity(\n                stock_release, reservation_id,\n                start_to_close_timeout=timedelta(seconds=60),\n            )\n            raise"
+          }
+        },
+        {
+          "id": "606bd8c2-005e-404f-9e74-28cf0a3e556f",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Por que Temporal/Cadence e não orchestrator próprio? Workflow engines persistem o estado após cada step automaticamente. Se o processo crashar, na próxima boot o workflow retoma do último step confirmado. Implementar isso na mão é um projeto de 6 meses. Alternativas: AWS Step Functions, Camunda Zeebe, Netflix Conductor, Uber Cadence, dbos-inc."
+          }
+        }
+      ]
+    },
+    {
+      "id": "a47e0741-a7c6-41b9-985f-1d408a0faaf5",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Choreography: eventos puros, sem orquestrador"
+      },
+      "children": [
+        {
+          "id": "6b678485-16f9-4db8-92f4-be1f785aeb55",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Cada serviço publica um evento após concluir sua parte. Outros serviços escutam e reagem. Não há um coordinator central — a \"lógica do workflow\" está distribuída. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "215fdbb8-5f85-438e-8ea6-89b1e5a990fb",
+          "type": "node_graph",
+          "position": 1,
+          "data": {
+            "title": "",
+            "columns": [
+              {
+                "label": "Produtor",
+                "nodes": [
+                  {
+                    "label": "Order API",
+                    "sub": "publica OrderCreated → Kafka"
+                  }
+                ]
+              },
+              {
+                "label": "Consumidores (reagem a eventos)",
+                "nodes": [
+                  {
+                    "label": "Stock Service",
+                    "sub": "on(OrderCreated) → reserve → publica StockReserved"
+                  },
+                  {
+                    "label": "Payment Service",
+                    "sub": "on(StockReserved) → charge → publica PaymentSucceeded"
+                  },
+                  {
+                    "label": "Shipping Service",
+                    "sub": "on(PaymentOK) → schedule → publica ShipmentScheduled"
+                  }
+                ]
+              },
+              {
+                "label": "Compensação (se Payment falhar)",
+                "nodes": [
+                  {
+                    "label": "publica PaymentFailed",
+                    "sub": ""
+                  },
+                  {
+                    "label": "Stock Service on(PaymentFailed)",
+                    "sub": "release reservation"
+                  },
+                  {
+                    "label": "Order Service on(PaymentFailed)",
+                    "sub": "mark order FAILED"
+                  }
+                ]
+              }
+            ],
+            "legend": []
+          }
+        },
+        {
+          "id": "ecab57b7-68b4-4aea-90ad-1610834d5545",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Aspecto",
+              "Orchestration",
+              "Choreography"
+            ],
+            "rows": [
+              [
+                "Acoplamento",
+                "Orchestrator conhece todos",
+                "Serviços desacoplados via eventos"
+              ],
+              [
+                "Visibilidade do workflow",
+                "Alta (state machine explícita)",
+                "Baixa — lógica espalhada em N listeners"
+              ],
+              [
+                "Adicionar novo step",
+                "Altera o orchestrator",
+                "Adiciona novo listener, talvez publica evento novo"
+              ],
+              [
+                "Debug",
+                "Trace do orchestrator",
+                "Pesadelo — precisa de distributed tracing forte"
+              ],
+              [
+                "Performance",
+                "Latência = soma dos passos",
+                "Geralmente paralelo, pode ser mais rápido"
+              ],
+              [
+                "Risco",
+                "SPOF no orchestrator (mitigado com HA)",
+                "\"Spaghetti de eventos\" conforme cresce"
+              ],
+              [
+                "Quando usa",
+                "Workflows complexos, multi-step",
+                "Fluxos simples, baixo acoplamento"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "888c8f17-21a0-4b4d-a1a8-f14c709d0f43",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Regra prática: comece com Orchestration. É mais fácil de debugar e evoluir. Vá pra Choreography quando tem um fluxo claramente desacoplado e simples, ou quando o orchestrator virou gargalo. Muitos sistemas misturam os dois (orchestration no fluxo principal, choreography pra side effects como analytics/notificações)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "eec0bff1-6227-4584-8f51-daf9b4d4fa0b",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Compensating actions: o que é e o que não é"
+      },
+      "children": [
+        {
+          "id": "57473bfa-808d-418c-b524-b1d92de2e434",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Compensação ≠ rollback. É uma "
+              },
+              {
+                "text": "nova operação",
+                "italic": true
+              },
+              {
+                "text": " que anula o efeito visível da anterior, mas pode deixar rastros auditáveis. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "001e91e0-8798-4c9d-bc82-6207e4110d13",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Ação original",
+              "Compensação adequada",
+              "Nota"
+            ],
+            "rows": [
+              [
+                "Reservar estoque (INSERT)",
+                "Liberar reserva (DELETE ou UPDATE status=released)",
+                "Simples"
+              ],
+              [
+                "Cobrar cartão (charge)",
+                "Reembolsar (refund)",
+                "Cria TX nova no gateway — auditável"
+              ],
+              [
+                "Agendar entrega",
+                "Cancelar entrega + talvez notificar motorista",
+                "Se já despachou, compensação vira \"recall\""
+              ],
+              [
+                "Enviar email ao cliente",
+                "(não-compensável: enviar email corrigido)",
+                "Texto: \"desconsidere a mensagem anterior\""
+              ],
+              [
+                "Gerar nota fiscal",
+                "Emitir nota de cancelamento",
+                "Fiscalmente relevante — não apague o original"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "e100fc8d-c429-4910-846c-6565422de1a0",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "danger",
+            "title": "",
+            "content": "3 regras de ouro pra compensação:"
+          }
+        }
+      ]
+    },
+    {
+      "id": "61606272-6c1a-4ca2-a658-e4d27cfa62be",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Tratando o worst case: semantic lock + pivot transaction"
+      },
+      "children": [
+        {
+          "id": "6814f390-6a40-4e25-8f86-01945bca8894",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Alguns sagas têm um ponto de "
+              },
+              {
+                "text": "não-retorno",
+                "bold": true
+              },
+              {
+                "text": ": operações que se foram, foram. Ex: \"despachar container pro navio\". Padrões: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "32d2d651-4342-41e8-ad58-85738cbd0bce",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Padrão",
+              "Uso"
+            ],
+            "rows": [
+              [
+                "Semantic lock",
+                "Marca o registro como \"pendente\" (não-cancelável). Outras operações veem o lock e respeitam. Saga libera no final."
+              ],
+              [
+                "Pivot transaction",
+                "A última transação \"cara\" da saga. A partir dela, sem retorno. Antes dela, cancela fácil."
+              ],
+              [
+                "Compensable transactions",
+                "Steps que podem ser compensados sem perda (reserva, hold)."
+              ],
+              [
+                "Retriable transactions",
+                "Steps após o pivot que precisam eventualmente acontecer (retry com backoff até sucesso)."
+              ]
+            ]
+          }
+        },
+        {
+          "id": "63190480-7681-4b02-8fa4-db1889115dea",
+          "type": "stack_flow",
+          "position": 2,
+          "data": {
+            "title": "",
+            "items": [
+              {
+                "label": "[C] Reservar estoque",
+                "sub": "compensable — pode liberar"
+              },
+              {
+                "label": "[C] Cobrar cartão",
+                "sub": "compensable — pode reembolsar"
+              },
+              {
+                "label": "─── PIVOT ───",
+                "sub": "ponto de não-retorno"
+              },
+              {
+                "label": "[P] Despachar pro carrier",
+                "sub": "pivot: depois daqui, sem retorno · se falhar: compensa os [C]s anteriores"
+              },
+              {
+                "label": "[R] Gerar nota fiscal",
+                "sub": "retriable — precisa acontecer sempre"
+              },
+              {
+                "label": "[R] Notificar cliente",
+                "sub": "retriable — retria infinitamente se falhar (pedido já foi)"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "8d98e951-1d81-4c37-9cf9-1df9eb6d0011",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Outbox pattern: garantindo que eventos saem"
+      },
+      "children": [
+        {
+          "id": "aeb7e980-5c0a-4c2c-97ff-6c82d218b0b8",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Num saga de choreography (ou orchestration com eventos), o "
+              },
+              {
+                "text": "outbox pattern",
+                "bold": true
+              },
+              {
+                "text": " garante que a operação local e o evento são atômicos: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "c21745fa-70d0-4b76-9062-eab431af16bb",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# order_service.py — outbox garantindo atomicidade\nasync def create_order(data: dict) -> dict:\n    async with db.begin() as tx:\n        # 1. Inserir pedido na tabela de domínio\n        order = await tx.execute(\n            text(\"INSERT INTO orders (...) VALUES (...) RETURNING *\"),\n            data,\n        )\n        order_row = order.one()\n\n        # 2. Inserir evento na outbox — MESMA transação\n        await tx.execute(\n            text(\"\"\"\n                INSERT INTO outbox (aggregate_id, event_type, payload, created_at)\n                VALUES (:id, 'OrderCreated', :payload, NOW())\n            \"\"\"),\n            {\"id\": order_row.id, \"payload\": json.dumps(data)},\n        )\n        # commit = ambos salvos ou nenhum\n\n    return {\"id\": order_row.id}\n\n\n# relay.py — worker separado publicando\nasync def relay_loop():\n    while True:\n        async with db.begin() as tx:\n            rows = await tx.execute(text(\"\"\"\n                SELECT id, event_type, payload FROM outbox\n                WHERE sent_at IS NULL\n                ORDER BY id\n                LIMIT 100\n                FOR UPDATE SKIP LOCKED\n            \"\"\"))\n            events = rows.fetchall()\n            for e in events:\n                await kafka.publish(topic=\"orders\", key=str(e.id), value=e.payload)\n                await tx.execute(\n                    text(\"UPDATE outbox SET sent_at = NOW() WHERE id = :id\"),\n                    {\"id\": e.id},\n                )\n        await asyncio.sleep(0.1)"
+          }
+        },
+        {
+          "id": "825e16ec-fc6e-4996-bb6d-9afe50167af2",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": " Alternativa mais escalável: "
+              },
+              {
+                "text": "CDC (Change Data Capture)",
+                "bold": true
+              },
+              {
+                "text": " com Debezium lendo o WAL do Postgres. Zero polling, latência baixa. Mas acopla pipeline à schema da tabela. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b834f483-09c7-4ab2-9fe2-03bee879666c",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Decisões reais"
+      },
+      "children": [
+        {
+          "id": "0e6e17c6-f9c4-4305-9430-615af1b7a6c9",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Workflow de checkout e-commerce com 4-5 serviços, sub-segundo",
+            "winner": "Saga Orchestration com Temporal ou Step Functions",
+            "why": "Você precisa de visibilidade (qual step falhou?), retries configuráveis por step, e evolução de workflow (adicionar passo = editar state machine). Temporal ou Step Functions te dão isso out-of-the-box. 2PC não serve porque seus serviços não são XA-compliant, e escalar travas globais mataria o throughput.",
+            "alternatives": [
+              {
+                "label": "Saga Choreography",
+                "note": "Se o fluxo é simples e desacoplado. Vira complexo rápido."
+              },
+              {
+                "label": "2PC com XA",
+                "note": "Só se você já tem Oracle/SQL Server + bancos XA — hoje é raro."
+              }
+            ]
+          }
+        },
+        {
+          "id": "1f415a40-5dda-4b66-b79b-584cd464a41f",
+          "type": "decision_box",
+          "position": 1,
+          "data": {
+            "scenario": "Fluxo longo: onboarding de cliente B2B (dias, 10+ steps, aprovações humanas)",
+            "winner": "Saga Orchestration com Temporal (ou Camunda pra BPM humano)",
+            "why": "Workflows longos com espera por humanos, timeouts de dias, retries caso backoffice demore — Temporal foi literalmente feito pra isso. Camunda BPM é melhor se você quer visualização BPMN pra stakeholders não-técnicos.",
+            "alternatives": [
+              {
+                "label": "Cron jobs + status polling",
+                "note": "Funciona em fluxos triviais; vira inferno com 10 steps."
+              },
+              {
+                "label": "AWS Step Functions",
+                "note": "Boa opção se já usa AWS e fluxo é visual."
+              }
+            ]
+          }
+        },
+        {
+          "id": "ea140075-ce38-4478-9256-b5568a556790",
+          "type": "decision_box",
+          "position": 2,
+          "data": {
+            "scenario": "Microserviços pequenos com eventos simples, sem dependências complexas",
+            "winner": "Choreography com Kafka/EventBridge + outbox pattern",
+            "why": "Se seu workflow é <5 steps e você não precisa de visibilidade centralizada, choreography é mais barato e desacoplado. Cada serviço reage a eventos via consumer group. Cuidado pra não virar spaghetti conforme cresce — considere Orchestration antes do segundo cruzamento de eventos.",
+            "alternatives": [
+              {
+                "label": "Orchestration",
+                "note": "Quando o workflow passa de 5 steps ou você perde visibilidade."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "675602b5-618e-40a4-99b2-3559e842e752",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Perguntas típicas (Q&A)"
+      },
+      "children": [
+        {
+          "id": "5de62221-8de7-49f5-a24d-4db39d834067",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Sagas substituem ACID?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "fbfe1e0d-a428-4736-99b4-4bf67274ef54",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Não. Sagas dão "
+              },
+              {
+                "text": "semantic consistency",
+                "italic": true
+              },
+              {
+                "text": " (eventual), não ACID strict. Durante a saga, outras queries podem ver estado intermediário inconsistente. Se a sua lógica de negócio exige isolamento estrito, Saga não é a resposta — repense o design (talvez um serviço só). "
+              }
+            ]
+          }
+        },
+        {
+          "id": "f13c5b68-151a-4fb4-abbf-a18189a33a78",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Como testar Sagas?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "e657b18a-693b-4d1c-9aca-3430e0adb13e",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": " Testes determinísticos: Temporal tem replay de workflow. Testes de caos: force cada step a falhar em todos os pontos possíveis, verifique que compensações rodam. Falha mid-compensation também — seu orchestrator deve retomar após crash. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "c6ea9585-fff6-4bd2-89cb-6bdc44a95f5a",
+          "type": "paragraph",
+          "position": 4,
+          "data": {
+            "content": [
+              {
+                "text": "O que é \"Saga inválida\"?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "6e131a22-07e6-4f6c-9dfc-6ffa90e8f717",
+          "type": "paragraph",
+          "position": 5,
+          "data": {
+            "content": [
+              {
+                "text": " Quando uma compensação falha e não pode ser resolvida (ex: cliente deletou conta antes do reembolso processar). Nesses casos, você entra em "
+              },
+              {
+                "text": "modo manual",
+                "italic": true
+              },
+              {
+                "text": ": alerta pra operador, deadletter queue, compensação humana. Design pra isso acontecer. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "357aae6f-f341-45ca-93d9-b4b60d1ac674",
+          "type": "paragraph",
+          "position": 6,
+          "data": {
+            "content": [
+              {
+                "text": "Múltiplas sagas ao mesmo tempo no mesmo registro — race condition?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "9790ce09-db72-4012-823d-28410c6c1f7c",
+          "type": "paragraph",
+          "position": 7,
+          "data": {
+            "content": [
+              {
+                "text": " Possível. Solução: optimistic locking (version column + CAS) no agregado. Se duas sagas tentam modificar a mesma reserva, a segunda falha e retria (ou compensa). "
+              }
+            ]
+          }
+        },
+        {
+          "id": "e6e35e38-a0b4-41e1-9d49-fccd5b81a180",
+          "type": "paragraph",
+          "position": 8,
+          "data": {
+            "content": [
+              {
+                "text": "Kafka Transactions são 2PC disfarçado?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "1adade04-5508-49b6-8e30-b31418cff6a7",
+          "type": "paragraph",
+          "position": 9,
+          "data": {
+            "content": [
+              {
+                "text": " Kinda. Kafka EOS usa transactional producer com 2PC entre produtor e broker. É 2PC dentro do Kafka, mas não te ajuda em sagas que atravessam DB + Kafka — pra isso precisa de outbox. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "a1a49698-78cc-43bf-a8e7-1e3bbd3f16bf",
+      "type": "callout",
+      "position": 12,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Take-aways:"
+      }
+    },
+    {
+      "id": "252abaf6-d8e3-46ed-b358-55bfa2a8322d",
+      "type": "paragraph",
+      "position": 13,
+      "data": {
+        "content": [
+          {
+            "text": " Próximo módulo: e se os "
+          },
+          {
+            "text": "eventos",
+            "italic": true
+          },
+          {
+            "text": " forem a fonte da verdade? Event Sourcing e CQRS. "
+          }
+        ]
+      }
+    }
+  ]
+}

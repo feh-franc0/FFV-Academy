@@ -1,0 +1,146 @@
+{
+  "slug": "websockets-producao-deep",
+  "title": null,
+  "blocks": [
+    {
+      "id": "418fdf97-e005-4471-b02f-3070822ecebb",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Handshake e framing"
+      },
+      "children": [
+        {
+          "id": "10cb0306-e7f8-450f-bc64-a5c46235bc2f",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " WebSocket começa como HTTP/1.1 Upgrade: Connection: Upgrade, Upgrade: websocket, Sec-WebSocket-Key. Após 101 Switching Protocols, a conexão TCP vira full-duplex com frames binários (opcode, mask, length, payload). Text frames (0x1), binary (0x2), close (0x8), ping (0x9), pong (0xA). "
+              }
+            ]
+          }
+        },
+        {
+          "id": "e337a0b2-5059-4089-ad89-2b10e748d251",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "# Handshake cliente (headers relevantes)\nGET /ws HTTP/1.1\nHost: app.ffv.com\nUpgrade: websocket\nConnection: Upgrade\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\nSec-WebSocket-Version: 13\n\n# Response\nHTTP/1.1 101 Switching Protocols\nUpgrade: websocket\nConnection: Upgrade\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+          }
+        }
+      ]
+    },
+    {
+      "id": "aab796e8-a60b-4c3e-ad60-6ce743924833",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Heartbeat aplicação: a regra que salva produção"
+      },
+      "children": [
+        {
+          "id": "49bba2dc-88ab-4c5b-b367-c9ec72e2c072",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "ts",
+            "code": "// Server\nws.on('message', (data) =&gt; {\n  const msg = JSON.parse(String(data));\n  if (msg.type === 'ping') {\n    ws.send(JSON.stringify({ type: 'pong', ts: Date.now() }));\n    return;\n  }\n  // ... roteamento normal\n});\n\n// Client com timeout\nlet pingTimer: ReturnType&lt;typeof setInterval&gt;;\nlet pongDeadline: ReturnType&lt;typeof setTimeout&gt;;\n\nfunction startHeartbeat(ws: WebSocket) {\n  pingTimer = setInterval(() =&gt; {\n    ws.send(JSON.stringify({ type: 'ping', ts: Date.now() }));\n    pongDeadline = setTimeout(() =&gt; ws.close(4000, 'pong-timeout'), 5000);\n  }, 25000);\n  ws.addEventListener('message', (ev) =&gt; {\n    const m = JSON.parse(ev.data);\n    if (m.type === 'pong') clearTimeout(pongDeadline);\n  });\n}"
+          }
+        },
+        {
+          "id": "a8b3efdd-f1cb-445c-af58-149388fb2733",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Sem heartbeat de aplicação, clientes atrás de corporate proxies ficam com conexão \"morta viva\" e seu produto não entrega mensagem. É o bug mais comum de WS em produção."
+          }
+        }
+      ]
+    },
+    {
+      "id": "699bf501-39f9-4236-b402-81d001d68e7e",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Scaling: sticky vs stateless+pubsub"
+      },
+      "children": [
+        {
+          "id": "df59684a-1334-4526-8e97-940f8211c8cc",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "ts",
+            "code": "// Stateless + Redis pub/sub (Node)\nimport { WebSocketServer } from 'ws';\nimport Redis from 'ioredis';\n\nconst sub = new Redis();\nconst pub = new Redis();\nconst wss = new WebSocketServer({ port: 3001 });\nconst localSubs = new Map&lt;string, Set&lt;WebSocket&gt;&gt;(); // channel -&gt; sockets\n\nwss.on('connection', (ws, req) =&gt; {\n  const channel = new URL(req.url!, 'http://x').searchParams.get('c')!;\n  if (!localSubs.has(channel)) localSubs.set(channel, new Set());\n  localSubs.get(channel)!.add(ws);\n  sub.subscribe(`ch:${channel}`);\n\n  ws.on('close', () =&gt; {\n    localSubs.get(channel)?.delete(ws);\n    if (localSubs.get(channel)?.size === 0) {\n      localSubs.delete(channel);\n      sub.unsubscribe(`ch:${channel}`);\n    }\n  });\n});\n\nsub.on('message', (topic, payload) =&gt; {\n  const channel = topic.replace(/^ch:/, '');\n  for (const ws of localSubs.get(channel) ?? []) {\n    if (ws.readyState === 1) ws.send(payload);\n  }\n});\n\n// publish de qualquer node\nexport function publish(channel: string, payload: string) {\n  pub.publish(`ch:${channel}`, payload);\n}"
+          }
+        },
+        {
+          "id": "89b4db4d-751f-4fef-8a3a-fffca8b46579",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Stateless + pubsub é o padrão correto em autoscale. Sticky sessions quebram quando HPA remove pods; Redis/NATS pubsub desacopla topologia."
+          }
+        }
+      ]
+    },
+    {
+      "id": "cbf898b5-c6da-4c24-a2dc-ae3c8c2da677",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Reconnection com backoff + replay"
+      },
+      "children": [
+        {
+          "id": "cb76565f-2fbf-41c0-a288-5e809509845e",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "ts",
+            "code": "function connect(url: string, lastSeq: number, onMessage: (m: unknown) =&gt; void) {\n  let attempt = 0;\n  const open = () =&gt; {\n    const ws = new WebSocket(`${url}?since=${lastSeq}`);\n    ws.onopen = () =&gt; { attempt = 0; };\n    ws.onmessage = (ev) =&gt; {\n      const m = JSON.parse(ev.data);\n      if (typeof m.seq === 'number') lastSeq = m.seq;\n      onMessage(m);\n    };\n    ws.onclose = () =&gt; {\n      attempt++;\n      const base = Math.min(30000, 1000 * 2 ** attempt);\n      const jitter = base * (0.8 + Math.random() * 0.4);\n      setTimeout(open, jitter);\n    };\n  };\n  open();\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "deeb3f53-03c3-46d3-bee2-599192eee2cc",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Socket.io: quando vale"
+      },
+      "children": [
+        {
+          "id": "5a79d504-b3d4-4f8a-8db7-0d3bded4b9ac",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Socket.io não é WebSocket puro: é protocolo próprio sobre WS com fallback para long-polling, salas nativas, acks, reconexão automática. Útil se precisa de IE legado (raro em 2026) ou quer abstração de rooms. Custo: payload maior, menor interop com clientes outros que não Socket.io. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "c82286c2-1a6e-4873-81aa-9ac229116b46",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Default 2026: WS puro + Redis pubsub para novos projetos. Socket.io só quando rooms/acks internos compensam o lock-in."
+          }
+        }
+      ]
+    }
+  ]
+}

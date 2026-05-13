@@ -1,0 +1,146 @@
+{
+  "slug": "exactly-once-semantics",
+  "title": null,
+  "blocks": [
+    {
+      "id": "9a5fe231-0a35-4458-8cc5-33b873b5e7e6",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Três semânticas de entrega"
+      },
+      "children": [
+        {
+          "id": "d965e401-9088-4ce1-87c4-179307ebf6c7",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "at-most-once: pode perder, nunca duplica (fire-and-forget)\nat-least-once: nunca perde, pode duplicar (default prático)\nexactly-once:  nunca perde, nunca duplica (dentro do Kafka, com EOS)"
+          }
+        },
+        {
+          "id": "b87cb5d1-5e38-4184-b84f-34ebd67e5b0b",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Exactly-once end-to-end em sistema distribuído com side effects externos é impossível sem cooperação do destinatário. O que Kafka oferece é EOS dentro do próprio Kafka + idempotent producer."
+          }
+        }
+      ]
+    },
+    {
+      "id": "12ba17d6-dca5-481b-a7a2-aa897d652c82",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Idempotent producer: o primeiro pilar"
+      },
+      "children": [
+        {
+          "id": "ec249638-6a13-4420-9b65-283083b91d7b",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " enable.idempotence=true faz o broker atribuir producer id (PID) e sequence number por partition. Retry de rede não duplica porque o broker rejeita sequence repetido. Obrigatório para EOS e para evitar duplicata em cenário normal de retry. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "1da8fb34-325c-4253-af7f-f5f90c647b95",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Transactions: read-process-write atômico"
+      },
+      "children": [
+        {
+          "id": "f4874242-66be-46ed-8745-87fd57f3661a",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "java",
+            "code": "props.put(\"transactional.id\", \"payments-processor-1\");\nprops.put(\"enable.idempotence\", true);\nKafkaProducer<String,String> prod = new KafkaProducer<>(props);\nprod.initTransactions();\n\nconsumer.subscribe(List.of(\"payments.raw\"));\n// isolation.level=read_committed no consumer\nwhile (running) {\n  ConsumerRecords<String,String> recs = consumer.poll(Duration.ofMillis(200));\n  if (recs.isEmpty()) continue;\n\n  prod.beginTransaction();\n  try {\n    for (ConsumerRecord<String,String> r : recs) {\n      String out = transform(r.value());\n      prod.send(new ProducerRecord<>(\"payments.enriched\", r.key(), out));\n    }\n    Map<TopicPartition,OffsetAndMetadata> offsets = offsetsFrom(recs);\n    prod.sendOffsetsToTransaction(offsets, consumer.groupMetadata());\n    prod.commitTransaction();\n  } catch (Exception e) {\n    prod.abortTransaction();\n  }\n}"
+          }
+        },
+        {
+          "id": "0599ac0a-8206-4bd5-bd58-ed8b802c7b9e",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "sendOffsetsToTransaction é o que fecha o ciclo: offsets de consumo vão para o mesmo transaction log dos writes. Commit atômico de ambos; nada pela metade."
+          }
+        }
+      ]
+    },
+    {
+      "id": "cc67f232-27d5-4da6-818e-b608fa3e896c",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Kafka Streams: EOS por default"
+      },
+      "children": [
+        {
+          "id": "d1d4b404-8081-4da8-acfa-147b8e17051b",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "java",
+            "code": "Properties p = new Properties();\np.put(StreamsConfig.APPLICATION_ID_CONFIG, \"fraud-scorer\");\np.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.EXACTLY_ONCE_V2);\n// v2: 1 producer por thread, muito mais barato que v1 (1 por task)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "c2ca5b46-e391-4058-b9ef-7a09e716599b",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Side effects externos: idempotência no receiver"
+      },
+      "children": [
+        {
+          "id": "b87c6403-e86f-4341-9ade-303d8a958f30",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Pipeline que chama API de pagamento, envia email ou grava em DB fora do Kafka não ganha EOS automático. O padrão correto é: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "abf2b6f9-0b4c-4f66-be3f-11d8d811d541",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "ts",
+            "code": "// Deduplicação no consumer por (topic, partition, offset) ou event id\nasync function handle(event: PaymentEvent) {\n  const exists = await db.query(\n    'SELECT 1 FROM processed_events WHERE event_id = $1', [event.id]);\n  if (exists.rowCount &gt; 0) return; // já processado, ignora\n\n  await db.tx(async t =&gt; {\n    await t.query('INSERT INTO processed_events(event_id) VALUES($1)', [event.id]);\n    await t.query('UPDATE balances SET amount = amount + $1 WHERE user_id = $2',\n                  [event.amountCents, event.userId]);\n  });\n}"
+          }
+        },
+        {
+          "id": "d16d26de-d69b-4f10-9c40-74d7c99e1dd2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "EOS dentro do Kafka + idempotência no receiver externo = effectively-once end-to-end. É o máximo realista e é o que sistemas financeiros reais entregam."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,671 @@
+{
+  "slug": "elasticsearch-internals",
+  "title": "In-memory buffer",
+  "blocks": [
+    {
+      "id": "2e5d519a-7562-43f5-9ee2-145ed0c693dc",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Por dentro do Elasticsearch (e Lucene)"
+      },
+      "children": [
+        {
+          "id": "f8a531c9-7f38-4bad-9ddb-41eaa21a4ce5",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Elasticsearch é frequentemente descrito como \"banco de busca\", mas isso esconde a verdade: ele é uma camada distribuída em cima do "
+              },
+              {
+                "text": "Apache Lucene",
+                "bold": true
+              },
+              {
+                "text": ", um engine de IR escrito por Doug Cutting (mesmo criador do Hadoop) que já existe desde 1999. Toda performance, garantias de durabilidade e modelo de dados vem do Lucene. Elasticsearch adiciona: REST API, sharding, replicação, cluster coordination, ingest pipelines, ILM, mapping, query DSL. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "e66883c5-b832-4ec3-b610-f9a1b2d05057",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Entender Lucene é entender Elasticsearch (e OpenSearch, e Solr). Este módulo desce ao nível do inverted index, segments imutáveis, refresh vs flush, translog, e como tudo isso se compõe num cluster distribuído. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "8c238585-d08f-4d65-9893-d7c57b94d454",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Referências: Lucene wiki oficial (apache.org), \"Elasticsearch: The Definitive Guide\" (Clinton Gormley & Zachary Tong, O'Reilly, ainda relevante apesar de antigo), e o blog Elastic.co (especialmente posts de Adrien Grand sobre segments e merging)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "67520291-4c98-4883-9d67-34ead98ba3ea",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Stack: do disco ao cluster"
+      },
+      "children": [
+        {
+          "id": "3e6b20f3-377f-4d79-bca5-73fa38d4ba45",
+          "type": "stack_flow",
+          "position": 0,
+          "data": {
+            "title": "Camadas da arquitetura",
+            "items": [
+              {
+                "text": "Hardware — NVMe SSD (latência baixa essencial), 64+ GB RAM (page cache + heap)"
+              },
+              {
+                "text": "OS / Filesystem — Linux, ext4/xfs, mmap habilitado, vm.max_map_count alto"
+              },
+              {
+                "text": "Lucene segments (imutáveis) — Inverted index, doc values, stored fields, term vectors"
+              },
+              {
+                "text": "Lucene IndexWriter / IndexReader — Buffer em RAM, refresh cria reader sobre segments"
+              },
+              {
+                "text": "Translog (WAL) — Append-only, fsync por request (ou async)"
+              },
+              {
+                "text": "Elasticsearch shard — Um Lucene index + translog + metadata"
+              },
+              {
+                "text": "Elasticsearch node — JVM, hospeda múltiplos shards (primary + replica)"
+              },
+              {
+                "text": "Elasticsearch cluster — Master eleito, coordenação via Zen Discovery / cluster state"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "022cafb0-1b95-43b6-a178-18eae1bbbc48",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Inverted index: a estrutura fundamental"
+      },
+      "children": [
+        {
+          "id": "0ac24161-bdf6-450b-9fc8-5a9955152537",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " O coração do Lucene é o "
+              },
+              {
+                "text": "inverted index",
+                "bold": true
+              },
+              {
+                "text": ": um mapeamento de term → lista de doc IDs que contêm o termo. Para cada termo, há uma "
+              },
+              {
+                "text": "posting list",
+                "italic": true
+              },
+              {
+                "text": " com (doc_id, term_freq, positions). Buscar \"postgres mvcc\" vira: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "92695f64-cc99-47a2-b617-f6a105491d55",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "text",
+            "code": "Inverted index (esquema simplificado)\n====================================\n\nTerm Dictionary (ordenado, com FST — Finite State Transducer)\n─────────────────────────────────────────────────────────────\n\"mvcc\"      → ptr posting list A\n\"postgres\"  → ptr posting list B\n\"vacuum\"    → ptr posting list C\n...\n\nPosting List \"postgres\" (comprimida com PFOR-Delta / FOR / VInt)\n────────────────────────────────────────────────────────────────\n[ (doc=3,   tf=2,  positions=[12, 47]),\n  (doc=17,  tf=1,  positions=[8]),\n  (doc=42,  tf=3,  positions=[2, 19, 91]),\n  ...\n]\n\nSkip list overlay (para acelerar AND queries com docs grandes)\n──────────────────────────────────────────────────────────────\nSkip a cada N postings (N=128 default), permitindo \"advance\"\ndireto para um doc_id próximo sem decodificar tudo.\n\nQuery \"postgres AND mvcc\":\n  1. Recupera posting list de \"postgres\" e \"mvcc\"\n  2. Caminha as duas listas em paralelo (merge sort)\n  3. Para cada doc comum, calcula score BM25\n  4. Mantém heap top-K\n  5. Retorna ordenado por score"
+          }
+        }
+      ]
+    },
+    {
+      "id": "daa05e20-520d-47db-9761-de38246e4ce8",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Segments imutáveis: a escolha arquitetural"
+      },
+      "children": [
+        {
+          "id": "740db9d7-ee42-44a2-bec1-2fb0ecc0f77f",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Lucene não atualiza segments. Nunca. Cada commit cria um novo segment. Deletes não removem nada — marcam num bitset "
+              },
+              {
+                "text": ".liv",
+                "code": true
+              },
+              {
+                "text": " dentro do segment. Updates são delete + insert (em segment novo). Periodicamente, um "
+              },
+              {
+                "text": "merge",
+                "bold": true
+              },
+              {
+                "text": " consolida segments pequenos em um maior, descartando docs deletados. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7a490e3-9b0c-40bd-9fe4-752326dea063",
+          "type": "node_graph",
+          "position": 1,
+          "data": {
+            "title": "Ciclo de vida de um segment",
+            "columns": [
+              {
+                "title": "In-memory buffer",
+                "nodes": [
+                  "IndexWriter buffer — docs novos em RAM, não buscáveis ainda"
+                ]
+              },
+              {
+                "title": "Refresh",
+                "nodes": [
+                  "New segment — criado em RAM (in-memory FS), IndexReader aberto. Buscável."
+                ]
+              },
+              {
+                "title": "Flush",
+                "nodes": [
+                  "Disk segment — fsync, translog truncado, checkpoint. Durável."
+                ]
+              },
+              {
+                "title": "Merge",
+                "nodes": [
+                  "Tiered merge — Lucene consolida segments pequenos → segment maior, expunge deletes"
+                ]
+              }
+            ],
+            "legend": []
+          }
+        },
+        {
+          "id": "5217f207-31b6-4563-8228-896bfe34803a",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Imutabilidade é o que habilita: leitura sem locks, mmap eficiente, paralelismo por segment, page cache do OS. O custo é: deletes não liberam espaço até merge, write amplification em merges grandes."
+          }
+        }
+      ]
+    },
+    {
+      "id": "4ffb993a-2e3c-4376-a0ed-da61feebe8ed",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Refresh vs flush vs commit (todo mundo confunde)"
+      },
+      "children": [
+        {
+          "id": "dd8fb128-d964-4d2a-86a0-a97bfd279e47",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Operação",
+              "O que faz",
+              "Custo",
+              "Default"
+            ],
+            "rows": [
+              [
+                "Refresh",
+                "Cria segment in-memory + abre IndexReader. Docs viram buscáveis.",
+                "Baixo (não fsync)",
+                "A cada 1s (refresh_interval)"
+              ],
+              [
+                "Flush",
+                "fsync de segments + truncate translog + checkpoint. Durabilidade.",
+                "Alto (IO)",
+                "A cada 512 MB de translog ou 30 min"
+              ],
+              [
+                "Commit",
+                "Termo Lucene equivalente a flush — escreve segments e metadata no disco.",
+                "Alto",
+                "Implícito no flush"
+              ],
+              [
+                "Merge",
+                "Consolida segments pequenos em maiores, expunge deletes.",
+                "Alto (CPU + IO)",
+                "Background, tiered merge policy"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "c80caac4-a9e4-490d-a794-5c98057537ca",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Bulk ingest pesado? Aumente para 30s ou desative (-1) durante o load, depois retorne a 1s. Pode acelerar ingestão em 5-10× — porque cada refresh cria segment e dispara merge eventual. Menos refreshes = segments maiores desde o início."
+          }
+        }
+      ]
+    },
+    {
+      "id": "d3fd75b1-2a0e-4024-88a5-e9193d602325",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Translog: durabilidade entre commits"
+      },
+      "children": [
+        {
+          "id": "be1ca08f-8351-4712-b3fb-b6717c8758cd",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Segments só vão para disco em flushes (a cada ~512 MB de translog ou 30 min). Entre flushes, docs já indexados estão num segment in-memory. Se o nó cai, perderíamos tudo desde o último flush. Solução: "
+              },
+              {
+                "text": "translog",
+                "bold": true
+              },
+              {
+                "text": ", o write-ahead log do ES. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "69a8deac-1fb9-4381-bcb1-9874c912ed8e",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Caminho de um doc indexado",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "label": "1. Index request",
+                "desc": "POST /index/_doc {...}"
+              },
+              {
+                "label": "2. Write ao translog",
+                "desc": "Append + fsync (durability default: request-level)"
+              },
+              {
+                "label": "3. Add ao buffer in-memory",
+                "desc": "IndexWriter buffer (não buscável ainda)"
+              },
+              {
+                "label": "4. Refresh (a cada 1s)",
+                "desc": "Buffer → segment in-memory. Reader reaberto. Doc buscável."
+              },
+              {
+                "label": "5. Flush (lazy)",
+                "desc": "fsync segments para disco. Translog truncado. Doc durável em segment."
+              },
+              {
+                "label": "6. Merge eventual",
+                "desc": "Background. Segments pequenos → grandes. Deletes purgados."
+              }
+            ]
+          }
+        },
+        {
+          "id": "1ded5f88-a3d5-4257-a132-15bc46fdacc1",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Durabilidade ajustável: (default, fsync por request, ~ms) ou (fsync a cada 5s, perda potencial de 5s de writes em crash, mas throughput maior). É a mesma equação de fsync que você encara no Postgres."
+          }
+        }
+      ]
+    },
+    {
+      "id": "750825b2-9fe1-4d28-a016-dada38e877a3",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Shards: distribuição e paralelismo"
+      },
+      "children": [
+        {
+          "id": "06a4fcdc-e89d-4246-9028-6eb7d323fb1a",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Um índice ES é dividido em "
+              },
+              {
+                "text": "shards primários",
+                "bold": true
+              },
+              {
+                "text": " (P0, P1, ..., Pn), cada um sendo um Lucene index completo. Para HA, cada primário tem N "
+              },
+              {
+                "text": "réplicas",
+                "bold": true
+              },
+              {
+                "text": " em outros nós. Queries são paralelizadas: coordinator broadcast para todos os shards primários (ou réplicas), cada shard responde com top-K local, coordinator merge top-K global. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "835c7305-b78e-4cc4-af7a-45466cc6d4c9",
+          "type": "key_value",
+          "position": 1,
+          "data": {
+            "items": [
+              {
+                "k": "Shard primário",
+                "v": "Lucene index. Aceita writes. Replica para réplicas."
+              },
+              {
+                "k": "Shard réplica",
+                "v": "Cópia exata de um primário. Aceita reads. Promovida a primário em failover."
+              },
+              {
+                "k": "Routing",
+                "v": "Hash(doc_id) % num_primary_shards → qual shard. Mudar num_primary requer reindex."
+              },
+              {
+                "k": "Allocation",
+                "v": "Master atribui shards a nós (balance, awareness, allocation filtering)"
+              },
+              {
+                "k": "Recovery",
+                "v": "Cópia de translog + segments para réplicas novas. Pode ser longo em shards de TBs."
+              }
+            ]
+          }
+        },
+        {
+          "id": "36b00d4d-aa41-4ce7-be1f-115c6cbe21f5",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Regra prática 2026: shard primário entre 20-50 GB. Mais que 50 GB → recovery lento, queries pesadas; menos que 20 GB → overhead de coordenação domina. Para tempo-séries, use Data Streams + ILM com rollover por tamanho (e.g., rollover quando shard atingir 50 GB)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "a177c27b-b826-448a-8197-0f971d33e583",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Query path: o que acontece num search"
+      },
+      "children": [
+        {
+          "id": "041939b3-4e42-4d71-becd-2af07c01d1cf",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "Client → POST /logs-*/_search { query: ... }\n              │\n              ▼\n       Coordinator node\n              │\n   ┌──────────┼──────────┐\n   ▼          ▼          ▼\n Shard 0    Shard 1   Shard 2     (em paralelo)\n   │          │          │\n   │  Lucene index search por shard:\n   │  - Para cada termo da query, recupera posting list\n   │  - AND/OR/phrase merge\n   │  - Calcula BM25 (default similarity)\n   │  - Mantém top-K em heap\n   ▼          ▼          ▼\n (doc_ids + scores top-K de cada shard)\n              │\n              ▼\n       Coordinator merge:\n       - Junta top-K de cada shard\n       - Re-sort por score\n       - Top-N global\n       - Fetch phase: busca _source dos N docs finais\n              │\n              ▼\n         Response → client\n\nLatência típica:\n- query phase: ~5-30 ms (CPU bound)\n- fetch phase: ~5-15 ms (IO bound, _source no disco)\n- network: ~1-5 ms intra-cluster"
+          }
+        }
+      ]
+    },
+    {
+      "id": "12fe37b0-2b77-4f15-828a-b84e4d5e7e93",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Tiered merge policy: por que merges acontecem"
+      },
+      "children": [
+        {
+          "id": "4082b210-d119-4787-a95c-12880167c787",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Lucene usa "
+              },
+              {
+                "text": "TieredMergePolicy",
+                "code": true
+              },
+              {
+                "text": " (default) para decidir quando merge segments. A heurística: agrupar segments de tamanho similar em \"tiers\" e mergear tiers que ultrapassem um limite. Parâmetros chave: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "132b8b5f-f601-45ee-ac5a-e2a090ee3004",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "items": [
+              "— tamanho máximo de segment pós-merge (default 5 GB)",
+              "— quantos segments por tier antes de mergear (default 10)",
+              "— segments menores que isso são agrupados (default 2 MB)"
+            ],
+            "ordered": false
+          }
+        },
+        {
+          "id": "d60bf8ce-15d8-42c1-a8ce-833fe2a08a33",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Em produção: nunca force em índices ativos. Isso cria 1 mega-segment que tira eficiência de merges futuros e bloqueia até completar. Force-merge só faz sentido em índices read-only (logs antigos, finalizados via ILM)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "ed65e07b-b73d-4ccf-8fdc-7d5b1108773c",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Elastic License: o drama de 2021"
+      },
+      "children": [
+        {
+          "id": "0269fbf3-285c-42bb-a7ae-2ea28247ef51",
+          "type": "timeline",
+          "position": 0,
+          "data": {
+            "title": "",
+            "events": [
+              {
+                "when": "2010",
+                "label": "Elasticsearch 0.4 lançado",
+                "detail": "Shay Banon, Apache 2.0. Comunidade cresce rapidamente."
+              },
+              {
+                "when": "2012",
+                "label": "Elastic NV fundada",
+                "detail": "Empresa por trás do projeto. Modelo open core."
+              },
+              {
+                "when": "2015",
+                "label": "AWS lança Elasticsearch Service",
+                "detail": "ES gerenciado em AWS. Concorre com Elastic Cloud."
+              },
+              {
+                "when": "Jan/2021",
+                "label": "Relicenciamento para SSPL/Elastic License",
+                "detail": "Elastic NV muda unilateralmente. AWS reage e forka."
+              },
+              {
+                "when": "Abr/2021",
+                "label": "OpenSearch nasce",
+                "detail": "AWS forka da última versão Apache 2.0. Linux Foundation hospeda governance."
+              },
+              {
+                "when": "Ago/2024",
+                "label": "Elastic volta a oferecer AGPL",
+                "detail": "Re-licencia também sob AGPL além de SSPL/EL. Open source de novo, mas fork persiste."
+              },
+              {
+                "when": "2026",
+                "label": "Dois ecossistemas paralelos",
+                "detail": "Elasticsearch e OpenSearch divergem em features. Decisão depende de stack, AWS-first, e roadmap."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "d7b6e132-e354-428b-80ec-0e4808482572",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Quando usar Elasticsearch (e quando não)"
+      },
+      "children": [
+        {
+          "id": "9b413388-3d77-4b52-9b1d-c857b75af6a3",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Busca full-text + agregações + analytics em escala",
+            "winner": "Elasticsearch / OpenSearch",
+            "why": "Inverted index Lucene maduro, BM25 default, hybrid search nativo (8.x+); Agregações (terms, date_histogram, percentiles) extremamente otimizadas; Sharding + replicação out-of-the-box, scaling horizontal real; Ecossistema (Logstash, Kibana, Beats) para logs/observability",
+            "alternatives": [
+              {
+                "name": "Postgres tsvector / FTS: ok para apps pequenos a médios sem necessidade de cluster. Limite ~1M docs com performance digna."
+              },
+              {
+                "name": "Meilisearch / Typesense: developer experience superior, typo tolerance built-in, ideal para \"instant search\" em e-commerce"
+              },
+              {
+                "name": "Vespa: superior em large-scale ML ranking, mas curva de aprendizado brutal"
+              },
+              {
+                "name": "Vector DB puro (Qdrant, Weaviate): se busca é 100% semântica e você não precisa de keyword search"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "e902a979-045f-4b0f-8e6c-24ceadbae6bd",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "7492cbe5-177b-4680-a51e-b5a0b9bd2f23",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "ES e OpenSearch são compatíveis?",
+            "answer": "Até versão 7.10 (ponto do fork) sim. Após isso divergem. Clients oficiais Elasticsearch 8.x não funcionam com OpenSearch e vice-versa. Use SDKs específicos."
+          }
+        },
+        {
+          "id": "4ebec00f-9022-4e62-b894-7b7ac8b2960f",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Vale rodar ES self-hosted ou ir em managed?",
+            "answer": "Self-hosted exige expertise em JVM tuning, cluster ops, snapshots. Managed (Elastic Cloud, AWS OpenSearch, Bonsai) cobra premium mas elimina toil. Para times sem dedicated infra, managed quase sempre vale."
+          }
+        },
+        {
+          "id": "a9941045-41aa-4d26-abfa-046953c5575e",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "ES suporta vector search?",
+            "answer": "Sim, desde 8.0 (HNSW nativo no Lucene). Em 2026, ES 8.13+ tem dense_vector field, kNN query, e hybrid search (BM25 + vector + RRF) out-of-the-box."
+          }
+        },
+        {
+          "id": "256228c0-a28b-4a71-8328-b68485287bcc",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Por que meu cluster fica 'yellow'?",
+            "answer": "Yellow = todos primários OK, mas algumas réplicas não alocadas. Comum em cluster de 1 nó (réplica não pode ir no mesmo nó do primário). Solução: adicionar nó ou setar number_of_replicas: 0 em dev."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1501abf-9152-40b4-814d-87997bc58427",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Resumo executivo"
+      },
+      "children": [
+        {
+          "id": "9ae6ab86-e364-4aa6-ac7a-6b078c4a42d9",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Elasticsearch = Lucene distribuído. Domine os conceitos do Lucene (inverted index, segments imutáveis, refresh vs flush, merges, translog) e o resto vira aplicação de tuning sobre essa base. Em 2026, ES 8.x e OpenSearch 2.x oferecem hybrid search nativo (BM25 + vector + RRF) — o que torna ES um candidato sério mesmo para aplicações modernas de RAG."
+          }
+        },
+        {
+          "id": "4268737c-8332-49d3-8c88-9507090db373",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Próximo módulo: comparativo prático entre OpenSearch, Meilisearch e Typesense — quando escolher qual."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,451 @@
+{
+  "slug": "langgraph-state-machines",
+  "title": null,
+  "blocks": [
+    {
+      "id": "300e58a6-50bc-4dd1-9104-80faa78b442a",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Quando um agente precisa de loops (ReAct), human-in-loop, persistência de estado entre sessões e cycles condicionais, o paradigma DAG (Airflow, Prefect, Dagster) é insuficiente. LangGraph (lançado jan/2024 pela LangChain) trouxe state machines explícitas para LLMs: nós, arestas, reducers, checkpointers e time travel — vocabulário inspirado em XState e Erlang/OTP mas adaptado para o cenário de agentes. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "07ba22ee-a0f6-4dc8-abf1-37719b999cd7",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que LangGraph traz que LCEL não tinha"
+      },
+      "children": [
+        {
+          "id": "5dd12627-fec1-4103-9d59-30d50dc2d8e2",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Necessidade",
+              "LCEL (RunnableSequence)",
+              "LangGraph (StateGraph)"
+            ],
+            "rows": [
+              [
+                "Pipeline linear",
+                "Idiomático: a | b | c",
+                "Funciona mas verbose"
+              ],
+              [
+                "Cycles (ReAct loop)",
+                "Impossível",
+                "Nativo: add_edge(\"act\", \"think\")"
+              ],
+              [
+                "Conditional routing",
+                "RunnableBranch (limitado)",
+                "add_conditional_edges()"
+              ],
+              [
+                "State mutation explícita",
+                "Estado passa via chains",
+                "TypedDict + reducers"
+              ],
+              [
+                "Human-in-the-loop",
+                "Manual",
+                "interrupt_before/after"
+              ],
+              [
+                "Persistência entre requests",
+                "Manual",
+                "Checkpointer (Sqlite/Postgres/Redis)"
+              ],
+              [
+                "Time travel",
+                "Não",
+                "get_state_history + update_state"
+              ],
+              [
+                "Subgraphs/hierarquia",
+                "Composição funcional",
+                "Subgraphs como nós"
+              ],
+              [
+                "Observabilidade",
+                "LangSmith básico",
+                "LangSmith com hierarquia full"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "9857bbb4-137f-4f3d-bda6-fd097e444dc2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Hello LangGraph — agente ReAct mínimo"
+      },
+      "children": [
+        {
+          "id": "9bee9e12-e72b-49ed-a957-8a9d07c1b3ef",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "from typing import TypedDict, Annotated, Sequence\nimport operator\nfrom langgraph.graph import StateGraph, START, END\nfrom langchain_anthropic import ChatAnthropic\nfrom langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage\nfrom langchain_core.tools import tool\n\n# 1. State schema\nclass AgentState(TypedDict):\n    messages: Annotated[Sequence[BaseMessage], operator.add]  # reducer: concat\n\n# 2. Tools\n@tool\ndef get_weather(city: str) -> str:\n    \"\"\"Retorna a temperatura atual da cidade.\"\"\"\n    return f\"Em {city}: 22°C, ensolarado\"\n\ntools = [get_weather]\nmodel = ChatAnthropic(model=\"claude-sonnet-4-7\").bind_tools(tools)\n\n# 3. Nodes\ndef call_model(state: AgentState) -> dict:\n    response = model.invoke(state[\"messages\"])\n    return {\"messages\": [response]}\n\ndef call_tool(state: AgentState) -> dict:\n    last_message = state[\"messages\"][-1]\n    tool_calls = last_message.tool_calls\n    outputs = []\n    for tc in tool_calls:\n        tool_fn = {t.name: t for t in tools}[tc[\"name\"]]\n        result = tool_fn.invoke(tc[\"args\"])\n        outputs.append(ToolMessage(content=str(result), tool_call_id=tc[\"id\"]))\n    return {\"messages\": outputs}\n\n# 4. Conditional router\ndef should_continue(state: AgentState) -> str:\n    last_message = state[\"messages\"][-1]\n    if not last_message.tool_calls:\n        return END\n    return \"tools\"\n\n# 5. Build graph\ngraph = StateGraph(AgentState)\ngraph.add_node(\"agent\", call_model)\ngraph.add_node(\"tools\", call_tool)\ngraph.add_edge(START, \"agent\")\ngraph.add_conditional_edges(\"agent\", should_continue)\ngraph.add_edge(\"tools\", \"agent\")  # ⬅️ CICLO — volta ao agente após tool\n\napp = graph.compile()\n\nresult = app.invoke({\"messages\": [HumanMessage(\"Qual a temperatura em São Paulo?\")]})\nfor m in result[\"messages\"]:\n    print(f\"{m.type}: {m.content[:80]}\")",
+            "filename": "react_agent.py"
+          }
+        },
+        {
+          "id": "cd15ba20-d7a2-4fbb-bb8d-5a6cc3e8b526",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "O ciclo é o coração do ReAct. O agente pode chamar tools quantas vezes precisar antes de decidir responder ao usuário. DAG proibiria isso."
+          }
+        }
+      ]
+    },
+    {
+      "id": "4a512af4-00d5-4053-a4f0-4f0a5ab10e69",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Checkpointing e time travel"
+      },
+      "children": [
+        {
+          "id": "30e02fe4-9f28-4195-9d7a-a0073d5863b5",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "from langgraph.checkpoint.postgres import PostgresSaver\n\n# Checkpointer persiste estado a cada nó\ncheckpointer = PostgresSaver.from_conn_string(\"postgresql://localhost/langgraph\")\ncheckpointer.setup()\n\napp = graph.compile(checkpointer=checkpointer)\n\n# thread_id identifica a conversa\nconfig = {\"configurable\": {\"thread_id\": \"user-42-conv-1\"}}\n\n# Primeira mensagem\napp.invoke({\"messages\": [HumanMessage(\"Olá\")]}, config=config)\n\n# Segunda mensagem — engine carrega estado anterior\napp.invoke({\"messages\": [HumanMessage(\"Continuando: temperatura em SP?\")]}, config=config)\n\n# Time travel — listar histórico\nfor snapshot in app.get_state_history(config):\n    print(f\"Step {snapshot.metadata['step']}: next={snapshot.next}\")\n    print(f\"  Messages: {len(snapshot.values['messages'])}\")\n\n# Voltar a um estado específico e bifurcar\ntarget = list(app.get_state_history(config))[3]   # snapshot de 3 steps atrás\nnew_config = app.update_state(target.config, {\"messages\": [HumanMessage(\"Pergunta diferente\")]})\napp.invoke(None, new_config)   # executa a partir do snapshot bifurcado",
+            "filename": "checkpointing.py"
+          }
+        },
+        {
+          "id": "2bb786e4-ba52-40ee-85b8-42a9c00eb82c",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Time travel cria thread_id implícitos novos quando você bifurca. Em produção, isso explode rapidamente se não houver TTL/cleanup. Postgres com partitioning por thread_id é o padrão."
+          }
+        }
+      ]
+    },
+    {
+      "id": "cb8a2655-ded1-4e3e-b23b-6e2790bc2f71",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Human-in-the-loop"
+      },
+      "children": [
+        {
+          "id": "a8a85e63-2423-4017-8fad-a8ed5e460cf8",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "# Cenário: agente sugere ação destrutiva, humano precisa aprovar\nfrom langgraph.graph import StateGraph\nfrom langgraph.checkpoint.memory import MemorySaver\n\nclass State(TypedDict):\n    messages: Annotated[list, operator.add]\n    pending_action: dict | None\n\ndef plan(state):\n    # LLM propõe ação destrutiva (ex.: deletar arquivo)\n    return {\"pending_action\": {\"type\": \"delete\", \"target\": \"/tmp/important.db\"}}\n\ndef execute(state):\n    action = state[\"pending_action\"]\n    # Em produção: subprocess.run / API call etc.\n    return {\"messages\": [AIMessage(f\"Executado: {action}\")]}\n\ngraph = StateGraph(State)\ngraph.add_node(\"plan\", plan)\ngraph.add_node(\"execute\", execute)\ngraph.add_edge(START, \"plan\")\ngraph.add_edge(\"plan\", \"execute\")\ngraph.add_edge(\"execute\", END)\n\n# 🛑 PAUSAR antes de \"execute\" para esperar aprovação\napp = graph.compile(\n    checkpointer=MemorySaver(),\n    interrupt_before=[\"execute\"],\n)\n\nconfig = {\"configurable\": {\"thread_id\": \"req-1\"}}\nresult = app.invoke({\"messages\": [], \"pending_action\": None}, config)\nprint(\"Pausado em:\", app.get_state(config).next)\n# > Pausado em: ('execute',)\n\n# Backend retorna ao usuário: \"Aprovar deletar /tmp/important.db?\"\n# Frontend mostra modal, usuário clica em \"Aprovar\"\n\n# Resume — invoke com None continua do checkpoint\napp.invoke(None, config)",
+            "filename": "human_in_loop.py"
+          }
+        }
+      ]
+    },
+    {
+      "id": "1ecffec8-3582-4b91-8b12-c947fece0068",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura interna do StateGraph"
+      },
+      "children": [
+        {
+          "id": "e5943a96-c3ee-4621-8a93-60aa408db756",
+          "type": "arch_flow",
+          "position": 0,
+          "data": {
+            "title": "Componentes de um LangGraph deployment",
+            "columns": [
+              {
+                "header": "Definição",
+                "items": [
+                  "StateGraph(SchemaTypedDict)",
+                  "add_node(name, fn)",
+                  "add_edge(a, b) — estática",
+                  "add_conditional_edges(a, router)",
+                  ".compile(checkpointer, interrupts)"
+                ]
+              },
+              {
+                "header": "Runtime",
+                "items": [
+                  "Pregel-inspired engine",
+                  "BSP-style step (parallel nodes)",
+                  "Reducer merge automático",
+                  "Conditional routing após cada step",
+                  "Stream events para observability"
+                ]
+              },
+              {
+                "header": "Persistência",
+                "items": [
+                  "MemorySaver (dev/test)",
+                  "SqliteSaver (single-node)",
+                  "PostgresSaver (produção)",
+                  "RedisSaver (latência crítica)",
+                  "AsyncCheckpointer para alta concorrência"
+                ]
+              },
+              {
+                "header": "Deploy",
+                "items": [
+                  "LangGraph Cloud (managed)",
+                  "LangGraph Server (self-hosted)",
+                  "FastAPI wrapper custom",
+                  "Stream via SSE/Websocket",
+                  "LangSmith integration nativa"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ec3f93d7-24a9-4351-aa5e-073e81c5c5f0",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Fluxo de decisão: quando usar LangGraph"
+      },
+      "children": [
+        {
+          "id": "35e76eaf-46e4-44ff-9b62-bebe32df8dc4",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Você precisa de um agente que pesquisa, propõe um plano, espera aprovação humana, depois executa em múltiplas etapas com retry em falhas.",
+            "winner": "LangGraph com interrupt_before + PostgresSaver",
+            "why": "Os 4 requisitos (multi-step, human approval, persistência entre requests, retry com cycles) são exatamente o caso de uso primário. LCEL não suporta human-in-loop nativo; CrewAI não tem cycles + retry idiomático; AutoGen funciona mas é overkill para sequência linear com 1 interrupt.",
+            "alternatives": [
+              {
+                "name": "CrewAI hierarchical",
+                "note": "Funciona se cycles forem raros e human-in-loop pode ser hack via tool"
+              },
+              {
+                "name": "AutoGen v0.4",
+                "note": "Excessivo para 1 thread de execução — actor model agrega complexidade"
+              },
+              {
+                "name": "Lógica custom + LCEL",
+                "note": "Possível mas você reimplementa checkpointer e time travel"
+              }
+            ]
+          }
+        },
+        {
+          "id": "d601748a-c65a-4e44-8ed6-14a9236f3563",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Árvore de decisão",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "icon": "🔄",
+                "label": "Precisa de cycles ou conditionals?",
+                "desc": "Se não → LCEL basta"
+              },
+              {
+                "icon": "⏸️",
+                "label": "Precisa human-in-loop?",
+                "desc": "Se sim → LangGraph wins"
+              },
+              {
+                "icon": "💾",
+                "label": "Precisa estado entre requests?",
+                "desc": "Se sim → LangGraph com checkpointer"
+              },
+              {
+                "icon": "🌐",
+                "label": "Precisa distribuição cross-host?",
+                "desc": "AutoGen v0.4 supera aqui"
+              },
+              {
+                "icon": "👥",
+                "label": "Múltiplos papéis especializados?",
+                "desc": "CrewAI mais idiomático"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "62c6963c-704f-4dd7-a10f-c905b54f2ac8",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Timeline do LangGraph"
+      },
+      "children": [
+        {
+          "id": "737438e7-f271-4473-a4ea-79f4d88f3923",
+          "type": "timeline",
+          "position": 0,
+          "data": {
+            "title": "",
+            "events": [
+              {
+                "when": "Out 2022",
+                "label": "LangChain v0.0",
+                "detail": "Harrison Chase — primeira versão"
+              },
+              {
+                "when": "Set 2023",
+                "label": "LCEL",
+                "detail": "LangChain Expression Language — composição via pipe"
+              },
+              {
+                "when": "Jan 2024",
+                "label": "LangGraph 0.1",
+                "detail": "StateGraph + checkpointer — spin-off para agentes",
+                "highlight": true
+              },
+              {
+                "when": "Mai 2024",
+                "label": "LangGraph Cloud",
+                "detail": "Managed deployment com long-running threads"
+              },
+              {
+                "when": "Out 2024",
+                "label": "LangGraph Studio",
+                "detail": "Visual debugging IDE — time travel UI"
+              },
+              {
+                "when": "2025",
+                "label": "create_react_agent unified",
+                "detail": "High-level API replicando ReAct em uma chamada"
+              },
+              {
+                "when": "2025",
+                "label": "Subgraphs maduros",
+                "detail": "Composição hierárquica como padrão de produção"
+              },
+              {
+                "when": "2026",
+                "label": "MCP integration",
+                "detail": "Tools MCP-native, padronizando com Anthropic/OpenAI"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "43cb23e4-64c1-4491-a8bf-f352d34e6fe8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "3f62468a-687e-49b2-bf12-275922b5c618",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "LangGraph requer LangChain?",
+            "answer": "Você pode usar LangGraph sem cadeias LCEL — só StateGraph + funções Python puras. Mas a maioria dos exemplos usa ChatModels da LangChain por conveniência. Tools podem ser plain Python functions decoradas com @tool ou objetos da LangChain."
+          }
+        },
+        {
+          "id": "350a2a52-a644-4ff4-80cd-8cfc612d6d7c",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Como observar/debugar?",
+            "answer": "LangSmith é integração first-class — toda chamada de nó vira span. Sem LangSmith, app.stream() emite events de cada step e você loga manualmente. LangGraph Studio (Electron app gratuito) dá visualização de grafo com time travel."
+          }
+        },
+        {
+          "id": "1fd9ca57-19c1-4711-a9cb-65b0be07ed08",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Latência em produção?",
+            "answer": "Checkpointer add ~10–50ms por nó. PostgresSaver com pgbouncer + connection pool é o padrão para alta carga. Se latência é crítica, RedisSaver é ~10× mais rápido mas requer cleanup explícito (sem TTL nativo para checkpoints)."
+          }
+        },
+        {
+          "id": "10f3bcee-5bb7-4d17-99e2-aa77e98bf95f",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Posso ter centenas de threads concorrentes?",
+            "answer": "Sim. Thread_id é a unidade de isolamento. Postgres com particionamento por thread_id escala para milhares concorrentes. LangGraph Cloud gerencia isso automaticamente. Para self-hosted, async checkpointer + uvloop é setup recomendado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "01b8cfe9-1bc0-4692-a839-0e2e619768b5",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Referências"
+      },
+      "children": [
+        {
+          "id": "27a273cb-2eb5-4a30-b8fc-12e1d984d5c6",
+          "type": "key_value",
+          "position": 0,
+          "data": {
+            "items": [
+              {
+                "k": "LangGraph docs",
+                "v": "langchain-ai.github.io/langgraph"
+              },
+              {
+                "k": "LangGraph GitHub",
+                "v": "github.com/langchain-ai/langgraph"
+              },
+              {
+                "k": "LCEL → LangGraph migration",
+                "v": "blog.langchain.dev/langgraph (jan 2024 launch post)"
+              },
+              {
+                "k": "Pregel paper",
+                "v": "Malewicz et al. \"Pregel: A System for Large-Scale Graph Processing\". SIGMOD 2010 — inspiração do engine"
+              },
+              {
+                "k": "ReAct",
+                "v": "Yao et al. \"ReAct: Synergizing Reasoning and Acting in Language Models\". ICLR 2023"
+              },
+              {
+                "k": "LangGraph Studio",
+                "v": "github.com/langchain-ai/langgraph-studio"
+              },
+              {
+                "k": "Persistência",
+                "v": "langchain-ai.github.io/langgraph/concepts/persistence"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

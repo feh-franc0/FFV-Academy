@@ -1,0 +1,135 @@
+{
+  "slug": "mtls-zero-trust-pratica",
+  "title": null,
+  "blocks": [
+    {
+      "id": "4f1ebcc6-18bc-4125-a3f0-86c0332e1d44",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Perímetro morreu, identity é o novo firewall"
+      },
+      "children": [
+        {
+          "id": "5ea7fb39-15ce-491e-88c5-1d7dfba490f5",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " BeyondCorp (whitepaper Google, 2014) formalizou o que breaches repetidos provaram: VPN corporativa + firewall de perímetro não escalam e falham catastroficamente quando atacante entra por phishing ou dependência comprometida. Zero-trust inverte: cada request, de qualquer origem, é autenticado via identity forte e autorizado por policy granular. mTLS é o transporte dessa autenticação entre serviços. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "db3d607e-d3dc-45df-a54a-6b57458e7025",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "danger",
+            "title": "",
+            "content": "Never roll your own mTLS infra. Use Istio, Linkerd, Consul Connect, Cilium Service Mesh ou SPIRE + envoy. Emitir e rotacionar milhares de certs manualmente é receita para downtime."
+          }
+        }
+      ]
+    },
+    {
+      "id": "9b0496f1-6738-4577-aefb-018c57b7df22",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "mTLS manual com openssl (para entender)"
+      },
+      "children": [
+        {
+          "id": "0c0dd687-b55f-4022-828f-f99e3665a8ab",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "# 1. CA interna\nopenssl genpkey -algorithm ED25519 -out ca.key\nopenssl req -x509 -new -key ca.key -days 3650 -out ca.crt \\\n  -subj \"/CN=FFV Internal CA\"\n\n# 2. Cert do servidor\nopenssl genpkey -algorithm ED25519 -out server.key\nopenssl req -new -key server.key -out server.csr -subj \"/CN=api.ffv.internal\"\nopenssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial \\\n  -out server.crt -days 30 \\\n  -extfile <(echo \"subjectAltName=DNS:api.ffv.internal\")\n\n# 3. Cert do cliente\nopenssl genpkey -algorithm ED25519 -out client.key\nopenssl req -new -key client.key -out client.csr -subj \"/CN=billing-service\"\nopenssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial \\\n  -out client.crt -days 1\n\n# 4. Teste com curl (cliente apresenta cert)\ncurl --cacert ca.crt --cert client.crt --key client.key \\\n  https://api.ffv.internal/health"
+          }
+        }
+      ]
+    },
+    {
+      "id": "32e07fee-531b-4a66-8c54-24a511ab7e73",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Istio PeerAuthentication STRICT"
+      },
+      "children": [
+        {
+          "id": "503b26ff-f853-4b93-ab75-992647f61303",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "# Forca mTLS em todo trafego do namespace\napiVersion: security.istio.io/v1\nkind: PeerAuthentication\nmetadata:\n  name: default\n  namespace: ffv-prod\nspec:\n  mtls:\n    mode: STRICT          # PERMISSIVE apenas durante migracao\n\n---\n# ACL fine-grained por identity SPIFFE\napiVersion: security.istio.io/v1\nkind: AuthorizationPolicy\nmetadata:\n  name: api-allow-billing\n  namespace: ffv-prod\nspec:\n  selector:\n    matchLabels:\n      app: api\n  action: ALLOW\n  rules:\n  - from:\n    - source:\n        principals:\n        - \"cluster.local/ns/ffv-prod/sa/billing-service\"\n        - \"cluster.local/ns/ffv-prod/sa/audit-service\"\n    to:\n    - operation:\n        methods: [\"POST\"]\n        paths: [\"/v1/charges\"]\n\n---\n# Verificar que esta STRICT\n# kubectl exec -n ffv-prod deploy/api -c istio-proxy -- \\\n#   pilot-agent request GET /stats/config_dump | jq '.configs[] | ...'\n# ou:\n# istioctl authn tls-check billing-pod.ffv-prod api.ffv-prod.svc.cluster.local"
+          }
+        },
+        {
+          "id": "e9d3cead-38ad-4df0-a87a-07fe8818b2c5",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Migração típica: comece em PERMISSIVE em namespace piloto, monitore que nenhum tráfego plaintext legítimo existe (via métricas istio_request_total com connection_security_policy=\"none\"), só então vire STRICT. Falha em ligar STRICT com workload externo não-mesh é o bug mais comum."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5c87675-9424-4399-a3b2-97d07b037aa4",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "SPIFFE/SPIRE fora do Kubernetes"
+      },
+      "children": [
+        {
+          "id": "fca5f834-265b-4051-b131-a231c3ca1ad9",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "# Registrar workload no SPIRE server (on-prem AWS EC2)\nspire-server entry create \\\n  -spiffeID spiffe://ffv.internal/billing \\\n  -parentID spiffe://ffv.internal/spire/agent/aws_iid/i-0abc123 \\\n  -selector aws_iid:tag:Role:billing \\\n  -selector unix:uid:10001 \\\n  -ttl 3600\n\n# Workload pega SVID via Workload API (socket Unix, sem senha)\nspire-agent api fetch x509 -socketPath /tmp/agent.sock \\\n  -write /run/ffv/svid/\n\n# Rotacao transparente: SPIRE agent re-emite antes da expiracao\n# Workload le do diretorio, sem downtime"
+          }
+        }
+      ]
+    },
+    {
+      "id": "a32ea097-5feb-4836-ac3b-6c8f2a16c9d9",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Checklist zero-trust pragmático 2026"
+      },
+      "children": [
+        {
+          "id": "957e1a6a-99bb-458b-bc24-dcf9092b2404",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "(1) mTLS STRICT no mesh. (2) Identity SPIFFE (não IP, não hostname). (3) AuthorizationPolicy por identity, deny-by-default. (4) Cert rotation <= 24h. (5) CA interna em HSM/Vault PKI. (6) Logs de handshake em SIEM. (7) Egress gateway bloqueia tráfego lateral inesperado. (8) Human access via SSO + short-lived cert (Teleport, smallstep, AWS IAM SSO)."
+          }
+        },
+        {
+          "id": "97622964-d00b-4bac-9400-8b65ae3949ec",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "mTLS não é substituto de authorization de aplicação. Identity do transporte prova \"quem fala\", authz prova \"o que pode fazer\". Os dois convivem. Serviço comprometido com cert válido ainda precisa falhar autz de aplicação em operações sensíveis."
+          }
+        }
+      ]
+    }
+  ]
+}

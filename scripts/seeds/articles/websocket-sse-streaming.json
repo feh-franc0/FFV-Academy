@@ -1,0 +1,156 @@
+{
+  "slug": "websocket-sse-streaming",
+  "title": null,
+  "blocks": [
+    {
+      "id": "0ac49c82-68fc-4555-848d-5460c1421389",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " HTTP foi projetado para request-response. Quando você precisa que o servidor envie dados sem o cliente pedir — notificações, chat, streaming de IA — existem três abordagens com trade-offs bem distintos. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "dd78baf6-97a2-4252-9837-f56dac77c3f9",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Comparação: long polling vs SSE vs WebSocket"
+      },
+      "children": [
+        {
+          "id": "dac7a592-b45e-4cf1-a2ff-0138e684c838",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Técnica",
+              "Direção",
+              "Protocolo",
+              "Overhead",
+              "Casos de uso"
+            ],
+            "rows": [
+              [
+                "Polling",
+                "Cliente → Servidor",
+                "HTTP",
+                "Alto (um req/s)",
+                "Evitar sempre"
+              ],
+              [
+                "Long polling",
+                "Bidirecional (simulado)",
+                "HTTP",
+                "Médio (1 RTT por msg)",
+                "Fallback legado"
+              ],
+              [
+                "SSE",
+                "Servidor → Cliente",
+                "HTTP",
+                "Baixo (stream HTTP)",
+                "Notificações, LLM streaming"
+              ],
+              [
+                "WebSocket",
+                "Bidirecional",
+                "WS/WSS",
+                "Mínimo (frames binários)",
+                "Chat, jogos, colaboração"
+              ],
+              [
+                "gRPC streaming",
+                "Bidirecional",
+                "HTTP/2",
+                "Mínimo + schema",
+                "Microserviços bidirecional"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "4907e621-20b0-463e-9860-db615aec5ed0",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "SSE: streaming de LLM e notificações"
+      },
+      "children": [
+        {
+          "id": "b93f6969-b4f7-448e-96cf-607013fe606d",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "# SSE (Server-Sent Events): stream HTTP com formato especial\n# Content-Type: text/event-stream\n# Cada evento: \"data: conteúdo\\n\\n\" (linha vazia = fim do evento)\n\nfrom fastapi import FastAPI\nfrom fastapi.responses import StreamingResponse\nimport asyncio\nimport anthropic\n\napp = FastAPI()\n\n# Streaming de LLM com SSE:\n@app.get(\"/stream\")\nasync def stream_llm(prompt: str):\n    async def generate():\n        client = anthropic.Anthropic()\n        with client.messages.stream(\n            model=\"claude-opus-4-6\",\n            max_tokens=1024,\n            messages=[{\"role\": \"user\", \"content\": prompt}]\n        ) as stream:\n            for text in stream.text_stream:\n                # Formato SSE: \"data: texto\\n\\n\"\n                yield f\"data: {text}\\n\\n\"\n        yield \"data: [DONE]\\n\\n\"\n\n    return StreamingResponse(\n        generate(),\n        media_type=\"text/event-stream\",\n        headers={\n            \"Cache-Control\": \"no-cache\",\n            \"X-Accel-Buffering\": \"no\",  # desabilita buffer do Nginx!\n        }\n    )\n\n# Notificações com SSE e ID para reconexão:\n@app.get(\"/notifications\")\nasync def notifications(user_id: str):\n    async def event_stream():\n        event_id = 0\n        while True:\n            # Checar por notificações novas:\n            notifications = await get_notifications(user_id)  # busca no DB/Redis\n            for notif in notifications:\n                event_id += 1\n                # SSE com ID permite que o browser retome após reconexão:\n                yield f\"id: {event_id}\\n\"\n                yield f\"event: notification\\n\"\n                yield f\"data: {notif.to_json()}\\n\\n\"\n\n            # Heartbeat a cada 30s (evita timeout de proxies):\n            yield \": ping\\n\\n\"\n            await asyncio.sleep(30)\n\n    return StreamingResponse(event_stream(), media_type=\"text/event-stream\")\n\n# No cliente (JavaScript):\n# const es = new EventSource('/notifications?user_id=123');\n# es.addEventListener('notification', (e) => {\n#   const data = JSON.parse(e.data);\n#   showNotification(data);\n# });\n# es.onerror = () => { /* EventSource reconecta automaticamente! */ };\n# // Last-Event-ID header é enviado automaticamente na reconexão"
+          }
+        }
+      ]
+    },
+    {
+      "id": "a1fb7980-d080-4823-8489-110a31f302be",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "WebSocket: full-duplex bidirecional"
+      },
+      "children": [
+        {
+          "id": "63543304-95b5-4fa8-ab09-f7b0607400d3",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "# WebSocket: upgrade HTTP → protocolo WS próprio\n# Handshake HTTP:\n# GET /ws HTTP/1.1\n# Upgrade: websocket\n# Connection: Upgrade\n# Sec-WebSocket-Key: base64(random 16 bytes)\n# Sec-WebSocket-Version: 13\n#\n# Resposta do servidor:\n# HTTP/1.1 101 Switching Protocols\n# Upgrade: websocket\n# Connection: Upgrade\n# Sec-WebSocket-Accept: base64(SHA1(key + GUID))\n#\n# Após isso: frames WS diretamente sobre TCP (sem HTTP)\n\nfrom fastapi import WebSocket, WebSocketDisconnect\nimport json\n\n# Servidor WebSocket com FastAPI:\nclass ConnectionManager:\n    def __init__(self):\n        self.active: dict[str, list[WebSocket]] = {}  # room_id → [ws]\n\n    async def connect(self, ws: WebSocket, room: str):\n        await ws.accept()\n        self.active.setdefault(room, []).append(ws)\n\n    def disconnect(self, ws: WebSocket, room: str):\n        if room in self.active:\n            self.active[room].remove(ws)\n\n    async def broadcast(self, room: str, message: dict):\n        for ws in self.active.get(room, []):\n            try:\n                await ws.send_json(message)\n            except Exception:\n                pass  # conexão morta, ignora\n\nmanager = ConnectionManager()\n\n@app.websocket(\"/ws/{room}\")\nasync def websocket_endpoint(ws: WebSocket, room: str):\n    await manager.connect(ws, room)\n    try:\n        # Autenticação no primeiro frame:\n        auth_frame = await ws.receive_json()\n        if auth_frame.get(\"type\") != \"auth\":\n            await ws.close(code=4001, reason=\"Primeiro frame deve ser auth\")\n            return\n\n        token = auth_frame.get(\"token\")\n        user = verify_jwt(token)  # lança exceção se inválido\n        if not user:\n            await ws.close(code=4001, reason=\"Token inválido\")\n            return\n\n        # Loop principal de mensagens:\n        while True:\n            data = await ws.receive_json()\n            if data.get(\"type\") == \"message\":\n                await manager.broadcast(room, {\n                    \"type\": \"message\",\n                    \"user\": user.name,\n                    \"text\": data[\"text\"],\n                })\n    except WebSocketDisconnect:\n        manager.disconnect(ws, room)\n    except Exception as e:\n        manager.disconnect(ws, room)\n\n# Heartbeat: evitar que proxies fechem conexão ociosa\n# WS tem ping/pong nativo (opcode 0x9/0xA):\n# Nginx: proxy_read_timeout 3600s; (1 hora)\n# AWS ALB: idle timeout padrão = 60s (aumente para WS longos)\n\n# No cliente (JavaScript):\n# const ws = new WebSocket('wss://api.example.com/ws/room1');\n# ws.onopen = () => ws.send(JSON.stringify({type:'auth', token: getJwt()}));\n# ws.onmessage = (e) => handleMessage(JSON.parse(e.data));\n# ws.onclose = (e) => scheduleReconnect(e.code);  // reconexão manual (diferente de SSE)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "3b9cb695-aa4c-401c-9bc5-5a279139844b",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Nginx e proxies: configuração para streaming"
+      },
+      "children": [
+        {
+          "id": "d12c9301-b09f-4887-8724-8bb974d56d81",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "# Nginx para SSE: desabilitar buffering\nnginx_sse_config = \"\"\"\nlocation /stream {\n    proxy_pass http://backend:8000;\n    proxy_http_version 1.1;\n    proxy_set_header Connection '';        # keep-alive sem upgrade\n    proxy_cache off;\n    proxy_buffering off;                  # CRÍTICO: sem buffering = streaming real\n    proxy_read_timeout 3600s;             # conexão longa para SSE\n    add_header X-Accel-Buffering no;      # header para desabilitar buffer via app\n}\n\"\"\"\n\n# Nginx para WebSocket: upgrade de protocolo\nnginx_ws_config = \"\"\"\nmap $http_upgrade $connection_upgrade {\n    default upgrade;\n    ''      close;\n}\n\nlocation /ws {\n    proxy_pass http://backend:8000;\n    proxy_http_version 1.1;\n    proxy_set_header Upgrade $http_upgrade;        # CRUCIAL: header WS\n    proxy_set_header Connection $connection_upgrade;\n    proxy_set_header Host $host;\n    proxy_set_header X-Real-IP $remote_addr;\n    proxy_read_timeout 3600s;                      # não fechar conexão ociosa\n    proxy_send_timeout 3600s;\n}\n\"\"\"\n\n# Problema comum: proxy sem configuração fecha WebSocket com 502/504\n# Sintoma: conexão funciona direto no backend mas falha atrás do proxy\n# Diagnóstico:\n# curl -i -N http://api.example.com/stream   ← SSE (vê se streama ou bufferiza)\n# wscat -c wss://api.example.com/ws          ← WebSocket CLI (npm i -g wscat)\n\n# AWS ALB para WebSocket:\n# - Suporte nativo: sem configuração especial além do health check\n# - Idle timeout padrão: 60s → aumentar para 3600s em aplicações de chat\n# - Target group: registre instâncias/containers normalmente"
+          }
+        }
+      ]
+    },
+    {
+      "id": "f4cd6a17-384f-4f2e-84bd-24ea3dfaef25",
+      "type": "callout",
+      "position": 5,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Modelo mental: SSE = HTTP stream simples (servidor → cliente), reconexão automática, funciona atrás de qualquer proxy com `proxy_buffering off`. WebSocket = full-duplex sobre TCP, requer configuração de proxy (Upgrade header). Para LLM streaming: SSE é a escolha certa (unidirecional, simples, CDN-friendly). Para chat e jogos: WebSocket. Heartbeat (ping/pong ou comment SSE) evita que proxies cortem conexões ociosas. Autenticação WebSocket: first frame auth ou token na URL com TTL curto."
+      }
+    },
+    {
+      "id": "25446779-b2cf-40c0-8085-2f691018eb45",
+      "type": "callout",
+      "position": 6,
+      "data": {
+        "variant": "info",
+        "title": "",
+        "content": "Próximo: CORS, CSRF e cookies seguros — segurança web fundamental que todo desenvolvedor backend precisa entender."
+      }
+    }
+  ]
+}

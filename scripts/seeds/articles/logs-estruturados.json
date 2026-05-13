@@ -1,0 +1,673 @@
+{
+  "slug": "logs-estruturados",
+  "title": null,
+  "blocks": [
+    {
+      "id": "405a68fb-dcd9-4a2e-9403-098dad42ed8a",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Todo sistema em produção tem logs. Poucos têm logs que realmente ajudam numa crise às 3h da manhã. A diferença entre um log inútil e um que resolve um incidente em 5 minutos não é quantidade — é estrutura. Log estruturado não é modismo: é a base de qualquer sistema de observabilidade que funciona em escala. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "f4514a96-9a29-4170-a55f-3b8c48f7a513",
+      "type": "paragraph",
+      "position": 1,
+      "data": {
+        "content": [
+          {
+            "text": " Neste módulo você vai entender por que JSON logs substituíram texto livre, como correlation IDs ligam logs de diferentes serviços numa mesma requisição, o que cada nível de log realmente significa (e por que 90% dos times usa WARN errado), e o custo real de formatter síncrono em hot paths. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "a369e968-9ccc-4bb6-a3ad-69145320d753",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Onde isso entra no exame e na prática"
+      },
+      "children": [
+        {
+          "id": "46408a7e-671f-4366-87a8-9d01dc2b1618",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " No domínio de Observabilidade & SRE, logs estruturados são o pré-requisito para tudo mais: métricas derivadas de logs, correlação com traces, alertas baseados em padrões. Sem estrutura, logs são strings opacas. Com estrutura, são dados consultáveis. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "3dc93f30-8cb4-48da-b18d-02dfb2728b3e",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Nível alvo: Você deve conseguir implementar structured logging em qualquer serviço, injetar trace_id/span_id automaticamente, e configurar o pipeline de logs para não impactar latência de produção."
+          }
+        }
+      ]
+    },
+    {
+      "id": "2b0b6f05-d098-41c2-a1fa-b0cf674d1623",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Texto livre vs JSON estruturado"
+      },
+      "children": [
+        {
+          "id": "3e0d5f32-c141-47ad-a522-fd51a80a87b7",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Considere o mesmo evento em dois formatos: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "58d0f583-5c0d-4fa2-84ce-903fa4d2c9a4",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "# ❌ Texto livre — o que a maioria tem\n2024-01-15 14:23:11 ERROR Failed to process order 12345 for user 99 after 3 retries\n\n# ✅ JSON estruturado — o que você quer ter\n{\n  \"timestamp\": \"2024-01-15T14:23:11.847Z\",\n  \"level\": \"error\",\n  \"message\": \"Failed to process order after retries\",\n  \"service\": \"order-service\",\n  \"version\": \"1.4.2\",\n  \"trace_id\": \"4bf92f3577b34da6a3ce929d0e0e4736\",\n  \"span_id\": \"00f067aa0ba902b7\",\n  \"order_id\": \"12345\",\n  \"user_id\": \"99\",\n  \"retry_count\": 3,\n  \"error\": \"ConnectionTimeout\",\n  \"error_detail\": \"payment-service:8080 unreachable after 5000ms\",\n  \"duration_ms\": 15234\n}"
+          }
+        },
+        {
+          "id": "a55f2f5a-f270-4206-b1fa-d76d4da9d4ee",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": " Com JSON, você filtra em qualquer sistema de logs (Loki, Datadog, CloudWatch): "
+              }
+            ]
+          }
+        },
+        {
+          "id": "06bb7017-724c-4cd9-945f-83ff899e1edf",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "bash",
+            "code": "# Loki LogQL — todos os erros de payment no último 1h\n{service=\"order-service\"} | json | level=\"error\" | error_detail =~ \"payment.*\"\n\n# Busca pelo trace_id específico (correlaciona com spans no Tempo)\n{service=~\".+\"} | json | trace_id=\"4bf92f3577b34da6a3ce929d0e0e4736\"\n\n# Latência P99 derivada de logs (sem Prometheus)\n{service=\"order-service\"} | json | unwrap duration_ms | p99()"
+          }
+        }
+      ]
+    },
+    {
+      "id": "8e74d1d3-c8cd-439a-9d85-08bfe19c2808",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Correlation IDs: amarrando tudo"
+      },
+      "children": [
+        {
+          "id": "c6543831-afc3-4c46-90ad-b96d671a3b61",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Uma requisição de checkout passa por 5 serviços. Sem um identificador comum, você tem 5 grupos de logs desconexos. Com "
+              },
+              {
+                "text": "trace_id",
+                "code": true
+              },
+              {
+                "text": ", você tem a jornada completa. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "d199cd5e-f0f4-469a-ac12-8bae04d6915a",
+          "type": "node_graph",
+          "position": 1,
+          "data": {
+            "title": "",
+            "columns": [
+              {
+                "label": "Origem",
+                "nodes": [
+                  {
+                    "label": "Cliente",
+                    "sub": "POST /checkout"
+                  },
+                  {
+                    "label": "API Gateway",
+                    "sub": "gera trace_id · injeta traceparent header"
+                  }
+                ]
+              },
+              {
+                "label": "Serviços (mesmo trace_id)",
+                "nodes": [
+                  {
+                    "label": "order-service",
+                    "sub": "trace_id: 4bf9… · span: 00f0…"
+                  },
+                  {
+                    "label": "payment-service",
+                    "sub": "trace_id: 4bf9… · span: a3ce…"
+                  },
+                  {
+                    "label": "inventory-service",
+                    "sub": "trace_id: 4bf9…"
+                  },
+                  {
+                    "label": "notification-service",
+                    "sub": "trace_id: 4bf9…"
+                  }
+                ]
+              },
+              {
+                "label": "Resultado",
+                "nodes": [
+                  {
+                    "label": "filtrar trace_id=\"4bf9…\"",
+                    "sub": "retorna logs de TODOS os serviços para essa request"
+                  }
+                ]
+              }
+            ],
+            "legend": []
+          }
+        },
+        {
+          "id": "a34d2d40-bf11-40c4-a154-cfd0526163d0",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": " O OpenTelemetry propaga isso automaticamente via W3C Trace Context (visto no módulo anterior). O que importa aqui é que o log exija que o trace_id seja "
+              },
+              {
+                "text": "injetado no contexto de logging",
+                "italic": true
+              },
+              {
+                "text": " — não passado manualmente a cada chamada de log. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "a401bfef-0225-4c5a-9ba5-6d3d707d0f4f",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Injeção automática de trace_id no logger"
+      },
+      "children": [
+        {
+          "id": "64f5341f-5e1e-488f-9036-f29ec50b3d18",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " A forma correta: configurar o logger para ler o span ativo do contexto OTel a cada registro. Sem poluir chamadas individuais com parâmetros extras. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "c6b8cdfa-24dd-48e5-8059-c9d34dee9643",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# Python: loguru + OpenTelemetry context bridge\nimport logging\nimport json\nfrom opentelemetry import trace\nfrom opentelemetry.trace import format_trace_id, format_span_id\n\nclass OtelJsonFormatter(logging.Formatter):\n    \"\"\"Injeta trace_id e span_id do contexto OTel ativo.\"\"\"\n\n    def format(self, record: logging.LogRecord) -> str:\n        ctx = trace.get_current_span().get_span_context()\n\n        log_entry = {\n            \"timestamp\": self.formatTime(record, \"%Y-%m-%dT%H:%M:%S.%f\")[:-3] + \"Z\",\n            \"level\": record.levelname.lower(),\n            \"message\": record.getMessage(),\n            \"logger\": record.name,\n            \"module\": record.module,\n            \"line\": record.lineno,\n        }\n\n        # Injetar trace context se span ativo\n        if ctx.is_valid:\n            log_entry[\"trace_id\"] = format_trace_id(ctx.trace_id)\n            log_entry[\"span_id\"] = format_span_id(ctx.span_id)\n            log_entry[\"trace_flags\"] = ctx.trace_flags\n\n        # Campos extras passados via extra={}\n        for key, value in record.__dict__.items():\n            if key not in logging.LogRecord.__dict__ and not key.startswith(\"_\"):\n                log_entry[key] = value\n\n        # Stacktrace se exception\n        if record.exc_info:\n            log_entry[\"exception\"] = self.formatException(record.exc_info)\n\n        return json.dumps(log_entry, default=str)\n\n# Setup — uma vez no startup\nhandler = logging.StreamHandler()\nhandler.setFormatter(OtelJsonFormatter())\nlogging.getLogger().addHandler(handler)\nlogging.getLogger().setLevel(logging.INFO)\n\nlogger = logging.getLogger(__name__)\n\n# Uso em qualquer lugar — trace_id é injetado automaticamente\ndef process_order(order_id: str, user_id: str):\n    logger.info(\n        \"Processing order\",\n        extra={\"order_id\": order_id, \"user_id\": user_id}\n    )\n    # Output: {\"timestamp\":\"...\",\"level\":\"info\",\"message\":\"Processing order\",\n    #          \"trace_id\":\"4bf92f...\",\"span_id\":\"00f067...\",\"order_id\":\"123\",\"user_id\":\"99\"}"
+          }
+        },
+        {
+          "id": "ebcb0aac-e27d-45c0-b88f-36df92445951",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "typescript",
+            "code": "// Node.js: pino + OpenTelemetry (pino é 8× mais rápido que winston)\nimport pino from 'pino';\nimport { trace, context } from '@opentelemetry/api';\n\n// Mixin lido a cada registro — injeta trace context\nconst otelMixin = () => {\n  const span = trace.getActiveSpan();\n  if (!span) return {};\n\n  const ctx = span.spanContext();\n  return {\n    trace_id: ctx.traceId,\n    span_id: ctx.spanId,\n    trace_flags: ctx.traceFlags,\n  };\n};\n\nconst logger = pino({\n  level: process.env.LOG_LEVEL ?? 'info',\n  mixin: otelMixin,\n  timestamp: pino.stdTimeFunctions.isoTime,\n  // pino serializa em JSON por default — zero config adicional\n});\n\nexport { logger };\n\n// Uso\nlogger.info({ order_id: '123', user_id: '99' }, 'Processing order');\n// Output: {\"time\":\"2024-01-15T14:23:11.847Z\",\"level\":\"info\",\"msg\":\"Processing order\",\n//          \"trace_id\":\"4bf92f...\",\"span_id\":\"00f067...\",\"order_id\":\"123\",\"user_id\":\"99\"}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "d94dcc4c-4fed-4c52-8fbf-598624d59e3b",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Log levels: o que cada um realmente significa"
+      },
+      "children": [
+        {
+          "id": "489697f8-a9f8-48d7-ab5d-726782ec14ac",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " A maioria dos times usa log levels de forma inconsistente. Aqui está a semântica correta — testada em ambientes de produção reais: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "6023aaab-986c-4ebc-9a53-8a3e15df7229",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Level",
+              "Quando usar",
+              "Resposta esperada",
+              "Em produção"
+            ],
+            "rows": [
+              [
+                "TRACE",
+                "Passos internos granulares (loop iteration, byte parsing)",
+                "Nenhuma — só diagnóstico local",
+                "❌ Nunca ligado"
+              ],
+              [
+                "DEBUG",
+                "Valores de variáveis, decisões de branch, SQL gerado",
+                "Nenhuma — diagnóstico sob demanda",
+                "⚠️ Sob demanda com sampling"
+              ],
+              [
+                "INFO",
+                "Evento de negócio significativo (order criada, user logado, payment aprovado)",
+                "Nenhuma — operação normal",
+                "✅ Sempre ligado"
+              ],
+              [
+                "WARN",
+                "Situação degradada mas recuperada (retry bem-sucedido, cache miss, rate limit atingido)",
+                "Monitorar tendência",
+                "✅ Sempre ligado + alertas de volume"
+              ],
+              [
+                "ERROR",
+                "Operação falhou, dado pode estar perdido ou inconsistente",
+                "Investigação imediata",
+                "🚨 Alerta em qualquer ocorrência"
+              ],
+              [
+                "FATAL/CRITICAL",
+                "Sistema não consegue continuar (DB connection pool esgotado, config inválida)",
+                "Restart + pager duty",
+                "🚨🚨 PagerDuty imediato"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "44adf6e9-3228-45cf-868a-31268c66f378",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Anti-patterns comuns:"
+          }
+        }
+      ]
+    },
+    {
+      "id": "7cbdaf93-557b-47f1-b395-916e63cd57dc",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Campos obrigatórios vs opcionais"
+      },
+      "children": [
+        {
+          "id": "8cf3cd8d-332b-4e6c-991a-e4a3832e7c26",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Defina um schema base que "
+              },
+              {
+                "text": "todos",
+                "italic": true
+              },
+              {
+                "text": " os serviços seguem. Campos extras são opcionais por serviço. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "51b8675d-73e3-4e62-a3c2-89fd8464700a",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# Schema base obrigatório (todos os serviços)\nREQUIRED_FIELDS = {\n    \"timestamp\",    # ISO 8601 com milissegundos\n    \"level\",        # error | warn | info | debug\n    \"message\",      # descrição human-readable do evento\n    \"service\",      # nome do serviço (ex: \"order-service\")\n    \"version\",      # versão do binário (ex: \"1.4.2\")\n    \"trace_id\",     # se OTel ativo (W3C format)\n    \"span_id\",      # se OTel ativo\n}\n\n# Campos opcionais recomendados por contexto\nCONTEXT_FIELDS = {\n    # HTTP handler\n    \"http_method\", \"http_path\", \"http_status\", \"duration_ms\",\n\n    # Database\n    \"db_operation\", \"db_table\", \"db_duration_ms\",\n\n    # Queue/messaging\n    \"queue_name\", \"message_id\", \"consumer_group\",\n\n    # Negócio\n    \"user_id\",      # ⚠️ Cuidado LGPD/GDPR — anonimizar se necessário\n    \"order_id\", \"payment_id\", \"tenant_id\",\n\n    # Error\n    \"error\",        # tipo/classe do erro\n    \"error_detail\", # mensagem de detalhe\n    \"retry_count\",  # número de tentativas anteriores\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "03da6216-c082-49d2-bb19-926bd621b896",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Bibliotecas recomendadas por linguagem"
+      },
+      "children": [
+        {
+          "id": "133d586c-f0d3-4a6e-b8ef-a10f49ca6f95",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Linguagem",
+              "Lib recomendada",
+              "Por quê",
+              "Alternativa"
+            ],
+            "rows": [
+              [
+                "Python",
+                "structlog",
+                "Pipeline de processadores, contexto thread-local/async, OTel bridge nativo",
+                "loguru (ergonomia, async)"
+              ],
+              [
+                "Node.js/TS",
+                "pino",
+                "Async, 8× mais rápido que winston, JSON por default, child loggers",
+                "winston (mais configurável)"
+              ],
+              [
+                "Go",
+                "slog (stdlib 1.21+)",
+                "Padrão da linguagem, zero deps, structured por design",
+                "zerolog (mais rápido)"
+              ],
+              [
+                "Java",
+                "logback + logstash-encoder",
+                "JSON encoder para Logback, padrão enterprise",
+                "log4j2 (async appender)"
+              ],
+              [
+                "Rust",
+                "tracing + tracing-subscriber",
+                "Integração nativa com tokio async, OTel bridge",
+                "slog"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "2f774666-f5c7-49cc-aa30-935056c21061",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# structlog: o mais ergonômico em Python\nimport structlog\nfrom opentelemetry import trace\n\n# Configurar uma vez\nstructlog.configure(\n    processors=[\n        structlog.contextvars.merge_contextvars,     # contexto async-safe\n        structlog.processors.add_log_level,\n        structlog.processors.TimeStamper(fmt=\"iso\"),\n        structlog.processors.JSONRenderer(),\n    ],\n    wrapper_class=structlog.BoundLogger,\n    context_class=dict,\n    logger_factory=structlog.PrintLoggerFactory(),\n)\n\nlogger = structlog.get_logger()\n\n# Contexto de request — FastAPI middleware\n@app.middleware(\"http\")\nasync def logging_middleware(request: Request, call_next):\n    span = trace.get_current_span()\n    ctx = span.get_span_context()\n\n    # Bind ao contexto da coroutine — disponível em TODOS os logs da request\n    structlog.contextvars.bind_contextvars(\n        trace_id=format(ctx.trace_id, \"032x\"),\n        span_id=format(ctx.span_id, \"016x\"),\n        method=request.method,\n        path=request.url.path,\n        request_id=request.headers.get(\"x-request-id\"),\n    )\n\n    response = await call_next(request)\n\n    logger.info(\n        \"request.completed\",\n        status=response.status_code,\n    )\n    # Output: {\"event\":\"request.completed\",\"level\":\"info\",\"timestamp\":\"...\",\n    #          \"trace_id\":\"...\",\"method\":\"POST\",\"path\":\"/checkout\",\"status\":200}\n\n    structlog.contextvars.clear_contextvars()\n    return response"
+          }
+        }
+      ]
+    },
+    {
+      "id": "3756a011-1c3c-4808-8713-5791de42e2ea",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Performance: o custo real de logging"
+      },
+      "children": [
+        {
+          "id": "d8106d2c-ceb1-4edf-b224-0b225158bd64",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Logging mal implementado é uma das causas mais comuns de latência inexplicável em produção. Os culpados principais: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "13a1cb3a-36e4-4301-b3e1-3a9bb25741cf",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Problema",
+              "Impacto",
+              "Solução"
+            ],
+            "rows": [
+              [
+                "Write síncrono em cada log",
+                "+0.1–5ms por log em hot path",
+                "Logger assíncrono com buffer em memória + worker thread"
+              ],
+              [
+                "JSON serialization a cada registro",
+                "+0.05–0.5ms (Python: stdlib json lento)",
+                "orjson (Python) ou pino (Node) — 5–10× mais rápido"
+              ],
+              [
+                "String interpolation eager",
+                "CPU gasta formatando strings que podem ser filtradas",
+                "Lazy evaluation: log.debug(\"Val: %s\", expensive_fn()) — só executa se DEBUG ativo"
+              ],
+              [
+                "Lock global no handler",
+                "Contention em multi-thread — degrada throughput linear",
+                "Handler thread-safe sem lock global (pino, zerolog)"
+              ],
+              [
+                "Stack trace em cada WARN",
+                "Stack trace serialization é 10–100× mais caro que mensagem",
+                "Stack trace apenas em ERROR+; WARN usa campos estruturados"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "2194fc44-7fb3-4292-9c7a-68649253acbf",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "python",
+            "code": "# ❌ Eager evaluation — executa mesmo se DEBUG desligado\nlogger.debug(f\"Cache keys: {json.dumps(cache.keys())}\")  # dump() sempre executa\n\n# ✅ Lazy — executa só se DEBUG ativo\nlogger.debug(\"Cache keys: %s\", lambda: json.dumps(cache.keys()))\n\n# ❌ Write síncrono em loop\nfor item in items:\n    logger.info(\"Processing\", extra={\"item_id\": item.id})  # I/O a cada iteração\n\n# ✅ Agrupar ou usar rate limiting de logs\nif len(items) > 100:\n    logger.info(\"Processing batch\", extra={\"count\": len(items)})\nelse:\n    for item in items:\n        logger.info(\"Processing\", extra={\"item_id\": item.id})\n\n# Configurar handler assíncrono (Python)\nimport logging.handlers\nimport queue\n\nlog_queue = queue.Queue(-1)  # unlimited\nqueue_handler = logging.handlers.QueueHandler(log_queue)\nqueue_listener = logging.handlers.QueueListener(\n    log_queue,\n    actual_handler,  # O handler real (StreamHandler, RotatingFileHandler)\n    respect_handler_level=True,\n)\nqueue_listener.start()  # Thread separada para I/O"
+          }
+        }
+      ]
+    },
+    {
+      "id": "cb94dadb-08e7-43f4-920f-bc05e26a6c0e",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Log sampling: quando você tem muito dado"
+      },
+      "children": [
+        {
+          "id": "76fd7c20-f2b9-4cb1-9787-85b0c9a6c99f",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Serviços de alto volume (1k+ req/s) não podem logar cada request ao nível INFO sem custo proibitivo. Sampling é a solução — mas precisa preservar logs de erros e traces completos. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "462d46c4-7c6b-4579-b325-017ab0483f22",
+          "type": "decision_box",
+          "position": 1,
+          "data": {
+            "scenario": "Serviço com 5.000 req/s — logging de cada request custa $2.000/mês em Datadog",
+            "winner": "Head sampling + full error logs",
+            "why": "Amostrar 10% dos requests INFO reduz custo em 90%. Erros, WARNs e traces com anomalia são sempre enviados integralmente.",
+            "alternatives": [
+              {
+                "label": "Logar tudo (sem sampling)",
+                "when": "Serviços < 100 req/s ou auditoria regulatória obrigatória"
+              },
+              {
+                "label": "Sampling por trace_id (tail)",
+                "when": "Quando o Collector OTel controla sampling — logs e traces amostrados consistentemente"
+              },
+              {
+                "label": "Drop total de INFO em produção",
+                "when": "Anti-pattern — você perde visibilidade de operações normais que precedem falhas"
+              }
+            ]
+          }
+        },
+        {
+          "id": "3f1d1280-5124-457c-9afd-5cc845ed803d",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "python",
+            "code": "# Rate-limited logging: logar no máximo N vezes/segundo\nimport time\nfrom collections import defaultdict\n\nclass RateLimitedLogger:\n    def __init__(self, logger, max_per_second: int = 100):\n        self._logger = logger\n        self._max = max_per_second\n        self._counts: dict[str, int] = defaultdict(int)\n        self._window_start = time.monotonic()\n\n    def info(self, event: str, **kwargs):\n        now = time.monotonic()\n        if now - self._window_start > 1.0:\n            self._counts.clear()\n            self._window_start = now\n\n        if self._counts[event] < self._max:\n            self._counts[event] += 1\n            self._logger.info(event, **kwargs)\n        # Dropped — nunca bloqueia o caller"
+          }
+        }
+      ]
+    },
+    {
+      "id": "ed628973-6e5c-427d-9a29-8250b9b05d90",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Pipeline de logs: do serviço ao storage"
+      },
+      "children": [
+        {
+          "id": "2119ace3-5531-41cb-963a-b72a3733eeae",
+          "type": "node_graph",
+          "position": 0,
+          "data": {
+            "title": "",
+            "columns": [
+              {
+                "label": "Produtores",
+                "nodes": [
+                  {
+                    "label": "Serviços (qualquer linguagem)",
+                    "sub": "emitem JSON para stdout — padrão 12-factor"
+                  }
+                ]
+              },
+              {
+                "label": "Coletores (DaemonSet / Deployment)",
+                "nodes": [
+                  {
+                    "label": "Fluent Bit / Fluentd",
+                    "sub": "DaemonSet"
+                  },
+                  {
+                    "label": "Promtail (Grafana)",
+                    "sub": "DaemonSet"
+                  },
+                  {
+                    "label": "OTel Collector",
+                    "sub": "logs pipeline · Deployment"
+                  }
+                ]
+              },
+              {
+                "label": "Log Backend",
+                "nodes": [
+                  {
+                    "label": "Grafana Loki",
+                    "sub": "self-hosted · labels + LogQL"
+                  },
+                  {
+                    "label": "Datadog / CloudWatch",
+                    "sub": "managed · Logs Insights"
+                  },
+                  {
+                    "label": "Elastic / OpenSearch",
+                    "sub": "enterprise"
+                  },
+                  {
+                    "label": "Retenção",
+                    "sub": "ERROR/WARN: 90d · INFO: 30d · DEBUG: 7d"
+                  }
+                ]
+              }
+            ],
+            "legend": []
+          }
+        },
+        {
+          "id": "e5a9d0f0-a206-43da-8f37-5e21b1bb4041",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Loki labels vs fields: No Grafana Loki, labels são indexados (baixa cardinalidade: service, env, level). Campos dentro do JSON são consultados via parser (| json) sem index — mais flexíveis mas mais lentos. Nunca coloque user_id ou trace_id como label Loki — isso explode a cardinalidade do índice."
+          }
+        }
+      ]
+    },
+    {
+      "id": "8e88f57f-ddee-4f3f-835e-017ddbae2bcb",
+      "type": "callout",
+      "position": 12,
+      "data": {
+        "variant": "warning",
+        "title": "",
+        "content": "Dados sensíveis em logs: LGPD/GDPR proíbem logar PII sem justificativa. Nunca logue passwords, tokens, CPF, cartão de crédito, email completo em INFO+. Use masking ou hashing antes de logar: \"email\": \"f***@gmail.com\", \"card\": \"**** **** **** 4242\". Erros de compliance em logs são difíceis de reverter — logs são frequentemente arquivados por anos."
+      }
+    },
+    {
+      "id": "1511d6b3-b982-4a87-b565-3006a905d8c0",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Q&A — perguntas típicas de entrevista SRE"
+      },
+      "children": []
+    },
+    {
+      "id": "6f1834fc-566a-401c-80c5-495312bf0c4d",
+      "type": "callout",
+      "position": 14,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Take-aways:"
+      }
+    }
+  ]
+}

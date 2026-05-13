@@ -1,0 +1,110 @@
+{
+  "slug": "idempotency-keys-e-webhooks",
+  "title": null,
+  "blocks": [
+    {
+      "id": "95bec60c-e8f1-4cac-9870-e9e465ca152f",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema: retry seguro em POST"
+      },
+      "children": [
+        {
+          "id": "1256a31d-1db5-46c2-aa09-7c692d3dc10f",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " POST de pagamento falhou: timeout no cliente. O servidor processou? Não dá pra saber. Se retry, risco de cobrança dupla. Sem retry, cliente perde. Idempotency-Key resolve. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "2e5c21ce-33e7-4b57-aa7d-2847e9cc0ff9",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Implementação de Idempotency-Key"
+      },
+      "children": [
+        {
+          "id": "20e03d69-c3b9-4f97-8165-68ea801c2372",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "typescript",
+            "code": "// Cliente gera UUID antes do POST\nconst key = crypto.randomUUID();\n\nawait fetch('/charges', {\n  method: 'POST',\n  headers: {\n    'Idempotency-Key': key,\n    'Content-Type': 'application/json',\n  },\n  body: JSON.stringify({ amount: 1000 }),\n});\n\n// Retry com MESMA chave — seguro"
+          }
+        },
+        {
+          "id": "a6fa5179-a9a5-41b0-bda3-393c79ca0078",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "typescript",
+            "code": "// Server pseudocódigo\nasync function handleCharge(req) {\n  const key = req.headers['idempotency-key'];\n  if (!key) return 400;\n\n  const cached = await redis.get(`idem:${key}`);\n  if (cached) {\n    const { status, body } = JSON.parse(cached);\n    return new Response(body, { status, headers: { 'Idempotent-Replay': 'true' } });\n  }\n\n  // Processar — dentro de transação\n  const charge = await db.$transaction(async (tx) => {\n    await tx.charge.create({ data: req.body });\n    await tx.idempotencyKey.create({ data: { key, request: req.body } });\n  });\n  const response = { status: 201, detail: charge };\n  await redis.set(`idem:${key}`, JSON.stringify(response), 'EX', 86400 * 2);\n  return new Response(JSON.stringify(charge), { status: 201 });\n}"
+          }
+        },
+        {
+          "id": "949a023a-4161-4e88-a9a9-e81a48ddd720",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Stripe recomenda TTL de 24h. Uber usa 7 dias. Escolha baseado no pior caso de retry que seu cliente pode fazer (ex: replay de job em cron de outro data center)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "43e3a0dc-a078-44cc-a24b-cf903e3b4d58",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Webhooks: design"
+      },
+      "children": [
+        {
+          "id": "c93c31a9-3090-48cb-a3cf-39bce57ec0f2",
+          "type": "list",
+          "position": 0,
+          "data": {
+            "items": [
+              "Payload mínimo: envie só . Cliente faz GET pra buscar detalhes. Reduz risco de vazamento em logs.",
+              "Assinatura HMAC: header com HMAC do body + timestamp.",
+              "Timestamp anti-replay: rejeite events com fora de ±5min.",
+              "Retry exponencial: tentar em 0, 1min, 5min, 30min, 2h, 6h, 24h. Depois DLQ.",
+              "Receiver idempotente: mesmo event.id processado 2x deve ter o mesmo efeito que 1x. Store event_id em Redis por 48h."
+            ],
+            "ordered": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "63db8a2a-d9e0-434a-804b-ac685480c88f",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Receiver em TS"
+      },
+      "children": [
+        {
+          "id": "1c08b5d6-aeda-4cf9-ad8f-f29f678018f7",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "typescript",
+            "code": "import crypto from 'node:crypto';\n\nexport async function webhookHandler(req: Request) {\n  const rawBody = await req.text();\n  const sig = req.headers.get('X-Signature')?.replace('sha256=', '');\n  const timestamp = req.headers.get('X-Timestamp');\n  if (!sig || !timestamp) return new Response('missing', { status: 400 });\n\n  // Anti-replay: rejeita se > 5min\n  if (Math.abs(Date.now() - Number(timestamp)) > 5 * 60_000) {\n    return new Response('stale', { status: 400 });\n  }\n\n  // Verifica HMAC\n  const expected = crypto.createHmac('sha256', process.env.WEBHOOK_SECRET!)\n    .update(timestamp + rawBody)\n    .digest('hex');\n  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {\n    return new Response('invalid sig', { status: 401 });\n  }\n\n  const event = JSON.parse(rawBody);\n\n  // Dedupe\n  const dup = await redis.set(`event:${event.id}`, '1', 'NX', 'EX', 172800);\n  if (!dup) return new Response('already processed', { status: 200 });\n\n  // Processa\n  await processEvent(event);\n  return new Response('ok', { status: 200 });\n}"
+          }
+        }
+      ]
+    }
+  ]
+}

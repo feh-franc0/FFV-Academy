@@ -1,0 +1,139 @@
+{
+  "slug": "transacoes-isolation-levels",
+  "title": null,
+  "blocks": [
+    {
+      "id": "496d7326-c939-4624-a823-3f6e92602aca",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " ACID é a garantia que diferencia um banco de dados de um arquivo de texto. Atomicidade, Consistência, Isolamento, Durabilidade — não são decoreba, são propriedades com implementação concreta que você precisa entender para não introduzir bugs de concorrência sutis. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "25ef9723-b506-4c30-acee-646e213493e4",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "ACID: o que cada propriedade garante"
+      },
+      "children": [
+        {
+          "id": "00e6a737-ec6c-48c9-a9a1-6c5283f02625",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "-- Atomicidade: tudo ou nada\nBEGIN;\nUPDATE contas SET saldo = saldo - 100 WHERE id = 1;  -- debita Alice\nUPDATE contas SET saldo = saldo + 100 WHERE id = 2;  -- credita Bob\n-- Se o segundo UPDATE falhar, o primeiro é REVERTIDO automaticamente\nCOMMIT;   -- ambos ou nenhum\n\n-- Consistência: constraints são verificadas no COMMIT\nBEGIN;\nUPDATE contas SET saldo = saldo - 1000 WHERE id = 1;\n-- CHECK (saldo >= 0) é violado → ROLLBACK automático ao tentar COMMIT\nCOMMIT;\n\n-- Isolamento: transações concorrentes não se veem (depende do nível)\n-- Ver seção de Isolation Levels abaixo\n\n-- Durabilidade: após COMMIT, dado está no disco (WAL garante)\n-- PostgreSQL usa Write-Ahead Log: toda mudança vai para WAL antes do heap\n-- Em caso de crash, recovery reproduz o WAL\n-- synchronous_commit = on (default): COMMIT espera WAL estar em disco"
+          }
+        }
+      ]
+    },
+    {
+      "id": "db06d76d-8b08-47fb-a7ea-90dc136fa947",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Isolation Levels: o trade-off consistência × performance"
+      },
+      "children": [
+        {
+          "id": "fe169988-fe25-452a-8928-dbc1879bed71",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Nível",
+              "Dirty Read",
+              "Non-Repeatable Read",
+              "Phantom Read",
+              "Anomalias seriais"
+            ],
+            "rows": [
+              [
+                "Read Uncommitted",
+                "Possível*",
+                "Possível",
+                "Possível",
+                "Possível"
+              ],
+              [
+                "Read Committed (padrão PG)",
+                "Impossível",
+                "Possível",
+                "Possível",
+                "Possível"
+              ],
+              [
+                "Repeatable Read",
+                "Impossível",
+                "Impossível",
+                "Impossível*",
+                "Possível"
+              ],
+              [
+                "Serializable",
+                "Impossível",
+                "Impossível",
+                "Impossível",
+                "Impossível"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "7b0fd691-e67f-4bdd-906e-cd17617fb6ef",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "text",
+            "code": "-- Alterar isolation level para uma transação:\nBEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;\n-- ... operações ...\nCOMMIT;\n\n-- Ou para a sessão inteira:\nSET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE;\n\n-- Exemplo de Non-Repeatable Read (Read Committed):\n-- T1: BEGIN; SELECT saldo FROM contas WHERE id=1;  → retorna 1000\n-- T2: BEGIN; UPDATE contas SET saldo=500 WHERE id=1; COMMIT;\n-- T1: SELECT saldo FROM contas WHERE id=1;  → retorna 500 (mudou!)\n-- Com Repeatable Read, T1 veria 1000 na segunda leitura\n\n-- Serialization Anomaly (detectada pelo Serializable PG):\n-- T1: SELECT SUM(quantidade) FROM estoque; → 100\n-- T2: SELECT SUM(quantidade) FROM estoque; → 100\n-- T1: INSERT INTO movimentos (tipo, qtd) VALUES ('entrada', 50) WHERE 100 < 200;\n-- T2: INSERT INTO movimentos (tipo, qtd) VALUES ('saida', 100) WHERE 100 >= 50;\n-- Ambas commitam — mas qualquer execução serial teria comportamento diferente!\n-- Serializable aborta uma delas com: ERROR: could not serialize access"
+          }
+        }
+      ]
+    },
+    {
+      "id": "149ed46e-4502-4c13-a734-8be4d7b26215",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Locking: FOR UPDATE, FOR SHARE, SKIP LOCKED"
+      },
+      "children": [
+        {
+          "id": "78423dea-3754-4d5a-9187-562a7c91fa5a",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "-- SELECT FOR UPDATE: lock exclusivo nas linhas (para update ou delete)\nBEGIN;\nSELECT id, saldo FROM contas WHERE id = 1 FOR UPDATE;\n-- Agora: nenhuma outra transação pode UPDATE/DELETE/FOR UPDATE nessa linha\n-- até este COMMIT/ROLLBACK\nUPDATE contas SET saldo = saldo - 100 WHERE id = 1;\nCOMMIT;\n\n-- SELECT FOR SHARE: lock compartilhado (múltiplos leitores, bloqueia writers)\n-- Útil quando você lê dado que outros não devem modificar mas podem ler\n\n-- SKIP LOCKED: ignora linhas lockadas (fila de trabalho)\n-- Padrão de job queue sem conflito entre workers:\nBEGIN;\nSELECT id, payload\nFROM jobs\nWHERE status = 'pendente'\nORDER BY prioridade DESC, id\nLIMIT 1\nFOR UPDATE SKIP LOCKED;  -- pega o próximo não-lockado\n-- ... processar job ...\nUPDATE jobs SET status = 'concluido' WHERE id = $1;\nCOMMIT;\n\n-- NOWAIT: falha imediatamente se não conseguir o lock\nSELECT * FROM tabela WHERE id = 1 FOR UPDATE NOWAIT;\n-- ERROR: could not obtain lock on row in relation \"tabela\"\n-- Útil para detectar contention sem esperar timeout\n\n-- Advisory locks: locks customizados no nível de aplicação\nSELECT pg_advisory_lock(42);        -- lock exclusivo de id 42\n-- ... operação crítica ...\nSELECT pg_advisory_unlock(42);"
+          }
+        }
+      ]
+    },
+    {
+      "id": "1cb7353e-e144-4427-bd35-6500a8028e4f",
+      "type": "callout",
+      "position": 4,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Guia prático: use Read Committed (padrão) para operações CRUD simples. Use Repeatable Read para relatórios que precisam de snapshot consistente. Use Serializable quando a lógica tem read-modify-write complexo. Use SELECT FOR UPDATE SKIP LOCKED para filas de trabalho. Nunca faça read-modify-write sem transação em sistemas concorrentes."
+      }
+    },
+    {
+      "id": "21f87d18-c849-4cfe-b38a-52c0d6919950",
+      "type": "callout",
+      "position": 5,
+      "data": {
+        "variant": "info",
+        "title": "",
+        "content": "Próximo: Normalização e modelagem — 1NF, 2NF, 3NF e quando desnormalizar intencionalmente."
+      }
+    }
+  ]
+}

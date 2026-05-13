@@ -1,0 +1,134 @@
+{
+  "slug": "vector-dbs-pgvector-pinecone",
+  "title": null,
+  "blocks": [
+    {
+      "id": "9d4ac18f-0a90-4117-ab2b-dc11cb8c96b3",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Vector DB é infra especializada"
+      },
+      "children": [
+        {
+          "id": "418a1b1a-f9e3-4b97-83b7-2013d93fdd02",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Um vetor de embedding é um ponto num espaço de 384 a 3072 dimensões. Buscar \"os 10 mais próximos desta query\" num milhão de pontos por força bruta é O(N) com cálculo denso — inviável em latência de produto. Vector DBs resolvem isso com indexes ANN (Approximate Nearest Neighbor): HNSW, IVF, PQ. Recall < 100% trocado por latência p99 de milissegundos. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "f2416c19-1988-4cab-bac2-9babe362bbe1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "pgvector em Postgres real"
+      },
+      "children": [
+        {
+          "id": "657cbc7e-e7bc-4b64-b2d1-2701c428881b",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "sql",
+            "code": "-- Habilita extensao\nCREATE EXTENSION IF NOT EXISTS vector;\n\n-- Tabela com embedding + metadata relacional\nCREATE TABLE documents (\n    id          BIGSERIAL PRIMARY KEY,\n    tenant_id   INT NOT NULL,\n    title       TEXT NOT NULL,\n    content     TEXT NOT NULL,\n    embedding   vector(1536) NOT NULL,    -- OpenAI text-embedding-3-small\n    created_at  TIMESTAMPTZ DEFAULT now()\n);\n\n-- Indice HNSW (Hierarchical Navigable Small World)\n-- Melhor recall/latencia em 2026. IVFFlat e alternativa mais barata de build.\nCREATE INDEX documents_embedding_hnsw\n    ON documents\n    USING hnsw (embedding vector_cosine_ops)\n    WITH (m = 16, ef_construction = 64);\n\n-- Index combinado para filtro por tenant (partial index)\nCREATE INDEX documents_tenant ON documents (tenant_id);\n\n-- Analyze para planner usar estatisticas\nANALYZE documents;"
+          }
+        }
+      ]
+    },
+    {
+      "id": "19b9a7eb-3ea5-4077-875e-2f0a13cd165d",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Busca: ANN + filtro + rerank"
+      },
+      "children": [
+        {
+          "id": "c7e32fc4-95e8-4df5-b1c4-e6c07f04e221",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "sql",
+            "code": "-- Top 50 mais proximos do embedding da query, dentro do tenant\n-- ef_search controla qualidade vs latencia (default 40, prod 100+)\nSET LOCAL hnsw.ef_search = 100;\n\nSELECT id, title, content,\n       1 - (embedding <=> $1::vector) AS cosine_similarity\nFROM documents\nWHERE tenant_id = $2\nORDER BY embedding <=> $1::vector\nLIMIT 50;"
+          }
+        },
+        {
+          "id": "e6fc5b59-7e75-4a68-86ff-b56f773509d9",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "ts",
+            "code": "import OpenAI from 'openai';\nimport { CohereClient } from 'cohere-ai';\n\nconst openai = new OpenAI();\nconst cohere = new CohereClient({ text: process.env.COHERE_API_KEY! });\n\nasync function semanticSearch(query: string, tenantId: number) {\n  // 1) Embed a query\n  const emb = await openai.embeddings.create({\n    model: 'text-embedding-3-small',\n    input: query,\n  });\n  const vec = emb.data[0].embedding;\n\n  // 2) Top-50 via pgvector\n  const candidates = await db.query(\n    'SELECT id, title, content FROM documents WHERE tenant_id = $1 ' +\n    'ORDER BY embedding <=> $2::vector LIMIT 50',\n    [tenantId, toPgVector(vec)]\n  );\n\n  // 3) Rerank cross-encoder -> top-5 reais\n  const rerank = await cohere.rerank({\n    model: 'rerank-multilingual-v3.0',\n    query,\n    documents: candidates.rows.map(r => r.content),\n    topN: 5,\n  });\n\n  return rerank.results.map(r => candidates.rows[r.index]);\n}"
+          }
+        },
+        {
+          "id": "5a50f409-f16c-44ef-839c-eaa63676f7f2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "O pipeline de 2 estágios (ANN recall + reranker precision) é o que separa RAG de brinquedo de RAG que responde bem. Sem reranker, você devolve documentos semanticamente próximos mas não necessariamente relevantes para a intenção."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b0c9105b-d981-459a-bba1-11795a91dd08",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Quando migrar de pgvector para dedicado"
+      },
+      "children": [
+        {
+          "id": "fa6ed7c2-f966-45d7-b977-84c16a13b88f",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "# Regras de migração\n\npgvector basta se:\n  - < 5M vetores\n  - ja tem Postgres gerenciado\n  - filtro metadata relacional importa\n  - p99 < 200ms tolerado\n\nconsidere Pinecone/Qdrant/Weaviate se:\n  - > 10M vetores\n  - multi-tenant com isolamento hard\n  - hybrid search (BM25 + dense) nativo\n  - p99 < 50ms obrigatorio\n  - replicacao geografica gerenciada\n\nconsidere Milvus/Vespa se:\n  - > 100M vetores, self-hosted\n  - features avancadas (filtering DSL, analytics)\n  - time dedicado pra operar"
+          }
+        }
+      ]
+    },
+    {
+      "id": "a97952e8-1fb6-433c-bded-91816ac1187a",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Anti-patterns comuns"
+      },
+      "children": [
+        {
+          "id": "a98efdda-ddab-415b-94b7-2e9165df30b6",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Embeddings de modelos diferentes não são comparáveis — nunca misture OpenAI com Cohere no mesmo índice. Chunks muito grandes (> 1000 tokens) viram embedding genérico. Chunks muito pequenos (< 50 tokens) perdem contexto. Metadata filter mal indexado degrada ANN. Reranker custa dinheiro — use apenas no top-50, não em tudo."
+          }
+        },
+        {
+          "id": "468db5da-b66c-4e2f-8a13-b7ddf5d80296",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Vector DB é infraestrutura de busca semântica. Dominar pgvector primeiro (simples, barato) e migrar para dedicado quando a dor chegar é o caminho sensato em 2026."
+          }
+        }
+      ]
+    }
+  ]
+}

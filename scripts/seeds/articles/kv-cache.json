@@ -1,0 +1,835 @@
+{
+  "slug": "kv-cache",
+  "title": null,
+  "blocks": [
+    {
+      "id": "bf0f3edf-7447-44bd-8022-b02dfbc0e4d4",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Por que um modelo de 30GB de parametros pode precisar de 60GB+ de VRAM? Por que gerar o primeiro token e lento mas os seguintes sao rapidos? A resposta e o "
+          },
+          {
+            "text": "KV Cache",
+            "bold": true
+          },
+          {
+            "text": " — uma das otimizacoes mais importantes (e menos explicadas) da inferencia de LLMs. Neste artigo, voce vai entender como ele funciona, quanto de memoria consome, e como tecnicas modernas (GQA, Flash Attention, PagedAttention) lidam com seus limites. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "2fe8d4ee-63e3-41d8-9333-0b08445f2ecd",
+      "type": "callout",
+      "position": 1,
+      "data": {
+        "variant": "warning",
+        "title": "",
+        "content": "Pre-requisito: voce precisa entender self-attention (Q, K, V) e como o Transformer gera tokens autorregressivamente. Se nao leu o artigo de Transformers, leia antes."
+      }
+    },
+    {
+      "id": "f7e147fa-e0d6-48be-8c29-a7b805d8662f",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O problema: atencao autorregressiva e redundante"
+      },
+      "children": [
+        {
+          "id": "5addd7e2-64a2-4e3b-b975-90fb8042b9f2",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Na geracao autorregressiva, o modelo gera "
+              },
+              {
+                "text": "um token por vez",
+                "bold": true
+              },
+              {
+                "text": ". Para gerar o token na posicao t, ele precisa calcular a atencao entre Q(t) e os Keys de "
+              },
+              {
+                "text": "todos os tokens anteriores",
+                "italic": true
+              },
+              {
+                "text": " (1 ate t-1), e combinar com os Values correspondentes. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "373f498b-442f-4fce-aab7-e69d2de3d96f",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Sem KV Cache: recalculo redundante (gerando \"O gato sentou\")",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "icon": "1️⃣",
+                "label": "Token \"O\"",
+                "desc": "Calcula K(O), V(O) → atenção vs K(O)"
+              },
+              {
+                "icon": "2️⃣",
+                "label": "Token \"gato\"",
+                "desc": "Recalcula K(O), V(O) ← REDUNDANTE! + K(gato)"
+              },
+              {
+                "icon": "3️⃣",
+                "label": "Token \"sentou\"",
+                "desc": "Recalcula K(O), K(gato) ← REDUNDANTE! + K(sentou)"
+              }
+            ]
+          }
+        },
+        {
+          "id": "ad43c0b8-b28c-4e54-a5a7-7cfac44bc7b4",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": " Para N tokens: recalcula N(N+1)/2 pares K/V — custo O(N²) em compute redundante. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "5bcd9af9-1187-4a8d-bd71-33ed18b7f8d5",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "A solucao: KV Cache"
+      },
+      "children": [
+        {
+          "id": "09d8f092-e7d4-480b-8bb0-d7af881fea7a",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " A ideia e simples: "
+              },
+              {
+                "text": "calcule K e V de cada token uma unica vez e guarde em memoria",
+                "bold": true
+              },
+              {
+                "text": ". Quando o proximo token chegar, so calcule K e V "
+              },
+              {
+                "text": "dele",
+                "italic": true
+              },
+              {
+                "text": " e concatene com o cache. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "d706f2ec-fd33-468f-a3c3-4f2c71d8b6af",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Com KV Cache: calcula cada K/V exatamente UMA vez",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "icon": "1️⃣",
+                "label": "Token \"O\"",
+                "desc": "Calcula K(O), V(O) → salva no cache"
+              },
+              {
+                "icon": "2️⃣",
+                "label": "Token \"gato\"",
+                "desc": "Calcula K(gato), V(gato) APENAS → concatena ao cache"
+              },
+              {
+                "icon": "3️⃣",
+                "label": "Token \"sentou\"",
+                "desc": "Calcula K(sentou), V(sentou) APENAS → concatena ao cache"
+              }
+            ]
+          }
+        },
+        {
+          "id": "89c11cfc-78e2-4967-a446-a6a4a8c63510",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": " Para N tokens: calcula exatamente N pares K/V — custo O(N) em vez de O(N²). "
+              }
+            ]
+          }
+        },
+        {
+          "id": "1380a54d-6dcd-43cb-8068-5abc74b7254f",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "O trade-off e classico: compute vs memoria. KV Cache troca recalculo (compute) por armazenamento (memoria VRAM). A geracao fica muito mais rapida, mas o cache ocupa espaco — e quanto maior o contexto, mais espaco."
+          }
+        }
+      ]
+    },
+    {
+      "id": "9d31e60b-a465-4bf5-961e-73a7bb6cebd2",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Prefill vs Decode: as duas fases da inferencia"
+      },
+      "children": [
+        {
+          "id": "fb9933c1-eb9f-4c52-b490-903693bcef5b",
+          "type": "stack_flow",
+          "position": 0,
+          "data": {
+            "title": "Inferencia de um LLM",
+            "items": [
+              {
+                "icon": "📥",
+                "label": "Prefill (prompt processing)",
+                "sub": "compute-bound",
+                "detail": "Processa todo o prompt de uma vez (paralelo). Calcula K e V para todos os tokens do prompt e preenche o cache. Pode levar segundos para prompts longos.",
+                "connector": "CACHE PREENCHIDO"
+              },
+              {
+                "icon": "🔄",
+                "label": "Decode (geracao autorregressiva)",
+                "sub": "memory-bound",
+                "detail": "Gera um token por vez. Cada passo: (1) calcula Q/K/V do novo token, (2) concatena K/V ao cache, (3) atencao do Q contra todo o cache, (4) prediz proximo token. Bottleneck: leitura do cache da VRAM.",
+                "connector": "REPETIR"
+              },
+              {
+                "icon": "📤",
+                "label": "Output completo",
+                "sub": "fim",
+                "detail": "Quando o modelo gera <|end|> ou atinge o limite de tokens, a geracao para. O cache e descartado (a menos que prompt caching esteja ativo)."
+              }
+            ]
+          }
+        },
+        {
+          "id": "4d4a969f-39db-4a47-bc85-dc5f7b86acb5",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Por isso o "
+              },
+              {
+                "text": "primeiro token",
+                "bold": true
+              },
+              {
+                "text": " demora mais (prefill inteiro) e os seguintes sao rapidos (so decode incremental). Voce ja percebeu isso ao usar ChatGPT ou Claude — aquela pausa inicial seguida de streaming rapido. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "643bb2da-e662-4042-b88f-002a0e6989e4",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Quanto de memoria o cache consome?"
+      },
+      "children": [
+        {
+          "id": "c5cdcb8f-bf63-41df-812d-dacfcf78f84b",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " KV Cache (bytes) = 2 × layers × seq_len × d_model × bytes_per_param "
+              }
+            ]
+          }
+        },
+        {
+          "id": "ee2159c3-ec02-48d2-9bcd-381b7c98cdb5",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Modelo",
+              "Layers",
+              "Dim",
+              "Cache 4k ctx",
+              "Cache 128k ctx"
+            ],
+            "rows": [
+              [
+                "LLaMA 3 8B",
+                "32",
+                "4096",
+                "2 GB",
+                "64 GB"
+              ],
+              [
+                "LLaMA 3 70B",
+                "80",
+                "8192",
+                "10 GB",
+                "320 GB"
+              ],
+              [
+                "GPT-4 (est.)",
+                "~120",
+                "~12k",
+                "~23 GB",
+                "~750 GB"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "8677fe3d-5cd8-4653-9657-5e7036984af0",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": " LLaMA 3 70B em FP16: modelo ~140 GB + cache 128k = 320 GB → "
+              },
+              {
+                "text": "~460 GB de VRAM para UM request",
+                "bold": true
+              },
+              {
+                "text": " = 6× H100 80GB apenas para servir 1 usuário. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "2495ffae-f948-4e99-a087-1f528623b7a8",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "GQA e MQA: compartilhando K/V entre cabecas"
+      },
+      "children": [
+        {
+          "id": "fa00f2cb-583d-4047-9925-4af11e1c54cf",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Multi-Head Attention (MHA) padrao gera K/V independentes para cada cabeca de atencao. Mas K/V consomem muito mais memoria que Q (cache!). Solucao: "
+              },
+              {
+                "text": "compartilhar K/V entre cabecas",
+                "bold": true
+              },
+              {
+                "text": ". "
+              }
+            ]
+          }
+        },
+        {
+          "id": "4f5133df-51ba-4c1d-921d-a2348ccd9777",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Tecnica",
+              "Q heads",
+              "K/V heads",
+              "Reducao de cache",
+              "Usado em"
+            ],
+            "rows": [
+              [
+                "MHA (padrao)",
+                "32",
+                "32",
+                "0% (baseline)",
+                "GPT-2, BERT, Transformer original"
+              ],
+              [
+                "GQA (Grouped)",
+                "32",
+                "8",
+                "75%",
+                "LLaMA 3, Gemma 2, Mistral"
+              ],
+              [
+                "MQA (Multi-Query)",
+                "32",
+                "1",
+                "97%",
+                "PaLM, Falcon, StarCoder"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "74bb9a49-e30c-43b4-8034-03bc19a9eb6e",
+          "type": "arch_flow",
+          "position": 2,
+          "data": {
+            "title": "MHA vs GQA vs MQA — compartilhamento de K/V entre cabeças",
+            "columns": [
+              {
+                "header": "MHA (Multi-Head)",
+                "headerColor": "var(--ffv-red)",
+                "items": [
+                  "32 Q heads",
+                  "32 K/V heads",
+                  "Cada cabeça tem seu K/V",
+                  "Cache baseline (100%)"
+                ],
+                "footer": "GPT-2, BERT, Transformer original",
+                "useCases": [
+                  "Máxima qualidade",
+                  "Alto custo de memória"
+                ]
+              },
+              {
+                "header": "GQA (Grouped)",
+                "items": [
+                  "32 Q heads",
+                  "8 K/V heads",
+                  "4 Q heads compartilham 1 K/V",
+                  "Cache 75% menor"
+                ],
+                "footer": "LLaMA 3, Gemma 2, Mistral",
+                "useCases": [
+                  "Compromisso ideal",
+                  "Quase qualidade de MHA"
+                ]
+              },
+              {
+                "header": "MQA (Multi-Query)",
+                "headerColor": "var(--ffv-green)",
+                "items": [
+                  "32 Q heads",
+                  "1 K/V head",
+                  "TODAS as Q usam mesmo K/V",
+                  "Cache 97% menor"
+                ],
+                "footer": "PaLM, Falcon, StarCoder",
+                "useCases": [
+                  "Máxima economia",
+                  "Pode perder qualidade"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "c5415cf8-5bda-423b-852e-2c27496cb9ca",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Flash Attention: compute eficiente, nao menos compute"
+      },
+      "children": [
+        {
+          "id": "ae3b74e5-572f-42aa-9af5-cf9e230f1f77",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Flash Attention nao reduz a complexidade O(n2) — reduz os "
+              },
+              {
+                "text": "acessos a memoria",
+                "bold": true
+              },
+              {
+                "text": ". GPUs tem dois tipos de memoria: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "c6d7f26f-4ec8-4441-bbc2-63a262ac260b",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Memoria",
+              "Tamanho (H100)",
+              "Velocidade",
+              "Papel"
+            ],
+            "rows": [
+              [
+                "SRAM (on-chip)",
+                "~50 MB",
+                "~19 TB/s",
+                "Rapida mas minuscula — usada como cache de trabalho"
+              ],
+              [
+                "HBM (VRAM)",
+                "80 GB",
+                "~3.4 TB/s",
+                "Grande mas ~6x mais lenta — onde modelo e KV Cache vivem"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "5ed77815-cd34-417c-ba14-2b0bde18135a",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": " A atencao padrao materializa a matriz n x n inteira na HBM. Flash Attention calcula a atencao em "
+              },
+              {
+                "text": "blocos",
+                "bold": true
+              },
+              {
+                "text": " (tiles) que cabem na SRAM, sem nunca materializar a matriz completa. Resultado: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "f8a3c7e3-7c2a-49b2-ab35-f3b375ab7240",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Metrica",
+              "Atencao padrao",
+              "Flash Attention v2"
+            ],
+            "rows": [
+              [
+                "Memoria de pico",
+                "O(n2) — materializa matriz n x n",
+                "O(n) — so armazena tiles parciais"
+              ],
+              [
+                "Acessos HBM",
+                "Muitos — le e escreve matriz inteira",
+                "Poucos — tudo fica na SRAM o maximo possivel"
+              ],
+              [
+                "Speedup tipico",
+                "Baseline",
+                "2-4x mais rapido"
+              ],
+              [
+                "Complexidade",
+                "O(n2)",
+                "O(n2) — mesma! So reordena os calculos"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "6fdd4ec6-9f34-427e-abe7-939b632226ad",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "PagedAttention: servindo multiplos usuarios"
+      },
+      "children": [
+        {
+          "id": "ae25adb7-b2b9-4364-aea8-8198c00fd798",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Em producao, um servidor serve "
+              },
+              {
+                "text": "multiplos usuarios simultaneamente",
+                "bold": true
+              },
+              {
+                "text": ". Cada request tem um KV Cache de tamanho diferente. Alocar memoria contiguamente causa "
+              },
+              {
+                "text": "fragmentacao",
+                "bold": true
+              },
+              {
+                "text": ": espacos vazios entre caches de tamanhos diferentes. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "49345e32-e6a1-4d99-8ce2-ef636a855d3f",
+          "type": "comparison_flow",
+          "position": 1,
+          "data": {
+            "title": "PagedAttention — antes e depois (inspirado em virtual memory do OS)",
+            "left": [],
+            "right": []
+          }
+        },
+        {
+          "id": "e45e1e32-ccc9-470e-b521-6f0f8b8081a7",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": " vLLM (UC Berkeley) implementa PagedAttention. Padrão na indústria para servir LLMs em produção. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "5e8f809f-9042-4321-9a21-39752cd14ded",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Prompt Caching: reutilizando o prefill"
+      },
+      "children": [
+        {
+          "id": "ced89cc7-623e-44b8-8929-5f118766e9f2",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Se 100 requests usam o mesmo system prompt de 2000 tokens, por que recalcular K/V desses 2000 tokens 100 vezes? "
+              },
+              {
+                "text": "Prompt Caching",
+                "bold": true
+              },
+              {
+                "text": " resolve: o KV Cache do prefixo comum e calculado uma vez e reutilizado. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "1ca81ec6-eafb-4f2c-ba3a-99cdbc5499dd",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Prompt Caching — como o prefill é reutilizado",
+            "orientation": "horizontal",
+            "steps": [
+              {
+                "icon": "1️⃣",
+                "label": "Request 1",
+                "desc": "Processa 2000 tokens (system) + 200 (user) → salva KV Cache do system"
+              },
+              {
+                "icon": "2️⃣",
+                "label": "Request 2",
+                "desc": "Reutiliza cache dos 2000 tokens! Processa só 300 novos → 86% mais barato"
+              },
+              {
+                "icon": "🔄",
+                "label": "Requests N",
+                "desc": "Todos reutilizam o cache → ~95% de economia em prefill"
+              }
+            ]
+          }
+        },
+        {
+          "id": "f61e2976-91e1-4b88-bd2b-8ca48927ab5b",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": " Requisitos: prefixo idêntico byte a byte · TTL ~5 min (Anthropic) · Preços: cache write = normal, cache read = ~10% do preço. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "6b65e2ce-ec06-427c-aabf-e29c8193fe15",
+          "type": "decision_box",
+          "position": 3,
+          "data": {
+            "scenario": "Quando usar Prompt Caching?",
+            "winner": "Sempre que system prompt > 1000 tokens e requests sao frequentes",
+            "why": "O custo de cache write e negligivel comparado com a economia em cache reads. Qualquer chatbot, RAG pipeline ou agent com system prompt longo se beneficia.",
+            "alternatives": [
+              {
+                "name": "Sem cache",
+                "note": "Apenas para requests unicos com prompts sempre diferentes (raro em producao)."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "dacd3c46-2a4e-43ec-aee3-481c820661cc",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "MLA: a próxima geração de eficiência de cache"
+      },
+      "children": [
+        {
+          "id": "4cd65880-c00d-44db-a7aa-215fe3c0a8f5",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " GQA e MQA compartilham K/V entre cabeças — mas ainda armazenam K e V separadamente. "
+              },
+              {
+                "text": "Multi-head Latent Attention (MLA)",
+                "bold": true
+              },
+              {
+                "text": ", introduzido pelo DeepSeek v2/v3 (2024), vai além: comprime K e V num espaço latente de dimensão muito menor antes de armazenar. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "47676559-9ba0-4221-942a-b4731c898335",
+          "type": "comparison_flow",
+          "position": 1,
+          "data": {
+            "title": "MHA / GQA vs MLA — o que é armazenado no cache",
+            "left": [],
+            "right": []
+          }
+        },
+        {
+          "id": "37516833-6a49-434f-8307-8047fbf67dd2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Trade-off do MLA: menos VRAM de cache, mas mais compute na atenção (re-projeção latente → K/V a cada step). Na prática, GPUs modernas têm compute sobrando mas VRAM escassa — MLA é o trade-off certo. É a razão pela qual DeepSeek v3 pode rodar contextos de 128k tokens com muito menos VRAM que LLaMA 3 equivalente."
+          }
+        },
+        {
+          "id": "aa5d0c40-b8c1-4d19-8907-3af24d13e82b",
+          "type": "comparison_table",
+          "position": 3,
+          "data": {
+            "columns": [
+              "Técnica",
+              "Redução de cache",
+              "Custo",
+              "Adoção"
+            ],
+            "rows": [
+              [
+                "MQA (Multi-Query)",
+                "1 K/V pair total → 8× menos (vs MHA 8h)",
+                "Perda de qualidade pequena-média",
+                "GPT-3.5, Falcon"
+              ],
+              [
+                "GQA (Grouped Query)",
+                "1 K/V por grupo → 2-8× menos",
+                "Perda mínima (LLaMA 3 usa)",
+                "LLaMA 3, Mistral, Gemma"
+              ],
+              [
+                "MLA (Latent Attention)",
+                "5-10× menos que MHA",
+                "Compute extra para re-projeção",
+                "DeepSeek v2/v3 (emergente)"
+              ],
+              [
+                "Cache Quantization (FP8)",
+                "2× menos que FP16",
+                "Ruído mínimo em V, moderado em K",
+                "TensorRT-LLM, vLLM recente"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "9ee92bfb-4b19-45ba-8f2f-95f438b6620e",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Perguntas e respostas"
+      },
+      "children": [
+        {
+          "id": "ec039843-1280-41de-bdc6-d3b2b48e4dd3",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "KV Cache existe durante o treinamento?",
+            "answer": "Nao. Durante o treinamento, todo o contexto e processado de uma vez (teacher forcing) — nao ha geracao autorregressiva, entao nao ha necessidade de cache incremental. KV Cache e puramente uma otimizacao de inferencia."
+          }
+        },
+        {
+          "id": "f7dbd7bf-acdf-4e19-a1a8-c682b3a03b0a",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Quantizar o KV Cache ajuda?",
+            "answer": "Sim. Armazenar K/V em FP8 ou INT8 em vez de FP16 reduz o cache pela metade com perda minima de qualidade. Pesquisas recentes (KV Cache quantization) mostram que INT4 e viavel para V mas nao para K (K e mais sensivel a precisao porque afeta os scores de atencao diretamente)."
+          }
+        },
+        {
+          "id": "9d9b6d78-58ea-4ee4-b2bc-568cf3c0cb77",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "O que e sliding window attention?",
+            "answer": "Em vez de cachear K/V de TODOS os tokens anteriores, cada camada so atende aos ultimos W tokens (ex: W=4096). Memoria do cache fica fixa em O(W) independente do contexto. Mistral usa isso. A perda: tokens muito distantes nao se “veem” diretamente, mas informacao flui indiretamente pelas camadas empilhadas."
+          }
+        }
+      ]
+    },
+    {
+      "id": "064f458c-20ba-4f0a-bddd-e2d9d919cac3",
+      "type": "callout",
+      "position": 12,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "O que voce aprendeu: KV Cache elimina recalculo redundante na geracao autorregressiva (O(n2) → O(n) por token). O custo e memoria VRAM — que pode superar o tamanho do modelo. GQA compartilha K/V entre cabecas (4x menos cache). Flash Attention reordena calculos para minimizar acessos a HBM (2-4x mais rapido). PagedAttention resolve fragmentacao em batch serving. Prompt Caching reutiliza o prefill entre requests. Proximo: como modelos com 1T+ parametros rodam sem carregar tudo na memoria — Mixture of Experts."
+      }
+    }
+  ]
+}

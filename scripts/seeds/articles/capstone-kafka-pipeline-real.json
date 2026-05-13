@@ -1,0 +1,114 @@
+{
+  "slug": "capstone-kafka-pipeline-real",
+  "title": null,
+  "blocks": [
+    {
+      "id": "5fe4c496-2d06-450c-9ae1-1fda88b2237f",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Projeto proposto"
+      },
+      "children": [
+        {
+          "id": "d9bbf081-cf60-497c-89b6-559c3c967340",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Construa um pipeline end-to-end que saia de um OLTP Postgres (sistema transacional de pedidos), propague mudanças confiavelmente via CDC + outbox, processe em tempo real com Kafka Streams e sirva dashboards analíticos em ClickHouse. Benchmarks publicáveis, EOS habilitado, observability real. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "a5cada66-7cd0-4dc2-8792-4dcfc31071cb",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Arquitetura alvo"
+      },
+      "children": [
+        {
+          "id": "5a9f7a60-8d9f-4165-a0af-f3084b133f30",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "OLTP:\n  Postgres 16 (orders, order_items, outbox)\n  - schemas criados com migrations (Flyway/Atlas)\n  - outbox table alimentada na mesma TX do write de negócio\nCDC:\n  Debezium 2.x (Kafka Connect cluster dedicado)\n  - PostgresConnector + EventRouter SMT\n  - heartbeat 10s, incremental snapshot\nStreaming Platform:\n  Kafka 3.7 em KRaft mode (3 brokers + 3 controllers)\n  - topics: events.order, orders.enriched, orders.agg.5min\n  - tiered storage habilitado para retention 30d\n  - Schema Registry (Avro) com BACKWARD_TRANSITIVE\nProcessing:\n  Kafka Streams app (Java 21)\n  - EOS_V2 habilitado\n  - join com KTable customers (enrichment)\n  - tumbling windows 5min (grace 1min)\nSink:\n  ClickHouse 24.x\n  - Kafka engine + materialized view\n  - tabela orders_analytics particionada por dia\nObservability:\n  - Prometheus + Grafana (metrics Kafka, consumer lag, streams state)\n  - OpenTelemetry traces Debezium → Streams → ClickHouse\n  - Alertas: consumer lag &gt; 1min, ISR &lt; 2, disk &gt; 80%"
+          }
+        }
+      ]
+    },
+    {
+      "id": "080eef7c-55ac-4603-ad69-4fbc9b54861a",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Esquema de domínio"
+      },
+      "children": [
+        {
+          "id": "622f6558-2d92-4cf3-894e-17903ac0459a",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "sql",
+            "code": "CREATE TABLE orders (\n  id            UUID PRIMARY KEY,\n  user_id       UUID NOT NULL,\n  total_cents   BIGINT NOT NULL,\n  currency      TEXT NOT NULL,\n  status        TEXT NOT NULL,\n  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),\n  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()\n);\n\nCREATE TABLE outbox (\n  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n  aggregate_type  TEXT NOT NULL,\n  aggregate_id    TEXT NOT NULL,\n  event_type      TEXT NOT NULL,\n  payload         JSONB NOT NULL,\n  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()\n);"
+          }
+        }
+      ]
+    },
+    {
+      "id": "48d4d525-cdad-487c-83fa-a74e42c3582c",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "ClickHouse sink"
+      },
+      "children": [
+        {
+          "id": "63e81c52-8aaa-4377-b7bf-f5327d7a1801",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "sql",
+            "code": "CREATE TABLE kafka_orders (\n  order_id String, user_id String, region String, tier String,\n  total_cents Int64, created_at DateTime64(3)\n) ENGINE = Kafka\nSETTINGS kafka_broker_list = 'b1:9092,b2:9092,b3:9092',\n         kafka_topic_list  = 'orders.enriched',\n         kafka_group_name  = 'ch-orders',\n         kafka_format      = 'AvroConfluent';\n\nCREATE TABLE orders_analytics (\n  order_id String, user_id String, region LowCardinality(String),\n  tier LowCardinality(String), total_cents Int64, created_at DateTime64(3)\n) ENGINE = MergeTree\nPARTITION BY toYYYYMMDD(created_at)\nORDER BY (region, created_at);\n\nCREATE MATERIALIZED VIEW orders_mv TO orders_analytics\nAS SELECT * FROM kafka_orders;"
+          }
+        }
+      ]
+    },
+    {
+      "id": "30130ecc-7efa-40d8-a9e0-463b3a87dbd7",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Entregáveis do capstone"
+      },
+      "children": [
+        {
+          "id": "9cb78c26-7ef7-4f09-8473-04b5efdfdb60",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "1. Repo monorepo:\n   - /infra (docker-compose + terraform dev)\n   - /oltp-service (Postgres migrations + API de pedidos)\n   - /streams-app (Kafka Streams EOS)\n   - /clickhouse (schemas + MVs)\n   - /bench (k6 e kafka-producer-perf-test)\n\n2. Benchmarks publicados:\n   - throughput sustentado (events/s)\n   - latência end-to-end p50/p95/p99 (OLTP commit → CH queryable)\n   - custo simulado por 1M eventos (tiered storage on/off)\n\n3. Failure injection documentada:\n   - mata 1 broker: ISR recovery, lag\n   - mata Debezium: resume from LSN\n   - mata Streams instance: rebalance cooperative-sticky\n\n4. ADRs:\n   - outbox vs dual write\n   - Avro vs Protobuf\n   - Streams vs Flink\n   - ClickHouse vs Druid vs Pinot\n\n5. Writeup + dashboard Grafana público"
+          }
+        },
+        {
+          "id": "b9b300f8-318c-4967-9992-02519e243eb6",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Esse capstone entregue com rigor diferencia engenheiro de dados/streaming em processos seletivos senior+. Recruiter lê o writeup, abre o dashboard, reproduz o benchmark com docker-compose e entende que você roda isso em produção de verdade."
+          }
+        }
+      ]
+    }
+  ]
+}

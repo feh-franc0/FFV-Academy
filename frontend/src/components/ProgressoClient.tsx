@@ -23,6 +23,7 @@ import {
   type Trail,
 } from '@/lib/curriculum';
 import { StudyHeatmap } from '@/components/StudyHeatmap';
+import { TrailStatsTable } from '@/components/TrailStatsTable';
 import { toast } from '@/lib/toast';
 
 export function ProgressoClient() {
@@ -206,6 +207,10 @@ export function ProgressoClient() {
 
       <section className="max-w-5xl mx-auto px-6 pb-12">
         <StudyHeatmap studyDays={state.studyDays} />
+      </section>
+
+      <section className="max-w-5xl mx-auto px-6 pb-12">
+        <TrailStatsTable />
       </section>
 
       <section className="max-w-5xl mx-auto px-6 pb-12">

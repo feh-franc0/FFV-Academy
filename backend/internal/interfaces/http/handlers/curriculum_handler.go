@@ -7,6 +7,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -96,6 +97,22 @@ type updateArticleRequest struct {
 	Published  bool   `json:"published"`
 }
 
+// articleWithBlocksResponse é a resposta da rota CMS-driven (GET /:slug/blocks).
+// Diferente de articleResponse, NÃO inclui content_md (legacy) — apenas blocks.
+// updated_at é exposto como time.Time para precisão do ETag client-side.
+type articleWithBlocksResponse struct {
+	Slug       string                 `json:"slug"`
+	Title      string                 `json:"title"`
+	TrailID    string                 `json:"trail_id"`
+	HubID      string                 `json:"hub_id"`
+	XP         int                    `json:"xp"`
+	ReadTime   int                    `json:"read_time"`
+	Difficulty string                 `json:"difficulty"`
+	Order      int                    `json:"order"`
+	UpdatedAt  time.Time              `json:"updated_at"`
+	Blocks     []*domcurriculum.Block `json:"blocks"`
+}
+
 // ─── Endpoints públicos ───────────────────────────────────────────────────────
 
 // List retorna artigos paginados, opcionalmente filtrados por trilha.
@@ -146,6 +163,49 @@ func (h *CurriculumHandler) GetBySlug(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	WriteJSON(w, http.StatusOK, toArticleResponse(article, true))
+}
+
+// GetBlocks retorna o artigo + sua árvore de blocks (CMS-driven content).
+// Esta é a rota usada pela rota dinâmica do frontend (/aprenda/[slug]).
+// Cache HTTP via ETag: cliente envia If-None-Match → 304 se não mudou.
+//
+// GET /api/v1/curriculum/:slug/blocks
+func (h *CurriculumHandler) GetBlocks(w http.ResponseWriter, r *http.Request) {
+	slug := chi.URLParam(r, "slug")
+
+	article, err := h.getArticle.Execute(r.Context(), slug)
+	if err != nil {
+		HandleDomainErrorCtx(r, w, err)
+		return
+	}
+
+	blocks, err := h.repo.FindBlocksBySlug(r.Context(), slug)
+	if err != nil {
+		HandleDomainErrorCtx(r, w, err)
+		return
+	}
+
+	// ETag baseado em updatedAt do artigo (mais determinístico que hash).
+	etag := `"v` + article.UpdatedAt().UTC().Format("20060102150405.000000") + `"`
+	if match := r.Header.Get("If-None-Match"); match == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "public, max-age=3600, stale-while-revalidate=86400")
+
+	WriteJSON(w, http.StatusOK, articleWithBlocksResponse{
+		Slug:       article.Slug(),
+		Title:      article.Title(),
+		TrailID:    article.TrailID(),
+		HubID:      article.HubID(),
+		XP:         article.XP(),
+		ReadTime:   article.ReadTime(),
+		Difficulty: article.Difficulty(),
+		Order:      article.Order(),
+		UpdatedAt:  article.UpdatedAt(),
+		Blocks:     blocks,
+	})
 }
 
 // Search busca artigos por similaridade de título.
@@ -246,6 +306,88 @@ func (h *CurriculumHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	WriteJSON(w, http.StatusOK, toArticleResponse(article, true))
+}
+
+// SaveBlocks substitui a árvore inteira de blocks de um artigo.
+// PUT /api/v1/admin/curriculum/:slug/blocks
+//
+// Body: { "blocks": [ {id, type, position, data, children?}, ... ] }
+//
+// Operação atômica: DELETE + INSERT em transação. IDs novos (sem UUID válido)
+// são re-gerados pelo Postgres. Position é validada >= 0.
+func (h *CurriculumHandler) SaveBlocks(w http.ResponseWriter, r *http.Request) {
+	slug := chi.URLParam(r, "slug")
+	if slug == "" {
+		WriteError(w, http.StatusBadRequest, "slug obrigatório", "validation-error")
+		return
+	}
+
+	// Confirma que o artigo existe antes de mexer nos blocks.
+	if _, err := h.getArticle.Execute(r.Context(), slug); err != nil {
+		HandleDomainErrorCtx(r, w, err)
+		return
+	}
+
+	type incomingBlock struct {
+		ID       string          `json:"id"`
+		Type     string          `json:"type"`
+		Position int             `json:"position"`
+		Data     json.RawMessage `json:"data"`
+		Children []incomingBlock `json:"children,omitempty"`
+	}
+	var req struct {
+		Blocks []incomingBlock `json:"blocks"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, "body inválido", "validation-error")
+		return
+	}
+
+	var convert func(items []incomingBlock) ([]*domcurriculum.Block, error)
+	convert = func(items []incomingBlock) ([]*domcurriculum.Block, error) {
+		out := make([]*domcurriculum.Block, 0, len(items))
+		for _, it := range items {
+			b, err := domcurriculum.NewBlock(it.ID, it.Type, it.Position, it.Data)
+			if err != nil {
+				return nil, err
+			}
+			if len(it.Children) > 0 {
+				children, err := convert(it.Children)
+				if err != nil {
+					return nil, err
+				}
+				for _, c := range children {
+					b.AddChild(c)
+				}
+			}
+			out = append(out, b)
+		}
+		return out, nil
+	}
+
+	blocks, err := convert(req.Blocks)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error(), "validation-error")
+		return
+	}
+
+	if err := h.repo.SaveBlocks(r.Context(), slug, blocks); err != nil {
+		HandleDomainErrorCtx(r, w, err)
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"slug":        slug,
+		"blocks_count": countBlocks(blocks),
+	})
+}
+
+func countBlocks(blocks []*domcurriculum.Block) int {
+	n := len(blocks)
+	for _, b := range blocks {
+		n += countBlocks(b.Children)
+	}
+	return n
 }
 
 // Delete realiza soft-delete de um artigo.

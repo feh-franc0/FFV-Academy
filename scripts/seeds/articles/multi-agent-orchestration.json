@@ -1,0 +1,472 @@
+{
+  "slug": "multi-agent-orchestration",
+  "title": null,
+  "blocks": [
+    {
+      "id": "8c30f1c8-8d8d-49ff-9079-845ffc8e1238",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Multi-agent é a categoria mais hyped e mais mal-aplicada da era pós-ChatGPT. Este módulo cataloga os patterns que funcionam empiricamente em produção — supervisor/worker, debate, voting, planner-executor, router — com referências aos papers originais. E gasta tempo igual no que importa mais: "
+          },
+          {
+            "text": "quando NÃO usar multi-agent",
+            "bold": true
+          },
+          {
+            "text": ". "
+          }
+        ]
+      }
+    },
+    {
+      "id": "6c14014d-8833-4da4-a5e4-7ffb79d1cb6d",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Catálogo de patterns"
+      },
+      "children": [
+        {
+          "id": "c18cf700-e937-46f4-89bf-41422331f320",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pattern",
+              "Quando usar",
+              "Custo",
+              "Latência"
+            ],
+            "rows": [
+              [
+                "Router",
+                "Despacho 1-shot por domínio",
+                "Baixo (1 LLM extra)",
+                "Baixa"
+              ],
+              [
+                "Supervisor/Worker",
+                "Decomposição dinâmica + paralelismo",
+                "Médio (M+N agents)",
+                "Média"
+              ],
+              [
+                "Sequential pipeline",
+                "Pipeline fixo determinístico",
+                "Médio (1× por step)",
+                "Alta (soma)"
+              ],
+              [
+                "Planner-Executor",
+                "Plan auditável antes de agir",
+                "Médio (1 Opus + N Haiku)",
+                "Média"
+              ],
+              [
+                "Debate (N round)",
+                "Reasoning com risco de error",
+                "Alto (N×R agents)",
+                "Alta"
+              ],
+              [
+                "Voting / Self-consistency",
+                "Resposta verificável, paralelo",
+                "Alto (N×) mas paralelo",
+                "Baixa"
+              ],
+              [
+                "Reflexion (self-critique)",
+                "Tasks iterativas com critic claro",
+                "Alto (iterativo)",
+                "Alta"
+              ],
+              [
+                "Tree of Thoughts",
+                "Search com backtracking",
+                "Muito alto",
+                "Muito alta"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "febf6792-e690-40bb-9f5e-29d1a67b9c88",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Supervisor / Worker em LangGraph"
+      },
+      "children": [
+        {
+          "id": "264a4956-77eb-429f-8fcf-b93d2ae839d4",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "from typing import TypedDict, Annotated, Literal\nimport operator\nfrom langgraph.graph import StateGraph, START, END\nfrom langgraph.prebuilt import create_react_agent\nfrom langchain_anthropic import ChatAnthropic\nfrom langchain_core.tools import tool\n\n# Tools dos workers\n@tool\ndef search_arxiv(query: str) -> str:\n    \"\"\"Pesquisa papers no arXiv.\"\"\"\n    return f\"3 papers encontrados sobre '{query}'\"\n\n@tool\ndef run_code(code: str) -> str:\n    \"\"\"Executa Python em sandbox.\"\"\"\n    return f\"Output: {eval(code)}\"  # NÃO faça isso em prod (use sandbox real)\n\nllm = ChatAnthropic(model=\"claude-sonnet-4-7\")\n\n# Workers especialistas\nresearcher = create_react_agent(llm, tools=[search_arxiv])\ncoder = create_react_agent(llm, tools=[run_code])\n\n# Supervisor: LLM com tool \"delegate\"\nclass State(TypedDict):\n    messages: Annotated[list, operator.add]\n    next: str\n\ndef supervisor(state: State) -> dict:\n    sys = \"\"\"Você coordena dois workers: 'researcher' (papers) e 'coder' (executa código).\n    Decida qual chamar ou se a task está completa. Retorne JSON: {\"next\": \"researcher\"|\"coder\"|\"FINISH\"}\"\"\"\n    response = llm.invoke([{\"role\": \"system\", \"content\": sys}] + state[\"messages\"])\n    import json\n    decision = json.loads(response.content)\n    return {\"next\": decision[\"next\"]}\n\ndef call_researcher(state):\n    result = researcher.invoke({\"messages\": state[\"messages\"]})\n    return {\"messages\": [result[\"messages\"][-1]]}\n\ndef call_coder(state):\n    result = coder.invoke({\"messages\": state[\"messages\"]})\n    return {\"messages\": [result[\"messages\"][-1]]}\n\ngraph = StateGraph(State)\ngraph.add_node(\"supervisor\", supervisor)\ngraph.add_node(\"researcher\", call_researcher)\ngraph.add_node(\"coder\", call_coder)\ngraph.add_edge(START, \"supervisor\")\ngraph.add_conditional_edges(\n    \"supervisor\",\n    lambda s: END if s[\"next\"] == \"FINISH\" else s[\"next\"],\n)\ngraph.add_edge(\"researcher\", \"supervisor\")  # supervisor decide next\ngraph.add_edge(\"coder\", \"supervisor\")\napp = graph.compile()",
+            "filename": "supervisor_workers.py"
+          }
+        },
+        {
+          "id": "00b0f2a8-f3da-4338-b675-42cb6240c7da",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Cycle é o padrão hierarchical canonical. Supervisor pode delegar várias vezes em sequência, agregando resultados, antes de FINISH."
+          }
+        }
+      ]
+    },
+    {
+      "id": "36a092b9-817f-4200-a9b0-4119908eb0a2",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Debate pattern"
+      },
+      "children": [
+        {
+          "id": "9f3c3b4e-e6d8-4dde-ad21-fb846851e623",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "# Adapted from Liang et al. 2023 — arxiv.org/abs/2305.19118\nimport asyncio\nfrom langchain_anthropic import ChatAnthropic\n\nllm = ChatAnthropic(model=\"claude-sonnet-4-7\")\n\nasync def debate(question: str, n_agents: int = 3, n_rounds: int = 2) -> str:\n    history = [[] for _ in range(n_agents)]\n\n    # Round 0: cada agente responde independentemente\n    for i in range(n_agents):\n        response = await llm.ainvoke([{\"role\": \"user\", \"content\": question}])\n        history[i].append(response.content)\n\n    # Rounds 1..N: cada agente vê argumentos dos outros e refina\n    for r in range(1, n_rounds + 1):\n        new_responses = []\n        for i in range(n_agents):\n            others = [history[j][r - 1] for j in range(n_agents) if j != i]\n            others_text = \"\\n\\n\".join(f\"Argumento {k+1}: {a}\" for k, a in enumerate(others))\n            prompt = (\n                f\"Pergunta original: {question}\\n\\n\"\n                f\"Outros agentes responderam:\\n{others_text}\\n\\n\"\n                f\"Sua resposta anterior: {history[i][r-1]}\\n\\n\"\n                \"Considere os argumentos. Refine sua resposta. Se mantiver, justifique.\"\n            )\n            response = await llm.ainvoke([{\"role\": \"user\", \"content\": prompt}])\n            new_responses.append(response.content)\n        for i in range(n_agents):\n            history[i].append(new_responses[i])\n\n    # Round final: judge agrega\n    final_args = [h[-1] for h in history]\n    judge_prompt = (\n        f\"Pergunta: {question}\\n\\n\"\n        + \"\\n\\n\".join(f\"Agente {i+1}: {a}\" for i, a in enumerate(final_args))\n        + \"\\n\\nComo juiz, dê a resposta consolidada e correta.\"\n    )\n    final = await llm.ainvoke([{\"role\": \"user\", \"content\": judge_prompt}])\n    return final.content\n\n# answer = asyncio.run(debate(\"Prove que sqrt(2) é irracional.\", n_agents=3, n_rounds=2))",
+            "filename": "debate.py"
+          }
+        }
+      ]
+    },
+    {
+      "id": "a26ddfb9-77da-4082-9b46-dfaffc9f10aa",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Voting / Self-consistency"
+      },
+      "children": [
+        {
+          "id": "3efd4b0d-5fed-48af-87bf-c132cb3cd9ff",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "# Self-consistency (Wang et al. 2023, ICLR — arxiv.org/abs/2203.11171)\nimport asyncio\nfrom collections import Counter\nfrom langchain_anthropic import ChatAnthropic\n\nllm = ChatAnthropic(model=\"claude-sonnet-4-7\", temperature=0.7)\n\nasync def self_consistency(question: str, n: int = 10) -> str:\n    \"\"\"N samples paralelos com temperatura > 0, vote majoritário.\"\"\"\n    # Paralelo via gather\n    tasks = [llm.ainvoke([{\"role\": \"user\", \"content\": question}]) for _ in range(n)]\n    responses = await asyncio.gather(*tasks)\n    answers = [r.content for r in responses]\n\n    # Normaliza (extrair \"answer: X\" — depende do domínio)\n    # Para math: extrair último número\n    import re\n    extracted = []\n    for ans in answers:\n        m = re.search(r\"\\\\boxed\\{(.+?)\\}|answer:?\\s*(\\S+)\", ans, re.IGNORECASE)\n        if m:\n            extracted.append(m.group(1) or m.group(2))\n    counts = Counter(extracted)\n    most_common, _ = counts.most_common(1)[0]\n    return most_common\n\n# Custo: N× tokens. Latência: 1× (paralelo). Accuracy boost ~5–15% em math.",
+            "filename": "voting.py"
+          }
+        },
+        {
+          "id": "b7d8b59c-4259-4480-b4e9-416f6483015c",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Self-consistency assume task com resposta extraível. Para texto livre (escrita criativa), não aplica — você não consegue \"votar\" em narrativas. Use debate ou reflexion."
+          }
+        }
+      ]
+    },
+    {
+      "id": "0ace1c29-3aa7-4eb0-950e-97bf97a046dd",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Planner-Executor"
+      },
+      "children": [
+        {
+          "id": "9cd250a1-ec52-42bd-9673-2becd8503a69",
+          "type": "flow_diagram",
+          "position": 0,
+          "data": {
+            "title": "Planner-Executor com replan",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "icon": "🎯",
+                "label": "Query do usuário",
+                "desc": "Task complexa multi-step"
+              },
+              {
+                "icon": "🧠",
+                "label": "Planner (Opus)",
+                "desc": "Gera plano: lista de steps detalhados"
+              },
+              {
+                "icon": "👁️",
+                "label": "Human review (opcional)",
+                "desc": "Auditoria do plano antes de agir"
+              },
+              {
+                "icon": "🔧",
+                "label": "Executor (Haiku) step 1",
+                "desc": "Executa step 1, retorna resultado"
+              },
+              {
+                "icon": "✅",
+                "label": "Step succeeded?",
+                "desc": "Se sim → step seguinte; se não → replan"
+              },
+              {
+                "icon": "🔁",
+                "label": "Loop até DONE",
+                "desc": "Todos os steps completos"
+              }
+            ]
+          }
+        },
+        {
+          "id": "a3ef3786-399c-4c42-bc9b-e6b7a40b0124",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Custo otimizado: Planner = Opus (1 chamada cara) + Executor = Haiku (N chamadas baratas). Reduz custo total em 60–80% vs Opus-only enquanto preserva qualidade do plano."
+          }
+        }
+      ]
+    },
+    {
+      "id": "24ffd338-7726-4986-9798-dd00b69c35dd",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Anti-pattern: usar multi-agent porque sim"
+      },
+      "children": [
+        {
+          "id": "f00f1cda-e151-4e0d-9b91-29380f56c62d",
+          "type": "arch_flow",
+          "position": 0,
+          "data": {
+            "title": "Sinais de que você NÃO precisa de multi-agent",
+            "columns": [
+              {
+                "header": "Sinais de overengineering",
+                "items": [
+                  "Todos os \"agents\" têm o mesmo prompt base",
+                  "Agents só trocam strings de texto (poderia ser tool)",
+                  "\"Agents\" diferem só no system message (poderia ser único agent com tools de domínio)",
+                  "Latência multiplicada não melhora qualidade no eval",
+                  "Debug exige mapear N stack traces"
+                ]
+              },
+              {
+                "header": "Quando refatorar para single agent",
+                "items": [
+                  "\"Specialist agents\" → tools do agent principal",
+                  "Sequential pipeline curto → LCEL chain",
+                  "Decisão simples → conditional logic Python",
+                  "Voting com 1 modelo → temperature sampling",
+                  "Debate de 2 agents → self-critique loop"
+                ]
+              },
+              {
+                "header": "Quando multi-agent vale",
+                "items": [
+                  "Tools/permissions genuinamente isoladas (security)",
+                  "Paralelismo real entre subtasks independentes",
+                  "Eval mostra ganho mensurável vs single",
+                  "Contexto não cabe em uma janela",
+                  "Equipes humanas distintas mantêm cada agente"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "8f875aec-e324-4a3a-a464-ac057b9f5a76",
+          "type": "decision_box",
+          "position": 1,
+          "data": {
+            "scenario": "Você quer construir agente que pesquisa, escreve código e revisa. Cada parte tem prompt diferente.",
+            "winner": "Provavelmente single agent com 3 tools, NÃO 3 agents",
+            "why": "Se os 'agents' diferem só em prompt + ferramentas, refatore para 1 agent com (research_tool, code_tool, review_tool) e instructions detalhadas. Mantém todo contexto, debug simples, latência baixa. Multi-agent só se cada parte exige modelo diferente, paralelismo real, ou permissions isoladas.",
+            "alternatives": [
+              {
+                "name": "Multi-agent",
+                "note": "Vale se Researcher = Haiku, Coder = Opus, Reviewer = Sonnet (modelos distintos) ou se há real paralelismo"
+              },
+              {
+                "name": "Pipeline sequencial",
+                "note": "CrewAI sequential se você quer estrutura visível e tracing por step"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "e4dbd8f6-0e54-4412-b7f9-66ae565163dc",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Timeline de patterns multi-agent"
+      },
+      "children": [
+        {
+          "id": "0eaf3305-5a08-42e4-83cf-39e9461154d3",
+          "type": "timeline",
+          "position": 0,
+          "data": {
+            "title": "",
+            "events": [
+              {
+                "when": "Mar 2022",
+                "label": "Self-consistency",
+                "detail": "Wang et al. — voting paralelo"
+              },
+              {
+                "when": "Out 2022",
+                "label": "ReAct",
+                "detail": "Yao et al. — think-act-observe loop single agent"
+              },
+              {
+                "when": "Mar 2023",
+                "label": "Reflexion",
+                "detail": "Shinn et al. — self-critique loop",
+                "highlight": true
+              },
+              {
+                "when": "Mai 2023",
+                "label": "Multi-Agent Debate",
+                "detail": "Du et al., Liang et al."
+              },
+              {
+                "when": "Mai 2023",
+                "label": "Tree of Thoughts",
+                "detail": "Yao et al. — search com BFS/DFS"
+              },
+              {
+                "when": "Jul 2023",
+                "label": "AutoGen v0.1",
+                "detail": "Conversational multi-agent framework"
+              },
+              {
+                "when": "Jan 2024",
+                "label": "LangGraph + create_supervisor",
+                "detail": "Pattern hierarchical idiomático"
+              },
+              {
+                "when": "2025",
+                "label": "Critique do hype",
+                "detail": "Anthropic/OpenAI publicam \"use single agent first\""
+              },
+              {
+                "when": "2026",
+                "label": "Maturidade",
+                "detail": "Multi-agent reservado para casos justificados; tooling consolidado"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "771f4909-ef83-42eb-b113-672aa5d85fd7",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "1bfa3952-c7f6-493e-84f7-d56b12510c28",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Posso combinar patterns?",
+            "answer": "Sim e frequentemente faz sentido. Exemplo real: Router → Supervisor → Workers, onde alguns workers usam Reflexion internamente. Camadas devem ser justificadas. Combinação canônica em prod 2026: outer LangGraph com router + supervisor, inner CrewAI para subprocessos lineares dentro de workers."
+          }
+        },
+        {
+          "id": "5327d7f8-0cfb-4085-a510-0bb4eb8ead26",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Como evaluar multi-agent system?",
+            "answer": "Crítico: eval ponta-a-ponta (input final → output final) E eval por agente isoladamente. Sem o segundo, você não sabe qual agente é o gargalo. LangSmith captura ambos. Golden trajectories — sequências esperadas de chamadas — são valiosos."
+          }
+        },
+        {
+          "id": "4654bcf9-1201-4e04-ae5e-3198d4abf8d3",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Latência: quanto adicional?",
+            "answer": "Por agente extra na cadeia sequencial: latência soma. Paralelos (debate, voting): max das latências individuais + agregação. Mediana em prod: single agent = 2–5s, multi-agent = 10–60s. Considere streaming progress ao usuário."
+          }
+        },
+        {
+          "id": "12f843e0-e6bd-48df-a643-c3aaf3fe64c3",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Memória compartilhada entre agents?",
+            "answer": "Tipicamente via state TypedDict no LangGraph (lido por todos os nós). Em AutoGen, mensagens trafegadas. Em CrewAI, via context= das Tasks. Vector DB compartilhado é padrão para memória de longo prazo cross-agent."
+          }
+        }
+      ]
+    },
+    {
+      "id": "59c0032e-5eee-4bf0-8286-8af1e1013826",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Referências"
+      },
+      "children": [
+        {
+          "id": "55f55160-c3d4-4dc1-b698-dde0c2a04afc",
+          "type": "key_value",
+          "position": 0,
+          "data": {
+            "items": [
+              {
+                "k": "ReAct",
+                "v": "Yao et al. \"ReAct: Synergizing Reasoning and Acting\". ICLR 2023"
+              },
+              {
+                "k": "Reflexion",
+                "v": "Shinn et al. \"Reflexion: Language Agents with Verbal Reinforcement Learning\". NeurIPS 2023. arXiv:2303.11366"
+              },
+              {
+                "k": "Tree of Thoughts",
+                "v": "Yao et al. \"Tree of Thoughts: Deliberate Problem Solving with LLMs\". NeurIPS 2023"
+              },
+              {
+                "k": "Multi-Agent Debate",
+                "v": "Liang et al. \"Encouraging Divergent Thinking in LLMs through Multi-Agent Debate\". arXiv:2305.19118 (2023)"
+              },
+              {
+                "k": "Self-Consistency",
+                "v": "Wang et al. \"Self-Consistency Improves Chain of Thought Reasoning\". ICLR 2023. arXiv:2203.11171"
+              },
+              {
+                "k": "Plan-and-Solve",
+                "v": "Wang et al. \"Plan-and-Solve Prompting: Improving Zero-Shot Chain-of-Thought Reasoning\". ACL 2023"
+              },
+              {
+                "k": "Anthropic on Agents",
+                "v": "anthropic.com/research/building-effective-agents (2024)"
+              },
+              {
+                "k": "OpenAI Agents guide",
+                "v": "platform.openai.com/docs/guides/agents-sdk"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

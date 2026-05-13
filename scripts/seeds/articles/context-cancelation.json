@@ -1,0 +1,155 @@
+{
+  "slug": "context-cancelation",
+  "title": null,
+  "blocks": [
+    {
+      "id": "23df6297-557a-4171-9b02-2c85f826bac9",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Por que context existe"
+      },
+      "children": [
+        {
+          "id": "5ffadd50-c066-40f2-b22e-8ba5e6b05e7a",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Request distribuída precisa de três coisas: cancelamento propagado (\"o cliente desistiu, pare\"), deadline absoluto (\"cut em 500 ms\") e valores request-scoped (trace-id). context.Context é a estrutura canônica para carregar os três por toda a stack — handler, service, repository, driver. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "91511a81-d70e-413b-81c6-826ac2e674b3",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Construtores e lifecycle"
+      },
+      "children": [
+        {
+          "id": "bc9cb15b-407b-4839-8d3e-7cac30fbe280",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "go",
+            "code": "// Base\nctx := context.Background()       // root (main, test)\nctx  = context.TODO()             // placeholder em refactor\n\n// Cancelamento manual\nctx, cancel := context.WithCancel(parent)\ndefer cancel()\n\n// Deadline absoluto\nctx, cancel := context.WithDeadline(parent, time.Now().Add(500*time.Millisecond))\ndefer cancel()\n\n// Timeout relativo (atalho para WithDeadline)\nctx, cancel := context.WithTimeout(parent, 500*time.Millisecond)\ndefer cancel()\n\n// Values (request-id, trace-id, user autenticado — só isso)\ntype ctxKey string\nconst userKey ctxKey = \"user\"\nctx = context.WithValue(ctx, userKey, user)\nu, _ := ctx.Value(userKey).(User)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "2423e8a1-e429-44e9-a9ef-b6916d25c221",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Propagação correta"
+      },
+      "children": [
+        {
+          "id": "df472652-b396-4e46-86d4-214c232f8f2f",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "go",
+            "code": "func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {\n    ctx := r.Context()                      // herda cancel/deadline do servidor\n    u, err := h.svc.Find(ctx, id)           // passa adiante\n    if err != nil {\n        if errors.Is(err, context.Canceled) { return }\n        http.Error(w, err.Error(), 500); return\n    }\n    json.NewEncoder(w).Encode(u)\n}\n\nfunc (s *Service) Find(ctx context.Context, id string) (User, error) {\n    return s.repo.Get(ctx, id)              // até o driver\n}\n\nfunc (r *Repo) Get(ctx context.Context, id string) (User, error) {\n    // database/sql, redis e HTTP aceitam ctx\n    return r.db.QueryRowContext(ctx, \"select ...\"), nil\n}"
+          }
+        },
+        {
+          "id": "b93f3041-d7ad-43a8-8008-895eb7d9ae3e",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Toda lib séria (database/sql, net/http, grpc-go, redis clients) tem variante Context das operações. Usar as não-Context é sinônimo de ignorar cancelamento."
+          }
+        }
+      ]
+    },
+    {
+      "id": "f78c9a0b-52e8-4c35-85c8-ce1b6e31c55c",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Observando ctx.Done"
+      },
+      "children": [
+        {
+          "id": "88ce27f5-a128-4ad3-87c9-5d44654e14b9",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "go",
+            "code": "func work(ctx context.Context, ch <-chan Job) error {\n    for {\n        select {\n        case <-ctx.Done():\n            return ctx.Err()     // Canceled ou DeadlineExceeded\n        case j, ok := <-ch:\n            if !ok { return nil }\n            process(ctx, j)\n        }\n    }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "c6406a4f-75c5-4269-8916-009742056dd6",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Goroutine leak por ctx esquecido"
+      },
+      "children": [
+        {
+          "id": "e646b39d-a123-45f4-8747-d7d4760506ec",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "danger",
+            "title": "",
+            "content": "O padrão mais comum de leak em Go: goroutine que não escuta ctx.Done e fica esperando um channel que ninguém mais alimenta. Resultado: métrica go_goroutines sobe monotonicamente até OOM. Cheque sempre com pprof goroutine profile."
+          }
+        }
+      ]
+    },
+    {
+      "id": "655ea07b-1985-4dbd-a6ef-fc444a9a0ecb",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Quando usar WithValue"
+      },
+      "children": [
+        {
+          "id": "d77b6903-fff8-4b9b-8c3a-5fbab33ed474",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Só para request-scoped data (request-id, trace-id, user autenticado por middleware). Nunca para logger, repository ou config — esses vão por struct injetada. Se começar a usar WithValue para tudo, você reinventou service locator; teste fica pesado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "0acc8968-ad0a-4fe2-819f-3f7ced22a639",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Resumo operacional"
+      },
+      "children": [
+        {
+          "id": "9e5bf18f-54dc-4b70-845b-3068e1164101",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "ctx primeiro arg, defer cancel sempre, propagação obrigatória até o driver, errors.Is(err, context.Canceled) para não gritar em log quando é cancelamento saudável. Disciplina simples, ganho enorme em estabilidade."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,156 @@
+{
+  "slug": "redis-avancado-serio",
+  "title": null,
+  "blocks": [
+    {
+      "id": "387e2799-05e3-41ee-b7f1-1d7578f7b5fa",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Redis não é só cache"
+      },
+      "children": [
+        {
+          "id": "ac6ed6c0-a12e-436f-8e4c-1138afdff71b",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " A maior parte dos times usa Redis como cache de string com TTL. É desperdiçar 80% da ferramenta. Redis é uma estrutura de dados remota: hashes, listas, sets, sorted sets, streams, bitmaps, HyperLogLog, geo. Cada um resolve um problema específico sem ter que mover dados para o app. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "7004efa3-eafd-48ce-bb65-35e2470529fa",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Leaderboard com SORTED SET"
+      },
+      "children": [
+        {
+          "id": "93c52987-e9c7-4852-b4a1-aad78952a8bc",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "# ZADD adiciona/atualiza score em O(log N)\nZADD leaderboard:global 1500 \"user:42\"\nZADD leaderboard:global 2100 \"user:17\"\nZADD leaderboard:global 980  \"user:99\"\n\n# Top 10 (descending)\nZREVRANGE leaderboard:global 0 9 WITHSCORES\n\n# Posicao do usuario 42 (rank)\nZREVRANK leaderboard:global \"user:42\"\n\n# Incrementar score atomicamente (ex: +50 XP)\nZINCRBY leaderboard:global 50 \"user:42\"\n\n# Slice por score (scores entre 1000 e 2000)\nZRANGEBYSCORE leaderboard:global 1000 2000 WITHSCORES"
+          }
+        },
+        {
+          "id": "13e04dae-4842-46a3-a3ab-96c30a2d83a6",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "ZSET é a estrutura mais poderosa do Redis. Leaderboards, delayed jobs, sliding window rate limit, priority queue, trending content — tudo vira ZSET com score bem escolhido."
+          }
+        }
+      ]
+    },
+    {
+      "id": "0dc39bdd-a65c-4e20-b1b6-b68d67b1f864",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Rate limiter atômico com Lua"
+      },
+      "children": [
+        {
+          "id": "8721ec43-e405-4a33-b446-bd602710eefb",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Implementação de sliding window rate limit em um único EVAL. Atomicidade garantida, zero race condition. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "d8e510b7-fc46-408c-9b64-81715691c1fa",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "lua",
+            "code": "-- KEYS[1] = chave da janela (ex: \"rl:user:42\")\n-- ARGV[1] = now em ms\n-- ARGV[2] = janela em ms\n-- ARGV[3] = limite\n-- ARGV[4] = request id unico\n\nlocal key    = KEYS[1]\nlocal now    = tonumber(ARGV[1])\nlocal window = tonumber(ARGV[2])\nlocal limit  = tonumber(ARGV[3])\nlocal reqId  = ARGV[4]\n\n-- 1) Remove requests fora da janela\nredis.call('ZREMRANGEBYSCORE', key, '-inf', now - window)\n\n-- 2) Conta requests dentro da janela\nlocal count = redis.call('ZCARD', key)\n\nif count < limit then\n  redis.call('ZADD', key, now, reqId)\n  redis.call('PEXPIRE', key, window)\n  return { 1, limit - count - 1 }  -- ok, restantes\nelse\n  return { 0, 0 }                    -- bloqueado\nend"
+          }
+        },
+        {
+          "id": "e0071d90-153f-4643-bd32-8a0334d529c8",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "ts",
+            "code": "// Uso no Node (ioredis)\nconst script = await fs.readFile('rate_limit.lua', 'utf8');\nconst sha = await redis.script('LOAD', script);\n\nasync function allow(userId: string) {\n  const now = Date.now();\n  const result = await redis.evalsha(\n    sha, 1,\n    'rl:user:' + userId,\n    now, 60000, 100, crypto.randomUUID()\n  ) as [number, number];\n  return { allowed: result[0] === 1, remaining: result[1] };\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "14bc5c02-a67c-436e-9902-d622f5efaacf",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Streams: log persistente tipo Kafka-lite"
+      },
+      "children": [
+        {
+          "id": "3eb3d0e5-70fe-43e2-94d8-0f182f3b771b",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "# Producer\nXADD events * type signup userId 42\nXADD events * type purchase userId 42 amount 99.90\n\n# Consumer group (processamento exactly-once-ish)\nXGROUP CREATE events analytics $ MKSTREAM\nXREADGROUP GROUP analytics worker-1 COUNT 10 BLOCK 5000 STREAMS events >\n\n# Ack apos processar\nXACK events analytics 1738000000000-0"
+          }
+        },
+        {
+          "id": "7dd309cc-0c61-4376-8574-96de3ecbe478",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Streams substitui filas pub/sub simples quando você precisa de replay, consumer groups e retention. Não substitui Kafka em escala massiva (GB/s)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "d7dd1b16-5d8d-41bb-937c-df2003b2e14c",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Persistence real: AOF vs RDB"
+      },
+      "children": [
+        {
+          "id": "dcb658e3-e922-4621-90f8-e7ad3d8388fd",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "RDB é snapshot periódico — rápido no restart, mas perde os writes entre snapshots. AOF (append-only file) loga cada write com fsync configurável — durability real. Em produção séria: AOF com appendfsync everysec + RDB semanal para backup. Nunca rodar Redis sem persistence se o dado importa."
+          }
+        },
+        {
+          "id": "dce27aac-6988-4726-98e7-8fa5b1209150",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Redis bem usado substitui 3-4 serviços: cache, fila, rate limiter, pub/sub, session store, leaderboard. Dominar estruturas vale mais que saber 10 bancos."
+          }
+        }
+      ]
+    }
+  ]
+}

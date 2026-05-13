@@ -26,7 +26,7 @@
 
 | Sprint | Período | Status | % Concluído |
 |---|---|---|---|
-| **Sprint 1** — Schema + Foundation | Sem 1 | ⬜ Não iniciada | 0% |
+| **Sprint 1** — Schema + Foundation | Sem 1 | 🟡 Em progresso | 80% |
 | **Sprint 2** — Blocos + Parser | Sem 2 | ⬜ Não iniciada | 0% |
 | **Sprint 3** — Migração piloto | Sem 3 | ⬜ Não iniciada | 0% |
 | **Sprint 4** — Wave 1 (100 módulos) | Sem 4 | ⬜ Não iniciada | 0% |
@@ -213,12 +213,20 @@ ALTER TABLE articles
 
 ### Checklist Parte III
 
-- [ ] Migration 25 escrita + down migration
-- [ ] Migration 26 escrita + down migration
-- [ ] Migration 27 escrita + down migration
-- [ ] Migrations testadas localmente (up + down + up)
-- [ ] Migration aplicada em staging
-- [ ] Migration aplicada em produção
+- [x] Migration 26 hubs (up + down) — feat/cms-sprint-1
+- [x] Migration 27 trails (up + down)
+- [x] Migration 28 extend curriculum_articles (up + down)
+- [x] Migration 29 module_blocks (up + down)
+- [x] Migration 30 module_revisions (up + down)
+- [x] Migration 31 comments (up + down) — schema pronto, sem handler
+- [x] Migration 32 comment_votes (up + down)
+- [x] Migration 33 article_ratings (up + down)
+- [x] Migration 34 article_bookmarks (up + down)
+- [x] Migration 35 trail_enrollments (up + down)
+- [x] Migration 36 content_reports (up + down)
+- [ ] Migrations testadas localmente (up + down + up) — pendente Docker local
+- [ ] Migrations aplicadas em staging
+- [ ] Migrations aplicadas em produção
 
 ---
 
@@ -765,26 +773,35 @@ Cache invalidation pipeline (ao editar):
 - 1 módulo de teste renderizando 100% do DB
 
 ### Tarefas
-- [ ] Migration `000025_create_module_blocks.sql`
-- [ ] Migration `000026_create_module_revisions.sql`
-- [ ] Migration `000027_extend_articles.sql`
-- [ ] Testes de migration (up + down + up)
-- [ ] Aplicar migrations em local + staging
-- [ ] Go structs: Section, Paragraph, Callout, CodeBlock, ComparisonTable
-- [ ] Validador Go com `validator.v10`
-- [ ] Repository `curriculum_repo.go` com fetch recursivo
-- [ ] Endpoint `GET /api/v1/curriculum/:slug` retornando blocks
-- [ ] Cache Redis no handler (TTL 1h)
-- [ ] Contract tests do endpoint
-- [ ] Zod schemas no frontend para 5 tipos
-- [ ] `BlockRenderer.tsx` com 5 tipos no registry
-- [ ] Fallback gracioso (unknown type, invalid data)
-- [ ] Testes unitários do renderer
-- [ ] Página `/admin/blocks` (storybook básico)
-- [ ] Visual regression tests dos 5 tipos
-- [ ] Criar 1 módulo de teste no DB manualmente (INSERT SQL)
-- [ ] Renderizar esse módulo via rota `/aprenda/teste-cms`
-- [ ] Comparar visual com módulo equivalente estático
+- [x] **Migrations 026-036** (11 arquivos up + 11 down) — em `feat/cms-sprint-1`
+- [x] Testes de migration (up + down + up) — aplicadas no Postgres local Docker
+- [x] Aplicar migrations em local (Docker compose dev) ✅
+- [ ] Aplicar migrations em staging
+- [ ] Aplicar migrations em produção
+- [x] Go structs Block + 15 tipos válidos (constantes BlockType*)
+- [x] Repository `curriculum_repo.go` com `FindBlocksBySlug` (árvore reconstruída em Go) + `SaveBlocks` (transacional)
+- [x] Endpoint `GET /api/v1/curriculum/:slug/blocks` retornando blocks ✅
+- [x] ETag + Cache-Control no handler
+- [x] OpenAPI documentado + Swagger UI funcional em http://localhost:8090
+- [ ] Cache Redis no handler (TTL 1h) — adiar para Sprint 2
+- [ ] Contract tests do endpoint — adiar para Sprint 2
+- [x] Zod schemas no frontend para 15 tipos (5 ativos, 10 placeholders)
+- [x] `BlockRenderer.tsx` com 5 tipos ativos no registry + adapters inline
+- [x] Fallback gracioso (unknown type, invalid data, PlaceholderBlock)
+- [ ] Testes unitários do renderer — adiar para Sprint 2
+- [ ] Página `/admin/blocks` (storybook básico) — Sprint 2
+- [ ] Visual regression tests dos 5 tipos — Sprint 2
+- [x] **Seed inicial**: 1 hub + 1 trilha + 3 módulos reais (19 blocks)
+- [x] Rota dinâmica `/aprenda-dynamic/[slug]/` paralela criada
+- [x] Renderizado e validado em http://localhost:3000/aprenda-dynamic/o-que-e-ia/
+- [ ] Comparar visual com módulo equivalente estático — pendente revisão Fernando
+
+**Validações ponta-a-ponta concluídas (2026-05-13):**
+- ✅ Backend Go rodando em `:8080`
+- ✅ Postgres + Redis via docker compose
+- ✅ Swagger UI em `:8090` executando endpoint com sucesso (200 OK)
+- ✅ Frontend Next.js em `:3000` SSR consumindo backend
+- ✅ Conteúdo do banco renderizado pelo BlockRenderer no browser
 
 ### Deliverable Sprint 1
 ✅ 1 módulo de teste renderizando 100% do DB, indistinguível dos estáticos.
@@ -966,24 +983,67 @@ Cache invalidation pipeline (ao editar):
 
 ---
 
-## Sprint 10 — Polish (Semana 10)
+## Sprint 10 — Polish + Painel Admin com Métricas (Semana 10)
 
 **Status**: ⬜ Não iniciada
 
 ### Objetivos
 - Plataforma CMS-driven madura
+- **Portal admin profissional com métricas reais** (escopo ampliado por solicitação)
 
-### Tarefas
+### Tarefas — CMS
+
 - [ ] Painel admin completo (drafts, scheduling, A/B variants)
-- [ ] Analytics avançado (heatmap por bloco, dropoff)
 - [ ] Bulk operations (publicar/arquivar em lote)
 - [ ] Importação OneOff (Markdown, Notion export)
 - [ ] Documentação completa em `docs/CMS.md`
 - [ ] Runbook de operação editorial
 - [ ] Treinamento (você + futuros editores)
 
+### Tarefas — Portal Admin de Métricas
+
+**Backend (Go)** — endpoints `/api/v1/admin/metrics/*`:
+
+- [ ] `GET /admin/metrics/overview` — KPIs gerais (DAU, WAU, MAU, total usuários, novos por semana, módulos publicados, XP distribuído)
+- [ ] `GET /admin/metrics/articles?from=&to=` — por módulo: views, completions, dropoff rate, tempo médio, rating médio
+- [ ] `GET /admin/metrics/articles/:slug` — drill-down de 1 módulo: heatmap por bloco (onde users param), distribuição de tempo, comentários, ratings
+- [ ] `GET /admin/metrics/quizzes` — por questão: taxa de acerto, tempo médio, qual opção mais errada, dificuldade calculada
+- [ ] `GET /admin/metrics/quizzes/:question_id` — drill-down de 1 questão: usuários que acertaram/erraram, distribuição por hub/trilha
+- [ ] `GET /admin/metrics/trails` — por trilha: enrollments, taxa de conclusão, dropoff, tempo médio para completar
+- [ ] `GET /admin/metrics/funnel` — funil completo: visita home → começa trilha → completa módulo → atinge milestone (badges/level)
+- [ ] `GET /admin/metrics/retention` — coortes semanais/mensais (D1, D7, D30 retention)
+- [ ] `GET /admin/metrics/search` — top queries, queries sem resultado, click-through rate
+- [ ] `GET /admin/metrics/users` — segmentação: free/paid, ativos/inativos, top XP
+
+**Tabelas novas (migrations 037-040 ou usar existentes)**:
+
+- [ ] `event_views` (já temos `analytics_events` — agregar sobre essa)
+- [ ] `quiz_attempts` (cada tentativa de resposta — armazena correct, time_spent, hint_used)
+- [ ] `module_progress` (granular: % do módulo lido, tempo total, scroll depth máximo)
+- [ ] Views materializadas em Postgres para agregações pesadas (refresh hourly via cron)
+
+**Frontend (Next.js) — Painel `/admin/metrics/`**:
+
+- [ ] `/admin/metrics` — dashboard overview com cards KPI + gráficos (Recharts/Tremor)
+- [ ] `/admin/metrics/articles` — tabela com filtro, ordenação, drill-down
+- [ ] `/admin/metrics/articles/[slug]` — visualização individual com heatmap visual (cor por bloco baseado em dropoff)
+- [ ] `/admin/metrics/quizzes` — tabela de questões com taxa de acerto + dificuldade
+- [ ] `/admin/metrics/quizzes/[id]` — distribuição de respostas (gráfico de barras por opção)
+- [ ] `/admin/metrics/trails` — funil de cada trilha
+- [ ] `/admin/metrics/retention` — heatmap de coortes
+- [ ] `/admin/metrics/funnel` — Sankey diagram de jornada do usuário
+- [ ] Filtros globais: data range, hub, trilha, dificuldade
+- [ ] Export CSV de qualquer tabela
+
+**Permissões e segurança**:
+
+- [ ] Todas as rotas `/admin/metrics/*` requerem `role=admin` no JWT
+- [ ] Audit log de cada acesso (quem viu o quê quando)
+- [ ] Rate limit específico para evitar scraping de métricas
+- [ ] Anonimização: nunca expor email/nome individual (só agregados)
+
 ### Deliverable Sprint 10
-✅ Plataforma CMS profissional + processo editorial sustentável.
+✅ Plataforma CMS profissional + painel admin com métricas em tempo real e drill-down por módulo/questão/usuário/trilha.
 
 ---
 

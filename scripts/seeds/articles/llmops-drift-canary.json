@@ -1,0 +1,637 @@
+{
+  "slug": "llmops-drift-canary",
+  "title": null,
+  "blocks": [
+    {
+      "id": "02609c5a-b43c-40b8-8d9a-45ea952e3b9e",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " LLMOps é o que separa \"demo de IA\" de \"sistema AI-native em produção\". Este módulo fecha a trilha juntando os ingredientes operacionais: "
+          },
+          {
+            "text": "eval harness",
+            "bold": true
+          },
+          {
+            "text": " bloqueando deploy ruim, "
+          },
+          {
+            "text": "canary de prompts",
+            "bold": true
+          },
+          {
+            "text": ", "
+          },
+          {
+            "text": "drift detection",
+            "bold": true
+          },
+          {
+            "text": " (modelo, dado, RAG), "
+          },
+          {
+            "text": "cost attribution",
+            "bold": true
+          },
+          {
+            "text": " e "
+          },
+          {
+            "text": "SLO de qualidade",
+            "bold": true
+          },
+          {
+            "text": ". Como saber que o pipeline continua entregando. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "4fed2677-1117-4db8-8d17-a7c87b229dfb",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "LLMOps ≠ MLOps: o que muda"
+      },
+      "children": [
+        {
+          "id": "824d355c-d2b6-4d42-bcf4-f092975f0c50",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "MLOps clássico",
+              "LLMOps"
+            ],
+            "rows": [
+              [
+                "Artefato versionado",
+                "Pesos do modelo",
+                "Prompts, tools, RAG config, eval sets"
+              ],
+              [
+                "Quem treina",
+                "Você",
+                "Provider (Anthropic/OpenAI/Google)"
+              ],
+              [
+                "Origem de drift",
+                "Dado ou pipeline",
+                "Provider muda snapshot, dado muda, prompt muda"
+              ],
+              [
+                "Eval",
+                "Test set estático",
+                "Eval harness com LLM-as-judge + métricas online"
+              ],
+              [
+                "Custo",
+                "Treino (capex) + inferência",
+                "Inferência variável + cache + batch"
+              ],
+              [
+                "Rollback",
+                "Voltar pesos antigos",
+                "Voltar prompt + pin de snapshot"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "8c472f77-0beb-4d85-ae19-1a799fb11db2",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Algumas dores são as mesmas (observability, deploy gradual, SLO), mas os artefatos diferem. Um PR que muda 3 linhas de system prompt é um \"modelo novo\" em LLMOps — merece eval e canary como qualquer release de modelo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "e199c902-aafc-4a20-98fe-6324417214e0",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Arquitetura de plataforma LLMOps"
+      },
+      "children": [
+        {
+          "id": "e5d0650f-14f2-4c5a-9749-345a60b58caf",
+          "type": "stack_flow",
+          "position": 0,
+          "data": {
+            "title": "",
+            "items": [
+              {
+                "label": "Prompt / Config Registry",
+                "sub": "Git + versionado: system prompt, tools, rag_version — referência por hash"
+              },
+              {
+                "label": "Eval Harness (CI)",
+                "sub": "golden set (100–500) · métricas de retrieval + geração · bloqueia PR se regressão > threshold"
+              },
+              {
+                "label": "Canary Router",
+                "sub": "1% → 10% → 50% → 100% — rollback automático por SLO"
+              },
+              {
+                "label": "Observability",
+                "sub": "traces (Langfuse/LangSmith) · p50/p95 · tokens, cost, cache ratio · online signals"
+              },
+              {
+                "label": "Drift Monitors",
+                "sub": "drift de modelo · distribuição de queries · RAG staleness → feedback para golden set"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "49708a0f-902c-4963-a423-d01fcc4138ab",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Prompt registry: versionar prompts como código"
+      },
+      "children": [
+        {
+          "id": "52a287ff-8c8c-4702-8174-d97b89154bf7",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Prompts devem viver em repo, revisados em PR, versionados por hash. Nunca edite prompt direto em dashboard \"sem deploy\" — reproduzibilidade é perdida. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "fc573e3a-5891-4b28-8d45-0e76885a00b6",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# Estrutura simples\n#   prompts/\n#     extract_ticket/\n#       v3.md          ← prompt em markdown com frontmatter YAML\n#       v3.json        ← schema de input/output\n#       v3.eval.jsonl  ← golden set opcional específico deste prompt\nfrom pathlib import Path\nimport hashlib, yaml, json\n\nclass Prompt:\n    def __init__(self, path: Path):\n        text = path.read_text()\n        if text.startswith(\"---\"):\n            meta_block, body = text.split(\"---\", 2)[1:]\n            self.meta = yaml.safe_load(meta_block)\n        else:\n            self.meta, body = {}, text\n        self.body = body.strip()\n        self.hash = hashlib.sha256(self.body.encode()).hexdigest()[:12]\n\n    def format(self, **kwargs) -> str:\n        return self.body.format(**kwargs)\n\n# Uso\np = Prompt(Path(\"prompts/extract_ticket/v3.md\"))\nprompt_text = p.format(ticket=ticket_text)\n# Log: prompt_hash=p.hash, version=p.meta.get(\"version\"), model=p.meta.get(\"model\")"
+          }
+        }
+      ]
+    },
+    {
+      "id": "61667e53-1867-460f-904e-fd05ea1f59ad",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Eval harness em CI: bloqueie PR ruim"
+      },
+      "children": [
+        {
+          "id": "64c509f0-8cb1-4f5b-bd0b-6e0db18d2f5b",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Coberto no módulo de RAG evaluation. Princípio operacional: "
+              },
+              {
+                "text": "golden set ≥ 100 itens",
+                "bold": true
+              },
+              {
+                "text": ", "
+              },
+              {
+                "text": "baseline committed no repo",
+                "bold": true
+              },
+              {
+                "text": ", "
+              },
+              {
+                "text": "CI compara current vs baseline",
+                "bold": true
+              },
+              {
+                "text": ", "
+              },
+              {
+                "text": "falha se regressão > threshold",
+                "bold": true
+              },
+              {
+                "text": ". "
+              }
+            ]
+          }
+        },
+        {
+          "id": "80f29d8e-bf94-4bb4-a6b4-362e45bb92de",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "yaml",
+            "code": "# promptfoo é uma das opções prontas — config declarativa\nprompts: [file://prompts/extract_ticket/v3.md]\nproviders:\n  - id: anthropic:messages:claude-sonnet-4-6\n    config: { temperature: 0 }\n\ntests:\n  - description: ticket simples\n    vars: { ticket: \"Meu cartão não passou na renovação\" }\n    assert:\n      - type: javascript\n        value: output.includes(\"billing\") && output.includes(\"card_declined\")\n      - type: latency\n        threshold: 3000\n      - type: cost\n        threshold: 0.01\n\ndefaultTest:\n  assert:\n    - type: llm-rubric\n      value: A resposta deve ser JSON válido com campos category, urgency (1-5), summary.\n      provider: openai:chat:gpt-4o-mini"
+          }
+        },
+        {
+          "id": "d393f88e-0faf-41e7-bea6-f5de9709b741",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Ferramenta",
+              "Forte em",
+              "Fraco em"
+            ],
+            "rows": [
+              [
+                "promptfoo",
+                "Config declarativa, fácil CI, múltiplos providers",
+                "Golden set grande vira YAML gigante"
+              ],
+              [
+                "LangSmith (LangChain)",
+                "Traces + datasets integrados; UI rica",
+                "Ecosistema LangChain; pricing"
+              ],
+              [
+                "Langfuse (open-source)",
+                "Self-host, traces, datasets, scores",
+                "Menos batteries-included que LangSmith"
+              ],
+              [
+                "RAGAS",
+                "Métricas RAG canônicas em código",
+                "Menos infra de dataset e CI"
+              ],
+              [
+                "Custom (pytest + jsonl)",
+                "Máximo controle",
+                "Você reimplementa tudo"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "03de5fab-3074-4f60-84ea-aae47eb20f63",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Canary de prompt: rollout gradual e automático"
+      },
+      "children": [
+        {
+          "id": "42fbd910-975c-4560-9aed-1ca0947920ff",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Novo prompt entra em produção atendendo a uma fração de tráfego. Comparamos métricas com grupo de controle (prompt atual). Se degradação, rollback. Se OK, subimos o percentual. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "23f4663a-c448-4868-bbde-d4d168a90834",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# Rota simples com sticky assignment por user_id\nimport hashlib\n\ndef canary_prompt(user_id: str, percent: int, control_hash: str, canary_hash: str) -> str:\n    bucket = int(hashlib.sha256(user_id.encode()).hexdigest(), 16) % 100\n    return canary_hash if bucket < percent else control_hash\n\n# Ao chamar LLM, log:\n#   variant = \"control\" | \"canary\"\n#   quality_score (estimado via eval online ou modelo judge)\n#   cost_usd\n#   latency_ms\n\n# Regra de promoção (pseudo)\n#   se canary_sample > 1000 E\n#      quality_delta > -2pp E\n#      cost_delta < +15% E\n#      latency_p95_delta < +200ms:\n#     promover percent +20 até 100\n#   senão:\n#     rollback para 0"
+          }
+        },
+        {
+          "id": "d9df38ba-d6dc-4454-9313-d9d4e6e26c80",
+          "type": "decision_box",
+          "position": 2,
+          "data": {
+            "scenario": "Mudança de system prompt em endpoint de alto tráfego (customer support)",
+            "winner": "Canary 1% → 10% → 50% → 100% em 48-72h com rollback automático",
+            "why": "Mudança parece inofensiva mas pode quebrar edge cases invisíveis ao eval offline (ex: novas intents). Canary expõe gradualmente e rollback em minutos protege receita.",
+            "alternatives": [
+              {
+                "name": "Deploy direto após eval offline",
+                "note": "ok só em endpoints de baixo risco com eval forte"
+              },
+              {
+                "name": "A/B 50/50 fixo",
+                "note": "experimentação estatística; não é o mesmo que safety canary"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "4e85db37-b256-458e-b23f-c11538916788",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Drift detection: o sinal que aparece antes do ticket"
+      },
+      "children": [
+        {
+          "id": "855200ef-6c25-40d6-b55a-72117a4c9d16",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Fonte de drift",
+              "Sensor",
+              "Alert"
+            ],
+            "rows": [
+              [
+                "Modelo (provider mudou)",
+                "Pin de snapshot (não usar \"latest\"); re-eval semanal contra golden",
+                "Diff de quality vs baseline > 3pp"
+              ],
+              [
+                "Query distribution",
+                "Distância (KL/PSI) entre vetores/tópicos de queries hoje vs semana passada",
+                "Distância acima de threshold"
+              ],
+              [
+                "RAG staleness",
+                "Data média dos chunks usados; hit ratio em novas queries",
+                "Hit ratio caindo ou data média muito antiga"
+              ],
+              [
+                "Tool drift",
+                "Taxa de tool_use errada ou validation error",
+                "Aumento súbito de tool errors"
+              ],
+              [
+                "Usuário refina muito",
+                "Taxa de follow-up/re-prompt em conversa",
+                "Sobe = qualidade caiu"
+              ],
+              [
+                "Custo por task",
+                "Tokens médios/query",
+                "Jump sugere loops ou context growth"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "78051a25-ed57-4653-8fe5-210065f349ab",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# Exemplo simples de drift por distribuição de tópicos (PSI)\nimport numpy as np\n\ndef psi(expected: np.ndarray, actual: np.ndarray, eps=1e-6) -> float:\n    expected = np.clip(expected, eps, None); expected /= expected.sum()\n    actual   = np.clip(actual,   eps, None); actual   /= actual.sum()\n    return float(np.sum((actual - expected) * np.log(actual / expected)))\n\n# Usa topic distribution (cluster de embeddings) em janela móvel\n# PSI < 0.1 estável, 0.1-0.25 atenção, > 0.25 drift significativo"
+          }
+        }
+      ]
+    },
+    {
+      "id": "73089b0d-4869-4e2b-983d-7f8e6923aa96",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Cost attribution e FinOps de LLM"
+      },
+      "children": [
+        {
+          "id": "9f78b325-4b56-4506-8e5b-8173365a6f92",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Tag / label",
+              "Pra que serve"
+            ],
+            "rows": [
+              [
+                "endpoint / rota",
+                "endpoint=search_rag",
+                "Identificar endpoint caro"
+              ],
+              [
+                "feature / produto",
+                "feature=summarize_monthly",
+                "Quanto cada feature custa"
+              ],
+              [
+                "tenant / cliente",
+                "tenant=acme (se multi-tenant)",
+                "Chargeback ou ROI por cliente"
+              ],
+              [
+                "model",
+                "model=sonnet-4-6",
+                "Impacto de mudança de modelo"
+              ],
+              [
+                "prompt_hash",
+                "prompt_hash=ab12cd34",
+                "Correlacionar custo com versão de prompt"
+              ],
+              [
+                "variant",
+                "variant=canary",
+                "Comparar canary vs control"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "f1a23d1c-dc93-4501-8171-d7922517b891",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Com essas labels em logs/traces, você responde \"feature X custou quanto por usuário em abril?\" em um dashboard. Sem labels, fica \"uma conta só\" e FinOps vira brigar com o fornecedor."
+          }
+        }
+      ]
+    },
+    {
+      "id": "6d712ae5-d8cf-4f6c-907f-dcb40e3b0e0c",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "SLO de qualidade: o que prometer"
+      },
+      "children": [
+        {
+          "id": "d552386d-09f7-450a-adf1-c2c78eef1807",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " SLO de LLM combina três famílias de métricas: "
+              },
+              {
+                "text": "qualidade",
+                "bold": true
+              },
+              {
+                "text": ", "
+              },
+              {
+                "text": "performance",
+                "bold": true
+              },
+              {
+                "text": ", "
+              },
+              {
+                "text": "custo",
+                "bold": true
+              },
+              {
+                "text": ". Cada uma com objetivo e janela clara. Exemplo para um assistente de suporte: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "2c640cff-7ad9-498b-b82b-4b08cad7e198",
+          "type": "list",
+          "position": 1,
+          "data": {
+            "items": [
+              "Qualidade: faithfulness ≥ 0.90 (LLM-as-judge, amostra diária de 50 conversas) em janela de 30 dias.",
+              "Qualidade online: thumbs-up rate ≥ 75% nas respostas avaliadas pelo usuário.",
+              "Latência: TTFT p95 ≤ 1200ms; total p95 ≤ 8s.",
+              "Custo: USD por conversa resolvida ≤ 0.05 (mediana mensal).",
+              "Disponibilidade: ≥ 99.5% (provider fail + retry transparente)."
+            ],
+            "ordered": false
+          }
+        },
+        {
+          "id": "5b3065cd-c83b-4f67-abba-694353e5a236",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "SLO sem error budget é aspiracional. Defina budget mensal (\"podemos ter até 1% abaixo do threshold\"); quando consumir, congele deploys de prompt/config até restaurar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "7192e8fe-ac4e-4593-a7bb-8b03469cb61f",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Incident playbook: o que fazer quando cai"
+      },
+      "children": [
+        {
+          "id": "58563106-600f-4ccb-82c6-95ea9a8502fa",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sintoma",
+              "Primeira ação",
+              "Investigação"
+            ],
+            "rows": [
+              [
+                "Quality score caiu em dashboard",
+                "Rollback do último prompt release",
+                "Diff de prompt, snapshot do modelo, composição de queries"
+              ],
+              [
+                "Custo pulou 2×",
+                "Verificar token/query por endpoint",
+                "Loops? Context growth? Cache invalidado?"
+              ],
+              [
+                "Latência estourou",
+                "Checar provider status; fallback para outro modelo/provider",
+                "Rate limit? Upstream? Streaming quebrou?"
+              ],
+              [
+                "Usuário reporta resposta errada",
+                "Pegar trace pelo request_id",
+                "Reprovar em golden set; adicionar caso ao set"
+              ],
+              [
+                "429 em massa",
+                "Ligar rate limiter local; considerar batch para jobs não-críticos",
+                "Subir quota no provider"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "1d9e30f3-7f20-49ea-a646-7bacce2cb4dd",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Perguntas típicas"
+      },
+      "children": [
+        {
+          "id": "f0c31f31-dd8c-4fa5-825b-fd6397ad265d",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Preciso mesmo pinar snapshot de modelo?",
+            "answer": "Sim. \"claude-sonnet-4\" (alias) pode passar para nova versão silenciosamente. \"claude-sonnet-4-6\" (snapshot) é estável até ser descontinuado com aviso. Canary de upgrade de snapshot é uma operação — não deixe a decisão com o alias."
+          }
+        },
+        {
+          "id": "059ce0c9-7ca5-4374-97e9-325aaa9e1c03",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Quando vale investir em plataforma LLMOps própria?",
+            "answer": "Quando você tem múltiplas features críticas de LLM (3+), múltiplos times mexendo em prompts, e gasta >US$5k/mês em API. Antes disso, Langfuse self-host + promptfoo + um golden set bem curado cobre 80% pelo custo de uma tarde de setup."
+          }
+        },
+        {
+          "id": "e19d1e77-941d-4876-a0e9-b1128bd37a48",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "LLM-as-judge em produção é confiável para alertar?",
+            "answer": "Para alertar, sim, desde que calibrado com humanos e com rubrica. Para acionar rollback automático sem humano no loop, recomendo calibração mais forte e combinação com sinal online (thumbs, refinement rate). Nunca confie em um juiz só para decisão crítica."
+          }
+        },
+        {
+          "id": "f07e2a53-f46e-4e84-8c60-c3ec81e36e69",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Como convenço o time a investir em eval harness antes de feature nova?",
+            "answer": "Com um incident. Meio sério: trace o último bug crítico em LLM, calcule o custo de MTTR, mostre que eval harness teria pegado antes. Se não tiver incident, faça um exercício: aplique eval em uma versão antiga de prompt — a chance de achar regressões esquecidas é altíssima."
+          }
+        }
+      ]
+    },
+    {
+      "id": "bb081d39-f922-4ad4-b95d-a0efb70896fd",
+      "type": "callout",
+      "position": 11,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Take-aways. LLMOps versiona prompts/tools/configs, não pesos. Eval harness em CI bloqueia regressão conhecida; monitoring online captura drift do mundo. Canary (1→10→50→100%) com rollback automático é obrigatório em tráfego de produção. Drift vem do modelo (pin snapshot), da query (distribuição), do RAG (staleness) — três sensores separados. Cost attribution com labels responde FinOps em minutos. SLO de qualidade + error budget separa engenharia séria de \"deploy and pray\". Com isso a trilha fecha: do RAG fundamental ao sistema AI-native em produção, rodando com eval, canary e SLO."
+      }
+    }
+  ]
+}

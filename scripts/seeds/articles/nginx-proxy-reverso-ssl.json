@@ -1,0 +1,311 @@
+{
+  "slug": "nginx-proxy-reverso-ssl",
+  "title": null,
+  "blocks": [
+    {
+      "id": "47c875db-1ac0-4d54-b0c9-22021e55bfda",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Nginx é o servidor web e proxy reverso mais usado no mundo — mais de 40% dos sites usam Nginx na frente da aplicação. Neste módulo você configura o Nginx como proxy reverso para uma API com múltiplas réplicas, adiciona rate limiting para proteger contra abuse, configura failover automático com "
+          },
+          {
+            "text": "proxy_next_upstream",
+            "code": true
+          },
+          {
+            "text": " e aplica headers de segurança essenciais. A configuração de SSL é coberta no próximo módulo — aqui tratamos a base HTTP primeiro. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "bcd04360-efcf-4c17-9127-056ea6607f3f",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Por que Nginx em frente à API?"
+      },
+      "children": [
+        {
+          "id": "95175254-bb0b-4641-bd0f-af989ffaac2a",
+          "type": "key_value",
+          "position": 0,
+          "data": {
+            "items": [
+              {
+                "k": "Terminação SSL",
+                "v": "Nginx gerencia o certificado SSL — a API recebe tráfego HTTP interno (mais simples e mais rápido)"
+              },
+              {
+                "k": "Load balancing",
+                "v": "Distribui requisições entre múltiplas réplicas da API automaticamente"
+              },
+              {
+                "k": "Arquivos estáticos",
+                "v": "Nginx serve arquivos estáticos diretamente do disco (muito mais rápido que Node/Go servindo estáticos)"
+              },
+              {
+                "k": "Rate limiting",
+                "v": "Protege a API de abuse sem precisar de middleware na aplicação"
+              },
+              {
+                "k": "Buffer de requests",
+                "v": "Absorve conexões lentas de clientes — a API recebe a requisição completa de uma vez"
+              },
+              {
+                "k": "Headers de segurança",
+                "v": "HSTS, X-Frame-Options, CSP — configurados uma vez no Nginx para todas as respostas"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "7c110448-22fb-488b-8f37-a8c8b3bea188",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Estrutura de diretórios do Nginx"
+      },
+      "children": [
+        {
+          "id": "9f66f565-7925-4733-b496-07f7e57fe510",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "# Estrutura recomendada no repositório do projeto\nnginx/\n├── nginx.conf          # configuração principal (worker_processes, events, http global)\n└── sites/\n    ├── api.conf        # configuração do virtualhost da API\n    └── frontend.conf   # (se servir frontend estático pelo Nginx)\n\n# No docker-compose.prod.yml, monta assim:\n# volumes:\n#   - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro\n#   - ./nginx/sites:/etc/nginx/conf.d:ro"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3e57888-6f8a-4fae-8633-0251eabcef9a",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "nginx.conf: configuração principal"
+      },
+      "children": [
+        {
+          "id": "a5a9c3e2-7dd0-4482-8577-85145729f2de",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "nginx",
+            "code": "# nginx/nginx.conf\nuser nginx;\nworker_processes auto;          # 1 worker por CPU core automaticamente\nerror_log /var/log/nginx/error.log warn;\npid /var/run/nginx.pid;\n\nevents {\n    worker_connections 1024;    # conexões simultâneas por worker\n    use epoll;                  # melhor performance no Linux\n    multi_accept on;            # aceita múltiplas conexões por vez\n}\n\nhttp {\n    include /etc/nginx/mime.types;\n    default_type application/octet-stream;\n\n    # Formato de log com informações úteis\n    log_format main '$remote_addr - $remote_user [$time_local] '\n                    '\"$request\" $status $body_bytes_sent '\n                    '\"$http_referer\" \"$http_user_agent\" '\n                    'rt=$request_time uct=$upstream_connect_time '\n                    'uht=$upstream_header_time urt=$upstream_response_time';\n\n    access_log /var/log/nginx/access.log main;\n\n    # Performance\n    sendfile on;\n    tcp_nopush on;\n    tcp_nodelay on;\n    keepalive_timeout 65;\n    types_hash_max_size 2048;\n\n    # Ocultar versão do Nginx nos headers de resposta\n    server_tokens off;\n\n    # Compressão gzip para respostas de texto\n    gzip on;\n    gzip_types text/plain text/css application/json application/javascript text/xml;\n    gzip_min_length 1000;\n    gzip_vary on;\n\n    # ─── Rate limiting zones (definidas aqui, usadas nos sites) ────\n    # Limite por IP para a API: 10 req/s com burst de 20\n    limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;\n\n    # Limite mais rígido para endpoints de autenticação: 5 req/min\n    limit_req_zone $binary_remote_addr zone=auth:10m rate=5r/m;\n\n    # ─── Incluir configurações de sites ────────────────────────────\n    include /etc/nginx/conf.d/*.conf;\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "6d8b7c58-a4cd-418f-9ca8-7c32a4d335a0",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "sites/api.conf: proxy reverso com load balancing"
+      },
+      "children": [
+        {
+          "id": "9c020c9f-803a-4108-b8a8-54d1142c0242",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "nginx",
+            "code": "# nginx/sites/api.conf\n\n# ─── Upstream: grupo de backends da API ─────────────────────────\n# Os nomes \"api\" referencia o serviço Docker Compose pelo nome\n# Se tiver 2 réplicas (api-1 e api-2), use IPs ou nomes com porta\nupstream api_backends {\n    # Round-robin por padrão entre os backends listados\n    server api:3000;          # nome do serviço Docker, porta interna\n\n    # Com múltiplas réplicas explícitas (se não usar deploy.replicas):\n    # server api-1:3000;\n    # server api-2:3000;\n\n    # Configurações de health check e timeout do upstream\n    keepalive 32;             # mantém 32 conexões HTTP keepalive com o backend\n}\n\n# ─── Servidor HTTP: redireciona para HTTPS ──────────────────────\nserver {\n    listen 80;\n    server_name api.seudominio.com;\n\n    # Desafio do Let's Encrypt (necessário para renovação de certificado)\n    location /.well-known/acme-challenge/ {\n        root /var/www/certbot;\n    }\n\n    # Todo o resto redireciona para HTTPS\n    location / {\n        return 301 https://$host$request_uri;\n    }\n}\n\n# ─── Servidor HTTPS ─────────────────────────────────────────────\nserver {\n    listen 443 ssl http2;\n    server_name api.seudominio.com;\n\n    # Certificados SSL (gerados pelo Certbot — próximo módulo)\n    ssl_certificate /etc/letsencrypt/live/api.seudominio.com/fullchain.pem;\n    ssl_certificate_key /etc/letsencrypt/live/api.seudominio.com/privkey.pem;\n\n    # Configuração SSL moderna (TLS 1.2 e 1.3 apenas)\n    ssl_protocols TLSv1.2 TLSv1.3;\n    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;\n    ssl_prefer_server_ciphers off;\n    ssl_session_cache shared:SSL:10m;\n    ssl_session_timeout 1d;\n\n    # ─── Headers de segurança ───────────────────────────────────\n    add_header Strict-Transport-Security \"max-age=31536000; includeSubDomains\" always;\n    add_header X-Frame-Options DENY always;\n    add_header X-Content-Type-Options nosniff always;\n    add_header X-XSS-Protection \"1; mode=block\" always;\n    add_header Referrer-Policy \"strict-origin-when-cross-origin\" always;\n\n    # ─── Rate limiting na API ───────────────────────────────────\n    limit_req zone=api burst=20 nodelay;\n    limit_req_status 429;\n\n    # ─── Proxy para a API ───────────────────────────────────────\n    location / {\n        proxy_pass http://api_backends;\n\n        # Headers necessários para a API conhecer o cliente real\n        proxy_set_header Host $host;\n        proxy_set_header X-Real-IP $remote_addr;\n        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n        proxy_set_header X-Forwarded-Proto $scheme;\n\n        # Timeouts razoáveis\n        proxy_connect_timeout 10s;\n        proxy_send_timeout 60s;\n        proxy_read_timeout 60s;\n\n        # Failover: se o backend retornar erro, tenta o próximo\n        proxy_next_upstream error timeout http_502 http_503 http_504;\n        proxy_next_upstream_tries 2;\n\n        # HTTP/1.1 necessário para keepalive com o upstream\n        proxy_http_version 1.1;\n        proxy_set_header Connection \"\";\n    }\n\n    # Rate limiting mais rígido em endpoints de auth\n    location /api/v1/auth {\n        limit_req zone=auth burst=5 nodelay;\n        proxy_pass http://api_backends;\n        proxy_set_header Host $host;\n        proxy_set_header X-Real-IP $remote_addr;\n        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n        proxy_set_header X-Forwarded-Proto $scheme;\n    }\n\n    # Health check público (sem rate limiting)\n    location /health {\n        proxy_pass http://api_backends;\n        access_log off;         # não polui o log com health checks\n    }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "cd563467-9e0a-4c1c-8cc9-14bc7055cdbd",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Rate limiting: entendendo burst e nodelay"
+      },
+      "children": [
+        {
+          "id": "9425e27f-e539-4f72-a7f6-946faf7ea668",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Rate limiting no Nginx funciona com um algoritmo de "
+              },
+              {
+                "text": "leaky bucket",
+                "italic": true
+              },
+              {
+                "text": ". Entender "
+              },
+              {
+                "text": "burst",
+                "code": true
+              },
+              {
+                "text": "  e "
+              },
+              {
+                "text": "nodelay",
+                "code": true
+              },
+              {
+                "text": " é crucial para não bloquear usuários legítimos: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "3e3aa24c-1a05-42c9-987a-f257f89884f4",
+          "type": "key_value",
+          "position": 1,
+          "data": {
+            "items": [
+              {
+                "k": "rate=10r/s",
+                "v": "Permite 10 requisições por segundo por IP em média (equivale a 1 req a cada 100ms)"
+              },
+              {
+                "k": "burst=20",
+                "v": "Permite picos de até 20 requisições acima do limite — ficam em fila antes de serem processadas"
+              },
+              {
+                "k": "nodelay",
+                "v": "Processa as requisições em burst imediatamente (sem fila/delay), mas conta para o limite. Sem nodelay, as em burst ficam esperando."
+              },
+              {
+                "k": "Sem burst, sem nodelay",
+                "v": "Qualquer req além de 10/s é rejeitada com 429 imediatamente — muito agressivo para UIs"
+              },
+              {
+                "k": "Com burst+nodelay",
+                "v": "Picos curtos passam rapidamente; ataques de volume são bloqueados após o burst"
+              }
+            ]
+          }
+        },
+        {
+          "id": "7795247a-27e8-4448-8185-5b06ee553836",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "nginx",
+            "code": "# Exemplo prático de quando cada configuração é adequada:\n\n# API pública — permite picos curtos (load de página com múltiplos requests)\nlimit_req zone=api burst=20 nodelay;\n\n# Login/autenticação — mais restritivo, sem burst generoso\nlimit_req zone=auth burst=5;\n\n# Endpoint de upload — processamento mais lento, timeout maior\nlocation /api/upload {\n    limit_req zone=api burst=5;\n    client_max_body_size 50M;\n    proxy_read_timeout 300s;\n    proxy_pass http://api_backends;\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "116f8b12-1b2c-4ca0-9aff-a13b4da7af92",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Headers de segurança: o que cada um faz"
+      },
+      "children": [
+        {
+          "id": "97ffcdd8-f8fc-4c1c-ba5a-f3e7aeecdb84",
+          "type": "key_value",
+          "position": 0,
+          "data": {
+            "items": [
+              {
+                "k": "Strict-Transport-Security",
+                "v": "HSTS: browser sempre usa HTTPS por 31536000 segundos (1 ano). includeSubDomains aplica para subdomínios também."
+              },
+              {
+                "k": "X-Frame-Options: DENY",
+                "v": "Impede que seu site seja embarcado em iframe de outro domínio — bloqueia clickjacking."
+              },
+              {
+                "k": "X-Content-Type-Options: nosniff",
+                "v": "Impede que o browser \"adivinhe\" o tipo de arquivo. Sem isso, um arquivo de texto com HTML pode ser executado como HTML."
+              },
+              {
+                "k": "X-XSS-Protection",
+                "v": "Ativa o filtro XSS de browsers mais antigos. Browsers modernos ignoram (têm proteção própria), mas não custa nada."
+              },
+              {
+                "k": "Referrer-Policy",
+                "v": "Controla quanta informação do Referer é enviada em navegação. strict-origin-when-cross-origin envia só a origem (sem path) em cross-origin."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "0244719f-6547-4032-8539-e39c1f47f3b6",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Testando a configuração"
+      },
+      "children": [
+        {
+          "id": "09f2dabd-2bd8-437f-b774-ad658e7bfee2",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "# Testar configuração sem reiniciar o Nginx (nunca reinicie sem testar)\ndocker compose exec nginx nginx -t\n# nginx: the configuration file /etc/nginx/nginx.conf syntax is ok\n# nginx: configuration file /etc/nginx/nginx.conf test is successful\n\n# Recarregar configuração sem downtime (graceful reload)\ndocker compose exec nginx nginx -s reload\n\n# Testar headers de segurança com curl\ncurl -I https://api.seudominio.com\n# HTTP/2 200\n# strict-transport-security: max-age=31536000; includeSubDomains\n# x-frame-options: DENY\n# x-content-type-options: nosniff\n\n# Testar rate limiting (vai retornar 429 após o burst)\nfor i in {1..30}; do\n  curl -s -o /dev/null -w \"%{http_code}\n\" https://api.seudominio.com/api/test\ndone\n# 200 200 200 ... 429 429 429\n\n# Ver logs do Nginx em tempo real\ndocker compose logs -f nginx\n\n# Ver acessos específicos (ajuda a diagnosticar problemas)\ndocker compose exec nginx tail -f /var/log/nginx/access.log"
+          }
+        }
+      ]
+    },
+    {
+      "id": "5d427114-716c-4c51-9dff-94539bcaa917",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "4a1eeb40-d06b-4209-8463-c57555b7e837",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Meu backend usa WebSockets. O que preciso adicionar?",
+            "answer": "WebSockets precisam de configuração especial no Nginx para funcionar com proxy. Adicione na location: Sem isso, o handshake WebSocket falha silenciosamente."
+          }
+        },
+        {
+          "id": "2a10f3fc-a939-44bb-99b8-7832a0f2864b",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "Como servir arquivos estáticos do frontend pelo Nginx?",
+            "answer": "Adicione um novo location / com root apontando para o diretório dos arquivos estáticos e try_files $uri $uri/ /index.html; (necessário para SPAs com client-side routing). Isso é muito mais eficiente que deixar o backend servir arquivos."
+          }
+        },
+        {
+          "id": "db10a2b2-f77a-438c-878c-fad5826e0343",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "O que é o header X-Real-IP e por que preciso dele?",
+            "answer": "Sem proxy_set_header X-Real-IP $remote_addr, sua API vai ver o IP do Nginx (127.0.0.1 ou IP interno do Docker) como IP do cliente em todas as requisições. Com o header, a API pode ler o IP real do usuário para logs, rate limiting na aplicação, geolocalização, etc."
+          }
+        }
+      ]
+    },
+    {
+      "id": "1306654d-18d0-44e3-8d67-1f82521daa20",
+      "type": "callout",
+      "position": 9,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Resumo. O Nginx está configurado como proxy reverso com upstream para múltiplas réplicas, rate limiting por zona (geral e de auth), failover automático, headers de segurança e redirecionamento HTTP→HTTPS. O próximo módulo adiciona o certificado SSL via Let's Encrypt para que o HTTPS funcione de verdade."
+      }
+    }
+  ]
+}

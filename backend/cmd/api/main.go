@@ -255,8 +255,14 @@ func run() error {
 	leaderboardH := handlers.NewLeaderboardHandler(leaderboardRepo)
 	statsH := handlers.NewStatsHandler(&pgxStatsRepo{pool: pool})
 	adminH := handlers.NewAdminHandler(userRepo, attemptRepo, eventUC).
-		WithAuditLog(auditLogRepo)
+		WithAuditLog(auditLogRepo).
+		WithAdminStats(&pgxAdminStatsRepo{pool: pool}).
+		WithAdminUsers(&pgxAdminUsersRepo{pool: pool})
 	curriculumH := handlers.NewCurriculumHandler(getArticleUC, listCurriculumUC, searchCurriculumUC, curriculumRepo)
+	moduleViewH := handlers.NewModuleViewHandler(&pgxModuleViewRepo{pool: pool})
+	commentsH := handlers.NewCommentsHandler(&pgxCommentsRepo{pool: pool})
+	trendingH := handlers.NewTrendingHandler(&pgxTrendingRepo{pool: pool})
+	trailLbH := handlers.NewTrailLeaderboardHandler(&pgxTrailLeaderboardRepo{pool: pool})
 
 	// ─── Observabilidade: Prometheus ────────────────────────────────────────────
 	metricsReg := middleware.NewMetricsRegistry()
@@ -283,6 +289,10 @@ func run() error {
 		Leaderboard:    leaderboardH,
 		Stats:          statsH,
 		Admin:          adminH,
+		ModuleView:     moduleViewH,
+		Comments:       commentsH,
+		Trending:       trendingH,
+		TrailLeaderboard: trailLbH,
 		Curriculum:     curriculumH,
 		Features:       featuresH,
 		Metrics:        metricsH,

@@ -1,0 +1,531 @@
+{
+  "slug": "agent-observability-langsmith",
+  "title": null,
+  "blocks": [
+    {
+      "id": "f695ffcd-78b0-408a-b7da-09270397daab",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Você não pode debugar o que não vê. Multi-agent + tool use + reasoning models + RAG geram cascatas de chamadas LLM com latências, custos e modos de falha que stack tradicional (APM, logs) não captura. Em 2026, observability LLM tem 4 jogadores principais: LangSmith (LangChain-native), Helicone (proxy agnóstico), Phoenix (OTel + RAG-focused), Langfuse (open-source full-stack). Este módulo compara cada um e mostra setups práticos. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "9f69c7c5-bcb0-4fac-9068-c0d3342ff029",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que precisa ser observado num agente"
+      },
+      "children": [
+        {
+          "id": "e4cae47b-052b-4ae2-b7e4-9b4ff17e0076",
+          "type": "key_value",
+          "position": 0,
+          "data": {
+            "items": [
+              {
+                "k": "Traces hierárquicos",
+                "v": "Cada call LLM, tool, sub-agent vira span aninhado — visualiza árvore de execução"
+              },
+              {
+                "k": "Latência por nível",
+                "v": "P50/P95/P99 por nó, por tool, por modelo — identifica gargalos"
+              },
+              {
+                "k": "Custo por trace",
+                "v": "Tokens × preço, agregado por user/feature/version — controla burn rate"
+              },
+              {
+                "k": "Errors estruturadas",
+                "v": "Tool failures, parse errors, max_iterations, rate limits — não logs ASCII soltos"
+              },
+              {
+                "k": "Prompt versioning",
+                "v": "Que prompt rodou quando, com que parâmetros — compara A vs B"
+              },
+              {
+                "k": "Dataset capture",
+                "v": "Runs reais → eval datasets → CI regression"
+              },
+              {
+                "k": "Online evals (LLM-as-judge)",
+                "v": "Score automático de runs em prod para detectar degradação"
+              },
+              {
+                "k": "PII filtering",
+                "v": "Captura sem armazenar dados sensíveis — LGPD/GDPR compliance"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "cd06cca7-f5b1-4e3a-952c-70ff79153e86",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "LangSmith — integrado ao LangChain"
+      },
+      "children": [
+        {
+          "id": "096f884f-ee1e-4f6f-bf3c-79856d74879b",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "# Setup: variáveis de ambiente + uso automático\nimport os\nos.environ[\"LANGCHAIN_TRACING_V2\"] = \"true\"\nos.environ[\"LANGCHAIN_API_KEY\"] = \"lsv2_...\"\nos.environ[\"LANGCHAIN_PROJECT\"] = \"ffv-agente-prod\"\n\nfrom langchain_anthropic import ChatAnthropic\nfrom langgraph.graph import StateGraph\n\n# Toda call LLM e nó LangGraph é tracked automaticamente\nllm = ChatAnthropic(model=\"claude-sonnet-4-7\")\nresponse = llm.invoke(\"Olá\")\n# → aparece em smith.langchain.com com latência, tokens, custo, prompt, response\n\n# Decorators para custom code\nfrom langsmith import traceable\n\n@traceable(name=\"custom-retrieval\", run_type=\"retriever\")\ndef my_retrieval(query: str) -> list[str]:\n    # Sua lógica de retrieval — vira span filho do trace pai\n    return search_db(query)\n\n# Prompt versioning via Hub\nfrom langchain import hub\nprompt = hub.pull(\"my-team/research-agent:v3\")  # versão pinada\nresponse = llm.invoke(prompt.format(question=\"...\"))",
+            "filename": "langsmith_setup.py"
+          }
+        }
+      ]
+    },
+    {
+      "id": "4bdfa84f-fee7-4bb7-82e2-7c67ea1124fe",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Helicone — proxy agnóstico"
+      },
+      "children": [
+        {
+          "id": "0182503c-aee3-402c-b697-fb577cadf1b7",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "# Setup: muda base_url para Helicone — não exige callbacks/framework\nimport openai\nimport anthropic\n\n# OpenAI via Helicone\nopenai_client = openai.OpenAI(\n    base_url=\"https://oai.helicone.ai/v1\",\n    default_headers={\n        \"Helicone-Auth\": f\"Bearer {os.environ['HELICONE_API_KEY']}\",\n        \"Helicone-User-Id\": \"user-42\",\n        \"Helicone-Property-Feature\": \"research\",      # custom properties\n    },\n)\n\n# Anthropic via Helicone\nanthropic_client = anthropic.Anthropic(\n    base_url=\"https://anthropic.helicone.ai\",\n    default_headers={\n        \"Helicone-Auth\": f\"Bearer {os.environ['HELICONE_API_KEY']}\",\n        \"Helicone-Cache-Enabled\": \"true\",             # cache built-in\n        \"Helicone-Rate-Limit-Policy\": \"1000;w=60\",    # 1000 req/min\n    },\n)\n\n# Toda call passa pelo proxy — captura automática + features extras:\n# - Cache de responses repetidos\n# - Rate limiting per user\n# - Cost tracking per property\n# - Prompt management via Helicone Prompts",
+            "filename": "helicone_setup.py"
+          }
+        },
+        {
+          "id": "d1ac3c1f-000d-4680-a37b-8ae22d427d75",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "O fato de ser proxy traz feature exclusiva: cache de response (configurável por header). Identidade de prompt repetido = mesma resposta retornada sem chamar o provider. Reduz drasticamente custos em apps com prompts cacheáveis."
+          }
+        }
+      ]
+    },
+    {
+      "id": "383822a1-a32f-4e34-8932-44aec49a3d5e",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Phoenix (Arize) — OTel-native + RAG"
+      },
+      "children": [
+        {
+          "id": "8f915b5f-2fcf-48a3-a12a-e4b650717880",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "# Phoenix self-host (Docker) + auto-instrumentation via openinference\nimport phoenix as px\nfrom phoenix.otel import register\nfrom openinference.instrumentation.openai import OpenAIInstrumentor\nfrom openinference.instrumentation.langchain import LangChainInstrumentor\n\n# Inicia UI local ou aponta para servidor remoto\npx.launch_app()  # http://localhost:6006\n\n# Configura tracer OTel — exports para Phoenix ou qualquer OTel backend\ntracer_provider = register(\n    project_name=\"ffv-agente\",\n    endpoint=\"http://localhost:6006/v1/traces\",\n)\n\n# Auto-instrument SDKs\nOpenAIInstrumentor().instrument(tracer_provider=tracer_provider)\nLangChainInstrumentor().instrument(tracer_provider=tracer_provider)\n\n# Specialty: embedding visualizations\n# Phoenix mostra UMAP/t-SNE de embeddings, detecta drift entre prod/eval datasets\n# Ideal para RAG observability — visualiza queries que retornam docs irrelevantes",
+            "filename": "phoenix_setup.py"
+          }
+        }
+      ]
+    },
+    {
+      "id": "1bed4202-a7a5-4090-bbf1-589fe2df435a",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Langfuse — open-source full stack"
+      },
+      "children": [
+        {
+          "id": "359864a8-9506-4d58-98e1-95a4939c3d36",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "from langfuse import Langfuse\nfrom langfuse.decorators import observe\n\nlangfuse = Langfuse(\n    public_key=os.environ[\"LANGFUSE_PUBLIC_KEY\"],\n    secret_key=os.environ[\"LANGFUSE_SECRET_KEY\"],\n    host=\"https://cloud.langfuse.com\",   # ou self-host\n)\n\n@observe()\ndef research_agent(query: str) -> str:\n    # Trace é criado automaticamente — child spans capturam calls LLM internas\n    prompt = langfuse.get_prompt(\"research-system\", version=3)\n    messages = [{\"role\": \"system\", \"content\": prompt.compile()}]\n    messages.append({\"role\": \"user\", \"content\": query})\n\n    response = anthropic_client.messages.create(\n        model=\"claude-sonnet-4-7\",\n        messages=messages,\n        max_tokens=2000,\n    )\n\n    # Captura score (eval feedback ou LLM-as-judge)\n    langfuse.score(\n        trace_id=langfuse.get_current_trace_id(),\n        name=\"relevance\",\n        value=0.85,\n        comment=\"LLM-as-judge: relevância da resposta\",\n    )\n\n    return response.content[0].text",
+            "filename": "langfuse_setup.py"
+          }
+        }
+      ]
+    },
+    {
+      "id": "547d4eb2-0170-4276-857d-8f9c3c3e08c4",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Comparativo direto"
+      },
+      "children": [
+        {
+          "id": "f18689e5-61cd-4cae-b704-9867d7ff7b06",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Feature",
+              "LangSmith",
+              "Helicone",
+              "Phoenix",
+              "Langfuse"
+            ],
+            "rows": [
+              [
+                "Modelo",
+                "SDK callback",
+                "HTTP proxy",
+                "OTel SDK",
+                "SDK + decorators"
+              ],
+              [
+                "Framework-agnostic",
+                "Limitado",
+                "✅ Total",
+                "✅ OTel",
+                "✅ Total"
+              ],
+              [
+                "Self-hostable",
+                "⚠️ Enterprise",
+                "⚠️ Enterprise",
+                "✅",
+                "✅"
+              ],
+              [
+                "Open-source",
+                "❌",
+                "⚠️ Parcial",
+                "✅",
+                "✅"
+              ],
+              [
+                "Prompt versioning",
+                "✅ (Hub)",
+                "✅",
+                "⚠️",
+                "✅"
+              ],
+              [
+                "Dataset capture",
+                "✅",
+                "✅",
+                "✅",
+                "✅"
+              ],
+              [
+                "LLM-as-judge",
+                "✅",
+                "⚠️",
+                "✅",
+                "✅"
+              ],
+              [
+                "Cache built-in",
+                "❌",
+                "✅ (proxy)",
+                "❌",
+                "❌"
+              ],
+              [
+                "Sweet spot",
+                "LangChain stacks",
+                "Multi-framework, cache",
+                "OTel-native, RAG",
+                "OSS full-stack"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "0977847f-3dd5-4616-b8fd-b075806e609e",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Arquitetura: como capturas hierárquicos funcionam"
+      },
+      "children": [
+        {
+          "id": "ad82f16f-78a4-4767-a921-b553ac9503e9",
+          "type": "arch_flow",
+          "position": 0,
+          "data": {
+            "title": "Anatomia de um trace de agente multi-step",
+            "columns": [
+              {
+                "header": "Trace level",
+                "items": [
+                  "Trace ID — sessão completa",
+                  "Início ao fim da request",
+                  "Metadata: user, version, feature"
+                ]
+              },
+              {
+                "header": "Span level",
+                "items": [
+                  "Supervisor span (parent)",
+                  "↳ Worker A span",
+                  "   ↳ Tool call span",
+                  "   ↳ LLM call span",
+                  "↳ Worker B span",
+                  "   ↳ LLM call span"
+                ]
+              },
+              {
+                "header": "Per-span data",
+                "items": [
+                  "Input/output JSON",
+                  "Latency ms",
+                  "Token usage + cost",
+                  "Errors + stack traces",
+                  "Custom metadata"
+                ]
+              },
+              {
+                "header": "Aggregations",
+                "items": [
+                  "P50/P95/P99 por feature",
+                  "Cost per user/day",
+                  "Error rate per tool",
+                  "Token volume trends",
+                  "Eval scores rolling"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "21d35f50-62ef-446c-9d41-8f9bc6c155a7",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Decisão prática"
+      },
+      "children": [
+        {
+          "id": "1807c2cd-5876-4b2b-bfa8-18b3f87058d8",
+          "type": "decision_box",
+          "position": 0,
+          "data": {
+            "scenario": "Time de 5 devs usa LangChain + LangGraph + Anthropic + alguns scripts Python diretos com OpenAI.",
+            "winner": "LangSmith (primário) + considere Langfuse OSS",
+            "why": "Time é LangChain-first: LangSmith integra zero-config nos casos centrais. Para os scripts ad-hoc com OpenAI direto, decorators @traceable capturam. Se time quer evitar lock-in ou self-host, Langfuse OSS cobre 90% das features com instrumentation similar.",
+            "alternatives": [
+              {
+                "name": "Helicone",
+                "note": "Vence se você quer cache de response e abstração proxy — mas perde semantics LangChain"
+              },
+              {
+                "name": "Phoenix",
+                "note": "Vence se você já tem OTel collector e backend tipo Datadog/Honeycomb"
+              },
+              {
+                "name": "Langfuse OSS",
+                "note": "Vence se compliance/self-host é mandatório — features full-stack"
+              }
+            ]
+          }
+        },
+        {
+          "id": "29558b52-689b-461b-8d06-8f057be8e823",
+          "type": "flow_diagram",
+          "position": 1,
+          "data": {
+            "title": "Árvore de decisão",
+            "orientation": "vertical",
+            "steps": [
+              {
+                "icon": "🦜",
+                "label": "Stack é LangChain/LangGraph?",
+                "desc": "Sim → LangSmith é zero-config"
+              },
+              {
+                "icon": "🔒",
+                "label": "Self-host é obrigatório?",
+                "desc": "Sim → Phoenix ou Langfuse OSS"
+              },
+              {
+                "icon": "🌐",
+                "label": "Multi-framework + quer cache?",
+                "desc": "Helicone (proxy)"
+              },
+              {
+                "icon": "📡",
+                "label": "Já tem OTel collector?",
+                "desc": "Phoenix integra nativamente"
+              },
+              {
+                "icon": "💼",
+                "label": "Default 2026",
+                "desc": "Langfuse OSS — features full-stack, agnóstico"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "4a10db6e-0b78-47d2-a7cd-7f43a28f16bf",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Timeline"
+      },
+      "children": [
+        {
+          "id": "26a868d1-e08b-4a87-86f8-588c5b564f7a",
+          "type": "timeline",
+          "position": 0,
+          "data": {
+            "title": "",
+            "events": [
+              {
+                "when": "Jul 2023",
+                "label": "LangSmith beta",
+                "detail": "LangChain — primeiro observability SaaS para LLMs"
+              },
+              {
+                "when": "Set 2023",
+                "label": "Helicone GA",
+                "detail": "YC W23 — proxy approach"
+              },
+              {
+                "when": "Out 2023",
+                "label": "Langfuse v1",
+                "detail": "Open-source MIT, full-stack OSS"
+              },
+              {
+                "when": "Jan 2024",
+                "label": "Arize Phoenix",
+                "detail": "OTel-native, foco em RAG/embeddings"
+              },
+              {
+                "when": "Mai 2024",
+                "label": "OpenLLMetry standard",
+                "detail": "OTel semantic conventions para LLM workloads",
+                "highlight": true
+              },
+              {
+                "when": "Set 2024",
+                "label": "OpenInference",
+                "detail": "Arize publica semantics conventions LLM-specific"
+              },
+              {
+                "when": "2025",
+                "label": "LangSmith Enterprise self-host",
+                "detail": "LangChain entra em prod compliance-heavy"
+              },
+              {
+                "when": "2026",
+                "label": "Padrão OTel consolidado",
+                "detail": "Maioria das plataformas exporta OTel; vendor-neutral é default"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "6b66c5fd-6d51-4e89-8afa-f8a767be3a67",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": [
+        {
+          "id": "33be9476-b91e-4773-9b25-b1cdea205c44",
+          "type": "qa_item",
+          "position": 0,
+          "data": {
+            "question": "Posso usar 2 ferramentas ao mesmo tempo?",
+            "answer": "Sim — comum em times grandes. Exemplo: LangSmith para dev (rich semantics), Phoenix para SRE (OTel native + dashboards Grafana). Custo: overhead negligível, complexidade de manutenção real."
+          }
+        },
+        {
+          "id": "cbb0c78b-4fd4-4b37-8939-678735e06668",
+          "type": "qa_item",
+          "position": 1,
+          "data": {
+            "question": "LGPD/GDPR: como tratar PII em traces?",
+            "answer": "Todas as ferramentas suportam filtros: regex de remoção (CPF, email, telefone), denylist de keys de input/output, self-host on-prem. Em prod, sempre filtrar antes de enviar; auditar amostras. Anthropic Bedrock também suporta logging filtering server-side."
+          }
+        },
+        {
+          "id": "45675960-bd57-417a-a474-1e124f7e452e",
+          "type": "qa_item",
+          "position": 2,
+          "data": {
+            "question": "Latência adicionada?",
+            "answer": "Helicone (proxy): +10–50ms por call (latência de rede extra). LangSmith/Langfuse/Phoenix (SDK): +1–5ms por span, async (não bloqueia request). Negligível em prod tipicamente."
+          }
+        },
+        {
+          "id": "09f38cfc-ce5b-43cf-93bf-7d1a332eb824",
+          "type": "qa_item",
+          "position": 3,
+          "data": {
+            "question": "Custo?",
+            "answer": "LangSmith SaaS: $0.0005/trace + tiers. Helicone: free até 100k req/month. Langfuse Cloud: free até 50k events/month. Self-host: só infra. Volume alto (1M+ requests/month) → considere self-host (Langfuse/Phoenix) por custo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "14ae484c-39cc-412d-8844-baa884a24eaf",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Referências"
+      },
+      "children": [
+        {
+          "id": "1398deca-220a-415c-a560-ecbb230c7726",
+          "type": "key_value",
+          "position": 0,
+          "data": {
+            "items": [
+              {
+                "k": "LangSmith",
+                "v": "smith.langchain.com — docs: docs.smith.langchain.com"
+              },
+              {
+                "k": "Helicone",
+                "v": "helicone.ai — docs: docs.helicone.ai"
+              },
+              {
+                "k": "Phoenix (Arize)",
+                "v": "github.com/Arize-ai/phoenix — docs.arize.com/phoenix"
+              },
+              {
+                "k": "Langfuse",
+                "v": "langfuse.com — github.com/langfuse/langfuse (MIT)"
+              },
+              {
+                "k": "OpenInference",
+                "v": "github.com/Arize-ai/openinference — OTel semantic conventions para LLM"
+              },
+              {
+                "k": "OpenLLMetry",
+                "v": "github.com/traceloop/openllmetry — OTel para LLM stack"
+              },
+              {
+                "k": "Dapper paper",
+                "v": "Sigelman et al. \"Dapper, a Large-Scale Distributed Systems Tracing Infrastructure\". Google 2010 — origem de distributed tracing"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
