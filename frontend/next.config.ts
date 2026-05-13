@@ -8,6 +8,18 @@ const nextConfig: NextConfig = {
   },
 
   /**
+   * trailingSlash: true gera /aprenda/<slug>/index.html em vez de
+   * /aprenda/<slug>.html. Necessário para hosting LiteSpeed/Apache da
+   * Hostinger Cloud Startup — o servidor força barra final em URLs sem
+   * extensão e, se o destino for um .html simples, redireciona 301 para a
+   * pasta correspondente e bate em 403 (diretório não existe).
+   *
+   * Resultado: todas as rotas precisam terminar com / (Next.js cuida disso
+   * nos <Link> internos automaticamente).
+   */
+  trailingSlash: true,
+
+  /**
    * ATENÇÃO: headers() NÃO funciona com `output: "export"` (site estático).
    * Esta configuração é incluída para referência e para quando o site for
    * servido via Vercel ou Caddy (proxy reverso) com suporte a headers HTTP.

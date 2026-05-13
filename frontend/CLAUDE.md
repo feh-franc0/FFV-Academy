@@ -164,6 +164,7 @@ npm run lint   # eslint src/ — zero warnings policy
 - Não usar `dynamic = 'force-dynamic'` em route handlers
 - `runtime = 'edge'` só funciona se gerar imagem estática no build
 - Imagens externas precisam `images.unoptimized: true` (já configurado)
+- **`trailingSlash: true` é OBRIGATÓRIO** — Hostinger LiteSpeed redireciona automaticamente URLs sem `/` no final para a versão com barra; sem trailingSlash, gera `out/X.html` e cai em 301→403 (pasta não existe). Com trailingSlash, gera `out/X/index.html` (caminho que LiteSpeed espera).
 
 ### RSC payloads (`__next.*.txt`) **excluídos do deploy**
 - O build gera 6.287 arquivos `__next.*.txt` (153 MB) em `out/` — RSC payloads do React.
