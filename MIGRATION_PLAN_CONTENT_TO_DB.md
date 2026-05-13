@@ -26,7 +26,7 @@
 
 | Sprint | Período | Status | % Concluído |
 |---|---|---|---|
-| **Sprint 1** — Schema + Foundation | Sem 1 | ⬜ Não iniciada | 0% |
+| **Sprint 1** — Schema + Foundation | Sem 1 | 🟡 Em progresso | 35% |
 | **Sprint 2** — Blocos + Parser | Sem 2 | ⬜ Não iniciada | 0% |
 | **Sprint 3** — Migração piloto | Sem 3 | ⬜ Não iniciada | 0% |
 | **Sprint 4** — Wave 1 (100 módulos) | Sem 4 | ⬜ Não iniciada | 0% |
@@ -213,12 +213,20 @@ ALTER TABLE articles
 
 ### Checklist Parte III
 
-- [ ] Migration 25 escrita + down migration
-- [ ] Migration 26 escrita + down migration
-- [ ] Migration 27 escrita + down migration
-- [ ] Migrations testadas localmente (up + down + up)
-- [ ] Migration aplicada em staging
-- [ ] Migration aplicada em produção
+- [x] Migration 26 hubs (up + down) — feat/cms-sprint-1
+- [x] Migration 27 trails (up + down)
+- [x] Migration 28 extend curriculum_articles (up + down)
+- [x] Migration 29 module_blocks (up + down)
+- [x] Migration 30 module_revisions (up + down)
+- [x] Migration 31 comments (up + down) — schema pronto, sem handler
+- [x] Migration 32 comment_votes (up + down)
+- [x] Migration 33 article_ratings (up + down)
+- [x] Migration 34 article_bookmarks (up + down)
+- [x] Migration 35 trail_enrollments (up + down)
+- [x] Migration 36 content_reports (up + down)
+- [ ] Migrations testadas localmente (up + down + up) — pendente Docker local
+- [ ] Migrations aplicadas em staging
+- [ ] Migrations aplicadas em produção
 
 ---
 
@@ -765,10 +773,8 @@ Cache invalidation pipeline (ao editar):
 - 1 módulo de teste renderizando 100% do DB
 
 ### Tarefas
-- [ ] Migration `000025_create_module_blocks.sql`
-- [ ] Migration `000026_create_module_revisions.sql`
-- [ ] Migration `000027_extend_articles.sql`
-- [ ] Testes de migration (up + down + up)
+- [x] **Migrations 026-036** (11 arquivos up + 11 down) — em `feat/cms-sprint-1`
+- [ ] Testes de migration (up + down + up) — pendente Docker local
 - [ ] Aplicar migrations em local + staging
 - [ ] Go structs: Section, Paragraph, Callout, CodeBlock, ComparisonTable
 - [ ] Validador Go com `validator.v10`
@@ -783,7 +789,7 @@ Cache invalidation pipeline (ao editar):
 - [ ] Página `/admin/blocks` (storybook básico)
 - [ ] Visual regression tests dos 5 tipos
 - [ ] Criar 1 módulo de teste no DB manualmente (INSERT SQL)
-- [ ] Renderizar esse módulo via rota `/aprenda/teste-cms`
+- [ ] Renderizar esse módulo via rota `/aprenda-dynamic/teste-cms`
 - [ ] Comparar visual com módulo equivalente estático
 
 ### Deliverable Sprint 1
