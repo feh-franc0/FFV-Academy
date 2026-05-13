@@ -165,6 +165,13 @@ npm run lint   # eslint src/ — zero warnings policy
 - `runtime = 'edge'` só funciona se gerar imagem estática no build
 - Imagens externas precisam `images.unoptimized: true` (já configurado)
 
+### RSC payloads (`__next.*.txt`) **excluídos do deploy**
+- O build gera 6.287 arquivos `__next.*.txt` (153 MB) em `out/` — RSC payloads do React.
+- O workflow `.github/workflows/deploy.yml` os **exclui do upload FTP** porque a Hostinger Cloud Startup tem timeout fixo de 3600s e não aceita 8k+ arquivos.
+- Consequência: **soft navigation entre páginas degrada** (~80ms → ~400ms). SEO, conteúdo, gamificação e demais funcionalidades **NÃO são afetados**.
+- Decisão documentada em [`docs/adr/0002-exclude-rsc-payloads-from-ftp-deploy.md`](./docs/adr/0002-exclude-rsc-payloads-from-ftp-deploy.md).
+- Quando migrar para **SSR/ISR na VPS** (próximo step arquitetural), esse exclude perde sentido e pode ser removido — os payloads passam a ser gerados em runtime pelo Node.js.
+
 ### CSP (Content Security Policy)
 - Em `app/layout.tsx` — só aplicado em prod (`process.env.NODE_ENV !== 'development'`)
 - `https://images.unsplash.com` e `https://*.googleusercontent.com` já na lista
