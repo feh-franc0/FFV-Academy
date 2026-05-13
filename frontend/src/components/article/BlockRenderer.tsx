@@ -289,13 +289,23 @@ const ADAPTERS: Record<string, AdapterEntry> = {
   comparison_flow: {
     allowsChildren: false,
     render: (data) => {
-      const left = Array.isArray(data?.left) ? data.left : [];
-      const right = Array.isArray(data?.right) ? data.right : [];
+      // ComparisonFlow espera { label, steps: [{label, instruction?}] } em left/right
+      const normalize = (x: any) => ({
+        label: asText(x?.label ?? x?.title ?? 'Etapa'),
+        steps: Array.isArray(x?.steps)
+          ? x.steps.map((s: any) => ({ label: asText(s?.label ?? s?.title), instruction: asText(s?.instruction ?? s?.body ?? '') }))
+          : [{ label: asText(x?.title ?? x?.label ?? ''), instruction: asText(x?.body ?? '') }],
+      });
+      const left = (Array.isArray(data?.left) ? data.left : []).map(normalize);
+      const right = (Array.isArray(data?.right) ? data.right : []).map(normalize);
+      // ComparisonFlow recebe left e right como ARRAY (várias colunas)
+      // mas a versão atual aceita 1 só. Pegamos o primeiro.
+      if (left.length === 0 || right.length === 0) return null;
       return (
         <ComparisonFlow
           title={asText(data?.title)}
-          left={left.map((s: any) => ({ title: asText(s?.title), body: asText(s?.body ?? '') }))}
-          right={right.map((s: any) => ({ title: asText(s?.title), body: asText(s?.body ?? '') }))}
+          left={left[0]}
+          right={right[0]}
         />
       );
     },

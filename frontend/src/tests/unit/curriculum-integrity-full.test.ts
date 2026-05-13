@@ -38,11 +38,13 @@ describe('Curriculum integrity — links e arquivos', () => {
     expect(broken, `prerequisites quebrado:\n${broken.join('\n')}`).toEqual([]);
   });
 
-  it('todo módulo tem arquivo src/app/aprenda/<slug>/page.tsx', () => {
+  it('todo módulo tem arquivo legado em src/app/aprenda-legacy/<slug>/page.tsx', () => {
+    // Pós-migração CMS: a rota /aprenda/[slug] agora é dinâmica.
+    // As 765 page.tsx vivem em aprenda-legacy/ como snapshot. Testa contra ele.
     const root = resolve(__dirname, '../../..');
     const missing: string[] = [];
     for (const m of allModules) {
-      const path = resolve(root, 'src/app/aprenda', m.slug, 'page.tsx');
+      const path = resolve(root, 'src/app/aprenda-legacy', m.slug, 'page.tsx');
       if (!existsSync(path)) missing.push(`${m.trailId}/${m.slug}`);
     }
     expect(missing, `artigos faltando (${missing.length}):\n${missing.join('\n')}`).toEqual([]);

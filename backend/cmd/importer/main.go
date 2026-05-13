@@ -107,9 +107,15 @@ func main() {
 	}
 	defer pool.Close()
 
+	seedsRoot := filepath.Dir(*seedsDir)
+
 	if !*dryRun {
 		if err := ensureBaseRefs(ctx, pool); err != nil {
 			log.Fatalf("ensure base refs: %v", err)
+		}
+		// FASE 1: sincroniza hubs + trails (FKs prontas antes do import)
+		if err := seedHubsAndTrails(ctx, pool, seedsRoot); err != nil {
+			log.Printf("WARN: seed hubs/trails: %v", err)
 		}
 	}
 
@@ -166,6 +172,15 @@ func main() {
 
 		if *verbose || (i+1)%50 == 0 {
 			fmt.Printf("[%d/%d] %s: %d blocks ✓\n", i+1, len(jsonFiles), slug, blockCount)
+		}
+	}
+
+	// FASE 2: depois do import, atualiza articles com title/hub/trail/xp reais
+	// extraídos do curriculum.ts (article-mappings.json).
+	if !*dryRun {
+		fmt.Println()
+		if err := seedArticleMappings(ctx, pool, seedsRoot); err != nil {
+			log.Printf("WARN: seed article mappings: %v", err)
 		}
 	}
 

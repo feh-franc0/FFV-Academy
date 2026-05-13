@@ -10,7 +10,12 @@ import { CURRICULUM } from '@/lib/curriculum';
 import { readdirSync, readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
-const APRENDA_DIR = join(process.cwd(), 'src/app/aprenda');
+// NOTA pós-migração CMS: a rota /aprenda/[slug] agora é dinâmica (busca do
+// backend). As 765 pastas estáticas legacy ficam em aprenda-legacy/ como
+// snapshot intocado. Os testes de integridade abaixo continuam validando
+// contra esse snapshot até que a migração esteja 100% concluída e a pasta
+// possa ser deletada.
+const APRENDA_DIR = join(process.cwd(), 'src/app/aprenda-legacy');
 
 describe('Curriculum cross-references — integridade referencial', () => {
   const allSlugs = new Set(CURRICULUM.flatMap(t => t.modules.map(m => m.slug)));

@@ -141,10 +141,15 @@ export const ImageSchema = z.object({
 // ─── Block (envelope com type discriminator) ────────────────────────────────
 
 export const BlockTypeSchema = z.enum([
+  // Sprint 1-2
   'section', 'paragraph', 'callout', 'code_block',
   'comparison_table', 'decision_box', 'flow_diagram',
   'arch_flow', 'matrix_diagram', 'stack_flow', 'timeline',
   'node_graph', 'annotated_formula', 'quiz', 'image',
+  // Sprint 2.5 (todos os primitives)
+  'qa_item', 'key_value', 'list',
+  'hierarchy_diagram', 'comparison_flow', 'split_flow',
+  'layer_stack', 'mind_map', 'exam_domain_badge',
 ]);
 
 export type BlockType = z.infer<typeof BlockTypeSchema>;
