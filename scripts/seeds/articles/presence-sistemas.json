@@ -1,0 +1,124 @@
+{
+  "slug": "presence-sistemas",
+  "title": null,
+  "blocks": [
+    {
+      "id": "64c53077-26de-4af2-a63c-bc7b781a5994",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Presence é estado efêmero"
+      },
+      "children": [
+        {
+          "id": "3ff6065e-a97c-41d1-bd5e-ea0c30b91405",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Online/offline, typing indicators, cursor tracking, selection ranges, last-seen — tudo isso é soft-state derivado da conexão viva. Quando a conexão cai, o estado some. Persistir em DB relacional como flag booleana é erro clássico; ninguém chama \"DELETE\" ao crashar. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "64150c76-3efe-4e10-a1b9-806ade5b922a",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Padrão heartbeat + TTL no Redis"
+      },
+      "children": [
+        {
+          "id": "021a0fd2-a8c7-4673-86c4-5ee0fc4a518f",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "ts",
+            "code": "import Redis from 'ioredis';\nconst redis = new Redis();\nconst TTL = 45; // segundos\n\n// Client envia heartbeat a cada 30s via WS\nwss.on('connection', (ws, req) =&gt; {\n  const userId = auth(req);\n  const roomId = room(req);\n\n  async function touch() {\n    await redis.multi()\n      .hset(`presence:${roomId}`, userId, JSON.stringify({ ts: Date.now() }))\n      .expire(`presence:${roomId}`, TTL)\n      .exec();\n    await redis.publish(`presence:ch:${roomId}`,\n      JSON.stringify({ type: 'join', userId }));\n  }\n\n  ws.on('message', (raw) =&gt; {\n    const m = JSON.parse(String(raw));\n    if (m.type === 'heartbeat') touch();\n    if (m.type === 'cursor') {\n      redis.publish(`presence:ch:${roomId}`,\n        JSON.stringify({ type: 'cursor', userId, pos: m.pos }));\n    }\n  });\n\n  ws.on('close', () =&gt; {\n    redis.hdel(`presence:${roomId}`, userId);\n    redis.publish(`presence:ch:${roomId}`,\n      JSON.stringify({ type: 'leave', userId }));\n  });\n\n  touch();\n});"
+          }
+        }
+      ]
+    },
+    {
+      "id": "25c398fd-f2e8-4ced-966f-16052507a608",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Snapshot + deltas para novos clients"
+      },
+      "children": [
+        {
+          "id": "776c5132-31c6-4bb1-8a00-ca1760ba1ecc",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "ts",
+            "code": "const snapshot = await redis.hgetall(`presence:${roomId}`);\nws.send(JSON.stringify({ type: 'snapshot', users: snapshot }));\n\nconst sub = new Redis();\nsub.subscribe(`presence:ch:${roomId}`);\nsub.on('message', (_ch, payload) =&gt; ws.send(payload));"
+          }
+        }
+      ]
+    },
+    {
+      "id": "1cd5295a-4d08-4782-91f3-7a8434e3ef5f",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Throttle e coalescing para cursor/typing"
+      },
+      "children": [
+        {
+          "id": "d8bdac37-9e22-48d7-adfb-572770478d97",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "ts",
+            "code": "let pending: { x: number; y: number } | null = null;\nlet flushTimer: ReturnType&lt;typeof setTimeout&gt; | null = null;\n\ndocument.addEventListener('mousemove', (e) =&gt; {\n  pending = { x: e.clientX, y: e.clientY };\n  if (!flushTimer) {\n    flushTimer = setTimeout(() =&gt; {\n      if (pending) ws.send(JSON.stringify({ type: 'cursor', pos: pending }));\n      pending = null;\n      flushTimer = null;\n    }, 100);\n  }\n});"
+          }
+        },
+        {
+          "id": "c4750141-c458-4ca3-a011-46e41beb0b9d",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Sem throttle, 120Hz de movimento de mouse gera tráfego suicida. Throttle 100ms + coalescing é o mínimo; em rooms grandes caia para 200-300ms."
+          }
+        }
+      ]
+    },
+    {
+      "id": "2372e375-09e1-4bf1-94b4-c405b0b9db03",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Quando usar Liveblocks/Ably/Pusher vs self-host"
+      },
+      "children": [
+        {
+          "id": "195dde9f-3c2f-4a4d-98d2-6dc2d174e069",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "self-host (Redis + Node):\n  + zero vendor lock\n  + custo baixo até milhões de conexões\n  - operação (scale out, failover, metrics)\nLiveblocks:\n  + SDK opinativo (presence + Yjs integrados)\n  + free tier generoso, preço razoável\n  - vendor lock, ótimo em workflows de colab\nAbly/Pusher/PubNub:\n  + pubsub managed, SLAs fortes\n  - preço escala com msg, caro em rooms muito ativas"
+          }
+        },
+        {
+          "id": "7c8599cb-8ef2-4498-8fae-2d385bad986a",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Regra prática: MVP = managed (Liveblocks/Ably). Escala séria = self-host Redis pubsub + WS stateless. Migração vale quando conta mensal ultrapassa salário de SRE."
+          }
+        }
+      ]
+    }
+  ]
+}

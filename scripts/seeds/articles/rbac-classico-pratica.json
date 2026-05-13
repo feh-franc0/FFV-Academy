@@ -1,0 +1,295 @@
+{
+  "slug": "rbac-classico-pratica",
+  "title": null,
+  "blocks": [
+    {
+      "id": "c2585d8a-8ccc-41fa-b4d6-5bc0da591697",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O paper que fundou tudo"
+      },
+      "children": [
+        {
+          "id": "609ef2f2-1997-4654-829b-ef39c10110dd",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " RBAC não é uma ideia da Microsoft nem do AWS IAM. É um modelo formal publicado em 1996 por "
+              },
+              {
+                "text": "Ravi Sandhu et al.",
+                "bold": true
+              },
+              {
+                "text": " no IEEE Computer (\"Role-Based Access Control Models\") e padronizado pelo NIST em 2004 (ANSI INCITS 359-2004). A contribuição central é uma observação simples: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "cf430ef1-5de0-4de8-b7e0-051b3534b385",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Atribuir permissões diretamente a usuários não escala. Atribuir papéis (roles) a usuários, e permissões a papéis, sim — porque o conjunto de papéis numa organização é pequeno, mas o de usuários é grande e rotativo."
+          }
+        },
+        {
+          "id": "fced7d3f-6fa2-449e-9424-272d2950f0f9",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": " O paper define quatro níveis incrementais — conhecidos como família RBAC: "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b244f780-d627-4c3f-b55d-156b54a08dd6",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Modelagem em SQL (3 tabelas, não 4)"
+      },
+      "children": [
+        {
+          "id": "13a9c32e-3561-4ce9-82c1-a01453467f56",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " O esquema canônico em Postgres — apenas três tabelas associativas além das entidades. Atenção ao índice composto na tabela de associação: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "6fce1a4d-be0e-464a-ad16-49ef0ea82031",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "sql",
+            "code": "-- Entidades base\nCREATE TABLE users (\n  id UUID PRIMARY KEY,\n  email TEXT UNIQUE NOT NULL,\n  created_at TIMESTAMPTZ DEFAULT now()\n);\n\nCREATE TABLE roles (\n  id UUID PRIMARY KEY,\n  name TEXT UNIQUE NOT NULL,        -- 'admin', 'editor', 'viewer'\n  parent_role_id UUID REFERENCES roles(id)  -- RBAC1 hierarchy\n);\n\nCREATE TABLE permissions (\n  id UUID PRIMARY KEY,\n  resource TEXT NOT NULL,           -- 'invoices', 'users'\n  action TEXT NOT NULL,             -- 'read', 'write', 'delete'\n  UNIQUE (resource, action)\n);\n\n-- Associações N:N\nCREATE TABLE user_roles (\n  user_id UUID REFERENCES users(id) ON DELETE CASCADE,\n  role_id UUID REFERENCES roles(id) ON DELETE CASCADE,\n  assigned_at TIMESTAMPTZ DEFAULT now(),\n  PRIMARY KEY (user_id, role_id)\n);\nCREATE INDEX idx_user_roles_user ON user_roles(user_id);\n\nCREATE TABLE role_permissions (\n  role_id UUID REFERENCES roles(id) ON DELETE CASCADE,\n  permission_id UUID REFERENCES permissions(id) ON DELETE CASCADE,\n  PRIMARY KEY (role_id, permission_id)\n);"
+          }
+        },
+        {
+          "id": "8d084c62-c9b6-4304-a0ed-0cca38af2ce2",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Erro comum: criar tabela direta \"para casos especiais\". Em 2 anos você tem 30% das perms via role e 70% via overrides — RBAC virou bagunça. Se precisa de override, modele como uma role pessoal por user (anti-pattern, mas pelo menos consistente) ou migre para ABAC/ReBAC."
+          }
+        }
+      ]
+    },
+    {
+      "id": "c54a52eb-36e4-44a4-a1aa-5f4101ce18b5",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Resolver permissões efetivas com hierarquia"
+      },
+      "children": [
+        {
+          "id": "f4e48913-c378-4640-9c1b-f3d795747cc8",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " A query \"quais permissões esse user tem?\" precisa atravessar a hierarquia. Em Postgres, CTE recursiva resolve elegantemente: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "ace661bf-cccd-4599-9678-5b1295bae53c",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "sql",
+            "code": "-- Dado um user_id, retornar todas as perms efetivas (incluindo herdadas)\nWITH RECURSIVE role_tree AS (\n  -- base: roles diretas do user\n  SELECT r.id, r.parent_role_id\n  FROM roles r\n  JOIN user_roles ur ON ur.role_id = r.id\n  WHERE ur.user_id = $1\n\n  UNION\n\n  -- step: sobe na hierarquia, mas espera, herança é DESCENDENTE\n  -- se editor herda de viewer, queremos perms de viewer ao olhar editor\n  SELECT child.id, child.parent_role_id\n  FROM roles child\n  JOIN role_tree rt ON child.parent_role_id = rt.id\n)\nSELECT DISTINCT p.resource, p.action\nFROM role_tree rt\nJOIN role_permissions rp ON rp.role_id = rt.id\nJOIN permissions p ON p.id = rp.permission_id;"
+          }
+        },
+        {
+          "id": "0387a035-e89a-4da9-a6ee-a6000e99e89a",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Em produção, a query acima é resolvida no path de cada request — cache obrigatório. Padrão: redis com TTL curto (60s) chave , invalidação em writes de /."
+          }
+        }
+      ]
+    },
+    {
+      "id": "c74ac4ba-eec9-422b-8b23-3eff7fc5d147",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Anatomia de uma decisão de acesso"
+      },
+      "children": []
+    },
+    {
+      "id": "2aca5bb9-e383-4d89-ae2d-8489ab9e22b2",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Separation of Duties (RBAC2)"
+      },
+      "children": [
+        {
+          "id": "2853ccb7-9a43-426c-890f-53d46cca684b",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " SoD vem de auditoria financeira: a pessoa que "
+              },
+              {
+                "text": "cria",
+                "italic": true
+              },
+              {
+                "text": " uma transação não pode ser a mesma que "
+              },
+              {
+                "text": "aprova",
+                "italic": true
+              },
+              {
+                "text": ". Em SOX/PCI-DSS isso é requisito legal, não best practice. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "470da292-800c-4f98-80fe-f7e85c657143",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Tipo",
+              "Quando se verifica",
+              "Exemplo"
+            ],
+            "rows": [
+              [
+                "Static SoD (SSD)",
+                "Na atribuição da role ao user",
+                "User com role \"submitter_payment\" não pode receber \"approver_payment\""
+              ],
+              [
+                "Dynamic SoD (DSD)",
+                "Na ativação da role na sessão",
+                "User tem ambas, mas só pode ativar uma por sessão"
+              ],
+              [
+                "Cardinality constraint",
+                "Quando role é atribuída",
+                "Apenas 2 usuários podem ter role \"ceo\""
+              ],
+              [
+                "Prerequisite role",
+                "Antes de atribuir",
+                "Só pode receber \"team_lead\" se já tiver \"senior_eng\""
+              ]
+            ]
+          }
+        },
+        {
+          "id": "aeee14dc-8b44-4ccb-be8c-274e22ed6265",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "sql",
+            "code": "-- SoD estática modelada em SQL via tabela de pares conflitantes\nCREATE TABLE role_conflicts (\n  role_a UUID REFERENCES roles(id),\n  role_b UUID REFERENCES roles(id),\n  PRIMARY KEY (role_a, role_b)\n);\n\n-- Trigger que bloqueia INSERT em user_roles violando conflito\nCREATE FUNCTION check_sod() RETURNS TRIGGER AS $$\nBEGIN\n  IF EXISTS (\n    SELECT 1 FROM user_roles ur\n    JOIN role_conflicts rc\n      ON (rc.role_a = NEW.role_id AND rc.role_b = ur.role_id)\n      OR (rc.role_b = NEW.role_id AND rc.role_a = ur.role_id)\n    WHERE ur.user_id = NEW.user_id\n  ) THEN\n    RAISE EXCEPTION 'SoD violation: conflicting role';\n  END IF;\n  RETURN NEW;\nEND;\n$$ LANGUAGE plpgsql;\n\nCREATE TRIGGER enforce_sod BEFORE INSERT ON user_roles\n  FOR EACH ROW EXECUTE FUNCTION check_sod();"
+          }
+        }
+      ]
+    },
+    {
+      "id": "0897846f-e5cf-4927-8f37-824621d8a2b1",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Onde RBAC vence: arquitetura típica"
+      },
+      "children": []
+    },
+    {
+      "id": "9e953414-e3ec-460d-a7f6-0bb98cdc20b8",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Onde RBAC quebra (e o porquê)"
+      },
+      "children": [
+        {
+          "id": "f6aaa12b-fb3b-41c0-a67d-f417de0257bb",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Os três sinais de que você precisa sair do RBAC puro: "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "af2f5185-b251-4bd4-a0f9-e833caa11860",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Implementação enxuta em TypeScript"
+      },
+      "children": [
+        {
+          "id": "c54dd7c6-c4b8-4009-952d-2cc9f537b2db",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "typescript",
+            "code": "// Decorator-style authz middleware\nimport type { Request, Response, NextFunction } from 'express';\n\ntype Permission = `${string}:${string}`;  // 'invoices:read'\n\nexport function requires(perm: Permission) {\n  const [resource, action] = perm.split(':');\n  return async (req: Request, res: Response, next: NextFunction) => {\n    const user = req.user;  // garantido por authn middleware anterior\n    if (!user) return res.status(401).json({ error: 'unauthenticated' });\n\n    const perms = await getEffectivePermissions(user.id);  // cache redis\n    const allowed = perms.has(`${resource}:${action}`);\n\n    // Audit log — sempre, permitido ou não\n    audit.log({\n      user_id: user.id,\n      resource, action,\n      decision: allowed ? 'permit' : 'deny',\n      ts: new Date(),\n    });\n\n    if (!allowed) return res.status(403).json({ error: 'forbidden' });\n    return next();\n  };\n}\n\n// Uso\napp.get('/invoices/:id', requires('invoices:read'), handleGetInvoice);\napp.delete('/users/:id', requires('users:delete'), handleDeleteUser);"
+          }
+        }
+      ]
+    },
+    {
+      "id": "8acee007-89de-4224-a361-1c9a1c2de6c8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "ArchFlow: integração Postgres + Redis + audit"
+      },
+      "children": []
+    },
+    {
+      "id": "16bfbf81-5691-436a-af02-487067e301cf",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Resumo executivo"
+      },
+      "children": []
+    }
+  ]
+}

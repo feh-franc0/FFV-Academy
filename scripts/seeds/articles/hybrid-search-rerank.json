@@ -1,0 +1,318 @@
+{
+  "slug": "hybrid-search-rerank",
+  "title": null,
+  "blocks": [
+    {
+      "id": "3fd48a9b-1765-46a8-9e15-401c5bc06a75",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Por que hybrid + rerank é o padrão ouro em 2026"
+      },
+      "children": [
+        {
+          "id": "9784868e-e80a-4948-b095-16a5cd0e1680",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Em 2026, qualquer pipeline de busca sério (RAG, knowledge base, suporte, e-commerce) usa três estágios: retrieval híbrido (BM25 + dense), fusão de rankings (RRF), e reranker cross-encoder no topo. Esse padrão ganhou os benchmarks MTEB-Retrieval e BEIR consistentemente, e é o default em Elasticsearch 8.x, Vespa, Qdrant hybrid, Weaviate. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "a479724a-fe11-446e-ada3-e2b3c38ff585",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " A intuição: cada estágio cobre uma limitação do anterior. BM25 acerta matches lexicais exatos. Dense acerta paráfrase e semântica. Cross-encoder corrige ambiguidades no topo. Compor os três é mais robusto que qualquer um sozinho. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "abfc5762-b0e9-4410-b2bc-44a9f2e4eeb8",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Referências: Cormack, Clarke & Buettcher (SIGIR 2009) \"Reciprocal Rank Fusion outperforms Condorcet and individual rank learning methods\"; Thakur et al. (2021) \"BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models\"; Cohere Rerank docs; BGE-reranker v2 (BAAI/bge-reranker-v2-m3)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "faf8b012-4289-419e-ba33-561a7592fe23",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Arquitetura: 3 estágios"
+      },
+      "children": []
+    },
+    {
+      "id": "fab765c9-7644-46c6-88df-251537f86042",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Reciprocal Rank Fusion: a fórmula que ganhou"
+      },
+      "children": [
+        {
+          "id": "cd604ef6-bbde-4d19-a456-775a19669173",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Por que k=60? Cormack et al. testaram k ∈ {1, 10, 60, 100} em TREC tasks. k=60 produziu melhor MAP. Intuitivamente: k=60 significa que rank=1 vale ~1.6× mais que rank=10, mas só ~1.06× mais que rank=2. Suaviza o topo sem dar peso desproporcional ao primeiro lugar."
+          }
+        },
+        {
+          "id": "27c8d3da-f8ef-4351-8250-cc30aee1bdb8",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "from collections import defaultdict\nfrom typing import Sequence\n\ndef rrf_fusion(rankings: Sequence[Sequence[str]], k: int = 60, top_n: int = 100):\n    \"\"\"\n    rankings: lista de rankings, cada ranking é lista de doc_ids ordenada (rank 1 = posição 0)\n    Retorna: lista de (doc_id, fused_score) ordenada.\n    \"\"\"\n    scores: dict[str, float] = defaultdict(float)\n    for ranking in rankings:\n        for rank0, doc_id in enumerate(ranking):\n            scores[doc_id] += 1.0 / (k + rank0 + 1)  # rank é 1-indexed\n    return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_n]\n\n# Exemplo\nbm25_ranking   = [\"doc_42\", \"doc_3\",  \"doc_17\", \"doc_91\", \"doc_8\"]   # top-5 BM25\nvector_ranking = [\"doc_3\",  \"doc_91\", \"doc_42\", \"doc_7\",  \"doc_17\"]  # top-5 dense\nfused = rrf_fusion([bm25_ranking, vector_ranking], k=60, top_n=5)\n\n# Resultado:\n# [('doc_3',  0.0326), ('doc_42', 0.0323),\n#  ('doc_17', 0.0320), ('doc_91', 0.0322), ('doc_7',  0.0156)]\n# doc_3 e doc_42 dominam porque aparecem alto em AMBOS os rankings"
+          }
+        }
+      ]
+    },
+    {
+      "id": "e82fd394-f0ba-4a69-87ca-8d8288e08825",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Weighted RRF e variantes (quando tunar paga)"
+      },
+      "children": [
+        {
+          "id": "7ffc80d2-d6b2-4e94-9d67-909003c7fd21",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " O RRF puro trata todos os rankings com peso igual. Em alguns casos, BM25 ou dense devem pesar mais. A variante weighted é simples: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "fb9a31e4-ed5c-4ecc-b240-e07c40f4e23a",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "def weighted_rrf(rankings_with_weights, k=60, top_n=100):\n    \"\"\"\n    rankings_with_weights: [(ranking, peso), ...]\n    \"\"\"\n    scores = defaultdict(float)\n    for ranking, w in rankings_with_weights:\n        for rank0, doc_id in enumerate(ranking):\n            scores[doc_id] += w / (k + rank0 + 1)\n    return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_n]\n\n# Caso: domínio técnico, BM25 é mais valioso para SKUs e códigos\nfused = weighted_rrf([\n    (bm25_ranking,   0.7),\n    (vector_ranking, 0.3),\n], k=60, top_n=20)\n\n# Pesos devem ser calibrados via golden set!"
+          }
+        },
+        {
+          "id": "2cb528d4-3355-46e0-b56c-9a4a143a2d70",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Não chute pesos. Calibrá-los exige golden set de 50-200 queries anotadas. Grid search rápido em {0.1, 0.3, 0.5, 0.7, 0.9} por ranking. Métrica: NDCG@10 ou MRR. Sem isso, weighted RRF pode piorar em vez de melhorar. RRF default (peso uniforme) já é um excelente baseline."
+          }
+        }
+      ]
+    },
+    {
+      "id": "cd6ff97a-3367-430e-9d66-0c5c0a58ee2d",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Cross-encoder reranker: o que faz"
+      },
+      "children": [
+        {
+          "id": "46e66df9-0926-408a-9327-4bbeeefb838c",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Bi-encoders (modelos de embedding) codificam query e doc separadamente. Cross-encoders processam (query, doc) juntos numa única passada de transformer, com atenção cruzada full. O resultado é um score muito mais contextualizado — entende melhor quando o doc "
+              },
+              {
+                "text": "responde",
+                "italic": true
+              },
+              {
+                "text": " à query, não só quando tem palavras similares. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "24b367e5-beab-403c-a672-955d35826c75",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Aspecto",
+              "Bi-encoder (retrieval)",
+              "Cross-encoder (rerank)"
+            ],
+            "rows": [
+              [
+                "Como funciona",
+                "Embed(query) e embed(doc) separados, similaridade via produto escalar",
+                "(query, doc) → transformer com cross-attention → score"
+              ],
+              [
+                "Pré-computa embeddings?",
+                "Sim — embed o corpus uma vez",
+                "Não — depende da query, recomputa sempre"
+              ],
+              [
+                "Latência por par",
+                "~1ms (lookup ANN)",
+                "~30-100ms em GPU, ~200-500ms em CPU"
+              ],
+              [
+                "Escala",
+                "Milhões+ via HNSW/IVF",
+                "Top-50 a top-200 só"
+              ],
+              [
+                "Precisão (NDCG@10)",
+                "~0.60-0.70",
+                "~0.75-0.85"
+              ],
+              [
+                "Exemplos",
+                "BGE-M3, e5, Voyage-3, OpenAI text-embedding-3",
+                "BGE-reranker-v2-m3, Cohere Rerank, Qwen reranker"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "3df02fb0-9138-459e-b620-d88aaf646804",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Reranker em código: BGE-reranker e Cohere"
+      },
+      "children": [
+        {
+          "id": "fb57b976-6a0a-4508-b901-560ed4fd9d83",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "# Opção 1: Cohere Rerank (API gerenciada, multilingual)\nimport cohere\nco = cohere.Client()  # COHERE_API_KEY no env\n\ncandidates = [{\"id\": d, \"text\": doc_texts[d]} for d in fused[:50]]\nresponse = co.rerank(\n    model=\"rerank-multilingual-v3.0\",\n    query=query,\n    documents=[c[\"text\"] for c in candidates],\n    top_n=10,\n)\nfinal_ids = [candidates[r.index][\"id\"] for r in response.results]\n\n# Opção 2: BGE-reranker local (GPU, sem custo por query)\nfrom sentence_transformers import CrossEncoder\n\nmodel = CrossEncoder(\"BAAI/bge-reranker-v2-m3\", device=\"cuda\")\npairs = [(query, doc_texts[d]) for d in fused[:50]]\nscores = model.predict(pairs, batch_size=32)\nranked = sorted(zip(fused[:50], scores), key=lambda x: x[1], reverse=True)\nfinal_ids = [d for d, _ in ranked[:10]]\n\n# Opção 3: Qwen reranker (multilingual, ótimo PT-BR em 2026)\nfrom FlagEmbedding import FlagReranker\nreranker = FlagReranker(\"Qwen/Qwen2.5-Reranker-0.5B\", use_fp16=True)\nscores = reranker.compute_score([[query, doc_texts[d]] for d in fused[:50]])"
+          }
+        },
+        {
+          "id": "b6b393be-e1df-4993-bbdb-88825d358e85",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Custo prático 2026: Cohere Rerank ~$2/1k queries. BGE-reranker em GPU A10/L4 amortizado ~$0.5/h, processa ~30 queries/segundo (top-50 cada). Para tráfego > 100 QPS, GPU local geralmente vence. Para tráfego baixo ou variável, API é mais simples."
+          }
+        }
+      ]
+    },
+    {
+      "id": "ee28479e-cb7b-4330-8bf5-4e64cf53456d",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Pipeline completo (production-ready)"
+      },
+      "children": [
+        {
+          "id": "1c7f50ad-2fe3-4280-86a0-27a058684d6a",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "from elasticsearch import Elasticsearch\nfrom qdrant_client import QdrantClient\nfrom sentence_transformers import SentenceTransformer, CrossEncoder\nfrom collections import defaultdict\n\n# 1. Inicialização\nes = Elasticsearch([\"https://es.internal:9200\"])\nqdrant = QdrantClient(url=\"https://qdrant.internal\")\nembedder = SentenceTransformer(\"BAAI/bge-m3\")\nreranker = CrossEncoder(\"BAAI/bge-reranker-v2-m3\", device=\"cuda\")\n\ndef hybrid_search(query: str, top_k: int = 10, retrieval_k: int = 100, rerank_k: int = 50):\n    # 2a. BM25 via Elasticsearch\n    es_resp = es.search(\n        index=\"docs\",\n        body={\"query\": {\"match\": {\"content\": query}}, \"size\": retrieval_k},\n        timeout=\"2s\",\n    )\n    bm25_ids = [hit[\"_id\"] for hit in es_resp[\"hits\"][\"hits\"]]\n\n    # 2b. Dense via Qdrant\n    q_emb = embedder.encode(query, normalize_embeddings=True).tolist()\n    dense_resp = qdrant.search(\n        collection_name=\"docs\",\n        query_vector=q_emb,\n        limit=retrieval_k,\n    )\n    dense_ids = [hit.id for hit in dense_resp]\n\n    # 3. RRF fusion\n    fused_scores: dict[str, float] = defaultdict(float)\n    for ranking in [bm25_ids, dense_ids]:\n        for rank0, doc_id in enumerate(ranking):\n            fused_scores[doc_id] += 1.0 / (60 + rank0 + 1)\n    fused = [d for d, _ in sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)][:rerank_k]\n\n    # 4. Cross-encoder rerank dos top-K fundidos\n    doc_texts = fetch_doc_texts(fused)  # batch fetch do storage\n    pairs = [(query, doc_texts[d]) for d in fused]\n    rerank_scores = reranker.predict(pairs, batch_size=32, show_progress_bar=False)\n    final = sorted(zip(fused, rerank_scores), key=lambda x: x[1], reverse=True)[:top_k]\n\n    return [{\"id\": d, \"score\": float(s)} for d, s in final]\n\n\n# Latência típica em produção:\n# - ES BM25:          5-15 ms\n# - Qdrant ANN:       5-20 ms  (em paralelo com ES, mesmo tempo total)\n# - RRF (in-memory):  <1 ms\n# - Reranker (GPU):  100-200 ms (top-50 em batch)\n# - Total:           ~120-230 ms p95"
+          }
+        }
+      ]
+    },
+    {
+      "id": "1ba1287a-715f-464d-933e-b0fd3adec526",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Quando reranker vale (e quando não)"
+      },
+      "children": []
+    },
+    {
+      "id": "736ac90a-7be7-49cb-98d8-16ee203d8a7f",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Métricas: como saber se o pipeline melhorou"
+      },
+      "children": [
+        {
+          "id": "a5154e82-0ed7-4f77-af74-744a15363e4c",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Benchmark típico em corpora reais: BM25 sozinho NDCG@10 ~0.55. Dense sozinho ~0.60. Hybrid RRF ~0.68. Hybrid + rerank ~0.78. Ganhos compostos reais — mas variam por domínio. Sempre meça no seu golden set, não confie em benchmark alheio."
+          }
+        }
+      ]
+    },
+    {
+      "id": "a305d8eb-042c-4bd6-bf7e-c74b70ef60f2",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": []
+    },
+    {
+      "id": "dcc0a2e6-a09c-4a5e-885a-87a53957166d",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Resumo executivo"
+      },
+      "children": [
+        {
+          "id": "61d4ede0-8107-4851-b157-dc00779eda0f",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Hybrid retrieval + RRF + cross-encoder rerank é o padrão ouro de 2026. RRF resolve o problema de combinar scores incomparáveis. Cross-encoder corrige top-K com precisão muito superior. Pipeline disponível out-of-the-box em ES 8, Qdrant, Weaviate, Vespa."
+          }
+        },
+        {
+          "id": "765e3936-1829-462c-b49d-4b277f3dcfb7",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Próximo: o lado \"dense\" do pipeline — quais embeddings de busca são state-of-the-art em 2026 (BGE-M3, e5, Voyage, Cohere v3) e como escolher."
+          }
+        }
+      ]
+    }
+  ]
+}

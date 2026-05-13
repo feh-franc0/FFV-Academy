@@ -1,0 +1,802 @@
+{
+  "slug": "idempotencia-retries",
+  "title": null,
+  "blocks": [
+    {
+      "id": "bb566bc6-2fd6-4ea7-9688-0d8ce86c92eb",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Todas as redes mentem. Pacotes se perdem. Timeouts disparam antes da resposta chegar. Servidores crasham "
+          },
+          {
+            "text": "entre",
+            "italic": true
+          },
+          {
+            "text": " processar a requisição e mandar o ACK. O cliente não tem como saber se a operação aconteceu — então ele "
+          },
+          {
+            "text": "retria",
+            "bold": true
+          },
+          {
+            "text": ". Se a operação não é idempotente, você acaba de debitar o cartão duas vezes. Se ela é, tudo bem. Este módulo é sobre as ferramentas que separam aplicações amadoras de sistemas que sobrevivem a AWS caindo no meio da noite. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "9dbd0039-4fa2-435d-be78-90ba772825bf",
+      "type": "paragraph",
+      "position": 1,
+      "data": {
+        "content": [
+          {
+            "text": " Vamos cobrir: o que é idempotência formalmente, como implementar "
+          },
+          {
+            "text": "idempotency keys",
+            "bold": true
+          },
+          {
+            "text": " do jeito que a Stripe faz, "
+          },
+          {
+            "text": "backoff exponencial com jitter",
+            "bold": true
+          },
+          {
+            "text": " (e por que jitter não é opcional), "
+          },
+          {
+            "text": "circuit breakers",
+            "bold": true
+          },
+          {
+            "text": " pra não afogar serviços recuperando, e as garantias reais de entrega em brokers como Kafka, SQS e RabbitMQ. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "531ebc51-c3f8-4e46-a6cd-b1fd6accd02a",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O que é idempotência (e quais operações já são)"
+      },
+      "children": [
+        {
+          "id": "a23e706e-dcd9-4277-8a08-712d84292376",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Formalmente: uma função "
+              },
+              {
+                "text": "f",
+                "code": true
+              },
+              {
+                "text": " é idempotente se "
+              },
+              {
+                "text": "f(f(x)) = f(x)",
+                "code": true
+              },
+              {
+                "text": ". Aplicada em sistemas distribuídos: chamar a operação 1 vez ou 50 vezes deixa o sistema no mesmo estado final. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "08c2364f-2215-45c1-a779-6f5f83b34efc",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Operação",
+              "Idempotente?",
+              "Exemplo"
+            ],
+            "rows": [
+              [
+                "GET",
+                "Sim (sem side effects)",
+                "GET /users/42"
+              ],
+              [
+                "PUT",
+                "Sim (substitui por completo)",
+                "PUT /users/42 {\"name\":\"Ana\"}"
+              ],
+              [
+                "DELETE",
+                "Sim (se já apagado, continua apagado)",
+                "DELETE /users/42"
+              ],
+              [
+                "POST (sem idempotency key)",
+                "Não",
+                "POST /payments → cria novo pagamento cada chamada"
+              ],
+              [
+                "POST (com idempotency key)",
+                "Sim (com key + dedup server-side)",
+                "POST /payments com Idempotency-Key: uuid"
+              ],
+              [
+                "Incremento: counter += 1",
+                "Não",
+                "Repetir → incrementa de novo"
+              ],
+              [
+                "Set absoluto: counter = 42",
+                "Sim",
+                "Qualquer número de repetições → 42"
+              ],
+              [
+                "Compare-and-swap (CAS)",
+                "Sim (primeira aplica, demais falham sem erro)",
+                "UPDATE ... WHERE version=X"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "82df34d7-60bf-4c3c-b7c9-3b8b2690b8b4",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Pegadinha clássica: \"enviar email de boas-vindas\" não é idempotente. Se você retria após crash, manda o email duas vezes. Solução: wrap em idempotency key (ex: grava em tabela antes de enviar)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "f28d6bcd-ec83-4d52-af85-8fd72c97f988",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Idempotency Keys: a pedra fundamental"
+      },
+      "children": [
+        {
+          "id": "f8ab4c76-4a73-4742-b5aa-425d7b5f829e",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " O padrão canônico, popularizado pela Stripe (2015): o cliente gera um UUID por "
+              },
+              {
+                "text": "intenção",
+                "italic": true
+              },
+              {
+                "text": " de operação e passa no header "
+              },
+              {
+                "text": "Idempotency-Key: <uuid>",
+                "code": true
+              },
+              {
+                "text": ". O servidor: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "8199a84d-f825-46c9-937a-f6499de823d4",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Implementação Postgres + FastAPI",
+                "bold": true
+              },
+              {
+                "text": " (enxuta mas production-shaped):"
+              }
+            ]
+          }
+        },
+        {
+          "id": "87806d97-ee08-4e31-9b7b-30797273a93e",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "python",
+            "code": "# idempotency.py — pattern completo com locking e TTL\nfrom fastapi import FastAPI, Header, HTTPException, Request\nfrom sqlalchemy import text\nimport json, hashlib\n\napp = FastAPI()\n\nIDEMPOTENCY_TTL_HOURS = 24  # Stripe guarda 24h, ajuste por caso de uso\n\n@app.post(\"/payments\")\nasync def create_payment(\n    request: Request,\n    idempotency_key: str = Header(..., alias=\"Idempotency-Key\"),\n):\n    body = await request.json()\n    body_hash = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()\n\n    async with db.begin() as tx:\n        # Lock da key — evita duas réplicas da API processarem o mesmo key em paralelo\n        row = await tx.execute(\n            text(\"\"\"\n                SELECT status_code, response_body, request_hash\n                FROM idempotency_keys\n                WHERE key = :k AND created_at > NOW() - INTERVAL '24 hours'\n                FOR UPDATE\n            \"\"\"),\n            {\"k\": idempotency_key},\n        )\n        existing = row.fetchone()\n\n        if existing:\n            # Proteção: mesma key com body diferente = erro 422 (Stripe faz isso)\n            if existing.request_hash != body_hash:\n                raise HTTPException(422, \"Idempotency-Key reuse with different payload\")\n            return {\"status\": existing.status_code, \"body\": existing.response_body}\n\n        # Executa a lógica real do pagamento\n        payment = await create_payment_logic(body)\n        response = {\"id\": payment.id, \"status\": \"created\"}\n\n        # Grava a resposta pra próxima chamada com a mesma key\n        await tx.execute(\n            text(\"\"\"\n                INSERT INTO idempotency_keys\n                  (key, request_hash, status_code, response_body, created_at)\n                VALUES (:k, :h, 201, :r, NOW())\n            \"\"\"),\n            {\"k\": idempotency_key, \"h\": body_hash, \"r\": json.dumps(response)},\n        )\n        return response"
+          }
+        },
+        {
+          "id": "b638d229-5dc3-4e54-9600-0fd0c42cadb8",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "",
+            "content": "Armadilha #1: in-flight requests. Se dois retries chegam ao mesmo tempo em réplicas diferentes da API, sem os dois não acham a key existente e ambos executam. Sempre lock (row-level no Postgres ou SET NX no Redis com TTL). A Stripe usa locking explícito em todas as rotas idempotentes."
+          }
+        },
+        {
+          "id": "89ce1a21-ff31-4d8f-817f-f41ddcc3597b",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Armadilha #2: body diferente com mesma key. Um bug no cliente pode reusar a key com body alterado. Guarde o hash do body e rejeite divergências com 422. Evita cenários em que o cliente \"acha\" que fez uma coisa mas o servidor tem outra."
+          }
+        }
+      ]
+    },
+    {
+      "id": "c81ae711-17a7-486a-850d-38c49321f7b0",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Backoff exponencial com jitter (a AWS tem paper sobre isso)"
+      },
+      "children": [
+        {
+          "id": "d10946db-c648-4599-98f8-b1364239b073",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Quando um retry é necessário, "
+              },
+              {
+                "text": "como",
+                "italic": true
+              },
+              {
+                "text": " esperar importa muito. A evolução histórica: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "e6caf1ea-b87c-47e5-b012-703a347abcf0",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Estratégia",
+              "Fórmula",
+              "Problema"
+            ],
+            "rows": [
+              [
+                "Retry imediato",
+                "sleep = 0",
+                "Thundering herd instantâneo — pior das opções."
+              ],
+              [
+                "Retry fixo",
+                "sleep = 1s",
+                "Espalha mas não cede carga se o serviço está estressado."
+              ],
+              [
+                "Backoff linear",
+                "sleep = n * 1s",
+                "Muito lento pra propagar; ainda sincroniza se N clientes erram juntos."
+              ],
+              [
+                "Backoff exponencial",
+                "sleep = base * 2^n",
+                "Bom, mas todos retriam nos mesmos instantes (2s, 4s, 8s)."
+              ],
+              [
+                "Exp + full jitter (AWS)",
+                "sleep = random(0, base * 2^n)",
+                "Melhor: espalhado no tempo, decresce a carga exponencialmente."
+              ],
+              [
+                "Exp + equal jitter",
+                "sleep = base*2^n/2 + random(0, base*2^n/2)",
+                "Full jitter com piso mínimo."
+              ]
+            ]
+          }
+        },
+        {
+          "id": "624e6dd5-aa42-4f2e-88ec-ad308b79266e",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Paper seminal: Exponential Backoff And Jitter (AWS Architecture Blog, 2015). Conclusão experimental: full jitter (ou \"decorrelated jitter\") tem throughput efetivo superior em quase todos os cenários. Use."
+          }
+        },
+        {
+          "id": "4d048acc-43cd-4ea1-a8f2-f5d505c4b81a",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": "Implementação Python com tenacity",
+                "bold": true
+              },
+              {
+                "text": ":"
+              }
+            ]
+          }
+        },
+        {
+          "id": "2a56286b-c259-46c5-945e-be96b02a3a35",
+          "type": "code_block",
+          "position": 4,
+          "data": {
+            "language": "python",
+            "code": "# retry_with_jitter.py\nfrom tenacity import retry, stop_after_attempt, wait_random_exponential, retry_if_exception_type\nimport httpx\n\n@retry(\n    stop=stop_after_attempt(5),                       # até 5 tentativas\n    wait=wait_random_exponential(                     # full jitter\n        multiplier=1,                                 # base em segundos\n        max=30,                                       # cap em 30s\n    ),\n    retry=retry_if_exception_type(httpx.TransportError),\n    reraise=True,\n)\nasync def call_payment_gateway(payload: dict):\n    async with httpx.AsyncClient(timeout=5.0) as client:\n        resp = await client.post(\n            \"https://gateway.example.com/charge\",\n            json=payload,\n            headers={\"Idempotency-Key\": payload[\"op_id\"]},  # sempre junto!\n        )\n        resp.raise_for_status()\n        return resp.json()"
+          }
+        },
+        {
+          "id": "6b5f2b5d-89f6-46f0-90e8-194abcb1dd51",
+          "type": "paragraph",
+          "position": 5,
+          "data": {
+            "content": [
+              {
+                "text": "Implementação TypeScript manual",
+                "bold": true
+              },
+              {
+                "text": " (quando não quer dep):"
+              }
+            ]
+          }
+        },
+        {
+          "id": "7cb0edf5-2615-4574-9f53-fe78042b57c7",
+          "type": "code_block",
+          "position": 6,
+          "data": {
+            "language": "typescript",
+            "code": "// backoff.ts\nexport async function retryWithBackoff<T>(\n  fn: () => Promise<T>,\n  opts: { maxAttempts?: number; baseMs?: number; capMs?: number } = {},\n): Promise<T> {\n  const { maxAttempts = 5, baseMs = 200, capMs = 30_000 } = opts;\n  let lastErr: unknown;\n\n  for (let attempt = 0; attempt < maxAttempts; attempt++) {\n    try {\n      return await fn();\n    } catch (err) {\n      lastErr = err;\n      if (!isRetryable(err)) throw err;              // 4xx não-429: não retria\n      if (attempt === maxAttempts - 1) break;\n\n      const exp = Math.min(capMs, baseMs * 2 ** attempt);\n      const jitter = Math.random() * exp;            // full jitter\n      await new Promise((r) => setTimeout(r, jitter));\n    }\n  }\n  throw lastErr;\n}\n\nfunction isRetryable(err: unknown): boolean {\n  // network + 5xx + 429 = retriáveis. 4xx normais = não.\n  if (err instanceof TypeError) return true;           // network\n  const status = (err as { status?: number })?.status;\n  return status === 429 || (!!status && status >= 500);\n}"
+          }
+        },
+        {
+          "id": "5d96e6ba-fd9d-4c8a-859f-9ccf65b10387",
+          "type": "callout",
+          "position": 7,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Nem tudo deve ser retriado. Retries cegos em 4xx (400, 401, 422) só desperdiçam quota. Regra: retria em timeouts, erros de rede, 429 (respeitando Retry-After header) e 5xx. 4xx são problema seu, não do servidor."
+          }
+        }
+      ]
+    },
+    {
+      "id": "d4a2e1c7-1573-4df7-b259-d4f7cbff5416",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Circuit Breaker: quando parar de retriar"
+      },
+      "children": [
+        {
+          "id": "b99ad830-a387-488e-b3f5-9de5d3ff2904",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Imagine que o pagamento gateway está 100% fora há 2 minutos. Sua API continua aceitando requests, cada uma esperando 5s de timeout + 5 retries com backoff = 30s. Threads começam a acumular, pool de conexão esgota, sua API morre "
+              },
+              {
+                "text": "por tabela",
+                "italic": true
+              },
+              {
+                "text": ". Circuit breaker quebra esse ciclo. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "34a6a44b-f235-44df-bb0a-90c147ead14b",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Implementação básica em Python",
+                "bold": true
+              },
+              {
+                "text": ":"
+              }
+            ]
+          }
+        },
+        {
+          "id": "9df9eec0-117f-40d6-999e-2837157224ea",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "python",
+            "code": "# circuit_breaker.py — versão educativa\nimport time\nfrom enum import Enum\n\nclass State(Enum):\n    CLOSED = \"closed\"\n    OPEN = \"open\"\n    HALF_OPEN = \"half_open\"\n\nclass CircuitBreaker:\n    def __init__(self, fail_threshold=5, reset_timeout_s=60):\n        self.state = State.CLOSED\n        self.fail_count = 0\n        self.fail_threshold = fail_threshold\n        self.reset_timeout_s = reset_timeout_s\n        self.opened_at: float | None = None\n\n    def call(self, fn, *args, **kwargs):\n        if self.state == State.OPEN:\n            if time.time() - self.opened_at > self.reset_timeout_s:\n                self.state = State.HALF_OPEN   # deixa 1 tentativa passar\n            else:\n                raise CircuitOpenError(\"circuit is open\")\n\n        try:\n            result = fn(*args, **kwargs)\n        except Exception:\n            self._on_failure()\n            raise\n        self._on_success()\n        return result\n\n    def _on_success(self):\n        self.fail_count = 0\n        self.state = State.CLOSED\n\n    def _on_failure(self):\n        self.fail_count += 1\n        if self.fail_count >= self.fail_threshold:\n            self.state = State.OPEN\n            self.opened_at = time.time()\n\nclass CircuitOpenError(Exception): ..."
+          }
+        },
+        {
+          "id": "07d82733-0928-40c5-8a37-6d1d18bdf1dd",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": " Em produção use bibliotecas prontas: "
+              },
+              {
+                "text": "resilience4j",
+                "code": true
+              },
+              {
+                "text": " (Java), "
+              },
+              {
+                "text": "opossum",
+                "code": true
+              },
+              {
+                "text": " (Node), "
+              },
+              {
+                "text": "pybreaker",
+                "code": true
+              },
+              {
+                "text": " ou "
+              },
+              {
+                "text": "aiobreaker",
+                "code": true
+              },
+              {
+                "text": " (Python), service meshes (Istio, Linkerd) fazem no proxy. Features extras: sliding window de falhas (não só contador), bulkheads (isola chamadas por pool), fallback values. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "42ec5099-d85f-444f-b104-70b210d2ca12",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "At-most-once, at-least-once, exactly-once"
+      },
+      "children": [
+        {
+          "id": "f4b9ddaf-2143-406e-bb13-5fbdbb6a3f7f",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " As três garantias de entrega que todo engenheiro distribuído precisa saber de cor: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "98a204b5-b448-4bea-a964-80c802140445",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Garantia",
+              "Significado",
+              "Custo"
+            ],
+            "rows": [
+              [
+                "At-most-once",
+                "Pode perder mensagens, nunca duplica",
+                "Sem retries, fire-and-forget. UDP, metrics."
+              ],
+              [
+                "At-least-once",
+                "Nunca perde, pode duplicar (retry + dedup do consumer)",
+                "Broker guarda até ACK. SQS, RabbitMQ, Kafka (default)."
+              ],
+              [
+                "Exactly-once (teórico)",
+                "Nenhuma perda, nenhuma duplicação",
+                "Impossível end-to-end em rede real (Two Generals Problem)."
+              ],
+              [
+                "Effectively-once (prático)",
+                "At-least-once + consumer idempotente → efeito = exactly-once",
+                "Padrão em sistemas sérios. Kafka EOS, Pulsar EOS dentro do broker."
+              ]
+            ]
+          }
+        },
+        {
+          "id": "db2d906b-74bb-463c-b08d-2698b031578b",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Two Generals Problem (1975): dois exércitos precisam atacar juntos por mensageiros que podem ser capturados. Prova-se que nenhum número finito de confirmações resolve a incerteza. Tradução pra rede: você nunca sabe se a ACK final chegou. Por isso exactly-once puro é mito; effectively-once é a realidade."
+          }
+        },
+        {
+          "id": "40244cb1-2e12-47be-b3ba-bafaa4bad6bc",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": "Effectively-once na prática",
+                "bold": true
+              },
+              {
+                "text": ":"
+              }
+            ]
+          }
+        },
+        {
+          "id": "008d7efb-6a2d-4c55-85c0-e5687f89d1c0",
+          "type": "code_block",
+          "position": 4,
+          "data": {
+            "language": "python",
+            "code": "# consumer_dedup.py — at-least-once do broker + dedup local = effectively-once\nasync def process_message(msg: dict):\n    msg_id = msg[\"id\"]  # broker garante que este id é estável\n\n    async with db.begin() as tx:\n        # Tenta inserir — se duplicata, constraint falha e a gente ignora\n        result = await tx.execute(\n            text(\"\"\"\n                INSERT INTO processed_messages (id, processed_at)\n                VALUES (:id, NOW())\n                ON CONFLICT (id) DO NOTHING\n            \"\"\"),\n            {\"id\": msg_id},\n        )\n        if result.rowcount == 0:\n            log.info(\"duplicate message, skipping\", msg_id=msg_id)\n            return\n\n        # Primeira vez vendo essa msg — processa na mesma transação\n        await apply_side_effects(msg, tx)\n\n    # Só ACK o broker depois do commit bem-sucedido\n    await broker.ack(msg)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "c7410b69-e9f6-4b56-bbd0-3aa2938ccdbc",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Outbox Pattern: publicar eventos sem perder ou duplicar"
+      },
+      "children": [
+        {
+          "id": "66afc746-9b16-4e27-8fa8-79de15a38eb0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Problema clássico: você quer "
+              },
+              {
+                "text": "criar um pedido E publicar um evento \"OrderCreated\"",
+                "italic": true
+              },
+              {
+                "text": ". Se faz em duas etapas (INSERT + publish), pode crashar no meio — DB tem o pedido, o evento nunca saiu (ou vice-versa). "
+              }
+            ]
+          }
+        },
+        {
+          "id": "6dfb70c9-24d5-4bb4-af51-c6df9df431b4",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Por que funciona: a transação é atômica (ACID do banco garante). O relay é idempotente (se crashar entre publicar e marcar como sent, apenas republica — consumer fará dedup). Combinado com "
+              },
+              {
+                "text": "ON CONFLICT DO NOTHING",
+                "code": true
+              },
+              {
+                "text": " no consumer = effectively-once end-to-end. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ebf6369a-e6aa-4242-9a01-8eb3637941b1",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Decisões reais"
+      },
+      "children": []
+    },
+    {
+      "id": "5a216000-2ec8-4cfe-b1e8-245345efbcd0",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Perguntas típicas (Q&A)"
+      },
+      "children": [
+        {
+          "id": "dbfb70b1-dd28-43ff-bbff-5714ad557dae",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Preciso de idempotency key em GET?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "00d9e7ff-05bb-4e0c-8b17-3f2be8973d4c",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Não. GET não muda estado. Você pode chamar 1 ou 100 vezes e o sistema fica igual. Idempotency keys são para operações com side effects (POST, às vezes PATCH). "
+              }
+            ]
+          }
+        },
+        {
+          "id": "3fb599b8-7c04-4728-8fb9-8ee2c5e65db4",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "TTL da idempotency key — quanto tempo?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "5733b1bc-0a1c-47b6-bb34-40f464e91118",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": " Depende do caso. Stripe usa 24h — tempo suficiente pra retries longos, curto pra não encher o DB. Pra filas batch que podem ficar presas dias, considere 7d. Nunca infinito, ou você paga armazenamento crescente. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "3781cbb3-2be3-46fc-a4eb-da662e48824b",
+          "type": "paragraph",
+          "position": 4,
+          "data": {
+            "content": [
+              {
+                "text": "Quando um retry é pior que desistir?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "00c6a1ee-5c39-4a1c-b56c-6db0db5bf85b",
+          "type": "paragraph",
+          "position": 5,
+          "data": {
+            "content": [
+              {
+                "text": " Em 4xx (exceto 429): o servidor tá te dizendo que a request é inválida, retry não resolve. Em operações não-idempotentes sem key: retry duplica. Em endpoint com lógica lenta que timed out no cliente mas ainda está rodando: retry empurra trabalho duplicado. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "571a8944-5b48-405c-b809-e943f461540c",
+          "type": "paragraph",
+          "position": 6,
+          "data": {
+            "content": [
+              {
+                "text": "Kafka EOS (Exactly-Once Semantics) é exactly-once verdadeiro?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "7ac5d88c-9b48-4a32-906e-9f7ca252595b",
+          "type": "paragraph",
+          "position": 7,
+          "data": {
+            "content": [
+              {
+                "text": " Dentro do Kafka, sim (produção idempotente + transações). Mas end-to-end, o consumer ainda precisa ser idempotente se escreve em sistemas externos (DBs, APIs). EOS do Kafka resolve "
+              },
+              {
+                "text": "uma parte",
+                "italic": true
+              },
+              {
+                "text": " da equação; o outro lado fica com você. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "2f4a29b4-e301-4c90-a3a3-689954f04f0b",
+          "type": "paragraph",
+          "position": 8,
+          "data": {
+            "content": [
+              {
+                "text": "Circuit breaker fecha sozinho?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "f1ad65ba-3da8-4b8a-9080-e902aa958ed3",
+          "type": "paragraph",
+          "position": 9,
+          "data": {
+            "content": [
+              {
+                "text": " Sim — depois do reset_timeout ele vai pra HALF-OPEN, deixa 1 chamada passar. Se sucesso, fecha (CLOSED). Se falha, volta pra OPEN e reseta o relógio. Automático. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "a8ea2d63-784a-4e24-83a1-1f505f8c1abf",
+      "type": "callout",
+      "position": 10,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Take-aways:"
+      }
+    },
+    {
+      "id": "d7fb5591-c90f-45c3-8f4a-6a18a471e597",
+      "type": "paragraph",
+      "position": 11,
+      "data": {
+        "content": [
+          {
+            "text": " Próximo módulo: quando você tem "
+          },
+          {
+            "text": "várias operações",
+            "italic": true
+          },
+          {
+            "text": " em serviços diferentes que precisam acontecer juntas — Sagas vs 2PC. "
+          }
+        ]
+      }
+    }
+  ]
+}

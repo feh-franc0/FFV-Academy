@@ -1,0 +1,521 @@
+{
+  "slug": "hybrid-search-reranking",
+  "title": null,
+  "blocks": [
+    {
+      "id": "475b9a8b-d4c7-499d-85ec-7f75f0ec661d",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Naive RAG (embed + top-k + prompt) bate em ~50-60% de precisão em bases reais. Para chegar nos 85%+ que produção exige, o retrieval deixa de ser "
+          },
+          {
+            "text": "uma",
+            "bold": true
+          },
+          {
+            "text": " busca e vira um "
+          },
+          {
+            "text": "pipeline de três estágios",
+            "bold": true
+          },
+          {
+            "text": ": recuperação por múltiplos métodos, fusão de rankings, e reranking fino. Este módulo mostra cada peça, quando ela entra e quanto ela custa. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "25a812d0-fa4e-43ee-8d9c-c50fcffb12fc",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "A anatomia de um retrieval de produção"
+      },
+      "children": [
+        {
+          "id": "b0231528-d0b8-475c-b278-2130c1198e2f",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Três estágios não é overkill — é o que separa \"funciona na demo\" de \"funciona no cliente\". Cada estágio tem um trade-off claro: recall (BM25+vector), diversidade (MMR/RRF), precisão (rerank)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "d0bbdddd-3d31-402b-ab67-1c833798a143",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "BM25: o clássico que se recusa a morrer"
+      },
+      "children": [
+        {
+          "id": "5331db47-25e6-4caa-8814-1fb21cc6a8f0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " BM25 (Best Matching 25) é um refinamento de TF-IDF dos anos 90. Pontua documento pela frequência dos termos da query, com saturação (mais ocorrências não crescem linear) e normalização por tamanho do doc. Em 2026 ainda é o sparse baseline contra o qual todos os denses são comparados — e em muitos casos ganha. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "199ea363-0a05-42c2-afd0-14a7c951c5d1",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Cenário",
+              "BM25",
+              "Dense (embedding)"
+            ],
+            "rows": [
+              [
+                "Match por sigla/ID/SKU",
+                "Excelente — casa literalmente",
+                "Ruim — token raro some no embedding"
+              ],
+              [
+                "Sinônimos (\"carro\" vs \"automóvel\")",
+                "Falha (lexical)",
+                "Excelente (semântico)"
+              ],
+              [
+                "Domínio técnico com jargão raro",
+                "Forte",
+                "Depende do treino do embedder"
+              ],
+              [
+                "Paráfrase (\"como faço\" vs \"processo de\")",
+                "Fraco",
+                "Forte"
+              ],
+              [
+                "Custo de indexação",
+                "Quase zero (Lucene/tantivy)",
+                "Alto (embed cada chunk)"
+              ],
+              [
+                "Latência de busca",
+                "<5ms em milhões de docs",
+                "<10ms com HNSW bem tunado"
+              ],
+              [
+                "Multilíngue",
+                "OK com stemmer/tokenizer correto",
+                "Depende do modelo"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "f4617c25-fefc-40e3-b803-9383d22c6483",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "python",
+            "code": "# BM25 com PostgreSQL full-text search (ts_rank_cd é BM25-like)\nimport psycopg\n\ndef bm25_search(conn, query: str, k: int = 50) -> list[dict]:\n    with conn.cursor() as cur:\n        cur.execute(\"\"\"\n            SELECT id, chunk, ts_rank_cd(\n              to_tsvector('portuguese', chunk),\n              plainto_tsquery('portuguese', %s)\n            ) AS score\n            FROM chunks\n            WHERE to_tsvector('portuguese', chunk)\n                  @@ plainto_tsquery('portuguese', %s)\n            ORDER BY score DESC\n            LIMIT %s\n        \"\"\", (query, query, k))\n        return [{\"id\": r[0], \"chunk\": r[1], \"score\": r[2]} for r in cur.fetchall()]\n\n# Para controle maior, use a extensão pg_bm25 (ParadeDB) ou\n# um engine dedicado: Elasticsearch, OpenSearch, Tantivy, Meilisearch"
+          }
+        }
+      ]
+    },
+    {
+      "id": "7c64e961-c58c-484f-b9cc-227a66fe833d",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Reciprocal Rank Fusion (RRF): o truque de uma linha"
+      },
+      "children": [
+        {
+          "id": "7afc40ad-a133-4244-b422-643c5ff85cd8",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Depois de ter dois (ou mais) rankings — um do BM25, outro do vetor — você precisa fundir. Normalizar scores é frágil: a escala do BM25 muda com o corpus, a do cosine já é limitada [0,1]. RRF resolve ignorando o score e usando só a "
+              },
+              {
+                "text": "posição",
+                "bold": true
+              },
+              {
+                "text": ". "
+              }
+            ]
+          }
+        },
+        {
+          "id": "99a00c67-0f74-45c4-9f85-ba9e807f92e9",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# RRF: uma função de 10 linhas que bate esquemas elaborados\nfrom collections import defaultdict\n\ndef rrf(rankings: list[list[str]], k: int = 60) -> list[tuple[str, float]]:\n    \"\"\"rankings: lista de listas de doc_ids ordenados por relevância.\"\"\"\n    scores: dict[str, float] = defaultdict(float)\n    for ranking in rankings:\n        for rank, doc_id in enumerate(ranking, start=1):\n            scores[doc_id] += 1.0 / (k + rank)\n    return sorted(scores.items(), key=lambda x: x[1], reverse=True)\n\n# Uso\nbm25_ids   = [r[\"id\"] for r in bm25_search(conn, query, k=50)]\nvector_ids = [r[\"id\"] for r in vector_search(conn, query, k=50)]\n\nfused = rrf([bm25_ids, vector_ids], k=60)\ntop_candidates = [doc_id for doc_id, _ in fused[:50]]"
+          }
+        },
+        {
+          "id": "05a8db2b-064f-46e4-8a78-fa060fd3e924",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "k=60 é o default empírico (do paper original de Cormack, Clarke e Büttcher, 2009). Valores menores privilegiam top positions; maiores diluem. Na prática, 40-80 funcionam; não perca tempo tunando fino sem eval harness."
+          }
+        }
+      ]
+    },
+    {
+      "id": "a76a16a1-0549-4b88-bfbf-23c366017e1b",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Cross-encoder rerank: o ganho de 10-20% em recall@5"
+      },
+      "children": [
+        {
+          "id": "b0aab906-6dda-478e-9af8-be3cd2311048",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Embedders (bi-encoders) codificam query e doc separadamente — isso permite pré-computar embeddings e buscar rápido, mas perde informação de interação. Cross-encoder lê "
+              },
+              {
+                "text": "[query, doc]",
+                "code": true
+              },
+              {
+                "text": " juntos, com atenção cruzada, e emite um score de relevância fino. É caro (chamada de rede por par) — por isso só roda em cima de top-50/100, reordenando para top-5/10. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "89aaaddd-e7bb-42bd-b675-62986cb106f9",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "API",
+              "Modelo",
+              "Multilíngue",
+              "Preço aproximado"
+            ],
+            "rows": [
+              [
+                "Cohere",
+                "rerank-v3.5",
+                "Sim (100+ idiomas)",
+                "US$2/1k docs reordenados"
+              ],
+              [
+                "Jina",
+                "jina-reranker-v2-base-multilingual",
+                "Sim",
+                "US$0.02/1M tokens (mais barato)"
+              ],
+              [
+                "Voyage",
+                "rerank-2",
+                "Sim",
+                "US$0.05/1M tokens"
+              ],
+              [
+                "BAAI/bge-reranker-v2-m3 (open)",
+                "Self-host",
+                "Sim",
+                "Só infra (GPU small OK)"
+              ],
+              [
+                "mixedbread-ai/mxbai-rerank-large (open)",
+                "Self-host",
+                "Limitado",
+                "Só infra"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "a5dbd06e-99e0-49aa-9fe7-aa63b70d2e27",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "python",
+            "code": "# Cohere rerank — simples, multilíngue, produção-ready\nimport cohere\n\nco = cohere.ClientV2()\n\ndef rerank(query: str, docs: list[dict], top_n: int = 10) -> list[dict]:\n    r = co.rerank(\n        model=\"rerank-v3.5\",\n        query=query,\n        documents=[d[\"chunk\"] for d in docs],\n        top_n=top_n,\n    )\n    # r.results: lista ordenada com índice do doc original + score\n    return [\n        {**docs[item.index], \"rerank_score\": item.relevance_score}\n        for item in r.results\n    ]\n\n# Self-host com sentence-transformers\nfrom sentence_transformers import CrossEncoder\nce = CrossEncoder(\"BAAI/bge-reranker-v2-m3\", max_length=512)\n\ndef rerank_local(query: str, docs: list[dict], top_n: int = 10) -> list[dict]:\n    pairs = [(query, d[\"chunk\"]) for d in docs]\n    scores = ce.predict(pairs, batch_size=32)\n    ranked = sorted(zip(docs, scores), key=lambda x: x[1], reverse=True)\n    return [{**d, \"rerank_score\": float(s)} for d, s in ranked[:top_n]]"
+          }
+        },
+        {
+          "id": "d1ed5178-5d32-4c2c-9856-a1a55cb0d774",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Cross-encoder não substitui retrieval — ele refina. Se top-100 do primeiro estágio não contém o doc certo, nenhum rerank salva. Recall no primeiro estágio é condição necessária."
+          }
+        }
+      ]
+    },
+    {
+      "id": "ce99730d-10d0-48e5-8730-a2108f293598",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Transformações de query: HyDE, expansion, multi-query"
+      },
+      "children": [
+        {
+          "id": "0192a5b7-d3fb-410b-8df0-68e26d824059",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Query curta + doc longo = descompasso de estilo, e embedder sofre. Três técnicas atacam isso em tempo de query (antes do retrieval). "
+              }
+            ]
+          }
+        },
+        {
+          "id": "74ac5e2e-69a5-455d-905d-55a36a0892bd",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Técnica",
+              "Como funciona",
+              "Quando vale"
+            ],
+            "rows": [
+              [
+                "HyDE",
+                "LLM gera um \"doc hipotético\" respondendo à query; você embeda esse doc em vez da query",
+                "Queries curtas/ambíguas, FAQ, help docs"
+              ],
+              [
+                "Query expansion",
+                "LLM expande a query em sinônimos e termos relacionados, concatenados",
+                "Domínio com jargão variado"
+              ],
+              [
+                "Multi-query",
+                "LLM gera N versões diferentes da query; você busca com cada uma e funde com RRF",
+                "Queries ambíguas com múltiplas interpretações"
+              ],
+              [
+                "Step-back",
+                "LLM gera uma pergunta mais genérica (contexto) + original; busca as duas e une",
+                "Queries muito específicas em base esparsa"
+              ],
+              [
+                "Decomposição",
+                "LLM quebra query complexa em sub-perguntas; busca cada uma",
+                "Queries analíticas/multi-hop"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "b44abd7c-b99f-42ec-810c-33943519d4a8",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "python",
+            "code": "# HyDE: Hypothetical Document Embedding\nfrom anthropic import Anthropic\n\nclient = Anthropic()\n\ndef hyde_query(user_query: str) -> str:\n    r = client.messages.create(\n        model=\"claude-haiku-4-5-20251001\",\n        max_tokens=300,\n        messages=[{\n            \"role\": \"user\",\n            \"content\": (\n                \"Escreva um parágrafo que responderia a esta pergunta como se \"\n                \"fosse um trecho de documentação interna. 100-150 palavras, tom \"\n                \"técnico e direto.\\n\\nPergunta: \" + user_query\n            ),\n        }],\n    )\n    return r.content[0].text\n\n# Pipeline com HyDE\ndef retrieve_with_hyde(query: str, k: int = 50) -> list[dict]:\n    hypothetical_doc = hyde_query(query)        # LLM barato\n    q_vec = embedder.encode(hypothetical_doc)    # embeda o doc, não a query\n    return vector_search_by_vec(q_vec, k=k)\n\n# Custo: +1 chamada Haiku (~US$0.0003 por query). Em alto volume,\n# cacheie o HyDE por hash da query normalizada."
+          }
+        }
+      ]
+    },
+    {
+      "id": "d6517459-9a9e-4d20-a64c-c5d1ffc1ab55",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "MMR: diversidade no top-k"
+      },
+      "children": [
+        {
+          "id": "9afc2d8c-cebf-43d0-a675-8121650307d7",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Problema comum: 5 chunks quase idênticos do mesmo parágrafo dominam o top-5. O LLM recebe redundância em vez de cobertura. MMR (Maximal Marginal Relevance) resolve re-rankeando por "
+              },
+              {
+                "text": "λ·relevância - (1-λ)·similaridade com já selecionados",
+                "code": true
+              },
+              {
+                "text": ". "
+              }
+            ]
+          }
+        },
+        {
+          "id": "13e1697c-9625-4991-8cea-29a3495e7ad9",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "import numpy as np\n\ndef mmr(query_vec, doc_vecs, doc_ids, k: int = 5, lambda_: float = 0.7):\n    \"\"\"Maximal Marginal Relevance: rerank por relevância + diversidade.\"\"\"\n    sim_q = doc_vecs @ query_vec               # similaridade com query\n    selected: list[int] = []\n    candidates = list(range(len(doc_ids)))\n    for _ in range(min(k, len(candidates))):\n        if not selected:\n            best = int(np.argmax(sim_q[candidates]))\n        else:\n            sim_sel = doc_vecs[candidates] @ doc_vecs[selected].T   # vs já escolhidos\n            max_sim_sel = sim_sel.max(axis=1)\n            score = lambda_ * sim_q[candidates] - (1 - lambda_) * max_sim_sel\n            best = int(np.argmax(score))\n        selected.append(candidates.pop(best))\n    return [doc_ids[i] for i in selected]\n\n# lambda=1 → recall puro (sem diversificar). lambda=0 → só diversidade (sem relevância).\n# 0.6-0.8 é o range útil."
+          }
+        }
+      ]
+    },
+    {
+      "id": "04b6f366-14c7-41de-a92d-f47a78a41e1c",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Pipeline completo: código de produção"
+      },
+      "children": [
+        {
+          "id": "1a01e4c6-fff5-491f-929f-4fdb67dbb568",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "# Retrieval de 3 estágios: BM25 + vector → RRF → cross-encoder rerank\nfrom collections import defaultdict\n\ndef retrieve(query: str, k_final: int = 8) -> list[dict]:\n    # 1) Query transform (opcional — HyDE se query curta)\n    search_query = query if len(query.split()) > 6 else hyde_query(query)\n\n    # 2) Multi-method retrieve (paralelize com asyncio em prod)\n    bm25_hits   = bm25_search(conn, search_query, k=50)\n    vector_hits = vector_search(conn, search_query, k=50)\n    by_id = {h[\"id\"]: h for h in (*bm25_hits, *vector_hits)}\n\n    # 3) RRF fusion\n    fused = rrf(\n        [[h[\"id\"] for h in bm25_hits], [h[\"id\"] for h in vector_hits]],\n        k=60,\n    )\n    candidates = [by_id[doc_id] for doc_id, _ in fused[:50]]\n\n    # 4) Cross-encoder rerank (top-50 → top-8)\n    reranked = rerank(query, candidates, top_n=k_final)  # usa query original\n    return reranked"
+          }
+        }
+      ]
+    },
+    {
+      "id": "6e47f7d4-5f7e-496e-a575-119cb89adb0f",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Latência e orçamento de tokens"
+      },
+      "children": [
+        {
+          "id": "68dc6cd0-64c9-44d8-8797-eb015dd0ed4e",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Estágio",
+              "Latência típica",
+              "Custo por query"
+            ],
+            "rows": [
+              [
+                "BM25 (Postgres FTS)",
+                "5-20 ms",
+                "~0"
+              ],
+              [
+                "Dense vector (pgvector HNSW)",
+                "10-30 ms",
+                "+custo do embed (~US$0.00002)"
+              ],
+              [
+                "RRF fusion",
+                "<1 ms",
+                "0"
+              ],
+              [
+                "HyDE (Haiku 4.5)",
+                "300-600 ms",
+                "~US$0.0003"
+              ],
+              [
+                "Cohere rerank top-50",
+                "100-300 ms",
+                "~US$0.0001 (50 docs)"
+              ],
+              [
+                "Pipeline total",
+                "~500-900 ms",
+                "~US$0.0005-0.001"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "3ac9d579-a687-4d1e-b845-4400b4208c6b",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Paralelize BM25 e vector search (são I/O independentes). HyDE é sequencial à query — se for crítico em p95, use só quando a query tiver <6 palavras. Cache de query normalizada (hash → resultado) elimina 30-50% de custo em bases com cauda longa repetitiva (FAQ)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "04dc4409-8d0b-456f-ac3f-05afe0f6ba5a",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Metadata filtering: o filtro barato que todo mundo esquece"
+      },
+      "children": [
+        {
+          "id": "cf86605b-6650-404d-88c2-0e0a15e923dd",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Antes de qualquer ML, filtre por metadata estruturada. "
+              },
+              {
+                "text": "WHERE tenant_id = ? AND lang = 'pt' AND created_at > now() - interval '90 days'",
+                "code": true
+              },
+              {
+                "text": " reduz o espaço de busca em 90%+ e aumenta recall efetivo gratuitamente. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "1f458c44-d8df-442e-8a60-24d2a47a76cb",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "sql",
+            "code": "-- pgvector com filtro ANTES da busca vetorial\nSELECT id, chunk,\n       1 - (embedding <=> $1::vector) AS sim\nFROM chunks\nWHERE tenant_id = $2\n  AND lang = 'pt'\n  AND doc_type = ANY($3::text[])\n  AND created_at > now() - interval '90 days'\nORDER BY embedding <=> $1::vector\nLIMIT 50;\n\n-- Para HNSW pré-filtrar bem, use índice parcial ou partitioning.\n-- Em Pinecone/Weaviate, metadata filter é campo estruturado no payload."
+          }
+        }
+      ]
+    },
+    {
+      "id": "41ab7862-1713-4368-9e4f-7a34ef4c7d73",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Perguntas típicas"
+      },
+      "children": []
+    },
+    {
+      "id": "b823e317-a2f1-4df2-b5bd-0f369a41002e",
+      "type": "callout",
+      "position": 11,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Take-aways. Retrieval de produção é três estágios: multi-method retrieve (BM25+dense), RRF fusion, cross-encoder rerank. RRF é uma função de 10 linhas que substitui calibração frágil. Reranker (Cohere, Jina, Voyage ou bge self-host) entrega o ganho final de 10-20% em recall@5. HyDE e query expansion ajudam em queries curtas. Metadata filter é de graça e dobra a qualidade efetiva. Próximo: como medir tudo isso com eval harness sério — recall@k, nDCG, faithfulness e LLM-as-judge."
+      }
+    }
+  ]
+}

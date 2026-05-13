@@ -1,0 +1,224 @@
+{
+  "slug": "span-memory-perf",
+  "title": null,
+  "blocks": [
+    {
+      "id": "7c639650-0b0a-4fe0-9b35-1d269fc52d9f",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Motivação"
+      },
+      "children": [
+        {
+          "id": "4590dced-ac2e-4fb0-ae67-d647fc39a8ff",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Em hot path (parsing, serialização, crypto, protocolos binários), cada alocação vira pressão no GC. "
+              },
+              {
+                "text": "Span<T>",
+                "code": true
+              },
+              {
+                "text": " permite fatiar arrays, strings e memória unmanaged com zero alocação e bounds check eficiente. É a ferramenta-chave de perf em .NET moderno. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "d04a73aa-90b0-4585-bc39-6331fad147c0",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Span<T> basics"
+      },
+      "children": [
+        {
+          "id": "e4123478-4be1-410b-8626-1987e8b5d7c1",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "csharp",
+            "code": "byte[] data = GetBuffer();\nSpan<byte> header = data.AsSpan(0, 16);\nSpan<byte> body   = data.AsSpan(16);\n\n// sobre string\nReadOnlySpan<char> email = \"alice@x.io\".AsSpan();\nint at = email.IndexOf('@');\nReadOnlySpan<char> user   = email[..at];\nReadOnlySpan<char> domain = email[(at+1)..];"
+          }
+        }
+      ]
+    },
+    {
+      "id": "6a1c3ba7-0430-467e-a08d-a4fe95141414",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "stackalloc para buffer temporário"
+      },
+      "children": [
+        {
+          "id": "93df16aa-462c-4682-b483-f193ef468342",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "csharp",
+            "code": "public static bool TryFormatId(int id, Span<char> dst, out int written)\n{\n    Span<char> scratch = stackalloc char[11]; // int.MinValue \"-2147483648\"\n    if (!id.TryFormat(scratch, out var n)) { written = 0; return false; }\n    if (n > dst.Length) { written = 0; return false; }\n    scratch[..n].CopyTo(dst);\n    written = n;\n    return true;\n}"
+          }
+        },
+        {
+          "id": "bdb8b885-7967-4c5b-bd9b-d90b725b920d",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Evite stackalloc dentro de loop grande — cada iteração reserva novamente. Alocação é no prólogo da função em C# moderno, não por iteração, mas é fácil escrever código que crie uma sequência de frames enormes."
+          }
+        }
+      ]
+    },
+    {
+      "id": "67d47421-f518-453b-9e54-da0d6a993eb7",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "ArrayPool para buffers grandes"
+      },
+      "children": [
+        {
+          "id": "adfaeb69-d12a-4f31-a52c-6e18a15ea722",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "csharp",
+            "code": "var pool = ArrayPool<byte>.Shared;\nbyte[] buf = pool.Rent(8192);\ntry\n{\n    var span = buf.AsSpan(0, 8192);\n    await stream.ReadExactlyAsync(span);\n    Process(span);\n}\nfinally\n{\n    pool.Return(buf, clearArray: false);\n}"
+          }
+        },
+        {
+          "id": "5e8c73cc-30d5-41fa-815d-3f7b7bfd1ac1",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Padrão canônico em código de alto throughput. "
+              },
+              {
+                "text": "RecyclableMemoryStream",
+                "code": true
+              },
+              {
+                "text": " (lib Microsoft.IO) generaliza para streams reutilizáveis. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "208429ad-11ff-49c9-826b-92c5b20c373b",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Memory<T> em APIs async"
+      },
+      "children": [
+        {
+          "id": "6396ef72-d3b8-4d2a-8847-83e263162f23",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "csharp",
+            "code": "public async Task<int> ReadExactlyAsync(\n    Memory<byte> buffer, CancellationToken ct)\n{\n    int total = 0;\n    while (total < buffer.Length)\n    {\n        int n = await _stream.ReadAsync(buffer[total..], ct);\n        if (n == 0) throw new EndOfStreamException();\n        total += n;\n    }\n    return total;\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "6b8d820d-b226-40b6-a905-d7789ac1ae24",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "ref struct e ref returns"
+      },
+      "children": [
+        {
+          "id": "d7b72f71-2ca4-4dcc-819b-9dabe7525bbb",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "csharp",
+            "code": "public ref struct Enumerator\n{\n    private readonly ReadOnlySpan<int> _span;\n    private int _idx;\n    public Enumerator(ReadOnlySpan<int> s) { _span = s; _idx = -1; }\n    public bool MoveNext() => ++_idx < _span.Length;\n    public ref readonly int Current => ref _span[_idx];\n}"
+          }
+        },
+        {
+          "id": "b0157952-77e6-407f-ae16-eaa6ac7295e8",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "ref readonly",
+                "code": true
+              },
+              {
+                "text": " evita copy de struct grande ao enumerar. Padrão em bibliotecas modernas (Utf8JsonReader, SequenceReader). "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "3617fc7f-2273-4c98-8aaf-877edb599f0b",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Benchmark honesto"
+      },
+      "children": [
+        {
+          "id": "34bba0d5-8414-45c0-afd5-e7e66c3de11b",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "csharp",
+            "code": "// BenchmarkDotNet\n[MemoryDiagnoser]\npublic class FormatBench\n{\n    [Benchmark(Baseline = true)]\n    public string Boxed() => $\"id={_id}\";\n\n    [Benchmark]\n    public int SpanFormat()\n    {\n        Span<char> buf = stackalloc char[32];\n        _id.TryFormat(buf, out var n);\n        return n;\n    }\n}"
+          }
+        },
+        {
+          "id": "a0ce8e6d-05cd-4adc-bb05-a7fba86caa26",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "BenchmarkDotNet é padrão da indústria .NET — warm-up, GC measurement, statistical significance automático. Sem ele, microbenchmark é teatro."
+          }
+        }
+      ]
+    },
+    {
+      "id": "2b8336d0-7262-4cc6-b6ea-987974bec1bf",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Quando investir"
+      },
+      "children": [
+        {
+          "id": "40d5c565-f3a3-439a-86ea-b8d88c4aa103",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Span/Memory brilha em: protocolos binários, JSON/Utf8 parsing (System.Text.Json usa Span), crypto, servidores high-throughput (Kestrel). Em CRUD tradicional o ganho é irrelevante — não adianta trocar EF + HTTP por Span. Meça com BenchmarkDotNet e MemoryDiagnoser antes de otimizar."
+          }
+        }
+      ]
+    }
+  ]
+}

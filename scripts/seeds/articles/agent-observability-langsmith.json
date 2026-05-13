@@ -1,0 +1,251 @@
+{
+  "slug": "agent-observability-langsmith",
+  "title": null,
+  "blocks": [
+    {
+      "id": "04c29092-d4eb-413c-b261-e5db4bcc3d4c",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Você não pode debugar o que não vê. Multi-agent + tool use + reasoning models + RAG geram cascatas de chamadas LLM com latências, custos e modos de falha que stack tradicional (APM, logs) não captura. Em 2026, observability LLM tem 4 jogadores principais: LangSmith (LangChain-native), Helicone (proxy agnóstico), Phoenix (OTel + RAG-focused), Langfuse (open-source full-stack). Este módulo compara cada um e mostra setups práticos. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "780babdf-78af-42bc-bd29-a06f16ade599",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que precisa ser observado num agente"
+      },
+      "children": []
+    },
+    {
+      "id": "8df8e6a0-a6ed-4886-a39b-347c306a584b",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "LangSmith — integrado ao LangChain"
+      },
+      "children": [
+        {
+          "id": "284d7968-368b-41de-87a8-d228dc94f38c",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "# Setup: variáveis de ambiente + uso automático\nimport os\nos.environ[\"LANGCHAIN_TRACING_V2\"] = \"true\"\nos.environ[\"LANGCHAIN_API_KEY\"] = \"lsv2_...\"\nos.environ[\"LANGCHAIN_PROJECT\"] = \"ffv-agente-prod\"\n\nfrom langchain_anthropic import ChatAnthropic\nfrom langgraph.graph import StateGraph\n\n# Toda call LLM e nó LangGraph é tracked automaticamente\nllm = ChatAnthropic(model=\"claude-sonnet-4-7\")\nresponse = llm.invoke(\"Olá\")\n# → aparece em smith.langchain.com com latência, tokens, custo, prompt, response\n\n# Decorators para custom code\nfrom langsmith import traceable\n\n@traceable(name=\"custom-retrieval\", run_type=\"retriever\")\ndef my_retrieval(query: str) -> list[str]:\n    # Sua lógica de retrieval — vira span filho do trace pai\n    return search_db(query)\n\n# Prompt versioning via Hub\nfrom langchain import hub\nprompt = hub.pull(\"my-team/research-agent:v3\")  # versão pinada\nresponse = llm.invoke(prompt.format(question=\"...\"))",
+            "filename": "langsmith_setup.py"
+          }
+        }
+      ]
+    },
+    {
+      "id": "67e82352-a73b-475d-b3fc-a871016b0dd7",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Helicone — proxy agnóstico"
+      },
+      "children": [
+        {
+          "id": "2609aff2-1951-406f-8e42-9d431f120fd3",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "# Setup: muda base_url para Helicone — não exige callbacks/framework\nimport openai\nimport anthropic\n\n# OpenAI via Helicone\nopenai_client = openai.OpenAI(\n    base_url=\"https://oai.helicone.ai/v1\",\n    default_headers={\n        \"Helicone-Auth\": f\"Bearer {os.environ['HELICONE_API_KEY']}\",\n        \"Helicone-User-Id\": \"user-42\",\n        \"Helicone-Property-Feature\": \"research\",      # custom properties\n    },\n)\n\n# Anthropic via Helicone\nanthropic_client = anthropic.Anthropic(\n    base_url=\"https://anthropic.helicone.ai\",\n    default_headers={\n        \"Helicone-Auth\": f\"Bearer {os.environ['HELICONE_API_KEY']}\",\n        \"Helicone-Cache-Enabled\": \"true\",             # cache built-in\n        \"Helicone-Rate-Limit-Policy\": \"1000;w=60\",    # 1000 req/min\n    },\n)\n\n# Toda call passa pelo proxy — captura automática + features extras:\n# - Cache de responses repetidos\n# - Rate limiting per user\n# - Cost tracking per property\n# - Prompt management via Helicone Prompts",
+            "filename": "helicone_setup.py"
+          }
+        },
+        {
+          "id": "70b90067-eb79-44db-ac80-608f10c02daa",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "O fato de ser proxy traz feature exclusiva: cache de response (configurável por header). Identidade de prompt repetido = mesma resposta retornada sem chamar o provider. Reduz drasticamente custos em apps com prompts cacheáveis."
+          }
+        }
+      ]
+    },
+    {
+      "id": "e8d9724f-87a5-465c-b02b-c9c24e93d4fc",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Phoenix (Arize) — OTel-native + RAG"
+      },
+      "children": [
+        {
+          "id": "16f07d48-939d-46ee-8641-28be4c491812",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "# Phoenix self-host (Docker) + auto-instrumentation via openinference\nimport phoenix as px\nfrom phoenix.otel import register\nfrom openinference.instrumentation.openai import OpenAIInstrumentor\nfrom openinference.instrumentation.langchain import LangChainInstrumentor\n\n# Inicia UI local ou aponta para servidor remoto\npx.launch_app()  # http://localhost:6006\n\n# Configura tracer OTel — exports para Phoenix ou qualquer OTel backend\ntracer_provider = register(\n    project_name=\"ffv-agente\",\n    endpoint=\"http://localhost:6006/v1/traces\",\n)\n\n# Auto-instrument SDKs\nOpenAIInstrumentor().instrument(tracer_provider=tracer_provider)\nLangChainInstrumentor().instrument(tracer_provider=tracer_provider)\n\n# Specialty: embedding visualizations\n# Phoenix mostra UMAP/t-SNE de embeddings, detecta drift entre prod/eval datasets\n# Ideal para RAG observability — visualiza queries que retornam docs irrelevantes",
+            "filename": "phoenix_setup.py"
+          }
+        }
+      ]
+    },
+    {
+      "id": "43654203-319e-4e74-be2b-92beddd6f8dc",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Langfuse — open-source full stack"
+      },
+      "children": [
+        {
+          "id": "1c58d760-2174-4d22-a17f-1f7081fb5799",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "from langfuse import Langfuse\nfrom langfuse.decorators import observe\n\nlangfuse = Langfuse(\n    public_key=os.environ[\"LANGFUSE_PUBLIC_KEY\"],\n    secret_key=os.environ[\"LANGFUSE_SECRET_KEY\"],\n    host=\"https://cloud.langfuse.com\",   # ou self-host\n)\n\n@observe()\ndef research_agent(query: str) -> str:\n    # Trace é criado automaticamente — child spans capturam calls LLM internas\n    prompt = langfuse.get_prompt(\"research-system\", version=3)\n    messages = [{\"role\": \"system\", \"content\": prompt.compile()}]\n    messages.append({\"role\": \"user\", \"content\": query})\n\n    response = anthropic_client.messages.create(\n        model=\"claude-sonnet-4-7\",\n        messages=messages,\n        max_tokens=2000,\n    )\n\n    # Captura score (eval feedback ou LLM-as-judge)\n    langfuse.score(\n        trace_id=langfuse.get_current_trace_id(),\n        name=\"relevance\",\n        value=0.85,\n        comment=\"LLM-as-judge: relevância da resposta\",\n    )\n\n    return response.content[0].text",
+            "filename": "langfuse_setup.py"
+          }
+        }
+      ]
+    },
+    {
+      "id": "4cfc8b3e-162f-491b-a946-919ef8c1cbb0",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Comparativo direto"
+      },
+      "children": [
+        {
+          "id": "f3b34075-fa09-4406-86df-54c7e6423f47",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Feature",
+              "LangSmith",
+              "Helicone",
+              "Phoenix",
+              "Langfuse"
+            ],
+            "rows": [
+              [
+                "Modelo",
+                "SDK callback",
+                "HTTP proxy",
+                "OTel SDK",
+                "SDK + decorators"
+              ],
+              [
+                "Framework-agnostic",
+                "Limitado",
+                "✅ Total",
+                "✅ OTel",
+                "✅ Total"
+              ],
+              [
+                "Self-hostable",
+                "⚠️ Enterprise",
+                "⚠️ Enterprise",
+                "✅",
+                "✅"
+              ],
+              [
+                "Open-source",
+                "❌",
+                "⚠️ Parcial",
+                "✅",
+                "✅"
+              ],
+              [
+                "Prompt versioning",
+                "✅ (Hub)",
+                "✅",
+                "⚠️",
+                "✅"
+              ],
+              [
+                "Dataset capture",
+                "✅",
+                "✅",
+                "✅",
+                "✅"
+              ],
+              [
+                "LLM-as-judge",
+                "✅",
+                "⚠️",
+                "✅",
+                "✅"
+              ],
+              [
+                "Cache built-in",
+                "❌",
+                "✅ (proxy)",
+                "❌",
+                "❌"
+              ],
+              [
+                "Sweet spot",
+                "LangChain stacks",
+                "Multi-framework, cache",
+                "OTel-native, RAG",
+                "OSS full-stack"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "3309c886-7007-4e4b-bdb0-703b99ccdcc9",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Arquitetura: como capturas hierárquicos funcionam"
+      },
+      "children": []
+    },
+    {
+      "id": "ebd82630-e955-43d6-b41c-55049a3ac6c7",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Decisão prática"
+      },
+      "children": []
+    },
+    {
+      "id": "25bac52d-6cf6-446a-bc49-37ae3a227d9f",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Timeline"
+      },
+      "children": []
+    },
+    {
+      "id": "e5506b4f-7348-4c15-983e-01531c051b1d",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": []
+    },
+    {
+      "id": "f04a5498-eea3-42f4-863c-b2292e87b34f",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Referências"
+      },
+      "children": []
+    }
+  ]
+}

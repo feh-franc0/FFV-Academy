@@ -1,0 +1,463 @@
+{
+  "slug": "vae-unet-internals",
+  "title": null,
+  "blocks": [
+    {
+      "id": "7de485c0-342d-4a1a-9bc8-ac868e5baa72",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Os três blocos que formam o Stable Diffusion"
+      },
+      "children": [
+        {
+          "id": "49b82684-48f6-4186-b82f-4ddd73570b24",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " No módulo anterior você viu a matemática do diffusion: forward gaussian, reverse, score matching, DDIM, SDE/ODE. Mas essa matemática não roda em pixels diretos — seria caro demais. O Stable Diffusion (Rombach et al. 2022, CVPR — Latent Diffusion Models) materializa a teoria em três módulos distintos que trabalham em conjunto: "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "fcc67692-0fa0-4b6a-b62d-64b57d794ee8",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Por que rodar diffusion no latente é a sacada toda"
+      },
+      "children": [
+        {
+          "id": "753767fc-436a-4a7a-abfa-5917b89221e4",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Imagine treinar e amostrar DDPM diretamente em 512×512×3 = 786.432 dimensões. Cada passo do U-Net processa um tensor dessa magnitude, e você precisa de ~20-50 passos. Com batch size razoável e VRAM finita, é inviável fora de cluster. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "9d5d1f68-8e38-4689-91fa-5b29b3aa4e6a",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " A observação central de Rombach et al.: "
+              },
+              {
+                "text": "a redundância perceptual nos pixels é altíssima",
+                "bold": true
+              },
+              {
+                "text": ". Você pode comprimir 8× em cada dimensão espacial (preservando ~98% da fidelidade perceptual) com um simples autoencoder bem treinado. O "
+              },
+              {
+                "text": "latente",
+                "italic": true
+              },
+              {
+                "text": " resultante tem 64×64×4 = 16.384 dimensões — 48× menor. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "5aee55e6-2901-4259-ad23-28453c1574ba",
+          "type": "comparison_table",
+          "position": 2,
+          "data": {
+            "columns": [
+              "Métrica",
+              "Pixel-space diffusion (GLIDE, Imagen)",
+              "Latent diffusion (Stable Diffusion)"
+            ],
+            "rows": [
+              [
+                "Dimensão por passo",
+                "512×512×3 = 786k",
+                "64×64×4 = 16k"
+              ],
+              [
+                "VRAM em inferência (fp16)",
+                "~16-24 GB para 1024px",
+                "~4-8 GB para 1024px (SDXL)"
+              ],
+              [
+                "Passos típicos para FID competitivo",
+                "50-100",
+                "20-50"
+              ],
+              [
+                "Treino em consumer GPU",
+                "❌ Inviável",
+                "✅ Possível (1× 3090)"
+              ],
+              [
+                "Custo total inferência (1 imagem)",
+                "~10× LDM",
+                "1× (baseline)"
+              ],
+              [
+                "Qualidade visual no benchmark",
+                "Topo de FID em 2022",
+                "Topo de FID em 2022, e 50× mais barato"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "6babadea-a76b-484d-a5ca-04ce259b67b2",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "A democratização da geração de imagem (rodar em RTX 3060, Mac M-series, até em celular Snapdragon) é consequência direta dessa escolha arquitetural. O VAE não é apenas otimização — é o que permitiu Stable Diffusion existir como open weights."
+          }
+        }
+      ]
+    },
+    {
+      "id": "5b3a9204-54ac-47e9-9418-7b20a9f5a6dc",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "VAE: compressão com bottleneck contínuo"
+      },
+      "children": [
+        {
+          "id": "7f28c85d-ae68-40fd-9fc6-955a6fd08637",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " O VAE (Kingma & Welling 2013) usado no SD não é o VAE original probabilístico — é uma variante mais próxima de um autoencoder regularizado. Ele tem dois objetivos no treino: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "52119773-57eb-4c23-a064-41a6e1e20430",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " O resultado é um autoencoder convolucional com encoder E e decoder D tal que: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "c08da9ab-c05f-4e56-a5c1-97052ad055ad",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "python",
+            "code": "# Inferência simplificada do Stable Diffusion\ndef generate(prompt, steps=30, cfg=7.5):\n    # 1. Texto → embedding\n    c = text_encoder(prompt)            # shape: [seq, dim]\n    c_uncond = text_encoder(\"\")         # para classifier-free guidance\n\n    # 2. Inicia no latente (não no pixel!)\n    z = torch.randn(1, 4, 64, 64)       # latente 64×64×4\n\n    # 3. Loop de denoising no latente\n    for t in scheduler.timesteps:       # 30 passos com DPM-Solver\n        eps_cond   = unet(z, t, c)\n        eps_uncond = unet(z, t, c_uncond)\n        eps        = eps_uncond + cfg * (eps_cond - eps_uncond)\n        z          = scheduler.step(eps, t, z)\n\n    # 4. Decoder VAE devolve para pixel\n    image = vae_decoder(z)              # shape: [1, 3, 512, 512]\n    return image",
+            "filename": "ldm_inference.py"
+          }
+        },
+        {
+          "id": "dd6f2842-9500-4706-9a90-907c15243af6",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "O VAE é o ponto frequentemente esquecido: latentes diferentes (SD1.5 vs SDXL vs SD3 vs Flux) não são compatíveis. Trocar de VAE quebra o modelo. Existem \"VAE substitutos\" como o MSE-VAE da Stability (melhora coerência de faces) — eles funcionam porque foram fine-tuned com a mesma latent distribution."
+          }
+        }
+      ]
+    },
+    {
+      "id": "9e945141-c9c6-42b3-a577-a45b4bccd379",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "U-Net: o cérebro do denoising"
+      },
+      "children": [
+        {
+          "id": "6b85bf6b-4905-4460-a3c2-4ae01bb2ca89",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " A U-Net (Ronneberger, Fischer, Brox 2015 — MICCAI) tem um formato em \"U\" no fluxograma de dados: "
+              },
+              {
+                "text": "caminho contrativo",
+                "bold": true
+              },
+              {
+                "text": " (encoder) reduz resolução enquanto aumenta canais; "
+              },
+              {
+                "text": "caminho expansivo",
+                "bold": true
+              },
+              {
+                "text": " (decoder) faz o reverso; "
+              },
+              {
+                "text": "skip connections",
+                "bold": true
+              },
+              {
+                "text": " concatenam features simétricos para preservar detalhe espacial. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "58fd424e-190a-49ad-a0c9-fabef76c4cf4",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "O SD 1.5 tem 859M params no U-Net. SDXL tem 2.6B. SD3 (8B) trocou U-Net por MMDiT. Flux.1 Dev (12B) usa DiT puro. A arquitetura U-Net cumpriu seu papel até ~2024, quando os transformers escalam melhor — tema do próximo módulo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "fe7db4c7-6dc6-4e12-9905-493c91a68659",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "ResBlock + Cross-Attention: o tijolo fundamental"
+      },
+      "children": [
+        {
+          "id": "2510af44-242e-43d5-8ad6-776e67f99ee0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Cada bloco do U-Net combina um "
+              },
+              {
+                "text": "ResBlock",
+                "bold": true
+              },
+              {
+                "text": " (com timestep injection) e um "
+              },
+              {
+                "text": "Spatial Transformer Block",
+                "bold": true
+              },
+              {
+                "text": " (que faz self-attention + cross-attention com o prompt). Em pseudocódigo: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "bd8d3b94-bc20-4fc5-bd45-a1448aae756f",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "class ResBlock(nn.Module):\n    def __init__(self, ch_in, ch_out, time_dim):\n        self.gn1   = GroupNorm(32, ch_in)\n        self.conv1 = Conv2d(ch_in, ch_out, 3, padding=1)\n        self.time  = Linear(time_dim, ch_out)      # FiLM-like\n        self.gn2   = GroupNorm(32, ch_out)\n        self.conv2 = Conv2d(ch_out, ch_out, 3, padding=1)\n        self.skip  = Conv2d(ch_in, ch_out, 1) if ch_in != ch_out else nn.Identity()\n\n    def forward(self, x, t_emb):\n        h = self.conv1(F.silu(self.gn1(x)))\n        h = h + self.time(F.silu(t_emb))[:, :, None, None]  # injeta t\n        h = self.conv2(F.silu(self.gn2(h)))\n        return h + self.skip(x)\n\nclass SpatialTransformer(nn.Module):\n    def __init__(self, ch, n_heads, ctx_dim):\n        self.norm = GroupNorm(32, ch)\n        self.proj_in  = Conv2d(ch, ch, 1)\n        self.attn_self  = MultiHeadAttention(ch, n_heads)            # tokens espaciais entre si\n        self.attn_cross = MultiHeadAttention(ch, n_heads, ctx_dim)   # tokens espaciais ↔ texto\n        self.ff   = FeedForward(ch)\n        self.proj_out = Conv2d(ch, ch, 1)\n\n    def forward(self, x, context):                # context = CLIP/T5 embedding\n        B, C, H, W = x.shape\n        h = self.proj_in(self.norm(x))\n        h = h.reshape(B, C, H*W).transpose(1, 2)  # [B, HW, C] como tokens\n        h = h + self.attn_self(h)                 # self-attn entre patches\n        h = h + self.attn_cross(h, context)       # cross-attn com prompt\n        h = h + self.ff(h)\n        h = h.transpose(1, 2).reshape(B, C, H, W)\n        return self.proj_out(h) + x",
+            "filename": "unet_block.py"
+          }
+        }
+      ]
+    },
+    {
+      "id": "c14c5658-841f-483d-a7c2-b5c77a79972e",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Cross-attention: como o prompt entra na imagem"
+      },
+      "children": [
+        {
+          "id": "bdf49c0e-9fa1-438d-8aab-b68b4c0b9d37",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " É aqui que a mágica do prompt acontece. No bloco SpatialTransformer, cada posição (x, y) do feature map vira uma "
+              },
+              {
+                "text": "query",
+                "italic": true
+              },
+              {
+                "text": "; cada token do prompt vira "
+              },
+              {
+                "text": "key",
+                "italic": true
+              },
+              {
+                "text": " e "
+              },
+              {
+                "text": "value",
+                "italic": true
+              },
+              {
+                "text": ". A atenção calcula: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "bc07526b-7f45-4453-87ae-3b3bfb0d8fa0",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Resultado: cada pixel \"lê\" do prompt o que é relevante para ele. Se você gerar \"a red car next to a blue house\", internamente os pixels da região do carro vão atender ao token \"red\"/\"car\" com peso alto, e os pixels da casa vão atender a \"blue\"/\"house\". Isso é visualizável em "
+              },
+              {
+                "text": "attention maps",
+                "italic": true
+              },
+              {
+                "text": " e é a base de técnicas como Prompt-to-Prompt (Hertz et al. 2022) e Attention-Refocusing. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "da44f44a-dc1a-4475-8302-a62124741dfb",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Text encoder: CLIP, OpenCLIP e T5"
+      },
+      "children": [
+        {
+          "id": "858c5f75-92fb-4086-99d5-af74e408acdd",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Modelo",
+              "Text encoder(s)",
+              "Dim total",
+              "Vantagem"
+            ],
+            "rows": [
+              [
+                "SD 1.5",
+                "CLIP-ViT-L/14 (OpenAI)",
+                "768",
+                "Padrão histórico"
+              ],
+              [
+                "SD 2.x",
+                "OpenCLIP-ViT-H/14",
+                "1024",
+                "Treino aberto (LAION)"
+              ],
+              [
+                "SDXL",
+                "CLIP-L + OpenCLIP-bigG (concat)",
+                "2048 + pooled",
+                "Melhor coerência semântica"
+              ],
+              [
+                "SD 3 / 3.5",
+                "CLIP-L + CLIP-G + T5-XXL",
+                "~4096",
+                "Prompts longos e detalhados via T5"
+              ],
+              [
+                "Flux.1",
+                "CLIP-L + T5-XXL",
+                "~2k + T5",
+                "T5 melhora seguimento e texto em imagens"
+              ],
+              [
+                "Imagen",
+                "T5-XXL puro",
+                "T5 4096",
+                "Saari et al. mostraram que T5 supera CLIP em alinhamento"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "062b5f38-8cae-4924-b724-8f3163f1f621",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "CLIP é treinado contrastivamente com imagens; entende conceitos visuais bem mas trunca em 77 tokens. T5 é treinado em texto puro com objetivo de span corruption — entende ordem, negação, contagem, relações espaciais melhor. SD3 e Flux combinam os dois: CLIP para \"look and feel\", T5 para fidelidade textual."
+          }
+        }
+      ]
+    },
+    {
+      "id": "6b8072f6-722b-43ac-a4fd-7c17c063a6f7",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Decisões arquiteturais que importam"
+      },
+      "children": []
+    },
+    {
+      "id": "dc89f15f-9bb4-4d9c-8904-53bc0d8a7933",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Como diagnosticar quando vai mal"
+      },
+      "children": []
+    },
+    {
+      "id": "5cc8824a-09e4-4028-acd5-43db9c5a5107",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Perguntas que sobram"
+      },
+      "children": []
+    },
+    {
+      "id": "9fd5e61b-81d4-41c4-9a3c-860f0e091a5a",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Leituras essenciais"
+      },
+      "children": [
+        {
+          "id": "86e8bad2-ff17-4432-bca6-cc862a7a35cb",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Próximo: o que substituiu U-Net. MMDiT (SD3.5) e DiT puro (Flux). Por que transformers escalam melhor, por que SD3 usa rectified flow, e o que o paper de Peebles & Xie 2023 mostrou que mudou o jogo."
+          }
+        }
+      ]
+    }
+  ]
+}

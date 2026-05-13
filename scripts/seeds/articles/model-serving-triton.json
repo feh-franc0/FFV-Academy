@@ -1,0 +1,145 @@
+{
+  "slug": "model-serving-triton",
+  "title": null,
+  "blocks": [
+    {
+      "id": "2c64cd2b-487a-440f-b27e-06c15ce0cf3c",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Serving é engenharia, não afterthought"
+      },
+      "children": [
+        {
+          "id": "2fa25d25-2b1d-49b2-a54b-1faea11936e9",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Um modelo vale zero até servir. Serving resolve três pressões em conflito: "
+              },
+              {
+                "text": "latência",
+                "bold": true
+              },
+              {
+                "text": " (p99 do SLA), "
+              },
+              {
+                "text": "throughput",
+                "bold": true
+              },
+              {
+                "text": " (requests por segundo por GPU) e "
+              },
+              {
+                "text": "custo",
+                "bold": true
+              },
+              {
+                "text": " (USD por 1k inferências). Boas escolhas de servidor, batching e hardware definem se o modelo é lucrativo ou não. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "279026ff-d385-4bc7-ad65-eb4280ac3d90",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Triton Inference Server — config.pbtxt"
+      },
+      "children": [
+        {
+          "id": "1692de31-70bb-4487-a5cf-3d11a80c9866",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "# model_repository/churn_xgb/config.pbtxt\nname: \"churn_xgb\"\nplatform: \"onnxruntime_onnx\"\nmax_batch_size: 128\n\ninput [\n  { text: \"features\", data_type: TYPE_FP32, dims: [ 42 ] }\n]\noutput [\n  { text: \"probability\", data_type: TYPE_FP32, dims: [ 1 ] }\n]\n\ndynamic_batching {\n  preferred_batch_size: [ 16, 64 ]\n  max_queue_delay_microseconds: 5000\n}\n\ninstance_group [\n  { count: 2, kind: KIND_GPU, gpus: [ 0 ] }\n]\n\nversion_policy { specific: { versions: [ 7 ] } }"
+          }
+        },
+        {
+          "id": "7c89f97f-717d-421d-8b65-a7e531c26112",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "max_queue_delay_microseconds é o contrato com o SLA de p99: quanto mais espera, melhor o batching, mas pior a cauda de latência."
+          }
+        }
+      ]
+    },
+    {
+      "id": "bfa1877e-f1c6-4737-9e1d-11683b34f767",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Cliente HTTP mínimo"
+      },
+      "children": [
+        {
+          "id": "7ad41e3f-5a0e-434f-a9a8-b56a159e29ab",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "import numpy as np\nimport tritonclient.http as httpclient\n\nclient = httpclient.InferenceServerClient(\"triton.ffv.internal:8000\")\n\nfeatures = np.array([[0.1, 0.2, 0.3] + [0.0] * 39], dtype=np.float32)\ninp = httpclient.InferInput(\"features\", features.shape, \"FP32\")\ninp.set_data_from_numpy(features)\n\nres = client.infer(model_name=\"churn_xgb\", inputs=[inp])\nproba = res.as_numpy(\"probability\")\nprint(proba)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b58a3e76-8047-4829-87be-4eef650615ab",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "BentoML — quando DX Python pesa"
+      },
+      "children": [
+        {
+          "id": "c9279d38-9b05-4165-a3f5-4c696e28d491",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "import bentoml\nfrom bentoml.io import JSON\n\nchurn_runner = bentoml.sklearn.get(\"ffv-churn:latest\").to_runner()\nsvc = bentoml.Service(\"ffv-churn-api\", runners=[churn_runner])\n\n@svc.api(input=JSON(), output=JSON())\nasync def predict(payload: dict) -&gt; dict:\n    # validacao, feature enrichment, feature store lookup, etc.\n    vec = build_feature_vector(payload[\"cliente_id\"])\n    proba = await churn_runner.async_run([vec])\n    return {\"score\": float(proba[0]), \"model_version\": \"7\"}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "d38be894-baae-4ced-9969-a9659f0da1d3",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Ensemble em Triton — DAG server-side"
+      },
+      "children": [
+        {
+          "id": "d060dcfc-38c8-4cb2-87b3-43a60374618f",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "# model_repository/text_pipeline/config.pbtxt\nname: \"text_pipeline\"\nplatform: \"ensemble\"\nmax_batch_size: 32\ninput  [ { text: \"raw_text\", data_type: TYPE_STRING, dims: [ 1 ] } ]\noutput [ { text: \"label\",   data_type: TYPE_FP32,   dims: [ 3 ] } ]\n\nensemble_scheduling {\n  step [\n    { model_name: \"tokenizer\", model_version: -1,\n      input_map: { key: \"text\", value: \"raw_text\" },\n      output_map: { key: \"ids\", value: \"token_ids\" } },\n    { model_name: \"encoder\", model_version: -1,\n      input_map: { key: \"ids\", value: \"token_ids\" },\n      output_map: { key: \"emb\", value: \"embedding\" } },\n    { model_name: \"classifier\", model_version: -1,\n      input_map: { key: \"emb\", value: \"embedding\" },\n      output_map: { key: \"out\", value: \"label\" } }\n  ]\n}"
+          }
+        },
+        {
+          "id": "0b6ce4b5-602c-46f9-86f1-d429d604452b",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Para pipeline com 3 modelos, ensemble reduz latência em 30-50% vs orquestrar os três pelo cliente via rede."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,143 @@
+{
+  "slug": "capstone-voice-assistant",
+  "title": null,
+  "blocks": [
+    {
+      "id": "1be350c1-b505-4a92-ac7f-1adfd381ca3f",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Objetivo do capstone"
+      },
+      "children": [
+        {
+          "id": "a9011b5b-9d01-49bf-9ea8-e8f86997fb7b",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Construir um voice assistant completo, deployado e avaliado. Não é demo — é sistema que alguém pode usar. O entregável combina os 6 módulos anteriores em produto único e serve de peça de portfolio para vagas de IA aplicada / engenharia multimodal sênior. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "416299b5-f656-49a6-875c-6647b9f6f197",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Spec mínima"
+      },
+      "children": [
+        {
+          "id": "ea3ed0c4-e308-4402-a747-46044c1ae634",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "markdown",
+            "code": "# Voice Assistant Capstone — Spec\n\n## Funcional\n- Web app (Next.js) OU CLI (Python/Node) rodando em desktop\n- Acionado por botão (push-to-talk) ou VAD contínuo (configurável)\n- Responde em PT-BR com voz natural\n- Executa 3+ tools: ex. get_weather, set_timer, search_web (ou domínio próprio)\n- Histórico da conversa persistido (SQLite) por sessão\n\n## Não-funcional\n- TTFA p95 < 1.2s na arquitetura Realtime\n- TTFA p95 < 2.5s na arquitetura pipeline (fallback)\n- Feature flag para trocar arquiteturas\n- Budget guard: derruba sessão se custo > $X\n- Logs estruturados (request id, etapa, latência, custo)\n- Barge-in funcional (interrupção durante fala do agent)\n\n## Avaliação\n- Golden set com 40+ interações categorizadas\n- Script que roda o golden set e reporta métricas\n- Writeup (README ou blog) com resultados, trade-offs, limitações"
+          }
+        }
+      ]
+    },
+    {
+      "id": "64bec465-c465-4a0c-83f2-364ae293e7a7",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Arquitetura recomendada"
+      },
+      "children": [
+        {
+          "id": "5d5543d5-64a2-4512-840f-94d13c67530d",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "# Arquitetura dupla, escolhível por feature flag\n\nmodo_realtime:\n  transporte: webrtc\n  modelo: gpt-4o-realtime-preview\n  vantagem: TTFA ~400ms, cross-modal reasoning\n  uso: conversa natural, primeira escolha\n\nmodo_pipeline:\n  vad: silero-vad (local)\n  stt: deepgram-nova-2 streaming\n  llm: claude-3-5-sonnet-20241022\n  tts: cartesia-sonic streaming\n  vantagem: custo previsível, resiliência\n  uso: fallback e volumes altos\n\nobservabilidade:\n  tracing: opentelemetry spans (vad, stt, llm, tts, play)\n  metrics: ttfa, total_latency, cost_usd_per_session\n  storage: sqlite local + export jsonl\n\nguardrails:\n  budget_session_usd: 0.50\n  max_turns: 30\n  pii_scrub: regex basico antes de log"
+          }
+        }
+      ]
+    },
+    {
+      "id": "d8ce2258-3cb3-4d93-aa27-c9e934d53caa",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Implementação: esqueleto (modo pipeline)"
+      },
+      "children": [
+        {
+          "id": "2a95fcf1-75b6-4692-a694-44454d89aeea",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "ts",
+            "code": "// orchestrator.ts - pipeline fallback\nimport { vadDetect } from './vad';\nimport { streamSTT } from './stt';\nimport { streamLLM } from './llm';\nimport { streamTTS } from './tts';\nimport { tools } from './tools';\n\nexport async function runTurn(ctx: SessionContext, audioIn: AsyncIterable<Buffer>) {\n  const started = performance.now();\n\n  // 1. VAD segmenta a fala do usuário\n  const userAudio = await vadDetect(audioIn);\n  ctx.trace('vad_done', performance.now() - started);\n\n  // 2. STT streaming -> texto\n  const userText = await streamSTT(userAudio, { language: 'pt-BR' });\n  ctx.trace('stt_done', performance.now() - started);\n\n  ctx.history.push({ role: 'user', content: userText });\n\n  // 3. LLM com tools\n  const llmStream = streamLLM({ history: ctx.history, tools });\n  let firstToken = 0;\n  let llmText = '';\n\n  // 4. TTS recebe tokens à medida que saem\n  const ttsStream = streamTTS({ voice: ctx.voiceId });\n\n  for await (const event of llmStream) {\n    if (event.type === 'text' && event.delta) {\n      if (!firstToken) firstToken = performance.now() - started;\n      llmText += event.delta;\n      ttsStream.send(event.delta);\n    } else if (event.type === 'tool_call') {\n      const result = await tools[event.name].run(event.args, ctx);\n      llmStream.submitToolResult(event.id, result);\n    }\n  }\n  ttsStream.end();\n\n  ctx.history.push({ role: 'assistant', content: llmText });\n  ctx.trace('llm_done', performance.now() - started);\n\n  // 5. Playback com barge-in\n  for await (const chunk of ttsStream.audio()) {\n    if (ctx.bargeIn) { ttsStream.cancel(); break; }\n    ctx.speaker.write(chunk);\n  }\n  ctx.trace('done', performance.now() - started);\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "98542550-9abd-4a56-91bc-a1b12ec42307",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Golden set de avaliação"
+      },
+      "children": [
+        {
+          "id": "75259358-6f62-4b26-bca3-a2a9da3de110",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "json",
+            "code": "[\n  { \"id\": \"cmd_clear_1\", \"category\": \"comando_claro\", \"audio\": \"fixtures/timer_5min.wav\",\n    \"expected_tool\": \"set_timer\", \"expected_args\": { \"minutes\": 5 } },\n  { \"id\": \"cmd_clear_2\", \"category\": \"comando_claro\", \"audio\": \"fixtures/clima_sp.wav\",\n    \"expected_tool\": \"get_weather\", \"expected_args\": { \"city\": \"São Paulo\" } },\n  { \"id\": \"ambig_1\", \"category\": \"ambiguo\", \"audio\": \"fixtures/alarme_amanha.wav\",\n    \"expected_behavior\": \"asks_follow_up\" },\n  { \"id\": \"offtopic_1\", \"category\": \"off_topic\", \"audio\": \"fixtures/piada.wav\",\n    \"expected_behavior\": \"redirects_politely\" },\n  { \"id\": \"noise_1\", \"category\": \"com_ruido\", \"audio\": \"fixtures/cafe_noise.wav\",\n    \"expected_tool\": \"set_timer\", \"tolerance\": 0.7 },\n  { \"id\": \"barge_1\", \"category\": \"barge_in\", \"script\": \"user_interrupts_at_1.5s\",\n    \"expected\": \"agent_stops_within_300ms\" }\n]"
+          }
+        }
+      ]
+    },
+    {
+      "id": "cec9e1fd-d519-42ca-a102-2e804ad6ffa2",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Writeup: o que recrutador quer ler"
+      },
+      "children": [
+        {
+          "id": "18ac988e-eaf2-42ba-aa5a-0ab221dd6a2b",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "markdown",
+            "code": "# Voice Assistant — Writeup\n\n## TL;DR\nSistema conversacional em PT-BR com duas arquiteturas (Realtime API e pipeline clássico),\nfallback automático, 3 tools funcionais, TTFA p95 de 820ms (Realtime) e 2.1s (pipeline).\nAvaliado em golden set de 42 interações — task success 88% (Realtime), 81% (pipeline).\n\n## Decisões de arquitetura\n- Por que WebRTC e não WebSocket: resiliência a perda de pacote em mobile\n- Por que pipeline como fallback: outage Realtime em 2025-11 custou 4h\n- Por que Cartesia no pipeline: TTFA 90ms vs ElevenLabs 300ms\n\n## Trade-offs honestos\n- Realtime API custa 3x mais por minuto → feature flag por tier de usuário\n- VAD Silero dá false positive em ambiente barulhento → expus threshold na UI\n- Barge-in ainda perde 15% dos casos em gravações de café (ruído acima de 65dB)\n\n## Métricas (tabela)\n| arquitetura | ttfa_p50 | ttfa_p95 | custo/sessão | task_success |\n| Realtime    | 410ms    | 820ms    | $0.18        | 88%          |\n| Pipeline    | 1400ms   | 2100ms   | $0.06        | 81%          |\n\n## Limitações conhecidas\n- ...\n\n## Próximas iterações\n- ...\n\n## Links\n- Código: github.com/user/voice-capstone\n- Demo vídeo (3min): ...\n- Dashboard ao vivo: ..."
+          }
+        }
+      ]
+    },
+    {
+      "id": "3504f676-b076-45a6-ba7e-710afd5e09e9",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Checklist final"
+      },
+      "children": [
+        {
+          "id": "5d5c5685-1349-4f85-8d97-34afea5b4d41",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Entregáveis: (1) repo público com README forte, (2) golden set + script de eval executável, (3) feature flag entre Realtime e pipeline, (4) budget guard ativo, (5) logs estruturados + export, (6) vídeo demo de 2-3min mostrando barge-in e tool calls, (7) writeup com trade-offs honestos e limitações. Esse nível de capstone vira peça de conversa em entrevista sênior — não é trophy, é evidência."
+          }
+        }
+      ]
+    }
+  ]
+}

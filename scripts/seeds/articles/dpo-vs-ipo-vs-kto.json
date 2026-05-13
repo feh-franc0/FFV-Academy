@@ -1,0 +1,304 @@
+{
+  "slug": "dpo-vs-ipo-vs-kto",
+  "title": null,
+  "blocks": [
+    {
+      "id": "ed30f38c-ad20-47cb-9b14-3a70cfc7e351",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Em 2023, Rafailov et al. provaram um resultado surpreendente: o reward model do RLHF é desnecessário. A política ótima tem forma fechada que permite expressar reward em termos da própria política — colapsando três modelos (policy, reference, RM) e um algoritmo RL (PPO) numa única loss de classificação. Esse paper (DPO) reabriu o pipeline e em dois anos IPO, KTO, SLiC, SPPO, ORPO e outros nasceram. Este módulo é o mapa do novo terreno. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "ef1410fc-cff2-4090-aa6c-ba64009b6f8b",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "A derivação que tornou o RM dispensável"
+      },
+      "children": [
+        {
+          "id": "bedfb587-3e73-47c5-a5c5-3ed0b0739b55",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " O RLHF maximiza um objective com KL penalty: "
+              },
+              {
+                "text": "max_π E_x,y[r(x,y)] - β·KL(π || π_ref)",
+                "code": true
+              },
+              {
+                "text": ". Esse problema tem solução fechada (lagrangiano + KKT): "
+              }
+            ]
+          }
+        },
+        {
+          "id": "62d37fc6-50e9-463b-bbe7-4299a70420a9",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Invertendo para isolar o reward: "
+              },
+              {
+                "text": "r(x,y) = β·log(π*(y|x)/π_ref(y|x)) + β·log Z(x)",
+                "code": true
+              },
+              {
+                "text": ". Substituindo na loss Bradley-Terry (que treina o RM), "
+              },
+              {
+                "text": "log Z(x)",
+                "code": true
+              },
+              {
+                "text": " cancela entre y_w e y_l (mesmo x). Resultado: loss puramente em probabilidades da política: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "93434474-02e4-4997-96cf-7e4b76c449d0",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Geometricamente: DPO aumenta a probabilidade de y_w e diminui a de y_l, mas normalizado pela referência (não pode fugir muito de π_ref). É treinamento de classificação binária — sem rollouts, sem RM, sem KL penalty explícita (a KL está implícita na razão log(π/π_ref))."
+          }
+        }
+      ]
+    },
+    {
+      "id": "91740d91-d674-44df-bc74-d0791b692541",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "DPO em código (TRL)"
+      },
+      "children": [
+        {
+          "id": "dd1abcbd-1dfe-4f1f-a70a-5e5b7264467a",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "from trl import DPOTrainer, DPOConfig\nfrom transformers import AutoModelForCausalLM, AutoTokenizer\nfrom datasets import load_dataset\n\n# Dataset com colunas: prompt, chosen, rejected\ndataset = load_dataset(\"HuggingFaceH4/ultrafeedback_binarized\", split=\"train_prefs\")\n\nmodel = AutoModelForCausalLM.from_pretrained(\"meta-llama/Meta-Llama-3-8B-Instruct\")\nref_model = AutoModelForCausalLM.from_pretrained(\"meta-llama/Meta-Llama-3-8B-Instruct\")\ntokenizer = AutoTokenizer.from_pretrained(\"meta-llama/Meta-Llama-3-8B-Instruct\")\n\nconfig = DPOConfig(\n    output_dir=\"./dpo-llama3\",\n    beta=0.1,                  # β da equação — controla a \"rigidez\" do KL implícito\n    loss_type=\"sigmoid\",       # DPO clássico. Alternativas: ipo, hinge, kto_pair, robust\n    learning_rate=5e-7,        # MUITO menor que SFT — DPO é sensível\n    per_device_train_batch_size=4,\n    gradient_accumulation_steps=4,\n    num_train_epochs=1,        # >1 epoch frequentemente piora\n    max_length=2048,\n    max_prompt_length=1024,\n)\n\ntrainer = DPOTrainer(\n    model=model,\n    ref_model=ref_model,\n    args=config,\n    train_dataset=dataset,\n    tokenizer=tokenizer,\n)\ntrainer.train()",
+            "filename": "train_dpo.py"
+          }
+        },
+        {
+          "id": "0bb71ad2-c14a-4209-bbff-d05327905f2a",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "β baixo (0.01) → DPO se afasta muito do SFT, pode degradar capacidades. β alto (0.5+) → mal sai do SFT, ganho marginal. β = 0.1–0.3 é típico."
+          }
+        }
+      ]
+    },
+    {
+      "id": "ff6ee874-33f4-4287-b78b-ffd81a75fcda",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "IPO: regularizando preferências ruidosas"
+      },
+      "children": [
+        {
+          "id": "08b6562f-5d7b-43cd-88ed-746a04fd3073",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Azar et al. 2023 (DeepMind, "
+              },
+              {
+                "text": "arxiv.org/abs/2310.12036",
+                "code": true
+              },
+              {
+                "text": ") observou: DPO via Bradley-Terry assume preferências determinísticas no limite (P(y_w > y_l) → 1). Quando dataset é ruidoso (preferências contraditórias), DPO empurra modelo a colocar probabilidade quase nula em y_l — overfit. IPO substitui a loss: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "5ab91c6c-bcee-4c09-a5f9-8b2b26cba538",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "A MSE com margem fixa τ regulariza: o modelo busca diferença τ entre y_w e y_l, não diferença infinita. Resultado: menos overfit em datasets ruidosos. Empíricamente IPO é mais robusto, DPO converge mais rápido em datasets limpos."
+          }
+        }
+      ]
+    },
+    {
+      "id": "411fdc75-64fe-4955-9c99-8690335236a0",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "KTO: aversão à perda na loss"
+      },
+      "children": [
+        {
+          "id": "6751184d-221e-4e69-a3df-8e4020332c87",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " KTO (Ethayarajh et al., Stanford/ContextualAI 2024 — "
+              },
+              {
+                "text": "arxiv.org/abs/2402.01306",
+                "code": true
+              },
+              {
+                "text": ") parte de duas premissas: (1) datasets reais são point-wise (👍/👎), não pareados; (2) Prospect Theory (Kahneman & Tversky 1979 — Nobel 2002) diz que humanos pesam perdas mais que ganhos. Loss assimétrica: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "d9888351-76fe-4550-98d9-280d0c3de964",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# KTO loss (simplificada — Ethayarajh et al. 2024)\nimport torch\nimport torch.nn.functional as F\n\ndef kto_loss(policy_logps, ref_logps, is_desirable,\n              beta=0.1, lambda_D=1.0, lambda_U=1.0):\n    \"\"\"\n    policy_logps: log-probs do modelo treinável para o exemplo (não pareado)\n    ref_logps:    log-probs do modelo de referência\n    is_desirable: True se o exemplo é \"good\" (👍), False se é \"bad\" (👎)\n    \"\"\"\n    # Reward implícito: log-ratio com referência\n    rewards = beta * (policy_logps - ref_logps)\n\n    # KL baseline (estimado em batch — não é par a par)\n    kl = (policy_logps - ref_logps).mean().detach().clamp(min=0)\n\n    if is_desirable:\n        # Valor positivo se reward > kl\n        value = lambda_D * (1 - torch.sigmoid(rewards - kl))\n    else:\n        # Aversão à perda: penaliza fortemente se reward > kl\n        value = lambda_U * (1 - torch.sigmoid(kl - rewards))\n\n    return value",
+            "filename": "kto_loss.py"
+          }
+        },
+        {
+          "id": "cc366f9e-993b-4ee0-8d6a-71477c6626a3",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "λ_D e λ_U controlam o tradeoff. Defaults λ_D = λ_U = 1 são neutros. Em datasets desbalanceados (90% positivos), usar λ_U > λ_D para evitar que o modelo ignore os negativos minoritários."
+          }
+        }
+      ]
+    },
+    {
+      "id": "86a69f9b-99c4-4311-9ad3-17ca0257ea94",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Comparação direta dos três"
+      },
+      "children": [
+        {
+          "id": "7129a82e-239d-4e20-882f-55c1cc3cbe9b",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "DPO",
+              "IPO",
+              "KTO"
+            ],
+            "rows": [
+              [
+                "Formato dataset",
+                "Pareado (chosen/rejected)",
+                "Pareado",
+                "Point-wise (good/bad)"
+              ],
+              [
+                "Loss base",
+                "log σ (BT)",
+                "MSE com margem",
+                "Asymmetric Prospect Theory"
+              ],
+              [
+                "Robustez a ruído",
+                "Baixa",
+                "Alta (regularizado)",
+                "Média (depende de λ)"
+              ],
+              [
+                "Velocidade convergência",
+                "Rápida",
+                "Média",
+                "Média"
+              ],
+              [
+                "Hiperparâmetros",
+                "β",
+                "β, τ",
+                "β, λ_D, λ_U"
+              ],
+              [
+                "Quando vence",
+                "Pareado limpo",
+                "Pareado ruidoso",
+                "Point-wise / desbalanceado"
+              ],
+              [
+                "Paper",
+                "Rafailov NeurIPS 2023",
+                "Azar 2023",
+                "Ethayarajh 2024"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "894d6731-68a5-491d-8a9c-59e1f941264a",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Família estendida em 2026"
+      },
+      "children": []
+    },
+    {
+      "id": "1fb9393f-7735-43a8-aac3-7a346008b47e",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Fluxo de decisão prático"
+      },
+      "children": []
+    },
+    {
+      "id": "718f5400-3777-45e1-82b0-905ca75e5d0d",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": []
+    },
+    {
+      "id": "cc61379d-6dd0-4515-921c-4308fbcb9269",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Referências"
+      },
+      "children": []
+    }
+  ]
+}

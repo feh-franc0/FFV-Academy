@@ -1,0 +1,198 @@
+{
+  "slug": "capstone-rust-cli-axum",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b379385c-2f18-41bb-92e1-577c9d438cd7",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O projeto"
+      },
+      "children": [
+        {
+          "id": "073c0081-fa1e-453e-80a1-1417000d649c",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Construa um "
+              },
+              {
+                "text": "gerenciador de tarefas com API + CLI + Postgres",
+                "bold": true
+              },
+              {
+                "text": " em um único cargo workspace. Não é TODO toy: é o scaffold mínimo que um serviço real de produção teria — auth JWT, migrations versionadas, tracing, Docker multi-stage, benchmark em CI. Objetivo: peça portfolio que um staff engineer olha e reconhece como \"esse cara sabe o que faz\". "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "96e8ef87-d9ab-48fa-93a1-eee34d2272ae",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Layout do workspace"
+      },
+      "children": [
+        {
+          "id": "92864e02-fab5-43db-bc3c-cb702b9c12ac",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "ffv-tasks/\n├── Cargo.toml              (workspace root)\n├── crates/\n│   ├── core/               (lib: domínio puro, sem I/O)\n│   │   ├── src/task.rs\n│   │   ├── src/error.rs\n│   │   └── tests/\n│   ├── cli/                (bin: clap subcommands)\n│   │   └── src/main.rs\n│   └── server/             (bin: axum + sqlx + jwt)\n│       ├── src/main.rs\n│       ├── src/auth.rs\n│       ├── src/routes/\n│       └── migrations/\n├── benches/                (criterion)\n├── Dockerfile              (multi-stage)\n├── docker-compose.yml      (postgres local)\n├── .github/workflows/      (CI: test + bench + build)\n└── README.md               (decisões arquiteturais)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b0c193f1-6249-42e7-9967-31474700476b",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "core: domínio puro"
+      },
+      "children": [
+        {
+          "id": "f80acb50-334f-4249-b147-8db0c5bf488f",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "rust",
+            "code": "// crates/core/src/task.rs\nuse serde::{Serialize, Deserialize};\nuse uuid::Uuid;\nuse time::OffsetDateTime;\n\n#[derive(Debug, Clone, Serialize, Deserialize)]\npub struct Task {\n    pub id: Uuid,\n    pub title: String,\n    pub done: bool,\n    pub created_at: OffsetDateTime,\n}\n\nimpl Task {\n    pub fn new(title: impl Into<String>) -> Self {\n        Self { id: Uuid::new_v4(), title: title.into(), done: false, created_at: OffsetDateTime::now_utc() }\n    }\n    pub fn complete(&mut self) { self.done = true; }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "44f8ba11-4e45-4d58-bc79-ddfbc686a4f3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "cli: clap com subcommands"
+      },
+      "children": [
+        {
+          "id": "8f5d2676-e938-4993-9ca3-21641bcc450b",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "rust",
+            "code": "// crates/cli/src/main.rs\nuse clap::{Parser, Subcommand};\n\n#[derive(Parser)]\n#[command(version, about = \"FFV Tasks CLI\")]\nstruct Cli { #[command(subcommand)] cmd: Cmd }\n\n#[derive(Subcommand)]\nenum Cmd {\n    Add { label: String },\n    List,\n    Done { id: String },\n}\n\nfn main() -> anyhow::Result<()> {\n    let cli = Cli::parse();\n    match cli.cmd {\n        Cmd::Add { title } => { let t = core::Task::new(title); println!(\"{}\", serde_json::to_string(&t)?); }\n        Cmd::List => { /* chama API via reqwest */ }\n        Cmd::Done { id } => { /* PATCH /tasks/:id */ }\n    }\n    Ok(())\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "c6429278-7422-47c8-9fef-1a8c4dce688a",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "server: axum + sqlx + jwt"
+      },
+      "children": [
+        {
+          "id": "b25ab1a2-1590-4c9c-8797-f2742b2d7adf",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "rust",
+            "code": "// crates/server/src/main.rs\nuse axum::{Router, routing::{get, post}, extract::{State, Path}, Json};\nuse sqlx::PgPool;\nuse std::sync::Arc;\n\n#[derive(Clone)]\nstruct AppState { db: PgPool, jwt_secret: Arc<String> }\n\nasync fn list_tasks(State(s): State<AppState>) -> Json<Vec<core::Task>> {\n    let rows = sqlx::query_as::<_, core::Task>(\"SELECT id, title, done, created_at FROM tasks ORDER BY created_at DESC\")\n        .fetch_all(&s.db).await.unwrap();\n    Json(rows)\n}\n\n#[tokio::main]\nasync fn main() -> anyhow::Result<()> {\n    tracing_subscriber::fmt::init();\n    let db = PgPool::connect(&std::env::var(\"DATABASE_URL\")?).await?;\n    sqlx::migrate!(\"./migrations\").run(&db).await?;\n\n    let state = AppState { db, jwt_secret: Arc::new(std::env::var(\"JWT_SECRET\")?) };\n    let app = Router::new()\n        .route(\"/health\", get(|| async { \"ok\" }))\n        .route(\"/tasks\", get(list_tasks).post(create_task))\n        .route(\"/tasks/:id\", get(get_task).patch(update_task))\n        .with_state(state);\n\n    let listener = tokio::net::TcpListener::bind(\"0.0.0.0:3000\").await?;\n    axum::serve(listener, app).await?;\n    Ok(())\n}\n\nasync fn create_task() {}\nasync fn get_task(Path(_id): Path<String>) {}\nasync fn update_task(Path(_id): Path<String>) {}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "1d4e684c-2ce9-4e9c-b081-e4f3dcf2a6bd",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Migrations versionadas com sqlx"
+      },
+      "children": [
+        {
+          "id": "6834fde2-1707-4b65-809c-39eafb0ee959",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "# crates/server/migrations/20260101000000_init.sql\nCREATE TABLE tasks (\n  id          UUID PRIMARY KEY,\n  title       TEXT NOT NULL,\n  done        BOOLEAN NOT NULL DEFAULT FALSE,\n  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()\n);\nCREATE INDEX idx_tasks_created_at ON tasks(created_at DESC);\n\n# sqlx-cli\ncargo install sqlx-cli\nsqlx migrate add init\nsqlx migrate run   # aplica\nsqlx migrate info  # status"
+          }
+        }
+      ]
+    },
+    {
+      "id": "73401bbc-1c94-4e66-9d8c-29405539e0da",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Dockerfile multi-stage (<20MB final)"
+      },
+      "children": [
+        {
+          "id": "70e69208-7367-4794-9cc8-ae0769eb550a",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "# ---- stage 1: build ----\nFROM rust:1.78-alpine AS builder\nRUN apk add --no-cache musl-dev\nWORKDIR /build\nCOPY . .\nRUN cargo build --release --target x86_64-unknown-linux-musl --bin server\n\n# ---- stage 2: runtime ----\nFROM scratch\nCOPY --from=builder /build/target/x86_64-unknown-linux-musl/release/server /server\nEXPOSE 3000\nENTRYPOINT [\"/server\"]\n\n# build: docker build -t ffv-tasks .\n# imagem final: ~12MB, zero deps dinâmicas, zero shell, zero CVE de userland"
+          }
+        }
+      ]
+    },
+    {
+      "id": "336402c3-f046-4870-acdd-55506be7caad",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "CI: test + bench + regression"
+      },
+      "children": [
+        {
+          "id": "e75f55f3-2f33-44fb-b678-34e2c4d0f47a",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "# .github/workflows/ci.yml\nname: ci\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    services:\n      postgres:\n        image: postgres:16\n        env: { POSTGRES_PASSWORD: test }\n        ports: [\"5432:5432\"]\n    steps:\n      - uses: actions/checkout@v4\n      - uses: dtolnay/rust-toolchain@stable\n      - run: cargo clippy -- -D warnings\n      - run: cargo fmt --check\n      - run: cargo test --workspace\n      - run: cargo bench --no-fail-fast -- --save-baseline pr\n      # compare com baseline main, falhe se regressão > 10%"
+          }
+        }
+      ]
+    },
+    {
+      "id": "720511d7-f3a4-464b-bba0-f8dd53cb4fc8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Entregáveis finais do capstone"
+      },
+      "children": [
+        {
+          "id": "f94c4ce5-f7a3-4fc6-ba64-d7821f15fc16",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Repo público com: (1) workspace core + cli + server, (2) migrations sqlx, (3) JWT auth real, (4) Dockerfile multi-stage com imagem <20MB, (5) tracing + métricas Prometheus, (6) criterion bench em benches/, (7) CI completo (clippy + fmt + test + bench), (8) README com diagrama de arquitetura e trade-offs, (9) CHANGELOG.md e LICENSE. Deploy opcional em Fly.io/Railway para link vivo."
+          }
+        },
+        {
+          "id": "a90642f5-904a-465b-9f15-e9e74d041afa",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Esse é o nível que recruiter sênior olha e pensa \"esse dev está pronto pra sistema real\". Combina Rust idiomático, arquitetura hexagonal, observabilidade e DevOps moderno — sinal de staff engineer em 2026."
+          }
+        }
+      ]
+    }
+  ]
+}

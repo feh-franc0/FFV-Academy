@@ -1,0 +1,161 @@
+{
+  "slug": "rag-local-private",
+  "title": null,
+  "blocks": [
+    {
+      "id": "dc1d79e6-87e4-42d6-92df-c353ef677f78",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Quando RAG precisa ser local"
+      },
+      "children": [
+        {
+          "id": "c566d420-7131-4338-8df5-37e5ef3dc789",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Cenários comuns em 2026 onde dado NÃO pode sair: contratos legais (escritórios), prontuários médicos (hospitais), código proprietário (corporações), documentos confidenciais (defesa, governo). Toda chamada para OpenAI/Anthropic vira incidente de compliance. A alternativa: stack 100% local, do parsing à geração. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "e114ff31-230a-4e7d-9c92-6fb5a41f59aa",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "A pilha em uma página"
+      },
+      "children": []
+    },
+    {
+      "id": "b1bbd95e-bd6e-439d-a071-10ffc71004d2",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Setup mínimo"
+      },
+      "children": [
+        {
+          "id": "c3de8f7f-7993-4c9b-b202-e0040f84f560",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "# 1. Instalar Ollama + modelo\nbrew install ollama\nollama pull qwen2.5:14b           # ou llama3.3:70b se tiver VRAM\nollama pull bge-m3                # embedding model\n\n# 2. Python env\nuv venv && source .venv/bin/activate\nuv pip install docling lancedb sentence-transformers FlagEmbedding"
+          }
+        },
+        {
+          "id": "834ab356-ed2d-43ff-a941-f9d84a0971f1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "from docling import DocumentConverter\nfrom sentence_transformers import SentenceTransformer\nimport lancedb\n\n# 1. Parse PDF mantendo estrutura\nconverter = DocumentConverter()\ndoc = converter.convert('contrato.pdf')\nchunks = doc.export_to_markdown().split('\\n\\n')  # simplificado\n\n# 2. Embed local (sem API)\nembedder = SentenceTransformer('BAAI/bge-m3')\nvectors = embedder.encode(chunks)\n\n# 3. Index local em LanceDB\ndb = lancedb.connect('./vault')\ntable = db.create_table('docs', data=[\n    {'text': c, 'vector': v.tolist()} for c, v in zip(chunks, vectors)\n])\n\n# 4. Query\nquery_vec = embedder.encode('cláusula de rescisão')\nresults = table.search(query_vec).limit(5).to_list()\n\n# 5. Generate com Ollama local\nimport ollama\nctx = '\\n\\n'.join(r['text'] for r in results)\nresponse = ollama.chat(\n    model='qwen2.5:14b',\n    messages=[{\n        'role': 'user',\n        'content': f'Contexto:\\n{ctx}\\n\\nPergunta: O que diz a cláusula de rescisão?'\n    }]\n)\nprint(response['message']['content'])"
+          }
+        }
+      ]
+    },
+    {
+      "id": "bdc35e35-eb8d-45c1-9ee1-7a141e9e6b57",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Hybrid search — código"
+      },
+      "children": [
+        {
+          "id": "8477f09a-2204-4bb3-a313-bb1fe260c9fc",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "# LanceDB suporta hybrid nativamente com FTS + vector\nimport lancedb\nfrom lancedb.rerankers import LinearCombinationReranker\n\ndb = lancedb.connect('./vault')\ntable = db.open_table('docs')\n\n# Cria índice FTS (BM25-like) sobre 'text'\ntable.create_fts_index('text')\n\n# Hybrid search\nreranker = LinearCombinationReranker(weight=0.7)\nresults = (\n    table.search('cláusula rescisão contratual', query_type='hybrid')\n    .vector(embedder.encode('cláusula rescisão contratual').tolist())\n    .rerank(reranker=reranker)\n    .limit(10)\n    .to_list()\n)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "4fb45cb0-9731-4a7d-9095-2a901affccd8",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Reranking com cross-encoder local"
+      },
+      "children": [
+        {
+          "id": "cec5ab74-c3e4-4b43-9b0d-6bdf2ef22b8e",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "from FlagEmbedding import FlagReranker\n\n# Roda local — sem API\nreranker = FlagReranker('BAAI/bge-reranker-v2-m3', use_fp16=True)\n\n# Pair-wise scoring\npairs = [['cláusula rescisão', candidate['text']] for candidate in results[:50]]\nscores = reranker.compute_score(pairs, normalize=True)\n\n# Reorder\nreranked = sorted(zip(scores, results), reverse=True)[:5]"
+          }
+        }
+      ]
+    },
+    {
+      "id": "2f9a0bbd-7018-4078-913e-69c0163d15ce",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Casos onde isso resolve"
+      },
+      "children": [
+        {
+          "id": "92715a4d-484a-4e2e-a02f-2cc35adb15f1",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Setor",
+              "Dado típico",
+              "Por que precisa ser local"
+            ],
+            "rows": [
+              [
+                "Jurídico",
+                "Contratos, peças processuais, jurisprudência interna",
+                "Privilege, LGPD, segredo profissional"
+              ],
+              [
+                "Médico",
+                "Prontuários, exames, protocolos",
+                "HIPAA, LGPD Art. 11 (dado sensível)"
+              ],
+              [
+                "Corporativo (M&A, jurídico)",
+                "Due diligence, comitês",
+                "NDA estrito, vazamento = lawsuit"
+              ],
+              [
+                "Defesa/Governo",
+                "Documentos classificados",
+                "Regulação setorial específica"
+              ],
+              [
+                "Banking/Fintech",
+                "Transações, modelagem de risco",
+                "Compliance + custo de API em escala"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "04770f3b-7b86-4a38-95d3-bbc66cc8636b",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Performance esperada (M3 Ultra 128GB)"
+      },
+      "children": []
+    }
+  ]
+}

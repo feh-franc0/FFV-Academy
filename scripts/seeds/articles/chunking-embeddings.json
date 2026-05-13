@@ -1,0 +1,367 @@
+{
+  "slug": "chunking-embeddings",
+  "title": null,
+  "blocks": [
+    {
+      "id": "37c78596-ede8-400f-957a-9352aa08ed0b",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Se 80% do resultado do RAG vem do ingest, então 80% do ingest vem de duas decisões: "
+          },
+          {
+            "text": "como você corta",
+            "bold": true
+          },
+          {
+            "text": " (chunking) e "
+          },
+          {
+            "text": "como você codifica",
+            "bold": true
+          },
+          {
+            "text": " (embedding). Este módulo é o mapa das opções reais, os trade-offs e o que a comunidade convergiu em 2024-2026 como default. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "7f9042d6-ae76-44ce-a349-74a739d9864a",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Estratégias de chunking, lado a lado"
+      },
+      "children": [
+        {
+          "id": "7b3a1071-efaa-43ff-a359-9f3d977e5bc1",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Estratégia",
+              "Como corta",
+              "Quando usa"
+            ],
+            "rows": [
+              [
+                "Fixed-size",
+                "N tokens ou caracteres, ignora estrutura",
+                "Texto homogêneo, log streams — quase nunca o certo"
+              ],
+              [
+                "Recursive",
+                "Tenta \\n\\n → \\n → . → palavra",
+                "Default para markdown, artigos, docs — 90% dos casos"
+              ],
+              [
+                "Document-aware",
+                "Respeita headings, listas, tabelas (markdown/HTML parsers)",
+                "Documentação técnica, manuais, KB estruturada"
+              ],
+              [
+                "Semantic",
+                "Embeda frases, quebra em saltos de similaridade",
+                "Texto narrativo longo, transcrições"
+              ],
+              [
+                "Proposition-based",
+                "LLM extrai proposições atômicas",
+                "Bases caras/críticas onde precisão > custo"
+              ],
+              [
+                "Contextual (Anthropic)",
+                "Recursive + prefixo gerado por LLM com contexto do doc",
+                "Bases grandes onde naive retrieval falha muito"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "5a1b3e96-7606-43cd-81da-a498ff173e72",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Anatomia do chunk certo"
+      },
+      "children": [
+        {
+          "id": "c0f7f27f-b6fc-42e1-8f90-0e87abe5b8e0",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Parâmetro",
+              "Range comum",
+              "Por que"
+            ],
+            "rows": [
+              [
+                "Tamanho (tokens)",
+                "256 – 1024",
+                "Pequeno perde contexto, grande dilui sinal. 512 é o sweet spot para maioria."
+              ],
+              [
+                "Overlap",
+                "10% – 20%",
+                "Frase cortada em dois chunks sobrevive. Acima de 25%, duplica demais."
+              ],
+              [
+                "Metadata embutida",
+                "source, title, section, created_at, type",
+                "Filtragem por metadata no retrieval é barata e potente."
+              ],
+              [
+                "Boundary preservation",
+                "respeitar \\n\\n, listas, code fences",
+                "Cortar no meio de código é catástrofe."
+              ]
+            ]
+          }
+        },
+        {
+          "id": "5e63721c-0eed-4866-9bf6-af0d37c0c74a",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Regra prática: 512 tokens / 15% overlap / recursive splitter respeitando markdown. Isso é 95% do que se precisa para começar. Otimize depois, com eval harness na mão."
+          }
+        }
+      ]
+    },
+    {
+      "id": "5a9dabe8-cb85-40e7-92ff-376e3a66ef17",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Contextual Retrieval: o truque de 2024 da Anthropic"
+      },
+      "children": [
+        {
+          "id": "8bc3cff3-7650-4aa3-a109-985c01eb7222",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Chunk isolado perde contexto. "
+              },
+              {
+                "text": "A margem operacional caiu 8% no trimestre.",
+                "code": true
+              },
+              {
+                "text": " Qual empresa? Qual trimestre? Sem o documento original, ninguém sabe — nem o retrieval. Solução: pré-processar. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "fbaee53f-c1a3-4048-8671-37ea8853f074",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# Para cada chunk, gerar um contexto curto usando LLM barato\nfrom anthropic import Anthropic\n\nclient = Anthropic()\n\ndef contextualize(doc: str, chunk: str) -> str:\n    prompt = f\"\"\"<document>{doc}</document>\nHere is a chunk from the document:\n<chunk>{chunk}</chunk>\nProvide a short (50-100 tokens) context situating this chunk within the document.\nOutput only the context, nothing else.\"\"\"\n    r = client.messages.create(\n        model=\"claude-haiku-4-5-20251001\",\n        max_tokens=120,\n        messages=[{\"role\": \"user\", \"content\": prompt}],\n    )\n    return r.content[0].text.strip()\n\n# Ingest\nfor chunk in chunks:\n    ctx = contextualize(full_doc, chunk)\n    embedded_text = f\"{ctx}\\n\\n{chunk}\"  # embeda o combinado\n    vector = embedder.encode(embedded_text)\n    db.insert(chunk=chunk, ctx=ctx, vector=vector)\n# Prompt caching no doc full faz o custo cair ~10x"
+          }
+        },
+        {
+          "id": "30f6fbe2-384a-4bc4-ae95-6bc0d4cdbc5f",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Resultado no paper: redução de 35% em failures de retrieval (49% quando combinado com hybrid search + reranking). Custo é pago uma vez no ingest, não por query. Use prompt caching do Anthropic para baratear em 10×."
+          }
+        }
+      ]
+    },
+    {
+      "id": "9350e661-06aa-486d-b5e2-3fd8afba9dfd",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Escolha de embedding em 2026"
+      },
+      "children": [
+        {
+          "id": "54ccdd6d-ebb3-4b7b-a025-3370195684cf",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Modelo",
+              "Dim",
+              "Contexto",
+              "Forte em"
+            ],
+            "rows": [
+              [
+                "OpenAI text-embedding-3-small",
+                "1536 (ajustável)",
+                "8191",
+                "Default barato, multilíngue decente"
+              ],
+              [
+                "OpenAI text-embedding-3-large",
+                "3072 (ajustável)",
+                "8191",
+                "Precisão alta; use Matryoshka para comprimir dim"
+              ],
+              [
+                "Voyage voyage-3-large",
+                "1024",
+                "32000",
+                "State-of-art em benchmarks independentes"
+              ],
+              [
+                "Cohere embed-multilingual-v3",
+                "1024",
+                "512",
+                "Forte em PT, ES, AR"
+              ],
+              [
+                "BAAI/bge-m3 (open)",
+                "1024",
+                "8192",
+                "Open-source, multilíngue, multi-funcional (dense+sparse)"
+              ],
+              [
+                "intfloat/multilingual-e5-large",
+                "1024",
+                "512",
+                "Open-source, boa base pt-BR"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "766c3fca-ab45-487b-9c24-6ac44d90932c",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Matryoshka: reduzir dimensão sem perder precisão"
+      },
+      "children": [
+        {
+          "id": "319fa907-230b-42df-a8c7-617574331d60",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Modelos Matryoshka (OpenAI text-embedding-3, Voyage) foram treinados de forma que os primeiros N dims já capturam o essencial. Truncar para 512 ou 768 dims mantém ~95% da precisão, com storage e search 3-6× mais baratos. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "26c2a450-3715-48b3-89d6-572d09172f13",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# OpenAI: pedir dimensão menor na API\nembedding = client.embeddings.create(\n    model=\"text-embedding-3-large\",\n    input=\"texto\",\n    dimensions=768,  # default 3072, mas 768 mantém ~95% da quality\n).data[0].embedding\n\n# Depois de obter, re-normalizar se for cosine\nimport numpy as np\nv = np.array(embedding)\nv_norm = v / np.linalg.norm(v)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "458412cf-c8b0-4d04-a3c9-5af76d1d9220",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Métricas de similaridade: cosine, dot, L2"
+      },
+      "children": [
+        {
+          "id": "bc30c93d-112e-4474-8ac6-b582588e9bf2",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Métrica",
+              "Fórmula",
+              "Quando usar"
+            ],
+            "rows": [
+              [
+                "Cosine similarity",
+                "dot(a,b) / (|a|·|b|)",
+                "Default para texto. Invariante a magnitude."
+              ],
+              [
+                "Dot product",
+                "Σ a_i · b_i",
+                "Se vetores já normalizados (= cosine, mais rápido)."
+              ],
+              [
+                "Euclidean (L2)",
+                "√Σ (a_i - b_i)²",
+                "Raro em texto. Mais comum em imagens/visão."
+              ]
+            ]
+          }
+        },
+        {
+          "id": "8053df89-40bf-48ca-a3c2-1e44ac3678cf",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Pegadinha: ao migrar entre vector DBs, confirme a métrica. pgvector aceita (cosine), (dot negativo), (L2). Usar a errada degrada silenciosamente a qualidade."
+          }
+        }
+      ]
+    },
+    {
+      "id": "27acabb3-c53e-41a6-96d0-42ff9368d0c8",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Código: pipeline de ingest com metadata + chunks + pgvector"
+      },
+      "children": [
+        {
+          "id": "6bbceb6d-f3ad-44f3-8c7c-54bba57c8ee3",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "from langchain_text_splitters import RecursiveCharacterTextSplitter\nimport psycopg\nfrom openai import OpenAI\n\noai = OpenAI()\nsplitter = RecursiveCharacterTextSplitter(\n    chunk_size=512,            # em tokens aproximados\n    chunk_overlap=75,\n    separators=[\"\\n\\n\", \"\\n\", \". \", \" \", \"\"],\n)\n\ndef embed(text: str) -> list[float]:\n    return oai.embeddings.create(\n        model=\"text-embedding-3-small\",\n        input=text,\n        dimensions=768,\n    ).data[0].embedding\n\nconn = psycopg.connect(\"postgresql://...\")\nwith conn.cursor() as cur:\n    cur.execute(\"\"\"\n        CREATE TABLE IF NOT EXISTS chunks (\n            id BIGSERIAL PRIMARY KEY,\n            doc_id TEXT NOT NULL,\n            section TEXT,\n            chunk TEXT NOT NULL,\n            embedding VECTOR(768) NOT NULL,\n            created_at TIMESTAMPTZ DEFAULT now()\n        );\n        CREATE INDEX IF NOT EXISTS chunks_emb_idx\n          ON chunks USING hnsw (embedding vector_cosine_ops);\n    \"\"\")\n\ndef ingest(doc_id: str, section: str, text: str) -> None:\n    for piece in splitter.split_text(text):\n        vec = embed(piece)\n        with conn.cursor() as cur:\n            cur.execute(\n                \"INSERT INTO chunks(doc_id,section,chunk,embedding) VALUES (%s,%s,%s,%s)\",\n                (doc_id, section, piece, vec),\n            )\n    conn.commit()"
+          }
+        }
+      ]
+    },
+    {
+      "id": "eca7a5b7-4c41-4c45-8950-a2cb75a5e981",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Perguntas típicas"
+      },
+      "children": []
+    },
+    {
+      "id": "d8235297-0640-46cb-a272-1add0810b657",
+      "type": "callout",
+      "position": 9,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Take-aways. Recursive chunking de 512/75 overlap é o default correto. Contextual Retrieval reduz failures em 35%+ e vale o custo no ingest. Embedding: OpenAI text-embedding-3-small ou bge-m3 cobrem 95% dos casos — meça antes de trocar. Matryoshka corta dimensão sem perder qualidade. Sempre guarde texto original + embedding + metadata. Próximo: hybrid search e reranking para elevar precisão de 60% para 85%+."
+      }
+    }
+  ]
+}

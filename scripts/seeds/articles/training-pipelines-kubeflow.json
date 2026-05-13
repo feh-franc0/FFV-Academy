@@ -1,0 +1,124 @@
+{
+  "slug": "training-pipelines-kubeflow",
+  "title": null,
+  "blocks": [
+    {
+      "id": "693d75ef-d843-4d7c-80b4-26e98b027608",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Training pipeline como cidadão de primeira classe"
+      },
+      "children": [
+        {
+          "id": "a5f7b7e2-eebf-4457-8e97-5ebf85ba55b7",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Notebook é ótimo para exploração. Produção pede pipeline declarativo: cada passo reproduzível, com inputs versionados, outputs nomeados, logs centralizados e retry automático. O objetivo é que qualquer pessoa do time consiga retreinar o modelo com um comando, e que o CI consiga disparar isso sem humano no loop. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "e13b6832-ba55-436e-9367-42ec80a387c4",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Kubeflow Pipelines — componente a componente"
+      },
+      "children": [
+        {
+          "id": "7190dfc6-3529-426e-9d2b-4a251c01a4bd",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "from kfp import dsl\nfrom kfp.dsl import Input, Output, Dataset, Model, Metrics\n\n@dsl.component(base_image=\"python:3.12\", packages_to_install=[\"pandas\", \"pyarrow\"])\ndef extract_features(dataset_out: Output[Dataset]):\n    import pandas as pd\n    df = pd.read_parquet(\"s3://ffv-ml/raw/events.parquet\")\n    df.to_parquet(dataset_out.path, index=False)\n\n@dsl.component(base_image=\"ffv/ml-train:2.1\")\ndef train_model(dataset_in: Input[Dataset], model_out: Output[Model], metrics: Output[Metrics]):\n    import pandas as pd, joblib\n    from sklearn.ensemble import GradientBoostingClassifier\n    df = pd.read_parquet(dataset_in.path)\n    X, y = df.drop(columns=[\"label\"]), df[\"label\"]\n    m = GradientBoostingClassifier(n_estimators=300).fit(X, y)\n    joblib.dump(m, model_out.path)\n    metrics.log_metric(\"train_rows\", len(df))\n\n@dsl.pipeline(name=\"churn-training\")\ndef pipeline():\n    feats = extract_features()\n    train = train_model(dataset_in=feats.outputs[\"dataset_out\"])\n    train.set_cpu_limit(\"4\").set_memory_limit(\"16Gi\").set_gpu_limit(1)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "8704601d-664d-4a71-a37d-76e7830bf47d",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Configuração de pipeline em YAML"
+      },
+      "children": [
+        {
+          "id": "e7c842dc-8cca-47d7-8001-e6d1d9c176f1",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "# kubeflow pipeline spec (trecho compilado)\napiVersion: argoproj.io/v1alpha1\nkind: Workflow\nmetadata:\n  generateName: churn-training-\nspec:\n  entrypoint: pipeline\n  templates:\n    - name: train-model\n      retryStrategy:\n        limit: 3\n        backoff:\n          duration: 60s\n          factor: 2\n      container:\n        image: ffv/ml-train:2.1\n        resources:\n          limits:\n            cpu: \"4\"\n            memory: 16Gi\n            nvidia.com/gpu: \"1\"\n        env:\n          - name: MLFLOW_TRACKING_URI\n            value: http://mlflow.ffv.internal\n      timeout: 2h"
+          }
+        },
+        {
+          "id": "1cb961a3-cd2e-4dd9-8b07-c531c3da26bb",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Sem retryStrategy, cada falha transitória (node evicted, imagem lenta para puxar) vira pipeline vermelho que precisa ser replanejado à mão."
+          }
+        }
+      ]
+    },
+    {
+      "id": "d47b42f4-dc49-44d1-a88e-b17243e1ecb0",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Airflow — quando é a escolha certa"
+      },
+      "children": [
+        {
+          "id": "ccf25a0a-da15-44a7-bd01-f1e6e66b7d76",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "from airflow import DAG\nfrom airflow.operators.python import PythonOperator\nfrom airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator\nfrom datetime import datetime, timedelta\n\nwith DAG(\n    \"churn_retraining\",\n    start_date=datetime(2026, 1, 1),\n    schedule=\"0 3 * * 1\",  # toda segunda 03:00\n    catchup=False,\n    default_args={\"retries\": 2, \"retry_delay\": timedelta(minutes=10)},\n):\n    extract = PythonOperator(task_id=\"extract\", python_callable=extract_features)\n    train = KubernetesPodOperator(\n        task_id=\"train\",\n        image=\"ffv/ml-train:2.1\",\n        cmds=[\"python\", \"-m\", \"train\"],\n        container_resources={\"limits\": {\"nvidia.com/gpu\": \"1\"}},\n    )\n    extract &gt;&gt; train"
+          }
+        }
+      ]
+    },
+    {
+      "id": "99cd815c-e42e-47ad-8e94-70a666654d83",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Prefect 2.x — DX em Python puro"
+      },
+      "children": [
+        {
+          "id": "68ac5d9a-b6cc-43af-8157-ea39cf776e66",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "from prefect import flow, task\n\n@task(retries=3, retry_delay_seconds=30, cache_expiration=3600)\ndef build_features() -&gt; str:\n    return \"s3://ffv-ml/features/churn.parquet\"\n\n@task\ndef train(path: str) -&gt; str:\n    return \"s3://ffv-ml/models/churn-v7.joblib\"\n\n@flow(name=\"churn-retraining\")\ndef retraining():\n    feats = build_features()\n    return train(feats)"
+          }
+        },
+        {
+          "id": "ab27552b-2292-4de0-a604-93267dcce89f",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Prefect brilha quando os steps são dinâmicos (mapping sobre lista de shards, por exemplo) e o time quer escrever Python idiomático sem ceder ao YAML."
+          }
+        }
+      ]
+    }
+  ]
+}

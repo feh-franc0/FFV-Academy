@@ -1,0 +1,149 @@
+{
+  "slug": "cdc-debezium-avancado",
+  "title": null,
+  "blocks": [
+    {
+      "id": "8e2e5f7b-7eec-4a79-8473-38cde18061f8",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "CDC: ler o log de transações, não a tabela"
+      },
+      "children": [
+        {
+          "id": "f6ec9355-da5d-48b5-a85e-0c8fb4ec9997",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Change Data Capture lê o log interno do banco (MySQL binlog, Postgres WAL via logical replication, Mongo oplog, SQL Server CDC, Oracle LogMiner) para capturar toda mudança em ordem. Debezium é um conjunto de Kafka Connect source connectors que transforma esses logs em eventos Avro/JSON. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "f01e776a-cb36-4279-8b03-1fd4000fc5d3",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "CDC não é \"query com filtro updated_at\". Polling perde DELETE, perde updates rápidos e sobrecarrega a tabela. Binlog/WAL é o único caminho correto em produção."
+          }
+        }
+      ]
+    },
+    {
+      "id": "25b72f79-9820-4dcc-9e95-10bcb6d05365",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Connector Postgres típico"
+      },
+      "children": [
+        {
+          "id": "59d5c3fd-3f1d-4cf6-9564-233013aabb11",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "json",
+            "code": "{\n  \"name\": \"orders-pg-source\",\n  \"config\": {\n    \"connector.class\": \"io.debezium.connector.postgresql.PostgresConnector\",\n    \"database.hostname\": \"pg.internal\",\n    \"database.port\": \"5432\",\n    \"database.user\": \"debezium\",\n    \"database.password\": \"${file:/secrets/pg.pass}\",\n    \"database.dbname\": \"orders\",\n    \"plugin.name\": \"pgoutput\",\n    \"slot.name\": \"debezium_orders\",\n    \"publication.name\": \"dbz_pub\",\n    \"topic.prefix\": \"pg.orders\",\n    \"table.include.list\": \"public.orders,public.order_items,public.outbox\",\n    \"snapshot.mode\": \"initial\",\n    \"heartbeat.interval.ms\": \"10000\",\n    \"tombstones.on.delete\": \"true\",\n    \"key.converter\": \"io.confluent.connect.avro.AvroConverter\",\n    \"value.converter\": \"io.confluent.connect.avro.AvroConverter\",\n    \"value.converter.schema.registry.url\": \"http://registry:8081\"\n  }\n}"
+          }
+        },
+        {
+          "id": "648d799b-7b47-4347-ad1c-1d5c946894cd",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Heartbeat é crítico em Postgres: sem movimento no WAL em tabelas watched, o slot não avança e o WAL enche o disco. Heartbeat força progresso periódico."
+          }
+        }
+      ]
+    },
+    {
+      "id": "407a4665-92c3-4e4e-9133-9abeb10490e4",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Envelope de evento CDC"
+      },
+      "children": [
+        {
+          "id": "4a1e1efe-280f-4027-a8e1-f558bf469b7e",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "json",
+            "code": "{\n  \"op\": \"u\",\n  \"ts_ms\": 1713528000123,\n  \"source\": {\n    \"db\": \"orders\", \"schema\": \"public\", \"table\": \"orders\",\n    \"lsn\": 281474976710899, \"txId\": 98123\n  },\n  \"before\": { \"id\": \"o-42\", \"status\": \"PENDING\", \"totalCents\": 12990 },\n  \"after\":  { \"id\": \"o-42\", \"status\": \"PAID\",    \"totalCents\": 12990 }\n}"
+          }
+        },
+        {
+          "id": "3b10551f-698c-42a2-9159-68f04bf8b7d9",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " op: c (create), u (update), d (delete), r (read do snapshot). before/after permitem reconstruir diff sem ambiguidade. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b0068891-4f28-45ea-bf6b-fa3957f41ed5",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Schema changes: não podem quebrar consumer"
+      },
+      "children": [
+        {
+          "id": "f2213657-bf5e-48c2-975f-353ab12be6da",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " ALTER TABLE em produção propaga via binlog. Debezium emite evento de schema change; seu pipeline precisa de compatibility BACKWARD no registry e consumers tolerantes a campos novos. Drop column é o caso perigoso: trate como deprecation gradual (stop writes, wait retention, drop). "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6443a93-c311-42c8-bdd3-583e06235452",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Dual write é bug; outbox é a resposta"
+      },
+      "children": [
+        {
+          "id": "14ce5aa7-5557-4a67-b3a7-ff101589aae6",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "sql",
+            "code": "-- Na mesma transação do write de negócio\nBEGIN;\nUPDATE orders SET status = 'PAID' WHERE id = 'o-42';\nINSERT INTO outbox (id, aggregate_type, aggregate_id, event_type, payload)\nVALUES (gen_random_uuid(), 'order', 'o-42', 'OrderPaid',\n        '{\"orderId\":\"o-42\",\"paidAt\":\"2026-04-19T12:00:00Z\"}'::jsonb);\nCOMMIT;\n-- Debezium lê outbox; SMT ExtractNewRecordState roteia para topic orders.events"
+          }
+        },
+        {
+          "id": "bcae3732-305a-4842-89bc-d8f5f46cd927",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Essa é a base do próximo capítulo (outbox). Commit atômico no DB, Kafka recebe via CDC. Zero dual write, zero inconsistência silenciosa."
+          }
+        }
+      ]
+    }
+  ]
+}

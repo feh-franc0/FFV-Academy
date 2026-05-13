@@ -1,0 +1,418 @@
+{
+  "slug": "azure-devops-pipelines",
+  "title": null,
+  "blocks": [
+    {
+      "id": "3bd101da-594a-4eca-85b1-5f45e56da112",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Azure DevOps é o guarda-chuva da Microsoft com 5 produtos: "
+          },
+          {
+            "text": "Boards",
+            "bold": true
+          },
+          {
+            "text": " (kanban/scrum), "
+          },
+          {
+            "text": "Repos",
+            "bold": true
+          },
+          {
+            "text": " (Git hosting), "
+          },
+          {
+            "text": "Pipelines",
+            "bold": true
+          },
+          {
+            "text": " (CI/CD), "
+          },
+          {
+            "text": "Test Plans",
+            "bold": true
+          },
+          {
+            "text": " (QA), "
+          },
+          {
+            "text": "Artifacts",
+            "bold": true
+          },
+          {
+            "text": " (package registry). Este módulo foca em "
+          },
+          {
+            "text": "Azure Pipelines",
+            "bold": true
+          },
+          {
+            "text": " — o motor de CI/CD, que evoluiu de “classic pipelines” (UI clicada) para "
+          },
+          {
+            "text": "YAML pipelines",
+            "bold": true
+          },
+          {
+            "text": " versionados no repo. Se seu stack é Microsoft (Azure AD, AKS, App Service, SQL Server), ou seu time já usa Azure Boards/Repos, é o caminho de menor atrito. A Microsoft também tem GitHub (compram em 2018), então GH Actions é a aposta estratégica de longo prazo — mas Azure Pipelines continua tendo diferenciais fortes em gate de aprovação, governança e integração com Azure. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "2545c62c-aa41-4e4f-a1b0-b178b47dc393",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Azure DevOps em 30 segundos"
+      },
+      "children": []
+    },
+    {
+      "id": "f1a5bb07-e1d5-4322-8e21-2544c83c9157",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Estrutura de um pipeline YAML"
+      },
+      "children": [
+        {
+          "id": "f29efe34-4f2c-4223-a2bf-f50684ebee9a",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "# azure-pipelines.yml — pipeline real de uma API Node\ntrigger:\n  branches:\n    include: [main, release/*]\n  paths:\n    exclude: [docs/*, README.md]\n\npr:\n  branches:\n    include: [main]\n\nvariables:\n  - group: 'shared-config'          # Variable Group da Library\n  - name: NODE_VERSION\n    value: '20.x'\n\npool:\n  vmImage: 'ubuntu-latest'\n\nstages:\n  - stage: Build\n    jobs:\n      - job: build_test\n        displayName: 'Build & Test'\n        steps:\n          - task: NodeTool@0\n            inputs: { versionSpec: $(NODE_VERSION) }\n\n          - task: Cache@2\n            inputs:\n              key: 'npm | \"$(Agent.OS)\" | package-lock.json'\n              restoreKeys: |\n                npm | \"$(Agent.OS)\"\n              path: $(Pipeline.Workspace)/.npm\n\n          - script: npm ci --cache $(Pipeline.Workspace)/.npm\n            displayName: 'Install deps'\n\n          - script: npm run lint\n            displayName: 'Lint'\n\n          - script: npm test -- --ci --coverage\n            displayName: 'Test'\n\n          - task: PublishTestResults@2\n            condition: succeededOrFailed()\n            inputs: { testResultsFiles: 'junit.xml' }\n\n          - task: PublishCodeCoverageResults@2\n            inputs:\n              summaryFileLocation: 'coverage/cobertura-coverage.xml'\n\n          - script: npm run build\n          - publish: dist\n            artifact: app"
+          }
+        }
+      ]
+    },
+    {
+      "id": "55847368-99de-4573-a943-57d7d533cb40",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Deploy em AKS com stage + approval"
+      },
+      "children": [
+        {
+          "id": "12cf77ca-b569-47c5-8da4-21209896952a",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "- stage: Deploy_Staging\n  dependsOn: Build\n  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))\n  variables:\n    - group: aks-staging           # conn string, KV secrets\n  jobs:\n    - deployment: deploy_aks\n      environment: 'staging.aks'   # environment com approval/checks\n      strategy:\n        runOnce:\n          deploy:\n            steps:\n              - download: current\n                artifact: app\n\n              - task: KubernetesManifest@1\n                displayName: 'Deploy to AKS'\n                inputs:\n                  action: 'deploy'\n                  kubernetesServiceConnection: 'aks-staging-connection'\n                  namespace: 'api'\n                  manifests: |\n                    k8s/deployment.yaml\n                    k8s/service.yaml\n                  containers: |\n                    acrmeusite.azurecr.io/api:$(Build.BuildId)\n\n- stage: Deploy_Prod\n  dependsOn: Deploy_Staging\n  jobs:\n    - deployment: deploy_prod\n      environment: 'production.aks'   # environment exige 2 approvers\n      strategy:\n        canary:\n          increments: [10, 50, 100]\n          preDeploy:\n            steps:\n              - script: echo \"Starting canary rollout\"\n          deploy:\n            steps:\n              - task: KubernetesManifest@1\n                inputs:\n                  action: 'deploy'\n                  kubernetesServiceConnection: 'aks-prod-connection'\n                  namespace: 'api'\n                  manifests: k8s/deployment.yaml\n                  containers: acrmeusite.azurecr.io/api:$(Build.BuildId)\n          postRouteTraffic:\n            steps:\n              - script: ./scripts/smoke-test.sh $(canary.percentage)\n          on:\n            failure:\n              steps:\n                - script: echo \"Rollback automático\"\n            success:\n              steps:\n                - script: echo \"Canary $(canary.percentage)% OK\""
+          }
+        },
+        {
+          "id": "01d4b79d-55ce-4aa8-81be-07c8b2abacf9",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Canary nativo: o tipo da strategy faz rollout por porcentagem, executa smoke test entre incrementos, e reverte se falhar. GH Actions e Jenkins precisam de plugin ou script caseiro pra mesma coisa."
+          }
+        }
+      ]
+    },
+    {
+      "id": "e70860b9-45b0-46c6-be7d-626af7cbc9f3",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Service Connections e Workload Identity Federation"
+      },
+      "children": [
+        {
+          "id": "373dbb10-b3e7-43ba-b7a6-870284cbf7c6",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Modo",
+              "Como funciona",
+              "Recomendação"
+            ],
+            "rows": [
+              [
+                "Azure Resource Manager (auto)",
+                "Azure DevOps cria Service Principal automaticamente",
+                "Evite — secret estático de 2 anos"
+              ],
+              [
+                "Service Principal manual",
+                "Você cria SP no Azure AD, coloca client secret no ADO",
+                "Legado — rotaciona à mão"
+              ],
+              [
+                "Managed Identity",
+                "Pipeline usa identidade do agente self-hosted em Azure VM",
+                "Ótimo para self-hosted em Azure"
+              ],
+              [
+                "Workload Identity Federation",
+                "OIDC: ADO emite token por run; Azure AD valida trust (org/project/pipeline) e dá STS",
+                "🏆 Padrão moderno — zero secret"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "a94c8f57-9578-431e-ba76-8fc612851d03",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "yaml",
+            "code": "# Com WIF, o YAML não muda muito — a mágica é na Service Connection\n- task: AzureCLI@2\n  inputs:\n    azureSubscription: 'prod-wif'     # Service Connection configurada como WIF\n    scriptType: bash\n    scriptLocation: inlineScript\n    inlineScript: |\n      az aks get-credentials -n prod-cluster -g prod-rg\n      kubectl get pods -A"
+          }
+        }
+      ]
+    },
+    {
+      "id": "ea104a1f-617d-46ad-a1da-165c574cc4d8",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Variable Groups + Key Vault"
+      },
+      "children": [
+        {
+          "id": "d2dc3ccc-b52e-4ca0-b40f-3b0723012063",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Nunca use . ADO masca variáveis declaradas secret, mas derivados (base64, JSON) escapam. Em logs de falha, erros de ferramentas podem despejar env — use com parcimônia e configure retention curto pra logs sensíveis."
+          }
+        }
+      ]
+    },
+    {
+      "id": "573b7e00-674c-42f7-914a-09319a9f9ddd",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Templates — reuso em escala"
+      },
+      "children": [
+        {
+          "id": "b0d54e99-5477-4c9d-bab2-f39e04ba26ec",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "# templates/node-build.yml  (no repo pipelines-templates)\nparameters:\n  - name: nodeVersion\n    type: string\n    default: '20.x'\n  - name: runCoverage\n    type: boolean\n    default: true\n\nsteps:\n  - task: NodeTool@0\n    inputs: { versionSpec: ${'$'}{{ parameters.nodeVersion }} }\n  - script: npm ci\n  - script: npm run lint\n  - script: npm test -- --ci\n    displayName: 'Test'\n  - ${'$'}{{ if eq(parameters.runCoverage, true) }}:\n    - task: PublishCodeCoverageResults@2\n      inputs: { summaryFileLocation: 'coverage/cobertura-coverage.xml' }"
+          }
+        },
+        {
+          "id": "4fd8110e-393d-4517-8c5d-9ac96949e322",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "yaml",
+            "code": "# pipeline consumidor\nresources:\n  repositories:\n    - repository: templates\n      type: git\n      name: infra/pipelines-templates\n      ref: refs/tags/v2.1.0        # pin de versão\n\njobs:\n  - job: build\n    steps:\n      - template: templates/node-build.yml@templates\n        parameters:\n          nodeVersion: '22.x'\n          runCoverage: true"
+          }
+        }
+      ]
+    },
+    {
+      "id": "6f41034a-4b04-4132-aad0-2ccb770d5610",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Environments, checks e approvals"
+      },
+      "children": []
+    },
+    {
+      "id": "c51d8382-e4ad-4a10-91d1-5990f61bded8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Agents: Microsoft-hosted vs Self-hosted"
+      },
+      "children": [
+        {
+          "id": "dc83b490-723e-4c38-adea-b5ecdcffb560",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Dimensão",
+              "Microsoft-hosted",
+              "Self-hosted"
+            ],
+            "rows": [
+              [
+                "Setup",
+                "Zero — usa vmImage: ubuntu-latest",
+                "Instala agent em VM/container/K8s"
+              ],
+              [
+                "Custo",
+                "Free tier limitado; paralelismo comprado",
+                "Sua infra"
+              ],
+              [
+                "Performance",
+                "VM compartilhada, sem estado",
+                "Disco persistente, cache local acelera"
+              ],
+              [
+                "Rede",
+                "Público",
+                "Acessa VPN/VNet — necessário pra recursos privados"
+              ],
+              [
+                "Ferramentas",
+                "Mudam por imagem (upgrades anuais)",
+                "Você escolhe"
+              ],
+              [
+                "Quando usar",
+                "Pipelines públicos ou sem rede privada",
+                "On-prem, integração com Azure private link"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "fe0771c1-e190-4ff7-85e4-d5b3ac04beb5",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Monorepo, path filters e matriz"
+      },
+      "children": [
+        {
+          "id": "e0dc1590-a13a-4128-8cdf-5f4ec07b8761",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "trigger:\n  branches: { include: [main] }\n  paths:\n    include:\n      - apps/api/**\n      - libs/**\n      - azure-pipelines-api.yml\n\njobs:\n  - job: test_matrix\n    strategy:\n      matrix:\n        node18_linux:\n          NODE: '18.x'\n          VMIMG: 'ubuntu-latest'\n        node20_linux:\n          NODE: '20.x'\n          VMIMG: 'ubuntu-latest'\n        node20_windows:\n          NODE: '20.x'\n          VMIMG: 'windows-latest'\n    pool:\n      vmImage: $(VMIMG)\n    steps:\n      - task: NodeTool@0\n        inputs: { versionSpec: $(NODE) }\n      - script: npm ci\n      - script: npm test"
+          }
+        }
+      ]
+    },
+    {
+      "id": "8707d8d1-4591-494b-8d97-14561e99ecb1",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Segurança e governança"
+      },
+      "children": []
+    },
+    {
+      "id": "6c584999-b11d-4a24-801a-dda33e998270",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Azure DevOps vs GitHub Actions — o dilema Microsoft"
+      },
+      "children": [
+        {
+          "id": "68f995d5-6cca-484f-bf76-633427f3baac",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Aspecto",
+              "Azure DevOps",
+              "GitHub Actions"
+            ],
+            "rows": [
+              [
+                "Foco",
+                "Suíte ALM completa (Boards, Repos, Pipelines, Test, Artifacts)",
+                "CI/CD dentro do GitHub"
+              ],
+              [
+                "Governança",
+                "Environments, approvals, checks, área/iteration paths",
+                "Environments + protection rules (mais simples)"
+              ],
+              [
+                "Gate de aprovação",
+                "🏆 Flexível (REST check, business hours, exclusive lock)",
+                "Básico (required reviewers, wait)"
+              ],
+              [
+                "Integração Azure",
+                "🏆 Nativa, WIF, tasks prontas",
+                "Boa (actions oficiais), mas menos profunda"
+              ],
+              [
+                "YAML",
+                "Mais verboso, stages explícitos",
+                "Mais enxuto, eventos amplos"
+              ],
+              [
+                "Estratégia Microsoft",
+                "Maintenance mode — evolui pouco",
+                "🏆 Roadmap ativo (AI, Copilot)"
+              ],
+              [
+                "Startup/greenfield",
+                "Raro hoje",
+                "Default"
+              ],
+              [
+                "Enterprise Microsoft",
+                "🏆 Onde está investimento existente",
+                "Alvo de migração futura"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "878754c2-a03e-4791-8ec5-88b105158d16",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "A Microsoft tem declarado que GitHub Actions é a plataforma estratégica e Azure DevOps está em modo de manutenção (sem novas features grandes). Para projetos novos, GH Actions com Azure OIDC é o caminho. Para times já investidos em ADO, continua valendo a pena — migração é trabalho de meses."
+          }
+        }
+      ]
+    },
+    {
+      "id": "0f2b09ac-80bc-4cb3-96e1-1fd7811a20be",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Decisões"
+      },
+      "children": []
+    },
+    {
+      "id": "4c3ac52b-006c-408b-87e4-cf07537e81a4",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Perguntas típicas"
+      },
+      "children": []
+    },
+    {
+      "id": "d45ab3a0-7e62-4290-994f-584f097ec618",
+      "type": "callout",
+      "position": 14,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Take-aways. (1) Azure DevOps = 5 produtos; Pipelines é o CI/CD. (2) YAML versionado > classic clicado. (3) Stages representam fases de entrega com environments, approvals e histórico — diferencial forte vs GH Actions. (4) Workload Identity Federation zera secrets estáticos — migre hoje. (5) Variable Group + Key Vault centraliza config e secret com rotação automática. (6) Templates + repos externos = reuso DRY com pin de versão. (7) Microsoft sinalizou GH Actions como futuro estratégico — planeje migração em horizonte de 1-3 anos se for greenfield, mantenha e modernize se for legado."
+      }
+    }
+  ]
+}

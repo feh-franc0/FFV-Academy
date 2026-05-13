@@ -1,0 +1,134 @@
+{
+  "slug": "connection-pool-n-plus-1",
+  "title": null,
+  "blocks": [
+    {
+      "id": "672c63be-838e-4356-8ff5-2b6bba204ede",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " APIs lentas raramente têm código Python lento — têm problemas no banco de dados. N+1 queries e falta de connection pool são os dois problemas de performance mais comuns e mais impactantes em aplicações com banco relacional. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "7697f6cb-347f-4f49-8950-a011c32aef23",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "N+1: detectar e corrigir"
+      },
+      "children": [
+        {
+          "id": "8dcadcfb-aac9-40c1-a791-5060b3c13ca7",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "# PROBLEMA: N+1 query com SQLAlchemy ORM\nfrom sqlalchemy.orm import Session\n\ndef listar_posts_com_autores(db: Session):\n    posts = db.query(Post).all()           # 1 query: SELECT * FROM posts\n    for post in posts:\n        print(post.author.nome)            # N queries: SELECT * FROM users WHERE id=?\n    # Total: 1 + N queries para N posts\n\n# SOLUÇÃO 1: joinedload — JOIN numa única query\nfrom sqlalchemy.orm import joinedload\n\ndef listar_posts_com_autores_v2(db: Session):\n    posts = db.query(Post).options(\n        joinedload(Post.author)            # JOIN users na mesma query\n    ).all()\n    for post in posts:\n        print(post.author.nome)            # dados já carregados — sem nova query\n    # Total: 1 query com JOIN\n\n# SOLUÇÃO 2: selectinload — 2 queries mas sem duplicação de dados\nfrom sqlalchemy.orm import selectinload\n\ndef listar_posts_com_autores_v3(db: Session):\n    posts = db.query(Post).options(\n        selectinload(Post.author)          # SELECT users WHERE id IN (1, 2, 3, ...)\n    ).all()\n    # Total: 2 queries (melhor que JOIN para relações 1:N com duplicação)\n\n# DETECÇÃO em desenvolvimento:\n# sqlalchemy-utils tem QueryCounter:\nfrom sqlalchemy import event\nquery_count = [0]\n\n@event.listens_for(engine, \"before_cursor_execute\")\ndef count_queries(conn, cursor, statement, *args):\n    query_count[0] += 1\n\n# Ou usar SQLAlchemy Echo:\nengine = create_engine(url, echo=True)   # loga todas as queries\n\n# SQL puro — sempre use JOIN ou IN:\n# ❌ N+1:\nposts = db.execute(\"SELECT * FROM posts\").fetchall()\nfor post in posts:\n    author = db.execute(\"SELECT * FROM users WHERE id=?\", [post.author_id]).fetchone()\n\n# ✅ JOIN:\nresults = db.execute(\"\"\"\n    SELECT p.*, u.nome as author_nome\n    FROM posts p\n    JOIN users u ON p.author_id = u.id\n\"\"\").fetchall()"
+          }
+        }
+      ]
+    },
+    {
+      "id": "26b0e7f9-db3c-411b-b691-f8c9e9d0a02c",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Connection pool: SQLAlchemy e asyncpg"
+      },
+      "children": [
+        {
+          "id": "f018b814-a812-44fe-b936-3f86badef620",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "from sqlalchemy import create_engine\nfrom sqlalchemy.orm import sessionmaker\n\n# Pool de conexões com SQLAlchemy (síncrono)\nengine = create_engine(\n    \"postgresql://user:pass@localhost/db\",\n    pool_size=10,          # conexões mantidas abertas\n    max_overflow=20,       # conexões extras em pico (máx: pool_size + max_overflow = 30)\n    pool_timeout=30,       # espera máxima por conexão disponível (segundos)\n    pool_recycle=3600,     # recria conexões após 1h (evita conexões mortas)\n    pool_pre_ping=True,    # testa conexão antes de usar (detecta conexões mortas)\n)\n\n# Calcular pool_size ideal:\n# pool_size ≈ (workers × threads_por_worker) / 2\n# Para FastAPI com 4 workers Uvicorn: 4 × 1 = 4 → pool_size=5, max_overflow=10\n\n# Pool assíncrono com SQLAlchemy async\nfrom sqlalchemy.ext.asyncio import create_async_engine, AsyncSession\n\nasync_engine = create_async_engine(\n    \"postgresql+asyncpg://user:pass@localhost/db\",\n    pool_size=20,\n    max_overflow=0,        # asyncio — não precisa de overflow geralmente\n    pool_timeout=30,\n)\n\n# asyncpg diretamente (sem ORM)\nimport asyncpg\n\nasync def criar_pool():\n    return await asyncpg.create_pool(\n        \"postgresql://user:pass@localhost/db\",\n        min_size=5,        # conexões mínimas abertas\n        max_size=20,       # máximo de conexões\n        command_timeout=10, # timeout por query\n        max_inactive_connection_lifetime=300,  # fecha conexões ociosas após 5min\n    )\n\nasync def buscar_usuario(pool, user_id: int):\n    async with pool.acquire() as conn:    # pega conexão do pool\n        return await conn.fetchrow(\n            \"SELECT * FROM users WHERE id = $1\", user_id\n        )\n    # conexão devolvida ao pool automaticamente ao sair do context manager"
+          }
+        }
+      ]
+    },
+    {
+      "id": "3d805326-bd7a-4f46-b185-641f70e06f17",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "PgBouncer: connection pooling externo"
+      },
+      "children": [
+        {
+          "id": "02dccf1c-ba50-4680-9a18-ebda33e85279",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Aspecto",
+              "Pool na aplicação",
+              "PgBouncer"
+            ],
+            "rows": [
+              [
+                "Escopo",
+                "Por processo",
+                "Global (todos os processos/serviços)"
+              ],
+              [
+                "Overhead",
+                "Zero (mesmo processo)",
+                "Pequeno (processo extra)"
+              ],
+              [
+                "Escalabilidade",
+                "N_workers × pool_size conexões",
+                "Pool centralizado, muito mais eficiente"
+              ],
+              [
+                "Restart de app",
+                "Conexões reconectam",
+                "Pool persiste, sem overhead de reconexão"
+              ],
+              [
+                "Quando usar",
+                "1 instância, poucas conexões",
+                "Múltiplas instâncias, muitos workers"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "4534052b-c8af-4aa8-bbb6-96c34841c426",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "text",
+            "code": "# pgbouncer.ini — configuração básica\n# [databases]\n# mydb = host=localhost port=5432 dbname=mydb\n#\n# [pgbouncer]\n# pool_mode = transaction\n# max_client_conn = 10000    # conexões de clientes (aplicação)\n# default_pool_size = 25     # conexões reais ao PostgreSQL por database\n# min_pool_size = 5\n# server_lifetime = 3600\n# server_idle_timeout = 600\n# listen_port = 5432\n# listen_addr = *\n\n# Com PgBouncer, configure a aplicação para usar NullPool\n# (PgBouncer já faz o pool, não precisa do pool da aplicação):\nfrom sqlalchemy import NullPool\n\nengine = create_engine(\n    \"postgresql://user:pass@pgbouncer-host:5432/mydb\",\n    poolclass=NullPool,     # sem pool na aplicação — PgBouncer faz isso\n)\n\n# Métricas para monitorar:\n# SHOW POOLS; — estado dos pools\n# SHOW STATS; — queries por segundo, duração média\n# SHOW CLIENTS; — conexões de clientes\n# SHOW SERVERS; — conexões com PostgreSQL"
+          }
+        }
+      ]
+    },
+    {
+      "id": "8a50eca5-c6fb-4ac3-80b9-b0387cffc5fc",
+      "type": "callout",
+      "position": 4,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Regras de ouro: nunca crie conexão por request sem pool. Use pool_pre_ping=True para detectar conexões mortas. Configure pool_size baseado no número de workers × CPU do banco (PostgreSQL é ~1 core por conexão ativa). Detecte N+1 em desenvolvimento com echo=True ou SQLAlchemy event hooks. Use joinedload para relações 1:1 e selectinload para 1:N."
+      }
+    },
+    {
+      "id": "1d49e946-ee42-4ea9-9074-9473d5680c0c",
+      "type": "callout",
+      "position": 5,
+      "data": {
+        "variant": "info",
+        "title": "",
+        "content": "Você concluiu a trilha SQL & Databases! Próximo: Como o Computador Funciona — CPU, memória, processos e I/O por baixo dos panos."
+      }
+    }
+  ]
+}

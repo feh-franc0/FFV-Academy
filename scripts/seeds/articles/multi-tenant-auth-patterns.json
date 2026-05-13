@@ -1,0 +1,184 @@
+{
+  "slug": "multi-tenant-auth-patterns",
+  "title": null,
+  "blocks": [
+    {
+      "id": "4ad847fa-66eb-46f0-9fee-a5e31330285d",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O modelo padrão SaaS B2B"
+      },
+      "children": [
+        {
+          "id": "646942bb-9cef-49a7-85f6-445eb134b4ad",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Você está construindo Linear/Notion/Vercel-like. A hierarquia consolidada: "
+              },
+              {
+                "text": "Org → Team → Project → Resource",
+                "bold": true
+              },
+              {
+                "text": ". Cada nível tem roles, sharing inter-níveis, guests externos. Implementar errado = dor permanente. Implementar bem destrava enterprise sales."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "8fab320f-c327-4fad-90dc-f6c5ba4ac6bc",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "A hierarquia visualizada"
+      },
+      "children": []
+    },
+    {
+      "id": "57e41591-1b09-4e5d-9e02-653205e6e67b",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Schema relacional baseline"
+      },
+      "children": [
+        {
+          "id": "22bd06cf-7cfd-43ad-8943-b6163128965a",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "sql",
+            "code": "-- Hierarchy\nCREATE TABLE organizations (id UUID PRIMARY KEY, name TEXT, plan TEXT);\nCREATE TABLE teams (id UUID PRIMARY KEY, org_id UUID REFERENCES organizations);\nCREATE TABLE projects (id UUID PRIMARY KEY, team_id UUID REFERENCES teams);\nCREATE TABLE documents (id UUID PRIMARY KEY, project_id UUID REFERENCES projects);\n\n-- Users + memberships\nCREATE TABLE users (id UUID PRIMARY KEY, email TEXT UNIQUE);\nCREATE TABLE org_members (\n  org_id UUID REFERENCES organizations,\n  user_id UUID REFERENCES users,\n  role TEXT NOT NULL,  -- 'owner', 'admin', 'member', 'guest'\n  is_guest BOOLEAN DEFAULT false,\n  PRIMARY KEY (org_id, user_id)\n);\nCREATE TABLE team_members (\n  team_id UUID REFERENCES teams,\n  user_id UUID REFERENCES users,\n  role TEXT NOT NULL,  -- 'admin', 'member', 'viewer'\n  PRIMARY KEY (team_id, user_id)\n);\n\n-- Sharing externo (granular por resource)\nCREATE TABLE resource_shares (\n  resource_type TEXT NOT NULL,\n  resource_id UUID NOT NULL,\n  shared_with_user_id UUID REFERENCES users,\n  shared_with_email TEXT,\n  role TEXT NOT NULL,           -- 'editor', 'commenter', 'viewer'\n  invited_by UUID REFERENCES users,\n  expires_at TIMESTAMPTZ,\n  PRIMARY KEY (resource_type, resource_id, COALESCE(shared_with_user_id, NULL), COALESCE(shared_with_email, NULL))\n);"
+          }
+        }
+      ]
+    },
+    {
+      "id": "7922524d-4e58-4fe0-a62e-558ecf4e259f",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Postgres RLS para isolation simples"
+      },
+      "children": [
+        {
+          "id": "fee4149a-1024-41f8-9eca-d63b5c170a97",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "sql",
+            "code": "-- Habilitar RLS\nALTER TABLE documents ENABLE ROW LEVEL SECURITY;\n\n-- Policy: só vê documents da org dele\nCREATE POLICY tenant_isolation ON documents\nUSING (\n  project_id IN (\n    SELECT p.id FROM projects p\n    JOIN teams t ON p.team_id = t.id\n    WHERE t.org_id = current_setting('app.current_org_id')::UUID\n  )\n);\n\n-- App seta o context antes de cada query\nSET LOCAL app.current_org_id = 'org-uuid-aqui';\nSELECT * FROM documents WHERE id = 'doc-uuid';  -- RLS aplica filter automaticamente"
+          }
+        }
+      ]
+    },
+    {
+      "id": "fbce9627-eea5-4f1c-9aa4-17c0e9e36448",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "ReBAC engine para sharing complexo"
+      },
+      "children": [
+        {
+          "id": "0d4ef434-dcba-4884-bbe5-a1ca186dbaaf",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "# SpiceDB schema para SaaS B2B\ndefinition user {}\n\ndefinition organization {\n  relation owner: user\n  relation admin: user\n  relation member: user\n\n  permission manage = owner + admin\n  permission view = manage + member\n}\n\ndefinition project {\n  relation parent: organization\n  relation editor: user\n  relation viewer: user\n\n  // Sharing externo\n  relation guest_editor: user\n  relation guest_viewer: user\n\n  permission edit = editor + guest_editor + parent->manage\n  permission view = edit + viewer + guest_viewer + parent->view\n}\n\ndefinition document {\n  relation project: project\n  relation external_editor: user\n  relation external_viewer: user\n\n  permission edit = external_editor + project->edit\n  permission view = edit + external_viewer + project->view\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "8028e447-c64b-44db-835b-3f6d6942ca0d",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Checks em produção"
+      },
+      "children": [
+        {
+          "id": "f81614a4-9790-4c78-b9da-a390df5e2427",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "typescript",
+            "code": "// SpiceDB SDK\nimport { v1 } from '@authzed/authzed-node';\n\nconst client = v1.NewClient(process.env.AUTHZED_TOKEN!);\n\nasync function canViewDocument(userId: string, docId: string): Promise<boolean> {\n  const resp = await client.checkPermission({\n    resource: { objectType: 'document', objectId: docId },\n    permission: 'view',\n    subject: { object: { objectType: 'user', objectId: userId } },\n  });\n  return resp.permissionship === v1.CheckPermissionResponse_Permissionship.HAS_PERMISSION;\n}\n\n// Em route handler\napp.get('/documents/:id', async (req, res) => {\n  const canView = await canViewDocument(req.user.id, req.params.id);\n  if (!canView) return res.status(403).send('Forbidden');\n  // ... resto\n});"
+          }
+        }
+      ]
+    },
+    {
+      "id": "73e228d9-bdbd-4d39-8107-97d4a17fda32",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Trade-offs RLS vs ReBAC"
+      },
+      "children": [
+        {
+          "id": "b8fd8a41-20b0-4ad5-9ede-78a3fb135b5b",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Aspecto",
+              "Postgres RLS",
+              "ReBAC engine"
+            ],
+            "rows": [
+              [
+                "Isolation simples por tenant",
+                "✅ Excelente",
+                "✅ Mas overkill"
+              ],
+              [
+                "Sharing cruzado inter-tenant",
+                "❌ Complicado",
+                "✅ Natural"
+              ],
+              [
+                "Roles customizadas por org",
+                "⚠️ Aplicação implementa",
+                "✅ Schema flexível"
+              ],
+              [
+                "Performance sub-ms",
+                "✅ Filter em SQL",
+                "✅ Cache distribuído"
+              ],
+              [
+                "Operacional",
+                "✅ Já tem Postgres",
+                "⚠️ Mais um serviço"
+              ],
+              [
+                "Debug",
+                "⚠️ EXPLAIN com policy",
+                "✅ ZedToken + tracing"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "659ea24e-890b-4382-b6cd-04e5dc67eb8b",
+      "type": "callout",
+      "position": 7,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Trilha Authorization Engineering concluída. Badge Authz Architect desbloqueado."
+      }
+    }
+  ]
+}

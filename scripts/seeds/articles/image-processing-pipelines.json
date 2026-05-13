@@ -1,0 +1,115 @@
+{
+  "slug": "image-processing-pipelines",
+  "title": null,
+  "blocks": [
+    {
+      "id": "6d8bf153-81d2-4e3e-9ced-8cf90cc191db",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Pipeline = contrato treino↔inferência"
+      },
+      "children": [
+        {
+          "id": "fc67a16b-363c-4706-a326-2de45d773d03",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Regra de ouro: a mesma normalização usada no treino precisa ser aplicada em inferência, pixel por pixel. Discrepância aqui é a causa mais comum de modelo “bom em validação, ruim em produção”. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "020be390-b86b-4ec9-b6c2-e0ac7cfb713f",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "danger",
+            "title": "",
+            "content": "Se seu treino normaliza com mean=[0.485, 0.456, 0.406] e std=[0.229, 0.224, 0.225] (ImageNet) mas a inferência esquece — acurácia cai 5–15% silenciosamente. Commit no repositório: arquivo preprocess.py único importado pelo treino e pela API."
+          }
+        }
+      ]
+    },
+    {
+      "id": "db242948-2b44-46e9-9774-7a2ab48bbac1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Augmentation com Albumentations"
+      },
+      "children": [
+        {
+          "id": "c73f8dba-457f-4a02-8735-b52e2a374bb6",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "import albumentations as A\nfrom albumentations.pytorch import ToTensorV2\n\ntrain_transform = A.Compose([\n    A.LongestMaxSize(max_size=640),\n    A.PadIfNeeded(min_height=640, min_width=640, border_mode=0),\n    A.HorizontalFlip(p=0.5),\n    A.RandomBrightnessContrast(p=0.3),\n    A.HueSaturationValue(p=0.3),\n    A.GaussNoise(p=0.2),\n    A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),\n    ToTensorV2(),\n], bbox_params=A.BboxParams(format=\"yolo\", label_fields=[\"class_labels\"]))\n\nval_transform = A.Compose([\n    A.LongestMaxSize(max_size=640),\n    A.PadIfNeeded(min_height=640, min_width=640, border_mode=0),\n    A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),\n    ToTensorV2(),\n], bbox_params=A.BboxParams(format=\"yolo\", label_fields=[\"class_labels\"]))"
+          }
+        },
+        {
+          "id": "b0908db7-2fcb-41f8-8fa4-4804320108d7",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Validação/inferência nunca têm augmentation aleatório — só resize + normalize determinísticos. Violar isso destrói comparabilidade entre épocas."
+          }
+        }
+      ]
+    },
+    {
+      "id": "94bfd993-27b6-44a1-a1a3-f0f21626a449",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Data loading: CPU vs DALI"
+      },
+      "children": [
+        {
+          "id": "7314c04d-bbd0-479a-941f-583e1240de25",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "# Pipeline DALI minimal: decode JPEG + resize + normalize 100% na GPU\nfrom nvidia.dali import pipeline_def, fn, types\n\n@pipeline_def(batch_size=64, num_threads=4, device_id=0)\ndef cv_pipeline(file_root):\n    jpegs, labels = fn.readers.file(file_root=file_root, random_shuffle=True)\n    images = fn.decoders.image(jpegs, device=\"mixed\")  # mixed = GPU decode\n    images = fn.resize(images, resize_x=224, resize_y=224)\n    images = fn.crop_mirror_normalize(\n        images,\n        mean=[0.485 * 255, 0.456 * 255, 0.406 * 255],\n        std=[0.229 * 255, 0.224 * 255, 0.225 * 255],\n        output_layout=\"CHW\",\n    )\n    return images, labels"
+          }
+        }
+      ]
+    },
+    {
+      "id": "25a54a90-52d0-4292-a67c-08b91a9bbcd7",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Preprocessing determinístico para inferência"
+      },
+      "children": [
+        {
+          "id": "aa86b295-4cda-43d8-82b4-7930b5373f9c",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "# preprocess.py — importado pelo treino e pela API FastAPI\nimport cv2\nimport numpy as np\n\nMEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)\nSTD  = np.array([0.229, 0.224, 0.225], dtype=np.float32)\n\ndef preprocess(img_bgr: np.ndarray, size: int = 640) -> np.ndarray:\n    img = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)\n    h, w = img.shape[:2]\n    scale = size / max(h, w)\n    nh, nw = int(h * scale), int(w * scale)\n    img = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_LINEAR)\n    canvas = np.zeros((size, size, 3), dtype=np.uint8)\n    canvas[:nh, :nw] = img\n    x = canvas.astype(np.float32) / 255.0\n    x = (x - MEAN) / STD\n    return x.transpose(2, 0, 1)  # HWC -> CHW"
+          }
+        },
+        {
+          "id": "345d666a-3294-48cc-970d-6d1d0e4dc9a0",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Um arquivo, uma função, dois consumidores. Se o treino mudar de 640 pra 800, a API não quebra silenciosamente — uma mudança, um deploy sincronizado."
+          }
+        }
+      ]
+    }
+  ]
+}

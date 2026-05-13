@@ -1,0 +1,225 @@
+{
+  "slug": "cache-analysis-pratica",
+  "title": null,
+  "blocks": [
+    {
+      "id": "76a67c2d-1ce7-40e6-b032-0dc228fc0fce",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Por que cache domina performance moderna"
+      },
+      "children": [
+        {
+          "id": "1e777665-7d22-4689-a45a-543a3324f4d6",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " CPU multiplicou clock ~10x desde 2000; DRAM mal dobrou de velocidade. O gap \"memory wall\" é real: acesso à DRAM custa 300+ ciclos, tempo suficiente para executar 1200 instruções em 3 IPC. Código cache-friendly ganha 10-100x sem mexer em algoritmo. Ignorar cache = deixar hardware moderno na mesa. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "2fe9ad60-9eb4-4d3e-ada2-4a2edff4afc6",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Jeff Dean \"Numbers Every Programmer Should Know\" (2009, atualizado pela comunidade): L1 ~1ns, L2 ~3ns, L3 ~12ns, DRAM ~100ns, SSD ~100us, rede DC ~500us, cross-continent ~150ms."
+          }
+        }
+      ]
+    },
+    {
+      "id": "6920a693-d064-4a97-8420-773b57ec11d4",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "perf stat: o primeiro termômetro"
+      },
+      "children": [
+        {
+          "id": "27d87b0e-b044-4f85-80a3-17f21615c53c",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " perf stat -d mostra contadores de hardware — IPC, cache misses, branch mispredicts. É o primeiro passo antes de micro-otimizar. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "e93be6ef-4843-43cd-8d28-1081baa2f443",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "# Rodar binário sob perf stat\nperf stat -d ./meu_app\n\n# Saída típica:\n#    12,345,678,901      cycles\n#     8,234,567,890      instructions              #  0.67 IPC   &lt;- baixo, stalls\n#       234,567,890      cache-references\n#        45,678,901      cache-misses              # 19.5% miss rate &lt;- alto\n#     2,345,678,901      branches\n#       123,456,789      branch-misses             #  5.3% miss rate &lt;- revisar\n\n# Mais detalhe por cache level\nperf stat -e L1-dcache-loads,L1-dcache-load-misses,LLC-loads,LLC-load-misses ./meu_app\n\n# Top-down analysis (Intel): classifica stalls em frontend/backend/bad-spec/retiring\nperf stat -M TopdownL1 ./meu_app"
+          }
+        }
+      ]
+    },
+    {
+      "id": "9db84eae-56f9-4c48-90be-deb90bbb27be",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Cache lines e false sharing"
+      },
+      "children": [
+        {
+          "id": "cdf7f34d-7ac7-454c-bda4-50d6332a039e",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Cache line x86 = 64 bytes. Todo acesso traz 64B juntos. Duas threads escrevendo em variáveis próximas pagam ping-pong MESI mesmo sem compartilhar dado. Diagnóstico via perf c2c. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "eea8aa3c-eb6c-4935-9cf7-e63450fe40fc",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "c",
+            "code": "// RUIM: false sharing entre threads\nstruct Counters {\n    long t0; long t1; long t2; long t3;  // 4 longs = 32B, cabem na mesma linha\n};\n// cada thread incrementa seu counter, mas invalida linha das outras\n\n// BOM: pad para 64B\n#include &lt;stdalign.h&gt;\nstruct CountersPadded {\n    alignas(64) long t0;\n    alignas(64) long t1;\n    alignas(64) long t2;\n    alignas(64) long t3;\n};\n\n// Diagnóstico com perf c2c\n// $ sudo perf c2c record ./meu_app\n// $ sudo perf c2c report\n// Mostra HITM (Hit Modified in other cache) — assinatura de false sharing."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b9373882-b506-4d5c-ac1f-8fe7c1035d5b",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Layout de dado: AoS vs SoA"
+      },
+      "children": [
+        {
+          "id": "56bc9069-a3c7-4ace-9c0e-b8d1849d0a61",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Array of Structs (AoS) é natural para OO mas ruim quando loop só lê um campo. Struct of Arrays (SoA) lê só o necessário, maximizando cache line utility. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "1dbfc266-a75f-4e97-adec-1db040d53289",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "rust",
+            "code": "// AoS — ruim para loop que só lê idade\nstruct Pessoa { nome: String, idade: u32, email: String }\nlet v: Vec&lt;Pessoa&gt; = ...;\nlet soma: u32 = v.iter().map(|p| p.idade).sum();  // cada load traz struct inteira\n\n// SoA — cada campo em seu vetor, cache-friendly\nstruct Pessoas {\n    nomes: Vec&lt;String&gt;,\n    idades: Vec&lt;u32&gt;,\n    emails: Vec&lt;String&gt;,\n}\nlet soma: u32 = pessoas.idades.iter().sum();  // streaming de u32 puro"
+          }
+        }
+      ]
+    },
+    {
+      "id": "16cfa374-fcf6-4d06-8b4c-cb82647bb8f5",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Branch prediction e código sem ramo"
+      },
+      "children": [
+        {
+          "id": "1997ffe9-84e3-418a-8b2e-f7692404a348",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Branch predictor moderno acerta ~95%, mas o 5% custa 15-20 ciclos por miss. Em loop hot com if imprevisível, vale reescrever branchless (cmov, SIMD mask). "
+              }
+            ]
+          }
+        },
+        {
+          "id": "30401383-e20e-446e-8250-a3389f69f835",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "c",
+            "code": "// Código ramificado — predictor sofre com dado aleatório\nint count = 0;\nfor (int i = 0; i &lt; n; i++) {\n    if (a[i] &gt; 128) count++;     // miss se dado é unpredictable\n}\n\n// Branchless equivalente\nint count = 0;\nfor (int i = 0; i &lt; n; i++) {\n    count += (a[i] &gt; 128);       // compilador emite cmov/setcc, sem branch\n}\n\n// Clássico: ordenar array antes do loop melhora 4-6x (predictor acerta todas)\n// Stack Overflow famoso: \"Why is it faster to process a sorted array than unsorted?\""
+          }
+        }
+      ]
+    },
+    {
+      "id": "0baf99d5-e4ec-4906-abe5-31c33d794f5d",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Prefetching manual (quando vale)"
+      },
+      "children": [
+        {
+          "id": "48dee9fc-09ae-4bcf-8673-839c83163a88",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Hardware prefetcher já pega padrões sequenciais. Prefetch manual ajuda em travessia de estrutura ponteirada (linked list, tree) onde endereço próximo não é sequencial. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "26c6b28f-9d46-4ab5-9ecd-94d1ac78324e",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "c",
+            "code": "// Travessia de linked list com prefetch do próximo nó\nfor (Node *n = head; n != NULL; n = n-&gt;next) {\n    __builtin_prefetch(n-&gt;next, 0, 0);  // hint: próximo nó em breve\n    process(n-&gt;data);\n}\n// Pode dar 20-40% em workload dominated por pointer chasing."
+          }
+        },
+        {
+          "id": "6eff66c1-329d-40da-8b6f-57b03c59b622",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Prefetch errado piora: polui cache e gasta bandwidth. Meça antes/depois com perf stat. Se hit rate de L1 já estava alto, prefetch manual não ajuda."
+          }
+        }
+      ]
+    },
+    {
+      "id": "a29b3c3e-224c-4f8c-ab88-33789dd838b1",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Referências"
+      },
+      "children": [
+        {
+          "id": "b3694615-41c2-4495-93da-98614866aac4",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " \"What Every Programmer Should Know About Memory\" (Ulrich Drepper, 2007) continua canônico. \"Algorithms for Modern Hardware\" (Sergey Slotin) é o update moderno. Intel Architecture Optimization Reference Manual para detalhes x86. \"Hennessy & Patterson\" para fundamentos. "
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

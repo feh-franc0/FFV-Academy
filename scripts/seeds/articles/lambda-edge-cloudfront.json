@@ -1,0 +1,175 @@
+{
+  "slug": "lambda-edge-cloudfront",
+  "title": null,
+  "blocks": [
+    {
+      "id": "8b440421-dc65-4e20-8b09-5c14e1d1b395",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Edge compute da AWS"
+      },
+      "children": [
+        {
+          "id": "518a9e28-ad1a-49f3-bc25-439ad39e7adc",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " A AWS oferece duas camadas distintas de compute no edge: CloudFront Functions (ultra-leve, em todos os 600+ POPs) e Lambda@Edge (container-ish, em ~13 regiões edge). Ambos integram com distribuições CloudFront e disparam em eventos de request/response do CDN. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "35b3417a-5ce2-4b36-ae2e-e2210afe114c",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "CloudFront Functions: sub-ms, bem restrito"
+      },
+      "children": [
+        {
+          "id": "7ba470d9-0439-4ca4-91a8-f76f65809ebd",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "js",
+            "code": "// function.js — ES5-ish, sem async/await, sem fetch\nfunction handler(event) {\n  var request = event.request;\n  var uri = request.uri;\n\n  // Rewrite /blog → /blog/index.html\n  if (uri.endsWith('/')) {\n    request.uri = uri + 'index.html';\n  } else if (!uri.includes('.')) {\n    request.uri = uri + '/index.html';\n  }\n\n  // Normalize accept header\n  var accept = request.headers['accept-language'];\n  if (accept && accept.value.startsWith('pt')) {\n    request.headers['x-locale'] = { value: 'pt-BR' };\n  }\n\n  return request;\n}"
+          }
+        },
+        {
+          "id": "6acd7390-b26c-478f-b660-72f2adb1591e",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "CF Functions não faz network I/O (nada de fetch, nada de DynamoDB). Só manipula request/response. Se precisar buscar algo externo, é Lambda@Edge."
+          }
+        }
+      ]
+    },
+    {
+      "id": "c27c65bd-d269-446a-95af-102cf2849157",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Lambda@Edge: Node completo"
+      },
+      "children": [
+        {
+          "id": "20dadd6f-3a75-45b4-b3fc-a76e81198415",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "ts",
+            "code": "// index.ts — Lambda@Edge em viewer-request\nimport type { CloudFrontRequestEvent, CloudFrontRequestResult } from 'aws-lambda';\nimport { createRemoteJWKSet, jwtVerify } from 'jose';\n\nconst jwks = createRemoteJWKSet(new URL('https://auth.ffv.com/.well-known/jwks.json'));\n\nexport const handler = async (\n  event: CloudFrontRequestEvent,\n): Promise<CloudFrontRequestResult> => {\n  const request = event.Records[0].cf.request;\n\n  const cookieHeader = (request.headers.cookie ?? [])[0]?.value ?? '';\n  const token = cookieHeader.match(/session=([^;]+)/)?.[1];\n\n  if (!token) {\n    return {\n      status: '401',\n      statusDescription: 'Unauthorized',\n      headers: { 'content-type': [{ key: 'Content-Type', value: 'text/plain' }] },\n      body: 'auth required',\n    };\n  }\n\n  try {\n    const { payload } = await jwtVerify(token, jwks, { issuer: 'ffv' });\n    request.headers['x-user-id'] = [{ key: 'X-User-Id', value: String(payload.sub) }];\n    return request;\n  } catch {\n    return { status: '403', statusDescription: 'Forbidden' };\n  }\n};"
+          }
+        }
+      ]
+    },
+    {
+      "id": "7d8ba012-7a74-4807-8a2f-33d0db1ac3d0",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Quatro triggers da CloudFront"
+      },
+      "children": [
+        {
+          "id": "9d268654-9e05-44df-8de1-9126dfaf46a7",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "ts",
+            "code": "// Viewer Request  — toda req, antes do cache check\n//   Use pra: auth, normalize, redirect, header set\n// Origin Request  — só em cache miss, antes de ir pro origin\n//   Use pra: origin selection, request body transform\n// Origin Response — resposta do origin, antes de cachear\n//   Use pra: image transform (retornar WebP de JPEG), transform HTML\n// Viewer Response — resposta final, antes do cliente\n//   Use pra: security headers (CSP, HSTS), cookies pós-resposta"
+          }
+        }
+      ]
+    },
+    {
+      "id": "fe30e53d-a478-4a90-9cc0-18d60016015d",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Imagem on-the-fly com Origin Response"
+      },
+      "children": [
+        {
+          "id": "9d4bc492-a316-4081-8d34-7c887c71fa61",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "ts",
+            "code": "// Lambda@Edge em origin-response\n// Recebe imagem JPEG do S3, retorna WebP se browser suporta\nimport sharp from 'sharp';\nimport type { CloudFrontResponseEvent } from 'aws-lambda';\n\nexport const handler = async (event: CloudFrontResponseEvent) => {\n  const { request, response } = event.Records[0].cf;\n  const accept = (request.headers.accept ?? [])[0]?.value ?? '';\n\n  if (!accept.includes('image/webp')) return response;\n  if (!response.headers['content-type']?.[0]?.value.startsWith('image/jpeg')) return response;\n\n  // Busca body original (Lambda@Edge não tem acesso direto; precisa request pro S3)\n  // Estratégia real: usar CloudFront Functions + Lambda@Edge + S3 signed URL\n  return response;\n};"
+          }
+        },
+        {
+          "id": "f46b348f-3e11-4b5d-b44a-0e7795a1139d",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Lambda@Edge não recebe body da resposta automaticamente — precisa fetch direto do origin ou usar padrão write-through com S3. Custo e latência ficam altos; pra image transform, geralmente CloudFront + Image Handler ou Cloudflare Images compensam mais."
+          }
+        }
+      ]
+    },
+    {
+      "id": "f4b0ba0c-7203-44af-82e6-a447520943d9",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Deploy e custo"
+      },
+      "children": [
+        {
+          "id": "6578302b-5f87-4c8e-bf99-582b956148a4",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "# CF Functions: deploy inline na console ou via CloudFront API\naws cloudfront create-function --name rewrite --function-code fileb://function.js \\\n  --function-config Comment=rewrite,Runtime=cloudfront-js-2.0\n\n# Lambda@Edge: Lambda normal (us-east-1 obrigatório), publish version,\n# associar à distribuição via event type\naws lambda publish-version --function-name edge-auth\naws cloudfront update-distribution --id DIST_ID ..."
+          }
+        },
+        {
+          "id": "44b0bd5e-6df0-4fb8-be67-d370739f1da7",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Preços aproximados 2026: CF Functions $0.10 por milhão de invocations. Lambda@Edge $0.60/M + $0.00000625125/GB-s. Cloudflare Workers Paid $5/mês + $0.30/M depois de 10M. Em volume alto, Cloudflare fica ordem de grandeza mais barato; em volume baixo, CF Functions é o mais econômico AWS-side. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "24e499b2-489c-45c2-9688-3eebd041aa70",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Quando escolher AWS edge"
+      },
+      "children": [
+        {
+          "id": "7b8da3e9-e754-4baf-a5ad-ee63a9d70773",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Stack já AWS-native, compliance exige AWS region (SOC2, HIPAA via BAA), integração com IAM/VPC privado, observability unificada em CloudWatch. Pra time que vive em AWS, CloudFront Functions + Lambda@Edge oferecem \"edge sem sair do ecossistema\". Pra time que quer edge barato e simples, Cloudflare ganha quase sempre."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,459 @@
+{
+  "slug": "sqs-sns-aws",
+  "title": "Producer",
+  "blocks": [
+    {
+      "id": "a5f696be-1d14-411e-86b2-ea159260a7ed",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O stack messaging da AWS em uma frase"
+      },
+      "children": [
+        {
+          "id": "e257092e-9bf2-481a-a9ed-ae9ef02d259c",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " A AWS tem três serviços principais de mensageria que se complementam: "
+              },
+              {
+                "text": "SQS",
+                "bold": true
+              },
+              {
+                "text": " (fila), "
+              },
+              {
+                "text": "SNS",
+                "bold": true
+              },
+              {
+                "text": " (pub/sub fan-out), "
+              },
+              {
+                "text": "EventBridge",
+                "bold": true
+              },
+              {
+                "text": " (event bus com pattern matching, schema registry, replay). Eles cobrem 90% dos casos sem precisar gerenciar Kafka/RabbitMQ. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "9e88232e-8983-4fdc-af1a-96767d80d1c2",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Regra: SQS = \"preciso garantir que esse job é processado eventualmente\". SNS = \"vários consumidores precisam saber desse evento agora\". EventBridge = \"tenho eventos de domínio que vários sistemas reagem com regras complexas\"."
+          }
+        }
+      ]
+    },
+    {
+      "id": "57086828-7fee-41b9-9f79-527d95b70eec",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "SQS: Standard vs FIFO"
+      },
+      "children": [
+        {
+          "id": "0bcb3751-c4a6-409c-8d98-6a9f818f10dd",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Aspecto",
+              "SQS Standard",
+              "SQS FIFO"
+            ],
+            "rows": [
+              [
+                "Throughput",
+                "Ilimitado (escala automaticamente)",
+                "300/s sem batching; 3000/s com batching; 30k/s high-throughput mode"
+              ],
+              [
+                "Ordering",
+                "Best-effort (não garantida)",
+                "Estrita por MessageGroupId"
+              ],
+              [
+                "Delivery",
+                "At-least-once (duplicatas possíveis)",
+                "Exactly-once (dedup por MessageDeduplicationId, janela 5min)"
+              ],
+              [
+                "Throughput por grupo (FIFO)",
+                "N/A",
+                "300/s default; 3000/s high-throughput"
+              ],
+              [
+                "Custo / 1M req",
+                "$0.40",
+                "$0.50"
+              ],
+              [
+                "Tamanho msg",
+                "256 KB (até 2 GB com Extended Library + S3)",
+                "256 KB"
+              ],
+              [
+                "Retention",
+                "1 min – 14 dias (default 4d)",
+                "1 min – 14 dias"
+              ],
+              [
+                "Quando usar",
+                "Default; idempotência consumer-side cobre duplicatas",
+                "Requisitos estritos de ordem (financeiro, sequenciamento)"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "87e386ca-8191-4fcc-87da-6897892c85dd",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "import boto3\nfrom botocore.config import Config\n\nsqs = boto3.client('sqs', config=Config(retries={'max_attempts': 10, 'mode': 'adaptive'}))\nQUEUE_URL = 'https://sqs.us-east-1.amazonaws.com/123/orders-queue'\n\nwhile True:\n    resp = sqs.receive_message(\n        QueueUrl=QUEUE_URL,\n        MaxNumberOfMessages=10,      # batch de 1-10\n        WaitTimeSeconds=20,          # long polling (reduz custo e latência)\n        VisibilityTimeout=120,       # 2min para processar\n        AttributeNames=['ApproximateReceiveCount'],\n        MessageAttributeNames=['All'],\n    )\n    for msg in resp.get('Messages', []):\n        receipt = msg['ReceiptHandle']\n        attempts = int(msg['Attributes']['ApproximateReceiveCount'])\n        try:\n            # Idempotência: chave única (msg_id, version) — DLQ após maxReceiveCount\n            process_order(msg['Body'], idem_key=msg['MessageId'])\n            sqs.delete_message(QueueUrl=QUEUE_URL, ReceiptHandle=receipt)\n        except TransientError:\n            # Não deletar → re-entrega após VisibilityTimeout\n            # Estender timeout se job está demorando:\n            sqs.change_message_visibility(\n                QueueUrl=QUEUE_URL, ReceiptHandle=receipt,\n                VisibilityTimeout=300,\n            )\n        except PermanentError:\n            # Forçar entrada na DLQ (após N tentativas via maxReceiveCount)\n            # ou deletar + publicar erro em outro topic\n            sqs.delete_message(QueueUrl=QUEUE_URL, ReceiptHandle=receipt)\n            publish_error(msg)",
+            "filename": "sqs_consumer.py"
+          }
+        },
+        {
+          "id": "66250afe-aa3e-412e-b0b0-c1fda6115973",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Long polling (WaitTimeSeconds=20) é obrigatório em prod. Short polling (default 0) gera 20x mais chamadas, custo maior e latência pior. Não há contraindicação para usar 20s."
+          }
+        }
+      ]
+    },
+    {
+      "id": "56518eee-8e0e-4d78-a1e5-bd4fb0f98b75",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Visibility timeout — o coração do at-least-once"
+      },
+      "children": [
+        {
+          "id": "7b803144-ff8d-4700-841d-bf6b2516c9f5",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Quando o consumer chama "
+              },
+              {
+                "text": "ReceiveMessage",
+                "code": true
+              },
+              {
+                "text": ", a mensagem fica "
+              },
+              {
+                "text": "invisível",
+                "italic": true
+              },
+              {
+                "text": " por N segundos. Se o consumer chamar "
+              },
+              {
+                "text": "DeleteMessage",
+                "code": true
+              },
+              {
+                "text": " antes do timeout, ela é removida. Se não chamar (crash, timeout, network), ela volta a ficar visível e pode ser entregue novamente. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "92bc77a6-346a-4778-8e6f-12e32bdb2b87",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Visibility timeout default é 30s — quase sempre pouco. Calibre para P99 do tempo de processamento × 1.5–2. Para Lambda consumer, AWS recomenda VisibilityTimeout ≥ 6× Lambda timeout."
+          }
+        }
+      ]
+    },
+    {
+      "id": "3a89d4e3-f995-481c-85fb-348269662c51",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "DLQ + redrive: padrão obrigatório"
+      },
+      "children": [
+        {
+          "id": "df99aa43-335a-442f-a5a9-23044f2fac9a",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "json",
+            "code": "{\n  \"deadLetterTargetArn\": \"arn:aws:sqs:us-east-1:123:orders-dlq\",\n  \"maxReceiveCount\": 5\n}",
+            "filename": "redrive-policy.json"
+          }
+        },
+        {
+          "id": "af031ed9-3be3-4043-bbf6-675359e5e2cc",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Após 5 tentativas malsucedidas (consumer recebeu mas não deletou antes do timeout), a mensagem migra automaticamente para a DLQ. Padrão de produção: "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "dc7bc261-90ad-4e9d-b8df-ba8305e4bccb",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "SNS: pub/sub com filter policies"
+      },
+      "children": [
+        {
+          "id": "2dc0c0df-b96b-4a08-87e4-3f7dde1697e0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " SNS é um fan-out push: um "
+              },
+              {
+                "text": "topic",
+                "bold": true
+              },
+              {
+                "text": " tem N "
+              },
+              {
+                "text": "subscriptions",
+                "bold": true
+              },
+              {
+                "text": ", e cada Publish entrega a todas as subscriptions (ou ao subset que casa com a filter policy). "
+              }
+            ]
+          }
+        },
+        {
+          "id": "a1fb1720-36d7-41a3-8584-f9da4b0b625f",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "json",
+            "code": "{\n  \"event_type\": [\"order_created\", \"order_paid\"],\n  \"region\": [\"us-east-1\", \"us-west-2\"],\n  \"amount_usd\": [{\"numeric\": [\">=\", 100]}],\n  \"customer_tier\": [{\"anything-but\": \"free\"}]\n}",
+            "filename": "filter-policy.json"
+          }
+        },
+        {
+          "id": "2aa92fed-8a51-486c-99d9-f55eef7f6332",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Padrão recomendado: SNS → SQS fan-out. Cada consumidor tem sua queue própria; failure ou slowness de um não afeta os outros. SNS Lambda direto é OK para fire-and-forget, mas perde retry/DLQ ergonomia que SQS dá."
+          }
+        }
+      ]
+    },
+    {
+      "id": "e4c5c1d2-1909-4781-a225-8937e7bfa0dd",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "EventBridge: event bus moderno"
+      },
+      "children": [
+        {
+          "id": "36dca307-e92d-4b02-a9ce-403856ed3c58",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " EventBridge é o sucessor lógico de CloudWatch Events. Conceitos centrais: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "9068e4c0-f159-43cb-8b45-2182b76c302e",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "json",
+            "code": "{\n  \"source\": [\"app.orders\"],\n  \"detail-type\": [\"OrderCreated\"],\n  \"detail\": {\n    \"amount_usd\": [{\"numeric\": [\">=\", 1000]}],\n    \"customer\": {\n      \"tier\": [\"enterprise\"],\n      \"region\": [{\"prefix\": \"us-\"}]\n    },\n    \"items\": {\n      \"category\": [\"luxury\", \"premium\"]\n    }\n  }\n}",
+            "filename": "eb-rule-pattern.json"
+          }
+        },
+        {
+          "id": "cc964601-f6b4-4207-8f3e-fba3bdf8b59f",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Pattern matching aninhado é a diferença chave vs SNS. Você pode filtrar por campos profundos do payload, prefix, numeric range, exists, anything-but. Reduz drasticamente Lambda invocations desnecessárias."
+          }
+        }
+      ]
+    },
+    {
+      "id": "cb98a04c-70a8-4f70-96c1-80484a043d28",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Archive + Replay: time machine de eventos"
+      },
+      "children": [
+        {
+          "id": "d13fde08-5125-4285-9e84-5afc640db796",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Cenário real: consumer Lambda teve bug por 48h e descartou eventos sem alarmar. Sem archive, eventos perdidos. Com archive habilitado: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "e87d6805-661b-43f4-b9d5-ac82fa1e9bc1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Replay envia para os targets atuais, não os de quando o evento foi originalmente publicado. Se você apagou um rule, ela não receberá. Garanta idempotência consumer-side antes de replay massivo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "9c429f8d-9b9a-487f-bc96-e806932ac43d",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Quando usar cada um"
+      },
+      "children": []
+    },
+    {
+      "id": "eea202f6-5267-498e-947d-ab5378ed548b",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Custos comparados (us-east-1, 2026)"
+      },
+      "children": [
+        {
+          "id": "d0754c74-5d4c-4959-b187-829e97167efe",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Serviço",
+              "Unidade",
+              "Preço"
+            ],
+            "rows": [
+              [
+                "SQS Standard",
+                "Por 1M requests",
+                "$0.40"
+              ],
+              [
+                "SQS FIFO",
+                "Por 1M requests",
+                "$0.50"
+              ],
+              [
+                "SNS",
+                "Por 1M publishes (excl. mobile/SMS)",
+                "$0.50"
+              ],
+              [
+                "SNS → Lambda/SQS/HTTP",
+                "Notificações",
+                "$0.50 por 1M (delivery)"
+              ],
+              [
+                "EventBridge events",
+                "Por 1M events publicados",
+                "$1.00"
+              ],
+              [
+                "EventBridge schema discovery",
+                "Por evento processado",
+                "$0.10 / 1M"
+              ],
+              [
+                "EventBridge archive",
+                "Storage GB/mês",
+                "$0.10"
+              ],
+              [
+                "EventBridge replay",
+                "GB processado",
+                "$0.10"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "fbe5c512-9239-444a-bb8a-452fb7b03c42",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "EventBridge custa 2x SNS por publish, mas elimina Lambda invocations desnecessárias (filter server-side) e custos de SQS extra. Em arquiteturas event-driven complexas, o TCO costuma ser menor que SNS+SQS+Lambda glue."
+          }
+        }
+      ]
+    },
+    {
+      "id": "6b67a03d-e4f6-4c46-987b-56984a653d24",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Timeline"
+      },
+      "children": []
+    },
+    {
+      "id": "bcdca064-0bd0-4273-a619-f460a73069ad",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Anti-patterns comuns"
+      },
+      "children": []
+    }
+  ]
+}

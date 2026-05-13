@@ -1,0 +1,212 @@
+{
+  "slug": "langgraph-state-machines",
+  "title": null,
+  "blocks": [
+    {
+      "id": "224d66a8-55ad-431c-b419-ca9b99d6b961",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Quando um agente precisa de loops (ReAct), human-in-loop, persistência de estado entre sessões e cycles condicionais, o paradigma DAG (Airflow, Prefect, Dagster) é insuficiente. LangGraph (lançado jan/2024 pela LangChain) trouxe state machines explícitas para LLMs: nós, arestas, reducers, checkpointers e time travel — vocabulário inspirado em XState e Erlang/OTP mas adaptado para o cenário de agentes. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "27b6098a-55df-4466-933d-c61bd42e0b31",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O que LangGraph traz que LCEL não tinha"
+      },
+      "children": [
+        {
+          "id": "7d9bff8d-a63d-4565-8468-2ad33c6f3784",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Necessidade",
+              "LCEL (RunnableSequence)",
+              "LangGraph (StateGraph)"
+            ],
+            "rows": [
+              [
+                "Pipeline linear",
+                "Idiomático: a | b | c",
+                "Funciona mas verbose"
+              ],
+              [
+                "Cycles (ReAct loop)",
+                "Impossível",
+                "Nativo: add_edge(\"act\", \"think\")"
+              ],
+              [
+                "Conditional routing",
+                "RunnableBranch (limitado)",
+                "add_conditional_edges()"
+              ],
+              [
+                "State mutation explícita",
+                "Estado passa via chains",
+                "TypedDict + reducers"
+              ],
+              [
+                "Human-in-the-loop",
+                "Manual",
+                "interrupt_before/after"
+              ],
+              [
+                "Persistência entre requests",
+                "Manual",
+                "Checkpointer (Sqlite/Postgres/Redis)"
+              ],
+              [
+                "Time travel",
+                "Não",
+                "get_state_history + update_state"
+              ],
+              [
+                "Subgraphs/hierarquia",
+                "Composição funcional",
+                "Subgraphs como nós"
+              ],
+              [
+                "Observabilidade",
+                "LangSmith básico",
+                "LangSmith com hierarquia full"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "a412e7c2-4bb1-4e2e-9999-a737967a0f87",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Hello LangGraph — agente ReAct mínimo"
+      },
+      "children": [
+        {
+          "id": "c8307653-d420-4b2f-bc2b-0824fd2a0883",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "from typing import TypedDict, Annotated, Sequence\nimport operator\nfrom langgraph.graph import StateGraph, START, END\nfrom langchain_anthropic import ChatAnthropic\nfrom langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage\nfrom langchain_core.tools import tool\n\n# 1. State schema\nclass AgentState(TypedDict):\n    messages: Annotated[Sequence[BaseMessage], operator.add]  # reducer: concat\n\n# 2. Tools\n@tool\ndef get_weather(city: str) -> str:\n    \"\"\"Retorna a temperatura atual da cidade.\"\"\"\n    return f\"Em {city}: 22°C, ensolarado\"\n\ntools = [get_weather]\nmodel = ChatAnthropic(model=\"claude-sonnet-4-7\").bind_tools(tools)\n\n# 3. Nodes\ndef call_model(state: AgentState) -> dict:\n    response = model.invoke(state[\"messages\"])\n    return {\"messages\": [response]}\n\ndef call_tool(state: AgentState) -> dict:\n    last_message = state[\"messages\"][-1]\n    tool_calls = last_message.tool_calls\n    outputs = []\n    for tc in tool_calls:\n        tool_fn = {t.name: t for t in tools}[tc[\"name\"]]\n        result = tool_fn.invoke(tc[\"args\"])\n        outputs.append(ToolMessage(content=str(result), tool_call_id=tc[\"id\"]))\n    return {\"messages\": outputs}\n\n# 4. Conditional router\ndef should_continue(state: AgentState) -> str:\n    last_message = state[\"messages\"][-1]\n    if not last_message.tool_calls:\n        return END\n    return \"tools\"\n\n# 5. Build graph\ngraph = StateGraph(AgentState)\ngraph.add_node(\"agent\", call_model)\ngraph.add_node(\"tools\", call_tool)\ngraph.add_edge(START, \"agent\")\ngraph.add_conditional_edges(\"agent\", should_continue)\ngraph.add_edge(\"tools\", \"agent\")  # ⬅️ CICLO — volta ao agente após tool\n\napp = graph.compile()\n\nresult = app.invoke({\"messages\": [HumanMessage(\"Qual a temperatura em São Paulo?\")]})\nfor m in result[\"messages\"]:\n    print(f\"{m.type}: {m.content[:80]}\")",
+            "filename": "react_agent.py"
+          }
+        },
+        {
+          "id": "21759d00-84f9-43b3-b911-49da8a0c86d7",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "O ciclo é o coração do ReAct. O agente pode chamar tools quantas vezes precisar antes de decidir responder ao usuário. DAG proibiria isso."
+          }
+        }
+      ]
+    },
+    {
+      "id": "00876bc5-1c26-47bf-ab83-3839709d1bcd",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Checkpointing e time travel"
+      },
+      "children": [
+        {
+          "id": "9b894970-b324-482b-938e-d18bc54d29ad",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "from langgraph.checkpoint.postgres import PostgresSaver\n\n# Checkpointer persiste estado a cada nó\ncheckpointer = PostgresSaver.from_conn_string(\"postgresql://localhost/langgraph\")\ncheckpointer.setup()\n\napp = graph.compile(checkpointer=checkpointer)\n\n# thread_id identifica a conversa\nconfig = {\"configurable\": {\"thread_id\": \"user-42-conv-1\"}}\n\n# Primeira mensagem\napp.invoke({\"messages\": [HumanMessage(\"Olá\")]}, config=config)\n\n# Segunda mensagem — engine carrega estado anterior\napp.invoke({\"messages\": [HumanMessage(\"Continuando: temperatura em SP?\")]}, config=config)\n\n# Time travel — listar histórico\nfor snapshot in app.get_state_history(config):\n    print(f\"Step {snapshot.metadata['step']}: next={snapshot.next}\")\n    print(f\"  Messages: {len(snapshot.values['messages'])}\")\n\n# Voltar a um estado específico e bifurcar\ntarget = list(app.get_state_history(config))[3]   # snapshot de 3 steps atrás\nnew_config = app.update_state(target.config, {\"messages\": [HumanMessage(\"Pergunta diferente\")]})\napp.invoke(None, new_config)   # executa a partir do snapshot bifurcado",
+            "filename": "checkpointing.py"
+          }
+        },
+        {
+          "id": "12c7f6ad-7883-45ce-a3ae-dea2c4604fa1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Time travel cria thread_id implícitos novos quando você bifurca. Em produção, isso explode rapidamente se não houver TTL/cleanup. Postgres com partitioning por thread_id é o padrão."
+          }
+        }
+      ]
+    },
+    {
+      "id": "2f471655-d030-4ffb-8f0a-547c99e357ae",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Human-in-the-loop"
+      },
+      "children": [
+        {
+          "id": "9670df8b-2158-4801-bb5e-047e23f6fc49",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "# Cenário: agente sugere ação destrutiva, humano precisa aprovar\nfrom langgraph.graph import StateGraph\nfrom langgraph.checkpoint.memory import MemorySaver\n\nclass State(TypedDict):\n    messages: Annotated[list, operator.add]\n    pending_action: dict | None\n\ndef plan(state):\n    # LLM propõe ação destrutiva (ex.: deletar arquivo)\n    return {\"pending_action\": {\"type\": \"delete\", \"target\": \"/tmp/important.db\"}}\n\ndef execute(state):\n    action = state[\"pending_action\"]\n    # Em produção: subprocess.run / API call etc.\n    return {\"messages\": [AIMessage(f\"Executado: {action}\")]}\n\ngraph = StateGraph(State)\ngraph.add_node(\"plan\", plan)\ngraph.add_node(\"execute\", execute)\ngraph.add_edge(START, \"plan\")\ngraph.add_edge(\"plan\", \"execute\")\ngraph.add_edge(\"execute\", END)\n\n# 🛑 PAUSAR antes de \"execute\" para esperar aprovação\napp = graph.compile(\n    checkpointer=MemorySaver(),\n    interrupt_before=[\"execute\"],\n)\n\nconfig = {\"configurable\": {\"thread_id\": \"req-1\"}}\nresult = app.invoke({\"messages\": [], \"pending_action\": None}, config)\nprint(\"Pausado em:\", app.get_state(config).next)\n# > Pausado em: ('execute',)\n\n# Backend retorna ao usuário: \"Aprovar deletar /tmp/important.db?\"\n# Frontend mostra modal, usuário clica em \"Aprovar\"\n\n# Resume — invoke com None continua do checkpoint\napp.invoke(None, config)",
+            "filename": "human_in_loop.py"
+          }
+        }
+      ]
+    },
+    {
+      "id": "1bbe501a-b6e5-4ab2-bd88-1c7a056fe726",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura interna do StateGraph"
+      },
+      "children": []
+    },
+    {
+      "id": "c37f7a68-2524-420e-a4bc-dd34095e6d5c",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Fluxo de decisão: quando usar LangGraph"
+      },
+      "children": []
+    },
+    {
+      "id": "d1679d1d-23c0-450f-b822-cf95b4b2ef57",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Timeline do LangGraph"
+      },
+      "children": []
+    },
+    {
+      "id": "459f8b7f-18c4-46e1-8eb3-86524c5187bf",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": []
+    },
+    {
+      "id": "e8dd9d2d-507f-425d-8a0a-a14b85fd32e6",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Referências"
+      },
+      "children": []
+    }
+  ]
+}

@@ -1,0 +1,429 @@
+{
+  "slug": "queue-patterns-dlq",
+  "title": "Producer",
+  "blocks": [
+    {
+      "id": "b0893390-a951-406e-9fbe-c5d0cbab9eaa",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Os 5 patterns que você vai usar 90% do tempo"
+      },
+      "children": [
+        {
+          "id": "c0d9b723-140a-411b-8be0-aa59f1547560",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Mensageria em produção exige um conjunto pequeno de patterns que se repete em SQS, RabbitMQ, Kafka, NATS, Pulsar. Quem os domina entrega sistemas estáveis; quem ignora, opera incidente atrás de incidente. Os cinco fundamentais: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "c6d48fac-7b1f-4675-8254-6c2b9cb9dad4",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Esses cinco patterns aparecem juntos em qualquer postmortem público de uma empresa séria (Stripe, Shopify, Netflix). Não são opcionais."
+          }
+        }
+      ]
+    },
+    {
+      "id": "5e4d7cea-5418-4ace-85bc-eeb10ba7bc62",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Pattern 1: Exponential backoff with jitter"
+      },
+      "children": [
+        {
+          "id": "c917f72c-f625-4558-b20e-c8480d8ede6b",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Retry sem backoff: cliente falhou → retry imediato → falha de novo → loop. Vira DoS contra a dependência. Retry com backoff: 1s, 2s, 4s, 8s... mas se 1000 clientes falharam ao mesmo tempo, os retries acontecem em sincronia, causando spikes brutais a cada potência de 2. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "9e523ebd-e884-4229-a807-e9e121df6ede",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " A solução: "
+              },
+              {
+                "text": "jitter",
+                "bold": true
+              },
+              {
+                "text": " (aleatoriedade) no intervalo. Marc Brooker (AWS Principal Engineer) publicou em 2015 o artigo \"Exponential Backoff And Jitter\" — referência canônica. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "30284a22-d8e6-4d33-9878-e645c99a31a4",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "python",
+            "code": "import random, time\n\ndef retry_with_jitter(call, max_attempts=5, base=0.1, cap=30.0):\n    \"\"\"Full jitter exponential backoff.\"\"\"\n    for attempt in range(max_attempts):\n        try:\n            return call()\n        except TransientError as e:\n            if attempt == max_attempts - 1:\n                raise\n            sleep = random.uniform(0, min(cap, base * (2 ** attempt)))\n            log.warning(f\"attempt {attempt} failed, sleeping {sleep:.2f}s: {e}\")\n            time.sleep(sleep)",
+            "filename": "retry_with_jitter.py"
+          }
+        },
+        {
+          "id": "6a068f4a-d215-476f-afcd-5c5bdb7d25d4",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Sempre tenha max_attempts + cap. Sem cap, o sleep cresce exponencialmente até horas; sem max_attempts, é retry infinito (poison pill)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "003667c8-35ca-4ba4-b0bd-d7e8071254c9",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Pattern 2: Dead Letter Queue (DLQ)"
+      },
+      "children": [
+        {
+          "id": "ee1157a8-476f-4c33-b75d-c7cfb42cd81e",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " DLQ é a \"lixeira investigável\" de mensagens que falharam mais que N vezes. Configuração varia por broker: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "5721000e-f9d8-4bd2-b932-4c039aff23fb",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Broker",
+              "Configuração",
+              "Métrica para alarme"
+            ],
+            "rows": [
+              [
+                "SQS",
+                "RedrivePolicy: deadLetterTargetArn + maxReceiveCount",
+                "ApproximateNumberOfMessagesVisible da DLQ"
+              ],
+              [
+                "RabbitMQ",
+                "x-dead-letter-exchange + x-delivery-limit (quorum)",
+                "queue messages_ready da DLQ"
+              ],
+              [
+                "Kafka",
+                "Aplicação implementa (Spring Kafka, Streams têm helpers)",
+                "consumer lag + count em \"topic.DLT\""
+              ],
+              [
+                "NATS JetStream",
+                "max_deliver + dead_letter_subject",
+                "subject count"
+              ],
+              [
+                "Pulsar",
+                "DeadLetterPolicy.maxRedeliverCount + deadLetterTopic",
+                "subscription backlog do DLQ topic"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "390f11ec-2d2c-497a-a7aa-567306c7f011",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Padrão prod: DLQ + alarme + runbook. SQS oferece DLQ Redrive nativo (console/API reenvia para a queue original em batch). Em outros brokers, você escreve um pequeno script."
+          }
+        }
+      ]
+    },
+    {
+      "id": "2333d94a-66fe-4e2f-ae90-3a329af9961a",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Pattern 3: Idempotência consumer-side"
+      },
+      "children": [
+        {
+          "id": "9cd7b5d3-521b-4a02-954e-c36f321c124f",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " At-least-once é a semântica de produção em 99% dos casos. Exactly-once "
+              },
+              {
+                "text": "dentro do mesmo cluster",
+                "italic": true
+              },
+              {
+                "text": " existe (Kafka transactional + Flink 2PC sinks), mas cross-system (HTTP, DB externo) precisa de idempotência no receiver. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "eb967143-6d81-473f-b54d-030592743cca",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "sql",
+            "code": "-- Tabela de idempotency keys (Postgres)\nCREATE TABLE idempotency_keys (\n    key            UUID PRIMARY KEY,\n    operation      TEXT NOT NULL,\n    result_json    JSONB NOT NULL,\n    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),\n    expires_at     TIMESTAMPTZ NOT NULL\n);\n\nCREATE INDEX idempotency_keys_expires_at_idx ON idempotency_keys(expires_at);\n\n-- Cleanup job diário\nDELETE FROM idempotency_keys WHERE expires_at < now();",
+            "filename": "idempotency_table.sql"
+          }
+        },
+        {
+          "id": "2c3efabb-ed00-476c-8285-4a6d807532f9",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "python",
+            "code": "def process_order_message(msg):\n    idem_key = msg.headers.get('idempotency_key') or msg.message_id\n    with db.transaction():\n        # Tentativa atômica de \"claim\" do idempotency key\n        inserted = db.execute(\"\"\"\n            INSERT INTO idempotency_keys (key, operation, result_json, expires_at)\n            VALUES (%s, 'process_order', '{}', now() + interval '24 hours')\n            ON CONFLICT (key) DO NOTHING\n            RETURNING key\n        \"\"\", (idem_key,)).fetchone()\n\n        if inserted is None:\n            # Já processada antes; ack e seguir\n            log.info(f\"duplicate detected for key={idem_key}, skipping\")\n            return\n\n        # Primeira vez: executa side effect dentro da mesma transação\n        order = parse_order(msg.body)\n        result = create_order_in_db(order)\n        db.execute(\"UPDATE idempotency_keys SET result_json=%s WHERE key=%s\",\n                   (json.dumps(result), idem_key))\n        # commit ao sair do with",
+            "filename": "idempotent_consumer.py"
+          }
+        },
+        {
+          "id": "4e57c7b5-80bd-4e55-aade-43b132196c68",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Para side effects externos (charge no Stripe, envio de email): fazer no provider primeiro com Idempotency-Key, depois marcar como processado. Stripe, Square, Mercado Pago aceitam header Idempotency-Key e fazem dedup server-side."
+          }
+        }
+      ]
+    },
+    {
+      "id": "7d1a5601-7bc9-4a9b-84cb-84bfaa19e8e6",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Pattern 4: Ordering por chave (não global)"
+      },
+      "children": [
+        {
+          "id": "02810263-a2da-4022-9e3c-e61950b869b9",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Ordering global em sistema distribuído é caríssimo: exige sequencer central (gargalo single-point) ou consenso por mensagem (latência). Ordering "
+              },
+              {
+                "text": "por entidade",
+                "bold": true
+              },
+              {
+                "text": " é o que a aplicação precisa em 99% dos casos: \"todos os eventos do pedido X em ordem\" não \"todos os eventos do mundo em ordem\". "
+              }
+            ]
+          }
+        },
+        {
+          "id": "8cd932d9-2404-4eba-9942-9f52d46bce56",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Broker",
+              "Como garantir ordering por chave"
+            ],
+            "rows": [
+              [
+                "Kafka",
+                "Partitioner por key (default murmur2). Mesma key → mesma partition → ordem garantida"
+              ],
+              [
+                "SQS FIFO",
+                "MessageGroupId = ID da entidade. Ordering estrita dentro do grupo"
+              ],
+              [
+                "RabbitMQ",
+                "Routing key consistente + single active consumer (SAC) ou consistent-hash exchange"
+              ],
+              [
+                "NATS JetStream",
+                "Subject determinístico (orders.{order_id}) + filter no consumer"
+              ],
+              [
+                "Pulsar",
+                "Key_Shared subscription type + message key = ID da entidade"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "d97bd133-fc47-4dc4-b195-13b542f9c369",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Cuidado com partition skew: se 80% das mensagens têm a mesma key, uma partition fica sobrecarregada. Solução: keys com cardinalidade suficiente (use ID estável, não enum de pequena cardinalidade)."
+          }
+        },
+        {
+          "id": "539af38c-c825-418e-b30d-2b4ea7f61a3c",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "java",
+            "code": "// Producer Kafka — ordering por order_id\nProducerRecord<String,String> record = new ProducerRecord<>(\n    \"orders.events\",\n    order.getId(),   // KEY → partitioner garante mesma partition\n    json\n);\nproducer.send(record);\n\n// Consumer Kafka — naturally ordered per partition\n// Cada consumer no grupo lê de partitions disjuntas\n// Eventos do mesmo order_id sempre na mesma partition, processados em ordem",
+            "filename": "KafkaOrderedProducer.java"
+          }
+        }
+      ]
+    },
+    {
+      "id": "5aeca40a-60b2-4a9b-8ef1-469ceac60a49",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Pattern 5: Poison pill detection"
+      },
+      "children": [
+        {
+          "id": "572742cd-dae4-45dd-9e69-2920ed734ef6",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Mensagem que sempre falha (payload malformado, bug específico, schema incompatível) bloqueia o consumer se for re-tentada indefinidamente. Detecção: contador de redelivery. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "10d00e5c-3904-4f2e-852e-be89146a2cfd",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "def handle_message(msg):\n    redelivery_count = int(msg.headers.get('x-delivery-count', 0))\n\n    if redelivery_count >= 5:\n        # Move para DLQ explicitamente (alguns brokers fazem auto)\n        log.error(\n            f\"poison pill detected after {redelivery_count} attempts\",\n            extra={\"msg_id\": msg.id, \"payload_size\": len(msg.body)}\n        )\n        send_to_dlq(msg, reason=\"max_retries_exceeded\")\n        emit_metric(\"poison_pill.detected\", tags={\"queue\": \"orders\"})\n        ack(msg)\n        return\n\n    try:\n        process(msg.body)\n        ack(msg)\n    except (SchemaError, ValidationError) as e:\n        # Erros permanentes: vão direto para DLQ (não retry)\n        log.warning(f\"permanent error: {e}; sending to DLQ\")\n        send_to_dlq(msg, reason=str(e))\n        ack(msg)\n    except TransientError as e:\n        # Erros transientes: NACK, deixa redelivery\n        log.warning(f\"transient error: {e}; will retry\")\n        nack(msg)",
+            "filename": "poison_pill_handler.py"
+          }
+        },
+        {
+          "id": "971da982-858c-4d86-a170-ae94f28d75eb",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Distinguir permanent vs transient errors economiza muito retry desnecessário. SchemaError, ValidationError, NotFound: permanente → DLQ direto. Timeout, ConnectionError, 5xx: transient → retry com backoff."
+          }
+        }
+      ]
+    },
+    {
+      "id": "613e34e0-0974-4308-8787-2fbe7ae10b68",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Pattern 6: Outbox (a glória escondida)"
+      },
+      "children": [
+        {
+          "id": "bf948258-a561-48b4-aac8-705bb8498a80",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " O problema: você quer escrever no banco "
+              },
+              {
+                "text": "e",
+                "italic": true
+              },
+              {
+                "text": " publicar no broker, atomicamente. Não há 2PC entre Postgres e Kafka. Se você commitar no banco e o publish falhar, perde a mensagem. Se publicar antes do commit, pode publicar e o commit falhar. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "3605b58f-73ef-4d6b-89a9-cd47b2069038",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "sql",
+            "code": "-- Tabela outbox (Postgres)\nCREATE TABLE outbox_events (\n    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n    aggregate_type  TEXT NOT NULL,           -- 'order', 'customer', etc.\n    aggregate_id    TEXT NOT NULL,           -- usado como partition key\n    event_type      TEXT NOT NULL,           -- 'OrderCreated', 'OrderShipped'\n    payload         JSONB NOT NULL,\n    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),\n    published_at    TIMESTAMPTZ,             -- NULL = ainda pendente\n    INDEX (published_at, created_at)         -- relay scan\n);\n\n-- Relay process (Python pseudo-código)\n-- SELECT * FROM outbox_events WHERE published_at IS NULL ORDER BY created_at LIMIT 100;\n-- Para cada: kafka.send(topic, key=aggregate_id, value=payload)\n-- UPDATE outbox_events SET published_at = now() WHERE id = ANY(...);\n\n-- OU MELHOR: Debezium lê o WAL e publica direto, eliminando relay process custom",
+            "filename": "outbox_schema.sql"
+          }
+        },
+        {
+          "id": "1cd328ab-66d0-48ce-be0d-172d74758e9b",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Debezium tem Outbox Event Router SMT pronto: lê tabela via logical decoding, transforma cada row em um Kafka record com headers/topic/key derivados das colunas. Substitui o relay process por configuração."
+          }
+        }
+      ]
+    },
+    {
+      "id": "3ae33f5c-917f-4cca-8ae4-26850073f61b",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Outros patterns úteis"
+      },
+      "children": []
+    },
+    {
+      "id": "ecc6b215-f32d-450b-8294-eb8e0e955135",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Decisões clássicas"
+      },
+      "children": []
+    },
+    {
+      "id": "d24e0ea5-a5c6-4c4d-8248-0918e416d9ed",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Checklist anti-incidente"
+      },
+      "children": []
+    }
+  ]
+}

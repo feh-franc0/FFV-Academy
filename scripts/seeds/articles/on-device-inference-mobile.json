@@ -1,0 +1,356 @@
+{
+  "slug": "on-device-inference-mobile",
+  "title": null,
+  "blocks": [
+    {
+      "id": "5d2b536c-4c26-4704-8d60-5e699edf1aae",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Em 2026, o LLM no seu bolso virou realidade. iPhone 16 Pro roda Apple Foundation ~3B no Neural Engine, Pixel 9 Pro roda Gemma 2 2B via MediaPipe, Galaxy S24 Ultra roda Phi-3 mini via Qualcomm AI Engine. A infraestrutura que viabiliza isso é discreta — ExecuTorch (Meta), MediaPipe LLM Inference (Google), Core ML (Apple), Qualcomm QNN, MediaTek NeuroPilot — mas cada uma resolve o mesmo problema fundamental: como rodar redes de bilhões de parâmetros em dispositivos com 8-12GB de RAM e 5W de TDP. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "3d58a208-5962-4e2b-8cd3-23cfd342eb5d",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O cenário 2026: SLMs dominam o mobile"
+      },
+      "children": [
+        {
+          "id": "8f4590da-4f14-4589-8149-c61b5f702b6d",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Modelo",
+              "Params",
+              "Tamanho INT4",
+              "iPhone 16 Pro",
+              "Pixel 9 Pro",
+              "S24 Ultra"
+            ],
+            "rows": [
+              [
+                "Llama 3.2 1B-Instruct",
+                "1.23B",
+                "~650 MB",
+                "~45 tok/s",
+                "~38 tok/s",
+                "~42 tok/s"
+              ],
+              [
+                "Llama 3.2 3B-Instruct",
+                "3.21B",
+                "~1.8 GB",
+                "~22 tok/s",
+                "~18 tok/s",
+                "~20 tok/s"
+              ],
+              [
+                "Gemma 2 2B",
+                "2.5B",
+                "~1.4 GB",
+                "~28 tok/s",
+                "~32 tok/s (GPU TPU)",
+                "~24 tok/s"
+              ],
+              [
+                "Phi-3.5-mini 4B",
+                "3.8B",
+                "~2.1 GB",
+                "~18 tok/s",
+                "~16 tok/s",
+                "~17 tok/s"
+              ],
+              [
+                "Qwen 2.5 1.5B",
+                "1.5B",
+                "~850 MB",
+                "~38 tok/s",
+                "~32 tok/s",
+                "~35 tok/s"
+              ],
+              [
+                "Apple Foundation ~3B",
+                "~3B",
+                "~1.5 GB ANE",
+                "Nativa, latência baixa",
+                "N/A",
+                "N/A"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "3d06ba1c-9361-4d0c-9dd5-a9543d26a6f1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "A regra prática: modelo INT4 com size ≤ 1/3 da RAM total do device, idealmente ≤ 2GB. Excedendo isso, pressure de memória mata o app em background, throttle térmico aparece em conversas longas, bateria drena visivelmente."
+          }
+        }
+      ]
+    },
+    {
+      "id": "8406199b-f11a-4416-ad8e-1b67820a9cad",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "ExecuTorch: o padrão multi-plataforma da Meta"
+      },
+      "children": [
+        {
+          "id": "bb714436-9b6b-4562-aa6b-3e62104196c9",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "# ExecuTorch — pipeline de exportação Llama 3.2 1B para iOS\nimport torch\nfrom executorch.examples.models.llama2 import Llama2Model\nfrom executorch.exir import to_edge\nfrom executorch.backends.apple.coreml.partition.coreml_partitioner import CoreMLPartitioner\n\n# 1. Carrega modelo PyTorch\nmodel = Llama2Model(\"Llama-3.2-1B-Instruct\", checkpoint_path=\"./consolidated.pth\")\nmodel.eval()\n\n# 2. Quantização INT4 (groupwise) via PT2E\nfrom torch.ao.quantization.quantizer.embedding_quantizer import EmbeddingQuantizer\nfrom torch.ao.quantization.quantizer.coreml_quantizer import CoreMLQuantizer\n\nquantizer = CoreMLQuantizer(bits=4, group_size=64)\nm = torch._export.capture_pre_autograd_graph(model, example_inputs)\nm = prepare_pt2e(m, quantizer)\n# calibração\nfor batch in calib_loader: m(batch)\nm = convert_pt2e(m)\n\n# 3. Exporta para Edge IR\nedge = to_edge(torch.export(m, example_inputs))\n\n# 4. Delegate para Core ML (otimiza para ANE)\nedge = edge.to_backend(CoreMLPartitioner())\n\n# 5. Salva .pte\nprog = edge.to_executorch()\nwith open(\"llama-3.2-1b-coreml-int4.pte\", \"wb\") as f:\n    f.write(prog.buffer)"
+          }
+        },
+        {
+          "id": "8f6948e7-3b6a-4cdd-9557-ee0fec590b82",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "swift",
+            "code": "// Runtime em iOS (Swift) — usando ExecuTorch\nimport ExecuTorchLLM\n\nlet modelPath = Bundle.main.path(forResource: \"llama-3.2-1b-coreml-int4\", ofType: \"pte\")!\nlet tokenizerPath = Bundle.main.path(forResource: \"tokenizer\", ofType: \"json\")!\n\nlet runner = try LLMRunner(modelPath: modelPath, tokenizerPath: tokenizerPath)\n\nlet prompt = \"Resuma este email em 2 frases: ...\"\ntry await runner.generate(prompt: prompt, maxTokens: 200) { token in\n    DispatchQueue.main.async { self.streamingText += token }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "315afe4d-4a2d-4bc8-b5d9-41e6845dc25f",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "MediaPipe LLM Inference (Google)"
+      },
+      "children": [
+        {
+          "id": "3f04abcc-20eb-49bd-b122-954127ee30b0",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "kotlin",
+            "code": "// Android Kotlin — MediaPipe LLM Inference\nimport com.google.mediapipe.tasks.genai.llminference.LlmInference\n\nclass GemmaService(context: Context) {\n    private val llm: LlmInference\n\n    init {\n        val options = LlmInference.LlmInferenceOptions.builder()\n            .setModelPath(\"/data/local/tmp/gemma-2b-it-gpu-int4.task\")\n            .setMaxTokens(2048)\n            .setMaxTopK(40)\n            .setTemperature(0.7f)\n            .setPreferredBackend(LlmInference.Backend.GPU)  // ou CPU\n            .build()\n        llm = LlmInference.createFromOptions(context, options)\n    }\n\n    suspend fun generate(prompt: String): String = withContext(Dispatchers.IO) {\n        llm.generateResponse(prompt)\n    }\n}"
+          }
+        },
+        {
+          "id": "0900f33e-364a-4908-98a1-b1b3e7b723c2",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "javascript",
+            "code": "// Web — MediaPipe LLM Inference no browser via WebGPU\nimport { FilesetResolver, LlmInference } from \"@mediapipe/tasks-genai\";\n\nconst genai = await FilesetResolver.forGenAiTasks(\n  \"https://cdn.jsdelivr.net/npm/@mediapipe/tasks-genai/wasm\",\n);\n\nconst llm = await LlmInference.createFromOptions(genai, {\n  baseOptions: { modelAssetPath: \"/models/gemma-2b-it-gpu-int4.bin\" },\n  maxTokens: 1024,\n  topK: 40,\n  temperature: 0.7,\n  randomSeed: 101,\n});\n\nconst response = await llm.generateResponse(\"Explique RAG em 2 frases.\");"
+          }
+        }
+      ]
+    },
+    {
+      "id": "f1a22280-e801-4e58-a020-e15132581e16",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Apple Foundation Models (iOS 26+)"
+      },
+      "children": [
+        {
+          "id": "b0cf6fc5-5dca-4892-b468-b989638eece2",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Anunciada na WWDC 2025 e disponível em iOS 26+, a "
+              },
+              {
+                "text": "FoundationModels.framework",
+                "bold": true
+              },
+              {
+                "text": " expõe o LLM on-device do Apple Intelligence para apps de terceiros. Modelo base ~3B parâmetros INT4 no ANE, adapters específicos por tarefa (~10-50MB) baixados sob demanda e ativados em runtime. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "91be47f8-0c3c-46f8-a7a3-6bf26e19f7e1",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "swift",
+            "code": "// Apple Foundation Models — iOS 26+\nimport FoundationModels\n\n// 1. Verifica disponibilidade (iPhone 15 Pro+, iPad M-series, todos Mac)\nguard SystemLanguageModel.default.availability == .available else { return }\n\n// 2. Sessão com guided generation (Swift macros para schema-aware output)\n@Generable struct EmailSummary {\n    @Guide(description: \"Resumo em 2 frases, PT-BR\")\n    let summary: String\n\n    @Guide(description: \"Lista de action items\")\n    let actions: [String]\n\n    let urgency: Urgency\n\n    enum Urgency: String, Generable {\n        case low, medium, high\n    }\n}\n\nlet session = LanguageModelSession(instructions: \"\"\"\nVocê resume emails profissionais em português.\n\"\"\")\n\nlet result = try await session.respond(\n    to: emailContent,\n    generating: EmailSummary.self,\n)\n\nprint(result.content.summary)        // typed!\nprint(result.content.actions)\nprint(result.content.urgency)"
+          }
+        },
+        {
+          "id": "359b8138-1e58-4926-8249-44a121affa3b",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "A FoundationModels.framework usa guided generation: o sistema garante que o output obedece o schema declarado via macros Swift, fazendo constrained decoding por baixo. Permite que apps tratem o LLM como uma função typed sem regex parsing nem JSON validation manual."
+          }
+        }
+      ]
+    },
+    {
+      "id": "aa7a300f-6b3b-4613-808a-d9c0550c2546",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Comparativo de runtimes"
+      },
+      "children": [
+        {
+          "id": "5dd3d4ca-0887-4612-94af-51d527ac5885",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Runtime",
+              "Maintainer",
+              "Plataformas",
+              "Formato",
+              "Force"
+            ],
+            "rows": [
+              [
+                "ExecuTorch",
+                "Meta",
+                "iOS, Android, Linux, embedded",
+                ".pte",
+                "Cross-platform, runtime tiny (~250KB), PyTorch direto"
+              ],
+              [
+                "MediaPipe LLM",
+                "Google",
+                "Android, iOS, Web (WebGPU), Linux",
+                ".task",
+                "Integração Google, GPU delegate maduro, web first-class"
+              ],
+              [
+                "Core ML",
+                "Apple",
+                "iOS, macOS, watchOS, visionOS",
+                ".mlpackage",
+                "Apple-only, ANE total, App Store nativo"
+              ],
+              [
+                "Apple Foundation",
+                "Apple",
+                "iOS 26+, macOS 15+",
+                "Embarcado SO",
+                "Sem download, swift macros, gratuito"
+              ],
+              [
+                "llama.cpp + bindings",
+                "Comunidade",
+                "Todas",
+                ".gguf",
+                "Flexibilidade total, modelos OSS abertos"
+              ],
+              [
+                "Qualcomm QNN",
+                "Qualcomm",
+                "Android Snapdragon",
+                ".dlc",
+                "NPU Hexagon dedicado, latência mínima Android premium"
+              ],
+              [
+                "MediaTek NeuroPilot",
+                "MediaTek",
+                "Android Dimensity",
+                ".dla",
+                "NPU MediaTek; mercado Asia/Europa"
+              ],
+              [
+                "ONNX Runtime Mobile",
+                "Microsoft",
+                "iOS, Android, Web",
+                ".onnx",
+                "Polígrafo de formatos; menos otimizado em mobile que ET/MediaPipe"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "debb6c5f-711a-4d7a-b34b-4f1d08d99087",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Padrões de uso e arquitetura híbrida"
+      },
+      "children": []
+    },
+    {
+      "id": "edd0358d-c391-4464-ac4e-b11a2ea72f6e",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Limites reais e armadilhas"
+      },
+      "children": [
+        {
+          "id": "eac9c967-8970-42d6-aa4f-a57e020e0ae7",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Thermal throttling: gerar texto contínuo em mobile aquece. Após 2-5 minutos de uso sustentado, OS reduz freq → tok/s cai 30-50%. Mitigar com batches curtos, streaming, dar respiros."
+          }
+        },
+        {
+          "id": "c311aed9-56ed-422b-ad9d-0de401d34846",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Memória de KV cache: contexto de 4k tokens em Llama 3.2 3B INT4 já come ~600MB. Em mobile com 8GB RAM, isso pressiona o sistema. Use ctx-size enxuto (1-2k típico) ou KV cache quantizado quando suportado."
+          }
+        },
+        {
+          "id": "0604c444-43c4-4667-a2f7-7e7619301d79",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Bateria: inferência GPU sustentada consome 3-5W. 10 minutos contínuos = 5-8% da bateria. Apps devem usar com parcimônia ou em background com cota."
+          }
+        }
+      ]
+    },
+    {
+      "id": "e355565d-a73c-4ed8-848d-46dbe1b960a1",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": []
+    },
+    {
+      "id": "b8fbfa83-19fe-4636-93ca-827ca711558f",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Referências"
+      },
+      "children": []
+    }
+  ]
+}

@@ -1,0 +1,322 @@
+{
+  "slug": "harness-hooks-cookbook-executivo",
+  "title": null,
+  "blocks": [
+    {
+      "id": "28670fe0-945d-41a1-bca4-408ab096a713",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Hooks separam o amador do profissional em harness engineering. Este módulo é cookbook: "
+          },
+          {
+            "text": "10 receitas testadas",
+            "bold": true
+          },
+          {
+            "text": " pra copiar, adaptar e rodar. Cada receita tem código completo, caso de uso, e a configuração em "
+          },
+          {
+            "text": "settings.json",
+            "code": true
+          },
+          {
+            "text": ". São os padrões que aparecem em projetos sérios — validação de segurança, automação de qualidade, notificação, audit log, snapshot pré-compact, classificação via LLM. Tudo com JSON decisions, tratamento de erro, e atenção a encoding. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "1edb7e54-9ac9-4e5a-9897-4a533ae37bba",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Receita 1: Bloquear rm -rf em paths perigosos"
+      },
+      "children": [
+        {
+          "id": "e6aad5f1-a0f1-456b-9183-318a6f99ee8c",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "#!/bin/bash\n# .claude/hooks/PreToolUse/block-dangerous-rm.sh\n# Bloqueia rm -rf em paths absolutos; pede confirmação em paths relativos.\n\nINPUT=$(cat)\nCMD=$(echo \"$INPUT\" | jq -r '.tool_input.command // \"\"')\nTOOL=$(echo \"$INPUT\" | jq -r '.tool_name // \"\"')\n\n# Só atua em Bash\nif [[ \"$TOOL\" != \"Bash\" ]]; then\n  echo '{\"decision\":\"allow\"}'\n  exit 0\nfi\n\n# Padrão crítico: rm -rf em paths absolutos\nif [[ \"$CMD\" =~ rm[[:space:]]+-rf[[:space:]]+/ ]] || \\\n   [[ \"$CMD\" =~ rm[[:space:]]+-rf[[:space:]]+~ ]] || \\\n   [[ \"$CMD\" =~ rm[[:space:]]+-rf[[:space:]]+\\$HOME ]]; then\n  jq -n '{\n    decision: \"block\",\n    reason: \"rm -rf em path absoluto é proibido pelo harness\",\n    systemMessage: \"🚨 Bloqueado: rm -rf em path absoluto\",\n    hookSpecificOutput: { PreToolUse: { permissionDecision: \"deny\" } }\n  }'\n  exit 0\nfi\n\n# Padrão moderado: rm -rf em path relativo\nif [[ \"$CMD\" =~ rm[[:space:]]+-rf ]]; then\n  jq -n '{\n    decision: \"ask\",\n    reason: \"rm -rf detectado — confirme antes de executar\",\n    hookSpecificOutput: { PreToolUse: { permissionDecision: \"ask\" } }\n  }'\n  exit 0\nfi\n\necho '{\"decision\":\"allow\"}'"
+          }
+        },
+        {
+          "id": "8e5c46ae-4bb9-4b91-af9a-450c5ec518f7",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "json",
+            "code": "// settings.json\n{\n  \"hooks\": {\n    \"PreToolUse\": [{\n      \"matcher\": \"Bash\",\n      \"hooks\": [{\n        \"type\": \"command\",\n        \"command\": \".claude/hooks/PreToolUse/block-dangerous-rm.sh\",\n        \"timeout\": 5\n      }]\n    }]\n  }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "e0166e95-ec1e-4b19-b62e-bc1b7c5c0c99",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Receita 2: Prettier automático pós Edit/Write"
+      },
+      "children": [
+        {
+          "id": "d79a88d5-ccf0-49f9-a91d-55acad85d6b3",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "#!/bin/bash\n# .claude/hooks/PostToolUse/auto-format.sh\n# Formata automaticamente arquivos suportados após edit/write\n\nINPUT=$(cat)\nTOOL=$(echo \"$INPUT\" | jq -r '.tool_name // \"\"')\nFILE=$(echo \"$INPUT\" | jq -r '.tool_input.file_path // \"\"')\n\n[[ \"$TOOL\" != \"Edit\" && \"$TOOL\" != \"Write\" ]] && exit 0\n[[ -z \"$FILE\" ]] && exit 0\n[[ ! -f \"$FILE\" ]] && exit 0\n\ncase \"$FILE\" in\n  *.ts|*.tsx|*.js|*.jsx|*.json|*.md|*.mdx|*.css)\n    npx --no-install prettier --write \"$FILE\" --log-level warn 2>&1\n    ;;\n  *.py)\n    ruff format \"$FILE\" 2>&1\n    ;;\n  *.go)\n    gofmt -w \"$FILE\" 2>&1\n    ;;\n  *.rs)\n    rustfmt \"$FILE\" 2>&1\n    ;;\nesac\n\nexit 0  # PostToolUse: exit code ignorado, hook é só notificação"
+          }
+        }
+      ]
+    },
+    {
+      "id": "8fb2fe0d-a5a3-4a6e-944f-ac4b50bd8596",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Receita 3: Injetar git context em todo prompt"
+      },
+      "children": [
+        {
+          "id": "267a6474-6fa8-4ae6-9c47-5ab6db671c3d",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "#!/bin/bash\n# .claude/hooks/UserPromptSubmit/inject-git-context.sh\n# Adiciona estado do git ao contexto de cada prompt do usuário\n\nINPUT=$(cat)\nPROMPT=$(echo \"$INPUT\" | jq -r '.user_message // \"\"')\n\nBRANCH=$(git branch --show-current 2>/dev/null || echo \"—\")\nCHANGES=$(git status --porcelain 2>/dev/null | wc -l | tr -d ' ')\nLAST_COMMIT=$(git log -1 --oneline 2>/dev/null || echo \"—\")\n\nCONTEXT=\"[git: branch=$BRANCH, changes=$CHANGES files, last=$LAST_COMMIT]\"\n\n# Output JSON que o Claude Code consolida no contexto:\njq -n --arg context \"$CONTEXT\" '{\n  decision: \"allow\",\n  systemMessage: $context\n}'"
+          }
+        },
+        {
+          "id": "e4a35f66-1158-41ba-a256-288dd53c1b2f",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Use esse hook quando Claude frequentemente pergunta “em qual branch estamos?” ou não sabe se tem mudanças pendentes. Expor esses dados automaticamente economiza turns."
+          }
+        }
+      ]
+    },
+    {
+      "id": "44855349-a3b3-476e-9057-0d8300b806c0",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Receita 4: Notificação Slack no Stop"
+      },
+      "children": [
+        {
+          "id": "2d5ab1f1-573f-4c69-9bfa-1b7c5d9c34db",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "json",
+            "code": "// settings.json — HTTP hook tipo direto\n{\n  \"hooks\": {\n    \"Stop\": [{\n      \"matcher\": \".*\",\n      \"hooks\": [{\n        \"type\": \"http\",\n        \"url\": \"https://hooks.slack.com/services/T00/B00/XXX\",\n        \"headers\": { \"Content-Type\": \"application/json\" },\n        \"allowedEnvVars\": [\"USER\"],\n        \"timeout\": 10\n      }]\n    }]\n  }\n}"
+          }
+        },
+        {
+          "id": "7f9a60aa-c726-468c-87c0-f52e72259114",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "#!/bin/bash\n# Alternativa via command hook com formatação rica\n# .claude/hooks/Stop/slack-notify.sh\n\nINPUT=$(cat)\nSESSION=$(echo \"$INPUT\" | jq -r '.session_id // \"unknown\"')\nSTOP_REASON=$(echo \"$INPUT\" | jq -r '.stop_reason // \"end_turn\"')\nPROJECT=$(basename \"$PWD\")\nUSER_NAME=\"${USER:-$(whoami)}\"\n\n# Rich message com blocks\ncurl -sS -X POST \"$SLACK_WEBHOOK_URL\" \\\n  -H \"Content-Type: application/json\" \\\n  -d @- <<JSON\n{\n  \"blocks\": [\n    {\n      \"type\": \"header\",\n      \"text\": { \"type\": \"plain_text\", \"text\": \"✅ Claude Code finalizou tarefa\" }\n    },\n    {\n      \"type\": \"section\",\n      \"fields\": [\n        { \"type\": \"mrkdwn\", \"text\": \"*Projeto:*\\n$PROJECT\" },\n        { \"type\": \"mrkdwn\", \"text\": \"*Dev:*\\n$USER_NAME\" },\n        { \"type\": \"mrkdwn\", \"text\": \"*Sessão:*\\n\\`$SESSION\\`\" },\n        { \"type\": \"mrkdwn\", \"text\": \"*Motivo:*\\n$STOP_REASON\" }\n      ]\n    }\n  ]\n}\nJSON\n\nexit 0"
+          }
+        }
+      ]
+    },
+    {
+      "id": "2e87f37a-789a-4368-951b-acb85b300883",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Receita 5: Snapshot antes de compaction"
+      },
+      "children": [
+        {
+          "id": "65cc37e9-c903-4a45-abde-4a74e6125b89",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "#!/bin/bash\n# .claude/hooks/PreCompact/snapshot.sh\n# Salva snapshot da sessão antes do compactor rodar (evita perder trabalho)\n\nINPUT=$(cat)\nSESSION=$(echo \"$INPUT\" | jq -r '.session_id // \"unknown\"')\nTRANSCRIPT=$(echo \"$INPUT\" | jq -r '.transcript_path // \"\"')\n\nSNAPSHOT_DIR=\".claude/snapshots/${SESSION}\"\nmkdir -p \"$SNAPSHOT_DIR\"\n\n# Copia transcript atual\nif [[ -n \"$TRANSCRIPT\" && -f \"$TRANSCRIPT\" ]]; then\n  TIMESTAMP=$(date +%Y%m%d-%H%M%S)\n  cp \"$TRANSCRIPT\" \"$SNAPSHOT_DIR/pre-compact-${TIMESTAMP}.jsonl\"\nfi\n\n# Log\necho \"[$(date -u +%FT%TZ)] Pre-compact snapshot salvo: $SNAPSHOT_DIR\" >> .claude/audit.log\n\nexit 0"
+          }
+        }
+      ]
+    },
+    {
+      "id": "90bd2b85-fd2a-4d3c-b8f7-8c9d8a5d98c7",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Receita 6: Audit log estruturado em JSON"
+      },
+      "children": [
+        {
+          "id": "efecd2a5-fcaf-4976-a362-99da56034fe6",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "#!/bin/bash\n# .claude/hooks/PostToolUse/audit-log.sh\n# Gera audit log estruturado de todas as ações de ferramenta\n\nINPUT=$(cat)\nTS=$(date -u +%FT%T.%3NZ)\nUSER_NAME=\"${USER:-$(whoami)}\"\n\n# Adiciona metadata e append ao log\necho \"$INPUT\" | jq --arg ts \"$TS\" --arg user \"$USER_NAME\" --arg cwd \"$PWD\" '{\n  timestamp: $ts,\n  user: $user,\n  cwd: $cwd,\n  session_id: .session_id,\n  tool_name: .tool_name,\n  tool_input: .tool_input,\n  tool_result_summary: (.tool_result | tostring | .[0:200])\n}' >> .claude/audit.jsonl\n\nexit 0"
+          }
+        },
+        {
+          "id": "7a03cd6f-3a35-44f6-9f0c-4f9ce17dd366",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Depois, para auditoria:"
+              }
+            ]
+          }
+        },
+        {
+          "id": "c0a9c674-5f54-4086-ade0-e46d2775f7e0",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "shell",
+            "code": "# Quantas edições por arquivo hoje:\njq -c 'select(.tool_name == \"Edit\") | .tool_input.file_path' .claude/audit.jsonl | \\\n  sort | uniq -c | sort -rn | head\n\n# Comandos Bash mais executados:\njq -r 'select(.tool_name == \"Bash\") | .tool_input.command' .claude/audit.jsonl | \\\n  cut -d' ' -f1 | sort | uniq -c | sort -rn | head\n\n# Timeline das últimas 20 ações:\ntail -20 .claude/audit.jsonl | jq -c '{ts: .timestamp, tool: .tool_name, target: (.tool_input.file_path // .tool_input.command // \"?\")}'"
+          }
+        }
+      ]
+    },
+    {
+      "id": "13369d94-bc1d-4410-b24d-6db19338029f",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Receita 7: Lint condicional por extensão"
+      },
+      "children": [
+        {
+          "id": "d0307438-f8cf-4169-97b7-0cd7f86419a6",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "#!/bin/bash\n# .claude/hooks/PostToolUse/smart-lint.sh\n# Roda o lint apropriado pra cada tipo de arquivo\n\nINPUT=$(cat)\nTOOL=$(echo \"$INPUT\" | jq -r '.tool_name // \"\"')\nFILE=$(echo \"$INPUT\" | jq -r '.tool_input.file_path // \"\"')\n\n[[ \"$TOOL\" != \"Edit\" && \"$TOOL\" != \"Write\" ]] && exit 0\n[[ -z \"$FILE\" || ! -f \"$FILE\" ]] && exit 0\n\ncd \"$(git rev-parse --show-toplevel 2>/dev/null)\" || exit 0\n\ncase \"$FILE\" in\n  *.ts|*.tsx)\n    npx --no-install eslint \"$FILE\" --fix --quiet 2>&1\n    npx --no-install tsc --noEmit --incremental 2>&1 | grep \"$FILE\" >&2 || true\n    ;;\n  *.py)\n    ruff check \"$FILE\" --fix --quiet 2>&1\n    mypy \"$FILE\" 2>&1 | head -5 >&2 || true\n    ;;\n  *.go)\n    golangci-lint run --fix \"$FILE\" 2>&1 >&2 || true\n    ;;\nesac\n\n# Exit 0: PostToolUse não bloqueia — output via stderr vira feedback pro Claude\nexit 0"
+          }
+        }
+      ]
+    },
+    {
+      "id": "3e382fd6-ac88-4504-848c-7fcfbe3459d8",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Receita 8: Auto-rollback se teste falha"
+      },
+      "children": [
+        {
+          "id": "0606f5b7-9d5f-49b2-90bd-ff9bfb69ba4a",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "#!/bin/bash\n# .claude/hooks/PostToolUse/test-and-rollback.sh\n# Roda testes após Edit; se falharem, reverte a edição via git\n\nINPUT=$(cat)\nTOOL=$(echo \"$INPUT\" | jq -r '.tool_name // \"\"')\nFILE=$(echo \"$INPUT\" | jq -r '.tool_input.file_path // \"\"')\n\n[[ \"$TOOL\" != \"Edit\" ]] && exit 0\n[[ -z \"$FILE\" ]] && exit 0\n\n# Só em arquivos de código (não docs/config)\ncase \"$FILE\" in\n  *.ts|*.tsx|*.py|*.go) ;;\n  *) exit 0 ;;\nesac\n\n# Roda teste específico do arquivo (se houver):\nTEST_FILE=\"\"\ncase \"$FILE\" in\n  *.ts) TEST_FILE=\"${FILE%.ts}.test.ts\" ;;\n  *.tsx) TEST_FILE=\"${FILE%.tsx}.test.tsx\" ;;\n  *.py) TEST_FILE=\"${FILE%.py}_test.py\" ;;\nesac\n\nif [[ -z \"$TEST_FILE\" || ! -f \"$TEST_FILE\" ]]; then\n  exit 0\nfi\n\n# Executa\ncase \"$TEST_FILE\" in\n  *.ts|*.tsx) RESULT=$(npx --no-install vitest run \"$TEST_FILE\" 2>&1) ;;\n  *.py) RESULT=$(pytest \"$TEST_FILE\" -xvs 2>&1) ;;\nesac\n\nif [[ $? -ne 0 ]]; then\n  # Testes falharam — reverte edição\n  git checkout \"$FILE\" 2>&1\n  echo \"🔴 Teste falhou após editar $FILE. Edição foi revertida.\" >&2\n  echo \"Erro:\" >&2\n  echo \"$RESULT\" | tail -20 >&2\nfi\n\nexit 0"
+          }
+        }
+      ]
+    },
+    {
+      "id": "3ec0340c-42ad-41ec-ba50-91a99b08c234",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Receita 9: Copy .env para worktrees automaticamente"
+      },
+      "children": [
+        {
+          "id": "f627abef-d116-4320-8173-59ed27817444",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "#!/bin/bash\n# .claude/hooks/WorktreeCreate/copy-env.sh\n# Copia arquivos gitignored essenciais pro novo worktree\n\nINPUT=$(cat)\nWORKTREE_PATH=$(echo \"$INPUT\" | jq -r '.worktree_path // \"\"')\n\n[[ -z \"$WORKTREE_PATH\" || ! -d \"$WORKTREE_PATH\" ]] && exit 0\n\n# Arquivos comuns que precisam viajar junto:\nfor FILE in .env .env.local .env.development config/local.json; do\n  if [[ -f \"$FILE\" ]]; then\n    mkdir -p \"$(dirname \"$WORKTREE_PATH/$FILE\")\"\n    cp \"$FILE\" \"$WORKTREE_PATH/$FILE\"\n  fi\ndone\n\necho \"✓ Arquivos de ambiente copiados para $WORKTREE_PATH\" >&2\nexit 0"
+          }
+        }
+      ]
+    },
+    {
+      "id": "63834c8a-6ab6-42db-90c4-84a7c2b5ceb4",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Receita 10: Classificação de severidade via Claude (hook type: prompt)"
+      },
+      "children": [
+        {
+          "id": "f2f17465-d340-4479-9534-144179487720",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "json",
+            "code": "// settings.json — hook que delega decisão a Claude via LLM\n{\n  \"hooks\": {\n    \"Notification\": [{\n      \"matcher\": \".*\",\n      \"hooks\": [{\n        \"type\": \"prompt\",\n        \"prompt\": \"Classifique esta notificação em severity (low|medium|high|critical) e sugira ação curta. Retorne JSON: {\\\"severity\\\":\\\"...\\\",\\\"action\\\":\\\"...\\\"}. Notificação:\",\n        \"model\": \"claude-haiku-4-5\",\n        \"timeout\": 30\n      }]\n    }]\n  }\n}"
+          }
+        },
+        {
+          "id": "226d33b4-2dd3-4e4a-a54a-738af680fb24",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "O Claude Code envia o payload do hook pro modelo, que retorna classificação. Depois você pode usar o output em outros hooks (encadeados via stdout/pipe) — ex: notificações critical disparam call automatizado; low vão só pro log."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "0848a81f-5a10-4615-b4d9-c64c9a757f35",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Debugging de hooks"
+      },
+      "children": [
+        {
+          "id": "c98646ca-ea5c-4744-b247-7ce99731e7ef",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "shell",
+            "code": "# Testar um hook com payload real:\necho '{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"/path/to/file.ts\"},\"session_id\":\"test\"}' \\\n  | bash .claude/hooks/PostToolUse/auto-format.sh\n\n# Ver payloads reais capturados durante sessão:\nclaude --debug hooks -p \"edite package.json\"\n# Loga input/output de cada hook\n\n# Verificar configuração de hooks ativa:\n/hooks\n\n# Testar timeout:\n# Aumente timeout em settings se hook lento (ex: rodar testes leva 60s)\n# Defaults: 60s por hook. Max sensato: 300s.\n\n# Erros comuns e soluções:\n#\n# 1. \"Hook timeout\" → aumente timeout em settings\n# 2. \"Hook exit 1 but no stderr\" → adicione echo \">&2\" pra capturar erros\n# 3. \"jq: parse error\" → use jq -r (.field // \"default\") com fallback\n# 4. Hook não dispara → cheque matcher (regex), tool_name exato\n# 5. Loop infinito → hook edita arquivo que dispara o mesmo hook.\n#    Solução: condicionar com env var (HOOK_RUNNING=1 skip)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5e25ea0-1b3c-4c7a-a089-08c779290749",
+      "type": "callout",
+      "position": 12,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Hooks são o coração do harness determinístico. Onde Claude pode “esquecer” uma instrução do CLAUDE.md, o hook runtime sempre executa. Use-os para: (1) bloquear ações perigosas; (2) automatizar qualidade (lint, format, testes); (3) notificar eventos (Slack, webhook); (4) auditar ações (audit.jsonl estruturado); (5) preservar trabalho (snapshots pre-compact). Com os 10 receitas deste cookbook, você tem a base pro seu próprio arsenal."
+      }
+    },
+    {
+      "id": "0c38d5a2-c89c-4fe7-a944-71f75367356d",
+      "type": "callout",
+      "position": 13,
+      "data": {
+        "variant": "info",
+        "title": "",
+        "content": "Próximo: Plugins para times — como empacotar skills, agents, MCP servers e hooks em um plugin instalável com claude plugin install. O mecanismo de distribuição que transforma o seu harness em um produto interno distribuível para a equipe toda."
+      }
+    }
+  ]
+}

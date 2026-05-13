@@ -14,18 +14,51 @@ import { fetchArticleWithBlocks } from '@/lib/curriculum-api';
 import { BlockTree } from '@/components/article/BlockRenderer';
 
 // `output: export` exige que rotas dinâmicas declarem antecipadamente os slugs
-// que devem ser pré-gerados no build. Durante migração, listamos manualmente
-// os módulos já presentes no DB. Sprint 3+ vai buscar essa lista do backend.
+// que devem ser pré-gerados no build. Agora puxamos do backend em build-time —
+// caem aqui TODOS os artigos com status=published.
+//
+// Em dev local (npm run dev): roda a cada request, mas em build (output:export)
+// roda 1x e gera 1 .html por slug.
 export async function generateStaticParams() {
-  return [
-    { slug: 'o-que-e-ia' },
-    { slug: 'o-que-e-llm' },
-    { slug: 'rag-fundamentos' },
-  ];
+  const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || '';
+  if (!apiBase) {
+    // Sem backend configurado (CI sem env var, etc) — degrade gracioso com fallback
+    return [
+      { slug: 'o-que-e-ia' },
+      { slug: 'o-que-e-llm' },
+      { slug: 'rag-fundamentos' },
+    ];
+  }
+  try {
+    // Backend tem cap de 100 por página — pagina até pegar todos.
+    const all: Array<{ slug: string }> = [];
+    let offset = 0;
+    const pageSize = 100;
+    while (true) {
+      const res = await fetch(`${apiBase}/api/v1/curriculum?limit=${pageSize}&offset=${offset}`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      const items: Array<{ slug: string }> = json.data ?? [];
+      all.push(...items);
+      if (items.length < pageSize) break;
+      offset += pageSize;
+      if (offset > 5000) break; // safety brake
+    }
+    console.log(`[generateStaticParams] ${all.length} slugs do backend`);
+    return all.map(item => ({ slug: item.slug }));
+  } catch (err) {
+    // Sem backend acessível — fallback mínimo pra não quebrar build
+    console.warn('[generateStaticParams] fallback (3 slugs):', err);
+    return [
+      { slug: 'o-que-e-ia' },
+      { slug: 'o-que-e-llm' },
+      { slug: 'rag-fundamentos' },
+    ];
+  }
 }
 
-// Permite construir rotas dinâmicas em dev local sem cache.
 // Em build estático (CI), as rotas em generateStaticParams() são pré-renderizadas.
+// `false` impede que slugs fora dessa lista sejam acessados (caem em 404).
 export const dynamicParams = false;
 
 export default async function DynamicModulePage({

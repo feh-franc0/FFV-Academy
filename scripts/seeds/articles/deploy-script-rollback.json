@@ -1,0 +1,169 @@
+{
+  "slug": "deploy-script-rollback",
+  "title": null,
+  "blocks": [
+    {
+      "id": "9b8c7b5c-447f-45ff-aedc-6894c7dd118e",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " O GitHub Actions disparou o pipeline e quer fazer deploy. Mas o workflow YAML "
+          },
+          {
+            "text": "não",
+            "italic": true
+          },
+          {
+            "text": " é onde a lógica de deploy mora — ele só copia arquivos e chama um "
+          },
+          {
+            "text": "script bash na VPS",
+            "bold": true
+          },
+          {
+            "text": " que faz o trabalho pesado: autentica no GHCR, pula a imagem, salva a tag anterior para rollback, sobe Postgres/Redis, espera o banco ficar pronto, roda migrations, atualiza a API com rolling update, valida health check em 120s — e, se algo falhar, reverte sozinho. Este módulo mostra esse script linha por linha. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "0423fdc9-4954-4de4-880a-5b0425305725",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Por que script remoto e não tudo no workflow YAML?"
+      },
+      "children": []
+    },
+    {
+      "id": "819fe406-1889-48fa-8a5b-0f8c3106c423",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "O script completo (scripts/deploy.sh)"
+      },
+      "children": [
+        {
+          "id": "2a7633e8-ca81-4a95-9747-68aa7124b776",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "#!/usr/bin/env bash\n# Deploy script para FFV API — rolling update + rollback automático.\n# Rodado pelo GH Actions (via ssh-action) ou manualmente na VPS.\n\nset -euo pipefail\n\n# ─── Inputs (via env) ──────────────────────────────────────────\n: \"${IMAGE_TAG:?IMAGE_TAG não setado}\"\n: \"${GHCR_TOKEN:?GHCR_TOKEN não setado}\"\n: \"${REPO_OWNER:?REPO_OWNER não setado}\"\n\n# ─── Constantes ────────────────────────────────────────────────\nWORKDIR=/opt/ffv\nCOMPOSE_FILE=\"${WORKDIR}/deployments/docker-compose.prod.yml\"\nENV_FILE=\"${WORKDIR}/.env\"\nIMAGE=\"ghcr.io/feh-franc0/ffv-api\"\nHEALTH_TIMEOUT=120\nPG_TIMEOUT=60\n\ncd \"${WORKDIR}\"\n\nlog() { echo \"[$(date +'%Y-%m-%dT%H:%M:%S')] $*\"; }\n\n# ─── 1. Login no GHCR ──────────────────────────────────────────\nlog \"🔑 Login no GHCR como ${REPO_OWNER}\"\necho \"${GHCR_TOKEN}\" | docker login ghcr.io -u \"${REPO_OWNER}\" --password-stdin\n\n# ─── 2. Pull da nova imagem ────────────────────────────────────\nlog \"📥 docker pull ${IMAGE}:${IMAGE_TAG}\"\ndocker pull \"${IMAGE}:${IMAGE_TAG}\"\n\n# ─── 3. Salva tag atual para rollback ──────────────────────────\nCURRENT_TAG=$(grep '^IMAGE_TAG=' \"${ENV_FILE}\" 2>/dev/null | cut -d= -f2 || echo \"latest\")\necho \"${CURRENT_TAG}\" > \"${WORKDIR}/.current_tag\"\nlog \"💾 Tag anterior salva em .current_tag: ${CURRENT_TAG}\"\n\n# ─── 4. Sobe postgres + redis (idempotente) ────────────────────\nlog \"🐘 Garantindo postgres + redis up\"\ndocker compose -f \"${COMPOSE_FILE}\" --env-file \"${ENV_FILE}\" up -d postgres redis\n\n# ─── 5. Aguarda Postgres ficar healthy (máx 60s) ───────────────\nlog \"⏳ Aguardando Postgres ficar pronto...\"\nfor i in $(seq 1 30); do\n  if docker compose -f \"${COMPOSE_FILE}\" exec -T postgres pg_isready -U ffv >/dev/null 2>&1; then\n    log \"✅ Postgres pronto em ${i}×2s\"\n    break\n  fi\n  sleep 2\n  if [ \"${i}\" -eq 30 ]; then\n    log \"❌ Postgres não ficou pronto em ${PG_TIMEOUT}s\"\n    exit 1\n  fi\ndone\n\n# ─── 6. Roda migrations (do host, trocando @postgres: por @localhost:) ──\nlog \"🔧 Rodando migrations\"\nDB_URL_LOCAL=$(grep '^DATABASE_URL=' \"${ENV_FILE}\" | cut -d= -f2- | sed 's/@postgres:/@localhost:/')\n\"${WORKDIR}/bin/migrate\" \\\n  -path \"${WORKDIR}/migrations\" \\\n  -database \"${DB_URL_LOCAL}\" \\\n  up\n\n# ─── 7. Atualiza .env com nova IMAGE_TAG e sobe API ─────────────\nlog \"🚀 Atualizando API para ${IMAGE_TAG} (2 réplicas)\"\nsed -i \"s|^IMAGE_TAG=.*|IMAGE_TAG=${IMAGE_TAG}|\" \"${ENV_FILE}\"\ndocker compose -f \"${COMPOSE_FILE}\" --env-file \"${ENV_FILE}\" \\\n  up -d --no-deps --pull never --scale api=2 api\n\n# ─── 8. Loop de health check (≥1 réplica healthy em 120s) ──────\nlog \"🩺 Health check loop (timeout ${HEALTH_TIMEOUT}s, exige ≥1 healthy)\"\ndeadline=$((SECONDS + HEALTH_TIMEOUT))\nwhile [ \"${SECONDS}\" -lt \"${deadline}\" ]; do\n  HEALTHY=$(docker compose -f \"${COMPOSE_FILE}\" ps -q api \\\n    | xargs -I{} docker inspect --format '{{.State.Health.Status}}' {} 2>/dev/null \\\n    | grep -c healthy || true)\n  if [ \"${HEALTHY}\" -ge 1 ]; then\n    log \"✅ ${HEALTHY} réplica(s) healthy\"\n    docker compose -f \"${COMPOSE_FILE}\" --env-file \"${ENV_FILE}\" up -d --no-deps nginx\n    docker image prune -f --filter \"until=24h\"\n    log \"🎉 Deploy concluído: ${IMAGE_TAG}\"\n    exit 0\n  fi\n  sleep 3\ndone\n\n# ─── 9. FAIL → rollback automático ─────────────────────────────\nlog \"❌ Nenhuma réplica healthy em ${HEALTH_TIMEOUT}s. Iniciando rollback...\"\nPREVIOUS_TAG=$(cat \"${WORKDIR}/.current_tag\")\nlog \"↩️  Voltando para ${PREVIOUS_TAG}\"\nsed -i \"s|^IMAGE_TAG=.*|IMAGE_TAG=${PREVIOUS_TAG}|\" \"${ENV_FILE}\"\ndocker compose -f \"${COMPOSE_FILE}\" --env-file \"${ENV_FILE}\" \\\n  up -d --no-deps --pull never --scale api=2 api\n\n# Validação rápida do rollback\nsleep 10\nHEALTHY=$(docker compose -f \"${COMPOSE_FILE}\" ps -q api \\\n  | xargs -I{} docker inspect --format '{{.State.Health.Status}}' {} \\\n  | grep -c healthy || true)\nif [ \"${HEALTHY}\" -ge 1 ]; then\n  log \"✅ Rollback OK: ${HEALTHY} réplica(s) healthy\"\nelse\n  log \"🔥 ALERTA: rollback também falhou — intervenção manual necessária\"\nfi\n\nexit 1",
+            "filename": "/opt/ffv/scripts/deploy.sh"
+          }
+        }
+      ]
+    },
+    {
+      "id": "c3fa1334-2ae0-4f11-8e62-3c5933f46c51",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Anatomia: o que cada etapa garante"
+      },
+      "children": []
+    },
+    {
+      "id": "ae7571b0-4c0e-4c75-b540-74cce738ad66",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Rollback: como funciona na prática"
+      },
+      "children": [
+        {
+          "id": "b4b95be6-39dd-4699-9ccb-23bedaf61ca8",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Rollback é só re-deploy com a tag antiga. Não há mágica — o script grava antes de mudar qualquer coisa, e o catch de falha lê esse arquivo, troca o no e roda o mesmo com a imagem anterior."
+          }
+        },
+        {
+          "id": "deb91c98-0dfe-4338-9bed-f2016772fbdf",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "# Rollback manual (sem GH Actions) — útil quando você quer voltar 2-3 versões:\n\nssh deploy@72.60.28.82\ncd /opt/ffv\n\n# Ver tags disponíveis no host:\ndocker images ghcr.io/feh-franc0/ffv-api --format '{{.Tag}}\\t{{.CreatedSince}}'\n# sha-a1b2c3d   2 hours ago\n# sha-e4f5g6h   1 day ago\n# sha-i7j8k9l   3 days ago\n# latest        2 hours ago\n\n# Rollback para um SHA específico:\nsudo sed -i 's|^IMAGE_TAG=.*|IMAGE_TAG=sha-e4f5g6h|' .env\nsudo docker compose -f deployments/docker-compose.prod.yml --env-file .env \\\n  up -d --no-deps --pull never --scale api=2 api\n\n# Validar\ndocker compose ps api\ncurl -fsS https://api.fernandofrancovalle.com/healthz"
+          }
+        }
+      ]
+    },
+    {
+      "id": "fbc47c6a-4992-4cab-bca1-1a91eea690b4",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Migrations dentro do deploy: ordem importa"
+      },
+      "children": [
+        {
+          "id": "7cbf4b91-7e93-4240-b964-ff86c4779d89",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Migrations rodam ANTES da API subir. Se a nova versão do binário espera uma coluna nova, subir a API antes da migration causaria erros 500 em massa. A ordem é: (1) postgres pronto, (2) migrations aplicadas, (3) API nova com a tag nova. Migrations destrutivas (DROP COLUMN, RENAME) exigem 2 deploys (expand/contract pattern) — sai do escopo deste módulo."
+          }
+        },
+        {
+          "id": "cb96d4e0-1168-4720-84dc-68afb556296a",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "# Estrutura esperada em /opt/ffv/migrations:\nls /opt/ffv/migrations/\n# 000001_init.up.sql\n# 000001_init.down.sql\n# 000002_add_users_table.up.sql\n# 000002_add_users_table.down.sql\n# ...\n\n# Migrate guarda o estado na tabela schema_migrations no Postgres:\npsql \"${DATABASE_URL//@postgres:/@localhost:}\" -c \\\n  \"SELECT version, dirty FROM schema_migrations\"\n# version | dirty\n# --------+-------\n#      42 | f\n# (1 row)\n\n# \"dirty = t\" significa que uma migration parou no meio.\n# Resolução manual: corrigir o estado SQL → migrate force <ultima_versao_ok>"
+          }
+        }
+      ]
+    },
+    {
+      "id": "bf968244-e2d1-453d-a155-ea6e340c83ba",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Observabilidade: confiando no script"
+      },
+      "children": [
+        {
+          "id": "cc1f6986-13a3-4d01-b57d-2f20b6bddf70",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Um script de deploy é tão útil quanto a sua capacidade de saber se algo deu errado. Algumas práticas mínimas: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "be014069-e95d-4046-8bee-46e735742ac8",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "# 1. Log estruturado em /var/log/ffv-deploy.log\nsudo tee -a /etc/cron.d/ffv-logrotate <<'EOF'\n/var/log/ffv-deploy.log {\n  daily\n  rotate 30\n  compress\n  missingok\n  notifempty\n}\nEOF\n\n# 2. Symlink no PATH para rodar manualmente:\nsudo ln -sf /opt/ffv/scripts/deploy.sh /usr/local/bin/ffv-deploy\n\n# 3. Ao rodar do GH Actions, captura todo o stdout/stderr:\n#    No script, redireciona para o arquivo de log E imprime para o ssh-action:\nexec > >(tee -a /var/log/ffv-deploy.log) 2>&1\n\n# 4. Verificar último deploy:\ntail -50 /var/log/ffv-deploy.log\ngrep -E '(❌|🎉|↩️)' /var/log/ffv-deploy.log | tail -20"
+          }
+        }
+      ]
+    },
+    {
+      "id": "eeef8128-99c5-416c-a250-ff475e4e59bd",
+      "type": "callout",
+      "position": 7,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Deploy resiliente. Esse script faz com ~80 linhas de bash o que ferramentas pesadas (ArgoCD, Flux, Spinnaker) fazem com clusters Kubernetes inteiros: rolling update, health check, rollback automático. Não é \"production-grade enterprise\" — é production-grade para um MVP solo, e isso é exatamente o que você precisa. O próximo módulo cobre como gerenciar os secrets (POSTGRES_PASSWORD, REDIS_PASSWORD, JWT_SECRET, GHCR_TOKEN) que esse script consome."
+      }
+    }
+  ]
+}

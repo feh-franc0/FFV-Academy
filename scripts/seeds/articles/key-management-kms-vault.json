@@ -1,0 +1,136 @@
+{
+  "slug": "key-management-kms-vault",
+  "title": null,
+  "blocks": [
+    {
+      "id": "e2f076b4-28b4-476e-9c25-320e876f264b",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema que nunca some"
+      },
+      "children": [
+        {
+          "id": "eeb168d1-023c-4e91-b136-d1824c175a7a",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Você pode escolher AES-256-GCM, Ed25519 e TLS 1.3 corretamente e ainda vazar tudo se o segredo da master key estiver em git, em .env commitado, em variável Jenkins ou em memória de processo que crashou e gerou core dump. Key management é o elo fraco em 90% dos breaches reais. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "fd1ff609-8ec9-4c5b-b023-be9e7a6bc57d",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "danger",
+            "title": "",
+            "content": "Never roll your own crypto, e definitivamente never roll your own key management. HSM, KMS e Vault existem porque armazenar/distribuir/rotacionar chaves com segurança é um problema operacional imenso."
+          }
+        }
+      ]
+    },
+    {
+      "id": "4f13d160-0919-4dbc-bc7f-bc8b2c9a4feb",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "AWS KMS na prática"
+      },
+      "children": [
+        {
+          "id": "08172289-fdb8-446c-bf78-9ffc8d5d7540",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "# boto3 - envelope encryption manual com AWS Encryption SDK\nimport boto3, aws_encryption_sdk\nfrom aws_encryption_sdk import CommitmentPolicy, StrictAwsKmsMasterKeyProvider\n\nclient = aws_encryption_sdk.EncryptionSDKClient(\n    commitment_policy=CommitmentPolicy.REQUIRE_ENCRYPT_REQUIRE_DECRYPT,\n)\n\nkms_kwargs = dict(key_ids=[\"arn:aws:kms:us-east-1:123:key/abcd-efgh\"])\nkey_provider = StrictAwsKmsMasterKeyProvider(**kms_kwargs)\n\nplaintext = b\"numero cartao: 4111 1111 1111 1111\"\nciphertext, header = client.encrypt(\n    source=plaintext,\n    key_provider=key_provider,\n    encryption_context={\"app\": \"billing\", \"tenant\": \"acme\"},\n)\n\n# Para decifrar, ambient deve ter IAM permitindo kms:Decrypt\ndecrypted, _ = client.decrypt(source=ciphertext, key_provider=key_provider)\nassert decrypted == plaintext"
+          }
+        },
+        {
+          "id": "123fb8b5-ba5c-493d-ab6a-621bfc1879d4",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "# CLI direto - gerar Data Key, cifrar arquivo localmente\naws kms generate-data-key \\\n  --key-id alias/ffv-main \\\n  --key-spec AES_256 \\\n  --encryption-context app=billing \\\n  --output json > dk.json\n\n# plaintext (base64) cifra dados; armazene apenas ciphertext do data key\nPT=$(jq -r .Plaintext dk.json | base64 -d)\nCT=$(jq -r .CiphertextBlob dk.json)\n\n# Rotation automatica da CMK\naws kms enable-key-rotation --key-id alias/ffv-main"
+          }
+        },
+        {
+          "id": "5122c064-3fa3-4e7e-b544-74fe2c8ccf72",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Encryption context é autenticated-associated-data (AAD) do AEAD: não cifra, mas precisa bater no decrypt. Use para bind lógico (tenant, purpose) — se alguém move ciphertext para outro contexto, decrypt falha."
+          }
+        }
+      ]
+    },
+    {
+      "id": "ecb35b6c-6a0a-49cc-affa-4172baf04cc8",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "HashiCorp Vault para multi-cloud"
+      },
+      "children": [
+        {
+          "id": "f5d64661-2aea-4bdb-8b17-4551321b97cc",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "# Habilitar transit engine (crypto as a service)\nvault secrets enable transit\n\n# Criar chave de signing JWT\nvault write -f transit/keys/jwt-signer type=ed25519\n\n# App assina sem nunca ver a chave privada\nvault write transit/sign/jwt-signer \\\n  input=$(echo -n '{\"sub\":\"user123\"}' | base64)\n\n# Dynamic database credentials (lease 1h, Vault cria e destroi user)\nvault write database/config/postgres-ffv \\\n  plugin_name=postgresql-database-plugin \\\n  allowed_roles=app-readonly \\\n  connection_url=\"postgresql://{{username}}:{{password}}@db.internal:5432/ffv\" \\\n  username=vault_admin password=$ADMIN_PASS\n\nvault write database/roles/app-readonly \\\n  db_name=postgres-ffv \\\n  creation_statements=\"CREATE ROLE \\\"{{name}}\\\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}'; GRANT SELECT ON ALL TABLES IN SCHEMA public TO \\\"{{name}}\\\";\" \\\n  default_ttl=1h max_ttl=24h\n\n# App pede credencial fresca por request\nvault read database/creds/app-readonly\n# -> username=v-app-readonly-xYz...  password=A1B2C3...  lease_duration=1h"
+          }
+        }
+      ]
+    },
+    {
+      "id": "84db071a-ad86-4265-b03a-20aab346a341",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Quando HSM dedicado vale a pena"
+      },
+      "children": [
+        {
+          "id": "73126b9b-ab77-40a0-8bf3-9e1a91099e35",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " CloudHSM (AWS) ou YubiHSM2 (on-prem) são cartas finais quando: (a) regulação exige FIPS 140-2 Level 3 com controle single-tenant; (b) você é CA raiz e não pode terceirizar; (c) signing de firmware em escala de OS vendor. Custo e complexidade operacional são altos — para 99% dos apps, KMS managed resolve. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3818376-be5f-45b9-9398-9e6b3a626bc6",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "yaml",
+            "code": "# Matriz de decisao 2026\napp_aws_only_sem_compliance_especial:    KMS (default)\napp_multi_cloud_ou_on_prem:              Vault Transit\nsecrets_app_rotacao_dinamica:            Vault dynamic secrets ou AWS Secrets Manager\nassinatura_firmware_ou_CA_raiz:          HSM dedicado (CloudHSM / Thales / YubiHSM)\ndev_local_nao_producao:                  sops + age, dotenv-vault (nunca .env em git)\nrotacao_jwt_signing_key:                 JWKS endpoint com overlap kid (n-1 e n)"
+          }
+        },
+        {
+          "id": "6b2f2cff-f46f-4780-a2b2-4d04e59742e1",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Key ceremony: emissão de root CA ou master HSM deve ser gravada em vídeo, com quorum M-of-N (Shamir Secret Sharing), testemunhas e auditor. Parece teatro — não é. Quando der merda, a gravação prova que o processo foi seguido."
+          }
+        }
+      ]
+    }
+  ]
+}

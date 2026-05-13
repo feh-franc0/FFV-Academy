@@ -1,0 +1,715 @@
+{
+  "slug": "rate-limiting-distribuido",
+  "title": null,
+  "blocks": [
+    {
+      "id": "bcbd22a9-ebf0-441a-9bbd-3716a148b745",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Rate limiting é o que separa API séria de APIs que caem toda vez que um cliente bugado entra em loop. Sem rate limit, você não tem proteção contra: (1) thundering herd de retries amplificando incidentes, (2) custo descontrolado em LLM APIs ou serviços pagos por uso, (3) DoS de um cliente mal-configurado matando os outros, (4) abuse de quota em free tier. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "8d4b6a34-9e42-4be9-a444-06ab6c250cac",
+      "type": "paragraph",
+      "position": 1,
+      "data": {
+        "content": [
+          {
+            "text": " Este módulo fecha a trilha de sistemas distribuídos com "
+          },
+          {
+            "text": "os 4 algoritmos clássicos",
+            "bold": true
+          },
+          {
+            "text": " de rate limiting (token bucket, leaky bucket, fixed window, sliding window), uma "
+          },
+          {
+            "text": "implementação real em Redis + Lua",
+            "bold": true
+          },
+          {
+            "text": " (atômica), e como distribuir o limite em cluster de N réplicas de API sem dupla contagem. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "1c01b174-b605-4c8a-b2d5-895fb096fce0",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Por que rate limiting é difícil em sistemas distribuídos"
+      },
+      "children": [
+        {
+          "id": "a8503b8c-17c6-4250-9a04-218ba5418399",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Numa única máquina, rate limit é trivial: contador em memória, incrementa e checa. O problema vira interessante quando você tem: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "af647dab-6609-453b-b51c-39671d100ace",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Duas abordagens:"
+          }
+        }
+      ]
+    },
+    {
+      "id": "4e19ac17-06f8-42fc-b11f-fd597fc8ab9a",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Os 4 algoritmos clássicos"
+      },
+      "children": [
+        {
+          "id": "f1cd3e8e-635d-475c-be95-2c10cdab5c9f",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Algoritmo",
+              "Intuição",
+              "Permite burst?",
+              "Memória",
+              "Precisão"
+            ],
+            "rows": [
+              [
+                "Fixed Window Counter",
+                "Contador por janela (ex: 00:00-00:59)",
+                "Sim (mas em boundary — 2x no limite)",
+                "O(1) por cliente",
+                "Baixa no boundary"
+              ],
+              [
+                "Sliding Window Log",
+                "Guarda timestamp de cada req",
+                "Conforme limite",
+                "O(N) — N reqs na janela",
+                "Máxima"
+              ],
+              [
+                "Sliding Window Counter",
+                "Interpola entre 2 janelas fixas",
+                "Suave",
+                "O(1)",
+                "Alta (aproximação ótima)"
+              ],
+              [
+                "Token Bucket",
+                "Balde com capacidade C, refill R/seg",
+                "Sim (até C tokens)",
+                "O(1)",
+                "Alta"
+              ],
+              [
+                "Leaky Bucket",
+                "Fila FIFO com saída constante",
+                "Não (saída suave)",
+                "O(N) da fila",
+                "Alta"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "047c9d8a-34ab-4daa-9494-17b500be7495",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Fixed Window Counter"
+      },
+      "children": [
+        {
+          "id": "9e00a1d4-fd5c-46eb-b8a5-81b9849a5b84",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "# fixed_window.py\nimport time\nimport redis.asyncio as redis\n\nr = redis.from_url(\"redis://localhost\")\n\nasync def allow(client_id: str, limit: int = 100, window_s: int = 60) -> bool:\n    now_window = int(time.time()) // window_s\n    key = f\"rate:{client_id}:{now_window}\"\n\n    async with r.pipeline(transaction=True) as pipe:\n        pipe.incr(key)\n        pipe.expire(key, window_s)        # idempotente\n        count, _ = await pipe.execute()\n\n    return count <= limit"
+          }
+        }
+      ]
+    },
+    {
+      "id": "8645c6a0-416a-48ae-8f54-303f66a2f678",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Sliding Window Log"
+      },
+      "children": [
+        {
+          "id": "d2aebc60-2bc5-49af-b86a-1300f24b2669",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Guarda o timestamp de cada req numa estrutura ordenada (Redis sorted set, ZSET). A cada req: remove timestamps mais velhos que a janela, conta os restantes, se < limite adiciona. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "85f47a5e-96e0-4871-b857-b5358e3e126f",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# sliding_window_log.py — preciso mas mais memória\nimport time\nimport redis.asyncio as redis\nimport uuid\n\nr = redis.from_url(\"redis://localhost\")\n\nasync def allow(client_id: str, limit: int = 100, window_s: int = 60) -> bool:\n    now_ms = int(time.time() * 1000)\n    window_start = now_ms - (window_s * 1000)\n    key = f\"rate:log:{client_id}\"\n\n    async with r.pipeline(transaction=True) as pipe:\n        pipe.zremrangebyscore(key, 0, window_start)     # expire old\n        pipe.zcard(key)                                  # count\n        pipe.zadd(key, {f\"{now_ms}:{uuid.uuid4()}\": now_ms})  # add new\n        pipe.expire(key, window_s)\n        _, count, _, _ = await pipe.execute()\n\n    return count < limit  # < pq o novo já foi adicionado"
+          }
+        },
+        {
+          "id": "66a3c499-0029-425f-a37d-508546a7d454",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Tradeoff: memoriza até limit timestamps por cliente. Pra limite de 100/min e 10k clientes ativos: 1M entries. Em limites altos (10k/s), memória explode. Use sliding window counter pra aproximar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "a0f7b564-213d-4589-955a-4528a5803b0d",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Sliding Window Counter (o sweet spot)"
+      },
+      "children": [
+        {
+          "id": "1bbfaf48-9f69-4a25-bd06-49b837c80d73",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Conceito da Cloudflare ("
+              },
+              {
+                "text": "How we built rate limiting capable of scaling to millions of domains",
+                "italic": true
+              },
+              {
+                "text": ", 2017): "
+              },
+              {
+                "text": "interpola entre 2 janelas fixas",
+                "bold": true
+              },
+              {
+                "text": " pra aproximar uma janela deslizante sem armazenar cada timestamp. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "e1b600eb-7b71-427d-af17-42ba51ee1cb2",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# sliding_window_counter.py\nimport time\n\nasync def allow(client_id: str, limit: int = 100, window_s: int = 60) -> bool:\n    now = time.time()\n    cur_win = int(now) // window_s\n    prev_win = cur_win - 1\n    percent_through = (now % window_s) / window_s\n\n    cur_key = f\"rate:sw:{client_id}:{cur_win}\"\n    prev_key = f\"rate:sw:{client_id}:{prev_win}\"\n\n    cur_count = int(await r.get(cur_key) or 0)\n    prev_count = int(await r.get(prev_key) or 0)\n\n    estimated = prev_count * (1 - percent_through) + cur_count\n\n    if estimated >= limit:\n        return False\n\n    await r.incr(cur_key)\n    await r.expire(cur_key, window_s * 2)   # manter visível 1 janela extra\n    return True"
+          }
+        },
+        {
+          "id": "8c221039-e16f-4fb4-b7d8-814ce63b844a",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Precisão: estudos da Cloudflare mostram erro < 0.003% comparado ao sliding window log, com 1 ordem de magnitude menos memória. Hoje é o padrão de fato pra APIs de escala — NGINX, Cloudflare, Kong usam variantes."
+          }
+        }
+      ]
+    },
+    {
+      "id": "9dac766c-f0c1-4f35-a624-2e3d6e8da3b5",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Token Bucket (o preferido de APIs públicas)"
+      },
+      "children": [
+        {
+          "id": "0a284070-c85e-438f-993e-3082160b010d",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Balde com capacidade C tokens. Refill a R tokens/segundo (até C). Cada req consome 1 token. Se o balde está vazio: reject. Permite bursts até C, mantendo taxa média R. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "f28e3b31-0d8a-4cc0-9586-df53abb958f0",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "lua",
+            "code": "-- token_bucket.lua — atômico via EVAL no Redis\n-- KEYS[1] = chave do bucket\n-- ARGV[1] = capacidade (C)\n-- ARGV[2] = refill rate (R tokens/seg)\n-- ARGV[3] = now (unix seconds, com decimais)\n-- ARGV[4] = tokens requested (tipicamente 1)\n\nlocal key = KEYS[1]\nlocal capacity = tonumber(ARGV[1])\nlocal refill_rate = tonumber(ARGV[2])\nlocal now = tonumber(ARGV[3])\nlocal requested = tonumber(ARGV[4])\n\nlocal data = redis.call('HMGET', key, 'tokens', 'last')\nlocal tokens = tonumber(data[1])\nlocal last = tonumber(data[2])\n\nif tokens == nil then\n  tokens = capacity\n  last = now\nend\n\n-- Refill: adiciona tokens proporcional ao tempo passado, cap em capacity\nlocal elapsed = math.max(0, now - last)\ntokens = math.min(capacity, tokens + elapsed * refill_rate)\n\nlocal allowed = 0\nif tokens >= requested then\n  tokens = tokens - requested\n  allowed = 1\nend\n\nredis.call('HMSET', key, 'tokens', tokens, 'last', now)\nredis.call('EXPIRE', key, math.ceil(capacity / refill_rate) + 1)\n\nreturn {allowed, tokens}"
+          }
+        },
+        {
+          "id": "614dab20-58b6-4ee3-bb79-57c947bcd503",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "python",
+            "code": "# token_bucket_client.py — chamando o script\nimport time\nimport redis.asyncio as redis\n\nr = redis.from_url(\"redis://localhost\")\n\n# Carrega uma vez, reusa via EVALSHA\nwith open(\"token_bucket.lua\") as f:\n    TOKEN_BUCKET_SHA = None\n\nasync def init_script():\n    global TOKEN_BUCKET_SHA\n    with open(\"token_bucket.lua\") as f:\n        TOKEN_BUCKET_SHA = await r.script_load(f.read())\n\nasync def allow(client_id: str, capacity: int = 10, rate: float = 5.0) -> tuple[bool, float]:\n    now = time.time()\n    key = f\"rate:bucket:{client_id}\"\n    allowed, remaining = await r.evalsha(\n        TOKEN_BUCKET_SHA, 1, key, capacity, rate, now, 1\n    )\n    return bool(allowed), remaining"
+          }
+        },
+        {
+          "id": "3ded8e88-c5b2-4cf9-9f7e-cc304df54f1c",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Por que token bucket é querido de APIs públicas: AWS, GitHub, Stripe, Google Cloud — todos usam variantes. Razão: é amigável pro cliente. Burst é permitido até C, então um script bem-escrito que faz 20 reqs rápidas seguidas de silêncio não é punido. Clientes mal-escritos (loop sem sleep) sentem rapidinho."
+          }
+        }
+      ]
+    },
+    {
+      "id": "9654cf00-67f3-4576-a064-125de61b79ca",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Leaky Bucket (taxa constante)"
+      },
+      "children": [
+        {
+          "id": "1ca68f0a-503e-4f8c-bcb8-bab38a8489a6",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Fila FIFO de capacidade C com saída constante R/seg. Se a fila está cheia, req é rejeitada. Processamento suave — não permite burst na "
+              },
+              {
+                "text": "saída",
+                "italic": true
+              },
+              {
+                "text": ". Útil pra proteger backends que não aguentam picos (ex: worker thread pool fixo). "
+              }
+            ]
+          }
+        },
+        {
+          "id": "d95e1de3-4979-49aa-a22b-aac6834c4b09",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# leaky_bucket.py — versão educativa em memória\nfrom collections import deque\nimport time\n\nclass LeakyBucket:\n    def __init__(self, capacity: int, rate_per_s: float):\n        self.capacity = capacity\n        self.rate = rate_per_s\n        self.queue = deque()\n        self.last_leak = time.time()\n\n    def allow(self) -> bool:\n        now = time.time()\n        # Leak: remove itens proporcional ao tempo passado\n        to_leak = int((now - self.last_leak) * self.rate)\n        for _ in range(min(to_leak, len(self.queue))):\n            self.queue.popleft()\n        self.last_leak = now\n\n        if len(self.queue) >= self.capacity:\n            return False\n        self.queue.append(now)\n        return True"
+          }
+        },
+        {
+          "id": "85b3bc2a-a35d-4de8-a931-87b7bd1fa0c1",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Token vs Leaky: mesmo comportamento em \"regime steady state\" (R/seg), mas token permite burst até C instantaneamente. Leaky força saída suave. Escolha token pra APIs públicas (UX amigável), leaky pra gate de sistemas com capacidade fixa."
+          }
+        }
+      ]
+    },
+    {
+      "id": "e5aa759c-c77d-4f0a-a564-dbfbb5af755e",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Rate limit em HTTP: o que devolver"
+      },
+      "children": [
+        {
+          "id": "3b876a10-6361-4d7c-a27a-5a31999f12dc",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Boas práticas de API (seguindo "
+              },
+              {
+                "text": "RFC 6585",
+                "italic": true
+              },
+              {
+                "text": " e padrões Stripe/GitHub): "
+              }
+            ]
+          }
+        },
+        {
+          "id": "3550f22f-0025-4789-9462-048aaf7770ac",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "http",
+            "code": "HTTP/1.1 429 Too Many Requests\nContent-Type: application/json\nRetry-After: 30\nX-RateLimit-Limit: 100\nX-RateLimit-Remaining: 0\nX-RateLimit-Reset: 1744803660\n\n{\n  \"error\": \"rate_limit_exceeded\",\n  \"message\": \"Too many requests. Try again in 30 seconds.\",\n  \"retry_after\": 30\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "8cd180a7-e7d8-4d76-be4e-624252cc3c0d",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Onde aplicar: camadas de rate limit"
+      },
+      "children": [
+        {
+          "id": "e441dbba-b8b4-4788-9300-0c97c18dc6da",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Camada",
+              "Exemplo",
+              "Quando usa"
+            ],
+            "rows": [
+              [
+                "CDN/Edge",
+                "Cloudflare Rate Limit, Fastly, AWS WAF",
+                "DDoS protection, bots, muito barato pq bloqueia antes do origin"
+              ],
+              [
+                "API Gateway",
+                "Kong, AWS API Gateway, Apigee, Traefik",
+                "Por API key/plan/tier, rotas diferentes com limites diferentes"
+              ],
+              [
+                "Application (middleware)",
+                "Redis + Lua no app",
+                "Lógica complexa (quota por feature, limites dinâmicos)"
+              ],
+              [
+                "Database/Storage",
+                "Redis connection pool, DB rate limit",
+                "Proteger backend caro (LLM API, gateway de pagamento)"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "a70863ab-a21b-4bcd-962d-8e2e7b62cc9e",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Camadas combinadas: na prática, você tem rate limit em múltiplas camadas. CDN bloqueia bot scrapers baratos; API gateway aplica plan limits; middleware faz rate limit fino por feature; e o DB pool protege contra self-DoS. Cada camada pega o que a anterior deixou passar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "eb4d5db7-9d6b-4d82-aac7-b44a41b75431",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Distribuindo rate limit: estratégias de precisão vs perf"
+      },
+      "children": [
+        {
+          "id": "2f43a30f-3afe-4ea8-87d8-3fbbf368418f",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Estratégia",
+              "Precisão",
+              "Latência",
+              "Complexidade"
+            ],
+            "rows": [
+              [
+                "Redis centralized (Lua)",
+                "Altíssima",
+                "+1-2ms por req",
+                "Média — só Redis"
+              ],
+              [
+                "Redis Cluster com hash slot",
+                "Alta",
+                "+1-2ms",
+                "Alta — cluster"
+              ],
+              [
+                "Local cache + periodic sync",
+                "Baixa (overshoot)",
+                "~0ms",
+                "Alta — eventual consistency"
+              ],
+              [
+                "Sticky routing + local",
+                "Alta (se sticky funciona)",
+                "~0ms",
+                "Baixa"
+              ],
+              [
+                "Global DynamoDB with conditional writes",
+                "Média-alta",
+                "+5-10ms",
+                "Média"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "d0a85b19-87a5-446e-8ac0-6078c6719d95",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "\"Sloppy\" rate limit é OK quando overshoot tolerável. Se limite é 1000/min e você tem 10 réplicas fazendo 100/min local, overshoot máximo é 10% (1100/min). Pra free tier com monetização por overage, totalmente aceitável. Pra limites críticos (LLM API pagando por token), centralize."
+          }
+        }
+      ]
+    },
+    {
+      "id": "3648270d-631c-4115-8bb8-fd9b2a89af0c",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Decisões reais"
+      },
+      "children": []
+    },
+    {
+      "id": "a29c98d6-94ec-48f2-bb3d-fb098067fdca",
+      "type": "section",
+      "position": 13,
+      "data": {
+        "title": "Perguntas típicas (Q&A)"
+      },
+      "children": [
+        {
+          "id": "9fcf4f01-d8d9-434f-9ed8-213c14f4d1bc",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Como fazer rate limit multi-dimensional (por key + por IP + global)?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "90eb6963-a45b-42b9-ae06-3f8e3f2313f2",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Múltiplos buckets. Uma req chama Lua script que testa cada bucket em sequência. Se qualquer um estourar, rejeita. Ex: "
+              },
+              {
+                "text": "rate:key:abc",
+                "code": true
+              },
+              {
+                "text": " (100/min), "
+              },
+              {
+                "text": "rate:ip:1.2.3.4",
+                "code": true
+              },
+              {
+                "text": " (1000/min), "
+              },
+              {
+                "text": "rate:global",
+                "code": true
+              },
+              {
+                "text": " (10000/min). "
+              }
+            ]
+          }
+        },
+        {
+          "id": "877e7ddd-f72e-4992-b06a-df793bb16122",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "O que fazer se Redis cair?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "b2f099d9-7b19-4055-b0ba-63fd07a11d53",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": " Decisão por business: "
+              },
+              {
+                "text": "fail-open",
+                "italic": true
+              },
+              {
+                "text": " (deixa passar, prioriza disponibilidade) ou "
+              },
+              {
+                "text": "fail-closed",
+                "italic": true
+              },
+              {
+                "text": " (rejeita tudo, prioriza proteção). APIs pagas geralmente fail-closed; APIs user-facing fail-open mas com circuit breaker. Tenha alerta agressivo em queda do Redis. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "eefb2f19-3f97-4a63-ad2a-c291aa45a452",
+          "type": "paragraph",
+          "position": 4,
+          "data": {
+            "content": [
+              {
+                "text": "Rate limit por IP é bom?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "064ae369-59c7-4197-9e51-16ddacaa2d0f",
+          "type": "paragraph",
+          "position": 5,
+          "data": {
+            "content": [
+              {
+                "text": " Razoável pra bots, perigoso pra usuários legítimos (NAT, CG-NAT, corporate proxies, mobile carriers compartilham IPs entre milhares). Use como última camada + whitelist trusted ranges + combine com API key. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "7166a08d-85ed-46d1-9097-e7014b498241",
+          "type": "paragraph",
+          "position": 6,
+          "data": {
+            "content": [
+              {
+                "text": "Como modelar \"quota mensal\" em vez de rate limit?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "f58e5541-710c-4e51-856e-ae5ae5e08aaf",
+          "type": "paragraph",
+          "position": 7,
+          "data": {
+            "content": [
+              {
+                "text": " Contador em Redis com TTL até fim do mês, ou em Postgres row com UPDATE atômico. Rate limit protege bursts; quota protege volume total. Diferente, complementar. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "b77b2fa1-e6af-4b70-8ce1-f614d0dd1c97",
+          "type": "paragraph",
+          "position": 8,
+          "data": {
+            "content": [
+              {
+                "text": "Cliente bem-comportado recebe 429 às vezes — isso é normal?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "a9e1b545-454f-48b7-b01d-4fa66ffbaafe",
+          "type": "paragraph",
+          "position": 9,
+          "data": {
+            "content": [
+              {
+                "text": " Com rate limit preciso e limite justo, sim. SDK deve implementar retry com backoff (respeitando Retry-After). Se clientes reclamam, revise se o limite está calibrado ou se eles precisam de plano maior. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "08754168-9cfc-48bb-addd-5bbd478ff809",
+      "type": "callout",
+      "position": 14,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Take-aways:"
+      }
+    },
+    {
+      "id": "797c9484-4254-4e50-9011-e613c99cdc26",
+      "type": "paragraph",
+      "position": 15,
+      "data": {
+        "content": [
+          {
+            "text": " Parabéns! Você terminou a trilha de "
+          },
+          {
+            "text": "Sistemas Distribuídos",
+            "bold": true
+          },
+          {
+            "text": ". Do CAP ao rate limit, você tem as bases pra projetar e operar sistemas que sobrevivem à realidade da rede. "
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,197 @@
+{
+  "slug": "claude-rag-agentic-search",
+  "title": null,
+  "blocks": [
+    {
+      "id": "5d06d029-db1f-45ff-83ab-6cd6cd7ef578",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " RAG agêntico é quando Claude controla o loop de retrieval — decidindo quando buscar, o que buscar, e como combinar múltiplos resultados. Em vez de uma busca única pré-determinada, Claude usa retrieval como uma ferramenta que invoca quantas vezes for necessário para responder bem. É a diferença entre um sistema que recupera informação e um que raciocina sobre como recuperá-la. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "4707bdaa-d462-4504-942a-bfa1a9acc26a",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "De RAG clássico para agêntico"
+      },
+      "children": [
+        {
+          "id": "16fd1e36-3043-4fd6-8b8f-125604864d90",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Aspecto",
+              "RAG Clássico",
+              "RAG Agêntico"
+            ],
+            "rows": [
+              [
+                "Controle do loop",
+                "Pipeline fixo (código)",
+                "Claude orquestra (adaptive)"
+              ],
+              [
+                "Número de buscas",
+                "1 por pergunta",
+                "N buscas — Claude decide"
+              ],
+              [
+                "Query refinement",
+                "Query original do usuário",
+                "Claude reformula se necessário"
+              ],
+              [
+                "Fontes",
+                "1 índice de vectores",
+                "Múltiplos índices/APIs"
+              ],
+              [
+                "Raciocínio sobre resultado",
+                "Nenhum — injeta chunks",
+                "Claude avalia relevância dos chunks"
+              ],
+              [
+                "Latência",
+                "Baixa e previsível",
+                "Variável — pode ser alto para perguntas complexas"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "510419cb-3700-460b-b6ad-93a8de8462eb",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "text",
+            "code": "# RAG agêntico com Claude: retrieval como tool use\n\nimport anthropic, json\nfrom typing import Callable\n\nclient = anthropic.Anthropic()\n\n# Definição das tools de retrieval\nretrieval_tools = [\n    {\n        \"name\": \"buscar_documentos\",\n        \"description\": \"\"\"Busca documentos relevantes no corpus usando busca híbrida.\n                         Use quando precisar de informação específica não presente no contexto.\n                         Reformule a query para maximizar relevância — queries específicas\n                         retornam melhores resultados que queries genéricas.\n                         Retorna top-5 chunks com score de relevância.\"\"\",\n        \"input_schema\": {\n            \"type\": \"object\",\n            \"properties\": {\n                \"query\": {\n                    \"type\": \"string\",\n                    \"description\": \"Query de busca otimizada para recuperar a informação necessária\"\n                },\n                \"filtros\": {\n                    \"type\": \"object\",\n                    \"description\": \"Filtros opcionais: {'tipo': 'contrato', 'ano': 2024}\",\n                    \"additionalProperties\": True\n                }\n            },\n            \"required\": [\"query\"]\n        }\n    }\n]"
+          }
+        }
+      ]
+    },
+    {
+      "id": "233fec81-de2c-4ba2-a1f5-cb8eceac60b5",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Busca híbrida: BM25 + embedding"
+      },
+      "children": [
+        {
+          "id": "b7b48ad2-9a36-4c19-99a4-b5d6f1831b7c",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "# Implementação de busca híbrida com Reciprocal Rank Fusion (RRF):\n\nfrom sentence_transformers import SentenceTransformer\nfrom rank_bm25 import BM25Okapi\nimport numpy as np\n\nclass HybridRetriever:\n    def __init__(self, documents: list[dict]):\n        self.documents = documents\n        self.texts = [d[\"content\"] for d in documents]\n\n        # BM25 para keyword matching\n        tokenized = [text.lower().split() for text in self.texts]\n        self.bm25 = BM25Okapi(tokenized)\n\n        # Embedding para busca semântica\n        self.model = SentenceTransformer(\"intfloat/multilingual-e5-base\")\n        self.embeddings = self.model.encode(self.texts, normalize_embeddings=True)\n\n    def search(self, query: str, top_k: int = 5, alpha: float = 0.5) -> list[dict]:\n        \"\"\"\n        Busca híbrida com RRF.\n        alpha: peso do embedding vs BM25 (0.5 = igual, 1.0 = só embedding)\n        \"\"\"\n        # BM25 scores\n        bm25_scores = self.bm25.get_scores(query.lower().split())\n        bm25_ranked = np.argsort(bm25_scores)[::-1]\n\n        # Embedding scores\n        query_emb = self.model.encode([query], normalize_embeddings=True)\n        emb_scores = (query_emb @ self.embeddings.T)[0]\n        emb_ranked = np.argsort(emb_scores)[::-1]\n\n        # Reciprocal Rank Fusion\n        k = 60  # constante RRF padrão\n        rrf_scores = {}\n        for rank, idx in enumerate(bm25_ranked):\n            rrf_scores[idx] = rrf_scores.get(idx, 0) + (1 - alpha) / (k + rank + 1)\n        for rank, idx in enumerate(emb_ranked):\n            rrf_scores[idx] = rrf_scores.get(idx, 0) + alpha / (k + rank + 1)\n\n        # Top-k resultados\n        top_indices = sorted(rrf_scores, key=rrf_scores.get, reverse=True)[:top_k]\n        return [\n            {**self.documents[i], \"relevance_score\": rrf_scores[i]}\n            for i in top_indices\n        ]\n\n# Por que RRF funciona:\n# BM25: \"art. 15\" encontra documentos com exatamente \"art. 15\" (keyword exact)\n# Embedding: \"rescisão\" encontra \"encerramento do contrato\" (semântica)\n# RRF combina os rankings sem precisar normalizar scores em escala comum"
+          }
+        }
+      ]
+    },
+    {
+      "id": "97bdbc0a-c03e-4223-ab5f-59cd85c2ffe5",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "O loop de retrieval agêntico"
+      },
+      "children": [
+        {
+          "id": "9c3cffed-ada6-4310-b20d-34ad44c65e4f",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "# Loop completo de RAG agêntico:\n\nretriever = HybridRetriever(carregar_documentos())  # seu corpus\n\ndef executar_busca(query: str, filtros: dict = None) -> str:\n    \"\"\"Função que o loop chama quando Claude usa a tool.\"\"\"\n    resultados = retriever.search(query, top_k=5)\n    if filtros:\n        resultados = [r for r in resultados\n                     if all(r.get(k) == v for k, v in filtros.items())]\n\n    return json.dumps([{\n        \"id\": r[\"id\"],\n        \"titulo\": r[\"titulo\"],\n        \"conteudo\": r[\"content\"][:1000],  # limita por chunk\n        \"relevancia\": round(r[\"relevance_score\"], 3)\n    } for r in resultados], ensure_ascii=False)\n\n# Loop agêntico:\ndef rag_agentico(pergunta: str, max_buscas: int = 10) -> str:\n    messages = [{\"role\": \"user\", \"content\": pergunta}]\n    buscas_realizadas = 0\n\n    while True:\n        response = client.messages.create(\n            model=\"claude-opus-4-6\",\n            max_tokens=2048,\n            tools=retrieval_tools,\n            system=\"\"\"Você é um assistente especializado em consultar documentos.\n                     Use a ferramenta buscar_documentos quando precisar de informação.\n                     Reformule queries se os resultados não forem suficientes.\n                     Responda apenas baseado nos documentos recuperados.\"\"\",\n            messages=messages\n        )\n\n        if response.stop_reason == \"end_turn\":\n            return response.content[0].text\n\n        if response.stop_reason == \"tool_use\" and buscas_realizadas < max_buscas:\n            messages.append({\"role\": \"assistant\", \"content\": response.content})\n            tool_results = []\n\n            for block in response.content:\n                if block.type == \"tool_use\":\n                    buscas_realizadas += 1\n                    resultado = executar_busca(\n                        block.input[\"query\"],\n                        block.input.get(\"filtros\")\n                    )\n                    tool_results.append({\n                        \"type\": \"tool_result\",\n                        \"tool_use_id\": block.id,\n                        \"content\": resultado\n                    })\n\n            messages.append({\"role\": \"user\", \"content\": tool_results})\n\n        else:\n            # Limite de buscas atingido — Claude responde com o que tem\n            messages.append({\n                \"role\": \"user\",\n                \"content\": \"Limite de buscas atingido. Responda com as informações obtidas.\"\n            })\n\n# Uso:\nresposta = rag_agentico(\n    \"Quais são as condições de rescisão nos contratos de 2023 \"\n    \"e como elas diferem dos contratos de 2022?\"\n)\n# Claude vai buscar: \"rescisão contratos 2023\" → \"rescisão contratos 2022\"\n# → \"diferenças cláusulas rescisão\" e combinar os resultados"
+          }
+        }
+      ]
+    },
+    {
+      "id": "f390749d-6f16-48f9-97a0-015f2f4cd03d",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Reranking para precisão máxima"
+      },
+      "children": [
+        {
+          "id": "4c85d2a3-8de6-4f4c-b57b-6ccd63f9e3ab",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "# Cross-encoder reranking: segunda etapa após busca inicial\n# Retrieve broad (top-20) → rerank precision (top-5)\n\nfrom sentence_transformers import CrossEncoder\n\nclass RerankedRetriever(HybridRetriever):\n    def __init__(self, documents: list[dict]):\n        super().__init__(documents)\n        # Cross-encoder: mais pesado mas muito mais preciso\n        self.reranker = CrossEncoder(\"cross-encoder/ms-marco-MiniLM-L-6-v2\")\n\n    def search_with_reranking(self, query: str, top_k: int = 5) -> list[dict]:\n        # Fase 1: retrieval amplo (candidatos)\n        candidates = self.search(query, top_k=20)\n\n        # Fase 2: reranking preciso\n        pairs = [(query, doc[\"content\"][:512]) for doc in candidates]\n        rerank_scores = self.reranker.predict(pairs)\n\n        # Ordena por score do cross-encoder\n        reranked = sorted(\n            zip(candidates, rerank_scores),\n            key=lambda x: x[1],\n            reverse=True\n        )\n\n        return [\n            {**doc, \"rerank_score\": float(score)}\n            for doc, score in reranked[:top_k]\n        ]\n\n# Por que o reranking importa:\n# Bi-encoder (embedding): rápido, pode errar em nuance semântica\n# Cross-encoder: lento, olha query E documento juntos — mais preciso\n# Padrão: retrieve 20 com bi-encoder → rerank top-5 com cross-encoder"
+          }
+        },
+        {
+          "id": "77e69f19-c652-4b77-9e60-a87534d83c0c",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Técnica",
+              "Velocidade",
+              "Precisão",
+              "Quando usar"
+            ],
+            "rows": [
+              [
+                "BM25 puro",
+                "Alta",
+                "Boa para keywords",
+                "Termos técnicos exatos, siglas"
+              ],
+              [
+                "Embedding puro",
+                "Alta",
+                "Boa semântica",
+                "Linguagem natural, sinônimos"
+              ],
+              [
+                "Híbrido (RRF)",
+                "Alta",
+                "Melhor dos dois",
+                "Maioria dos casos"
+              ],
+              [
+                "Híbrido + Reranker",
+                "Média",
+                "Máxima",
+                "Alta precisão necessária (jurídico, médico)"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "bd1bbce0-3267-4048-9f72-540eddf38345",
+      "type": "callout",
+      "position": 5,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "RAG agêntico com busca híbrida + reranking é o estado da arte para sistemas de Q&A sobre documentos. Cada componente resolve um problema específico: híbrido captura keywords e semântica, reranker refina a precisão, e o loop agêntico permite perguntas complexas que requerem múltiplas buscas. A combinação dos três resolve 90%+ dos casos de produção."
+      }
+    },
+    {
+      "id": "379eda78-f7b7-4611-a613-39844ae8d3d9",
+      "type": "callout",
+      "position": 6,
+      "data": {
+        "variant": "info",
+        "title": "",
+        "content": "Próximo: Agents e Workflows — padrões de orquestração multi-agent, handoffs, e como construir sistemas onde múltiplos agentes colaboram em tarefas complexas."
+      }
+    }
+  ]
+}

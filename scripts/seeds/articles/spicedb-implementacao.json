@@ -1,0 +1,312 @@
+{
+  "slug": "spicedb-implementacao",
+  "title": null,
+  "blocks": [
+    {
+      "id": "5a9c8aaf-816c-4e9c-9368-691fd9d06725",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "A implementação Zanzibar mais madura"
+      },
+      "children": [
+        {
+          "id": "f228350e-296e-49d6-bb55-2833576eb62a",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "SpiceDB",
+                "bold": true
+              },
+              {
+                "text": " é o produto da "
+              },
+              {
+                "text": "Authzed",
+                "link": "https://authzed.com"
+              },
+              {
+                "text": ", fundada por engenheiros vindos do Red Hat/CoreOS. Open-source desde 2021, Apache 2.0. É hoje a implementação ReBAC mais alinhada ao paper Zanzibar — mantém zookies (rebatizados ZedTokens), userset rewrites, namespaces, APIs Check/Expand/Lookup, e ainda adicionou caveats (ABAC condicional). "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "d9d2c539-2210-49a2-985e-f836bc86aca5",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Schema Language: declarando o domínio"
+      },
+      "children": [
+        {
+          "id": "44e020bf-360d-47d9-9214-6d334baa19ef",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " A primeira coisa a desenhar é o schema. SpiceDB tem uma DSL própria, type-safe, com tooling (zed CLI, playground.authzed.com). Exemplo de schema Drive-like: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "10f8acef-0be8-419d-be76-36675fd443f2",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "text",
+            "code": "definition user {}\n\ndefinition organization {\n  relation admin: user\n  relation member: user\n\n  permission manage = admin\n  permission view = admin + member\n}\n\ndefinition folder {\n  relation parent: folder | organization\n  relation owner: user\n  relation editor: user\n  relation viewer: user\n\n  permission write = owner + editor + parent->write\n  permission read  = viewer + write + parent->read\n}\n\ndefinition document {\n  relation parent: folder\n  relation owner: user\n  relation editor: user\n  relation viewer: user\n\n  permission write = owner + editor + parent->write\n  permission read  = viewer + write + parent->read\n  permission share = owner + parent->write\n}",
+            "filename": "schema.zed"
+          }
+        },
+        {
+          "id": "75ecc915-ef8b-41ba-87b6-190f9851d64c",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Essa DSL substitui o protobuf de namespace config do paper Zanzibar — mesma expressividade, leitura humana. aplica em prod; versionado em git."
+          }
+        }
+      ]
+    },
+    {
+      "id": "369fbc0e-ace1-4795-bdaf-1e857db4ca09",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Os 4 verbos da API"
+      },
+      "children": [
+        {
+          "id": "92a4766e-88ac-48a3-a504-5e5c05bab3c8",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "API",
+              "Quando usar",
+              "Latência alvo"
+            ],
+            "rows": [
+              [
+                "WriteRelationships",
+                "Criar/deletar tuplas (compartilhar doc, adicionar membro)",
+                "~10-30ms (storage commit)"
+              ],
+              [
+                "CheckPermission",
+                "Pode user X fazer ação Y no recurso Z? — path do request HTTP",
+                "<10ms p99 (cache hot)"
+              ],
+              [
+                "LookupResources",
+                "\"Quais docs Tom pode ler?\" — UI de listagem do user",
+                "Stream; depende do fan-out"
+              ],
+              [
+                "LookupSubjects",
+                "\"Quem tem acesso ao doc X?\" — UI de admin/share",
+                "Stream; depende do grafo"
+              ],
+              [
+                "ExpandPermission",
+                "Debug: quem deriva essa perm e por quê",
+                "~50ms; uso esporádico"
+              ],
+              [
+                "ReadRelationships",
+                "Listar tuplas brutas (compliance, audit)",
+                "Stream paginado"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "26a208a2-0ffe-4a4e-bf5c-600aa5acfac1",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Exemplo end-to-end: compartilhar e checar"
+      },
+      "children": [
+        {
+          "id": "e9ffe4a8-7782-40ad-b991-76fd0baa2e2c",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "typescript",
+            "code": "import { v1 } from '@authzed/authzed-node';\n\nconst client = v1.NewClient('YOUR_API_TOKEN', 'spicedb.example.com:50051');\n\n// 1. Alice compartilha doc:report-q1 com Bob como editor\nconst writeResp = await client.promises.writeRelationships(\n  v1.WriteRelationshipsRequest.create({\n    updates: [\n      v1.RelationshipUpdate.create({\n        operation: v1.RelationshipUpdate_Operation.CREATE,\n        relationship: v1.Relationship.create({\n          resource: { objectType: 'document', objectId: 'report-q1' },\n          relation: 'editor',\n          subject: { object: { objectType: 'user', objectId: 'bob' } },\n        }),\n      }),\n    ],\n  }),\n);\n\n// IMPORTANTE: guardar o zedToken retornado\nconst zedToken = writeResp.writtenAt;  // ex: 'GhUKEzE2Nz...'\nawait db.documents.update({\n  where: { id: 'report-q1' },\n  data: { authzZedToken: zedToken.token },\n});\n\n// 2. Bob faz GET /docs/report-q1 — middleware checa\nconst check = await client.promises.checkPermission(\n  v1.CheckPermissionRequest.create({\n    resource: { objectType: 'document', objectId: 'report-q1' },\n    permission: 'read',\n    subject: { object: { objectType: 'user', objectId: 'bob' } },\n    consistency: v1.Consistency.create({\n      requirement: { oneofKind: 'atLeastAsFresh',\n        atLeastAsFresh: { text: doc.authzZedToken },\n      },\n    }),\n  }),\n);\n\nif (check.permissionship !== v1.CheckPermissionResponse_Permissionship.HAS_PERMISSION) {\n  throw new ForbiddenError();\n}",
+            "filename": "app/share.ts"
+          }
+        },
+        {
+          "id": "34cea4d4-cd9d-405d-9710-3abbf9e00bae",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "O persistido junto ao recurso é o que garante consistência. Sem ele, você pode ler dados com permissões obsoletas — exatamente o new enemy problem."
+          }
+        }
+      ]
+    },
+    {
+      "id": "f0c7a59f-30b4-4b94-a06e-38b84dce350a",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Caveats: ABAC dentro de ReBAC"
+      },
+      "children": [
+        {
+          "id": "8582a375-287c-4d16-b55b-28d5092ecc0a",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " A maior limitação histórica do ReBAC puro: como expressar \"Bob pode ler MAS apenas do escritório (IP no CIDR corporativo)\"? Em SpiceDB pós-2023, caveats resolvem isso via expressões CEL avaliadas em runtime. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "8791806c-3b2e-4d75-908d-79434bfe4abe",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "text",
+            "code": "caveat ip_allowlist(user_ip string, allowed_cidrs list<string>) {\n  user_ip.isIpAddress() && user_ip.ipInCidrList(allowed_cidrs)\n}\n\ndefinition document {\n  relation viewer: user with ip_allowlist\n  permission read = viewer\n}",
+            "filename": "schema.zed"
+          }
+        },
+        {
+          "id": "e36db5b8-62f0-46cb-850d-5f87fbe6bbe6",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "typescript",
+            "code": "// Write da tupla COM contexto fixo\nawait client.promises.writeRelationships({\n  updates: [{\n    operation: 'CREATE',\n    relationship: {\n      resource: { objectType: 'document', objectId: 'sensitive' },\n      relation: 'viewer',\n      subject: { object: { objectType: 'user', objectId: 'bob' } },\n      optionalCaveat: {\n        caveatName: 'ip_allowlist',\n        context: { allowed_cidrs: ['10.0.0.0/8', '192.168.0.0/16'] },\n      },\n    },\n  }],\n});\n\n// Check passando contexto runtime\nawait client.promises.checkPermission({\n  resource: { objectType: 'document', objectId: 'sensitive' },\n  permission: 'read',\n  subject: { object: { objectType: 'user', objectId: 'bob' } },\n  context: { user_ip: req.ip },  // contexto dinâmico do request\n});"
+          }
+        }
+      ]
+    },
+    {
+      "id": "c189e5b1-6b30-4d09-90a0-17461760dc0f",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Arquitetura de deployment"
+      },
+      "children": []
+    },
+    {
+      "id": "9648cc0f-5138-4a76-ac91-b59623197bc7",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Performance: como tirar sub-ms"
+      },
+      "children": [
+        {
+          "id": "1dff35a7-95bc-48a6-8a5c-910cc3c64049",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Tuning crítico: e . Sem isso, você não chega aos números do paper. Em single-node dev é fine, mas em produção dispatch cluster é obrigatório."
+          }
+        }
+      ]
+    },
+    {
+      "id": "f8175235-03dd-434a-941d-70f477dae81e",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Modelagem real: multi-tenant SaaS"
+      },
+      "children": [
+        {
+          "id": "2f222d63-c704-41b7-bdac-3298b1d35a82",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "definition user {}\n\ndefinition organization {\n  relation admin: user\n  relation billing_admin: user\n  relation member: user\n\n  permission manage = admin\n  permission view_billing = admin + billing_admin\n  permission view = admin + billing_admin + member\n}\n\ndefinition project {\n  relation org: organization\n  relation owner: user\n  relation contributor: user\n\n  permission manage = owner + org->admin\n  permission write = manage + contributor\n  permission read  = write + org->member\n}\n\ndefinition issue {\n  relation project: project\n  relation assignee: user\n  relation reporter: user\n\n  permission manage = reporter + project->manage\n  permission write  = manage + assignee + project->write\n  permission read   = project->read\n}",
+            "filename": "schema-saas.zed"
+          }
+        },
+        {
+          "id": "9f32648f-4bf5-405f-88b5-8f936eb4b57a",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Note como herança org → project → issue é declarativa. Adicionar \"guest\" ao projeto não exige role nova nem mudança de schema — basta tupla "
+              },
+              {
+                "text": "project:web#contributor@user:guest",
+                "code": true
+              },
+              {
+                "text": ". Esse é o ganho fundamental sobre RBAC. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "fb11319f-6b7e-4c15-a970-6e2b3c4c55cd",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Operando: zed CLI, dev container, testing"
+      },
+      "children": [
+        {
+          "id": "af5cd0c3-e9cc-4613-bf97-7103eb4b366d",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "schema: |\n  definition user {}\n  definition doc {\n    relation viewer: user\n    relation editor: user\n    permission read = viewer + editor\n  }\n\nrelationships: |\n  doc:report#editor@user:alice\n  doc:report#viewer@user:bob\n\nassertions:\n  assertTrue:\n    - doc:report#read@user:alice  # editor pode ler\n    - doc:report#read@user:bob    # viewer pode ler\n  assertFalse:\n    - doc:report#read@user:charlie  # nem editor nem viewer",
+            "filename": "validation.yaml"
+          }
+        }
+      ]
+    },
+    {
+      "id": "279010ef-2bed-4192-a120-72b0f30a16b4",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Quando NÃO usar SpiceDB"
+      },
+      "children": []
+    },
+    {
+      "id": "9482f213-e3ca-4dde-aea3-4158d23c3b27",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Resumo executivo"
+      },
+      "children": []
+    }
+  ]
+}

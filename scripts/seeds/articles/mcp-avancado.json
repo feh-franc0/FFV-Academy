@@ -1,0 +1,177 @@
+{
+  "slug": "mcp-avancado",
+  "title": null,
+  "blocks": [
+    {
+      "id": "795566ea-9d7c-400b-8a6a-54981b453ab5",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Um servidor MCP de produção vai além de expor tools. Ele lida com autenticação, auditoria, erros de forma resiliente, usa sampling para inteligência interna, e expõe resources dinâmicos. Neste módulo, construímos um servidor completo com os padrões que aparecem em integrações profissionais. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "e811e353-e6e5-4a23-b8a3-4fb048394646",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Error handling robusto"
+      },
+      "children": [
+        {
+          "id": "494755aa-b0e8-4520-b349-c320d95cd196",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "# Padrão de error handling para tools MCP em produção:\n\nfrom mcp.server import Server\nfrom mcp import types\nimport logging, traceback\n\nlogger = logging.getLogger(__name__)\napp = Server(\"servidor-producao\")\n\n@app.call_tool()\nasync def call_tool(name: str, arguments: dict) -> list[types.TextContent]:\n    try:\n        if name == \"buscar_cliente\":\n            return await _buscar_cliente(arguments)\n        raise ValueError(f\"Tool desconhecida: {name}\")\n\n    except ClienteNaoEncontradoError as e:\n        # Erro de negócio — Claude pode tentar alternativa\n        logger.info(f\"Cliente não encontrado: {arguments}\")\n        return [types.TextContent(\n            type=\"text\",\n            text=json.dumps({\n                \"erro\": \"cliente_nao_encontrado\",\n                \"mensagem\": str(e),\n                \"sugestao\": \"Tente buscar por CPF ou email em vez de nome\"\n            }),\n            isError=True  # ← Claude recebe e adapta sua resposta\n        )]\n\n    except PermissaoNegadaError as e:\n        # Erro de autorização — deve ser informado ao usuário\n        logger.warning(f\"Acesso negado: {name} com {arguments}\")\n        return [types.TextContent(\n            type=\"text\",\n            text=json.dumps({\n                \"erro\": \"permissao_negada\",\n                \"recurso\": str(e),\n                \"acao\": \"Solicite ao administrador acesso ao recurso\"\n            }),\n            isError=True\n        )]\n\n    except Exception as e:\n        # Erro inesperado — log completo interno, mensagem genérica ao Claude\n        logger.error(\n            f\"Erro inesperado em tool '{name}'\",\n            extra={\"arguments\": arguments, \"error\": str(e)},\n            exc_info=True\n        )\n        return [types.TextContent(\n            type=\"text\",\n            text=json.dumps({\n                \"erro\": \"erro_interno\",\n                \"mensagem\": \"Erro interno ao processar a solicitação. Tente novamente.\"\n            }),\n            isError=True\n        )]"
+          }
+        }
+      ]
+    },
+    {
+      "id": "5821fd5b-ea2e-4f3f-a970-d3b97e482588",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Resources dinâmicos"
+      },
+      "children": [
+        {
+          "id": "d9e25b4d-3668-4530-b4b5-3d69d7d6f782",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "# Resources estáticos vs dinâmicos:\n\n# ─── Resources estáticos (lista fixa) ────────────────────\n@app.list_resources()\nasync def list_resources() -> list[types.Resource]:\n    return [\n        types.Resource(\n            uri=\"config://database/schema\",\n            name=\"Schema do banco de dados\",\n            description=\"Estrutura completa das tabelas e relacionamentos\",\n            mimeType=\"application/json\"\n        ),\n        types.Resource(\n            uri=\"docs://api/reference\",\n            name=\"Referência da API interna\",\n            description=\"Documentação dos endpoints internos\",\n            mimeType=\"text/markdown\"\n        )\n    ]\n\n@app.read_resource()\nasync def read_resource(uri: str) -> str:\n    if uri == \"config://database/schema\":\n        return json.dumps(get_db_schema())  # função sua\n    if uri == \"docs://api/reference\":\n        return pathlib.Path(\"docs/api.md\").read_text()\n    raise ValueError(f\"Resource desconhecido: {uri}\")\n\n# ─── Resource templates (URI dinâmico) ────────────────────\n# Para expor coleções de dados addressable por ID:\n\n@app.list_resource_templates()\nasync def list_resource_templates() -> list[types.ResourceTemplate]:\n    return [\n        types.ResourceTemplate(\n            uriTemplate=\"cliente://{cliente_id}/historico\",\n            name=\"Histórico de compras do cliente\",\n            description=\"Lê o histórico completo de pedidos de um cliente específico. \"\n                        \"Use {cliente_id} como o ID do cliente (ex: cliente://C001/historico)\",\n            mimeType=\"application/json\"\n        )\n    ]\n\n@app.read_resource()\nasync def read_resource(uri: str) -> str:\n    # Processa tanto URIs fixos quanto de templates\n    if uri.startswith(\"cliente://\") and uri.endswith(\"/historico\"):\n        cliente_id = uri.replace(\"cliente://\", \"\").replace(\"/historico\", \"\")\n        historico = get_historico_cliente(cliente_id)  # função sua\n        return json.dumps(historico)\n    # ... outros casos"
+          }
+        }
+      ]
+    },
+    {
+      "id": "1fb36976-8384-49e0-b7e7-88e9dc125faa",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Sampling: Claude dentro do seu servidor"
+      },
+      "children": [
+        {
+          "id": "43476cf8-a749-4803-8093-740761755ac1",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "# Sampling permite que o servidor peça ao host para chamar o LLM\n# Caso de uso: usar Claude para processar/sumarizar antes de retornar\n\nfrom mcp.server import Server\nfrom mcp.types import SamplingMessage, TextContent\n\napp = Server(\"servidor-com-sampling\")\n\n@app.call_tool()\nasync def call_tool(name: str, arguments: dict) -> list[TextContent]:\n    if name == \"analisar_log\":\n        # 1. Busca os logs brutos\n        logs_brutos = get_logs(arguments[\"periodo\"])  # pode ser 10MB de logs\n\n        # 2. Usa sampling para pedir ao host que Claude sumarize\n        # O host tem as credenciais de API — o servidor não precisa ter\n        summary_response = await app.request_context.session.create_message(\n            messages=[\n                SamplingMessage(\n                    role=\"user\",\n                    content=TextContent(\n                        type=\"text\",\n                        text=f\"\"\"Analise estes logs e retorne:\n1. Top 5 erros por frequência com contagem\n2. Padrão de horário com mais erros (hora do dia)\n3. Serviços mais afetados\n\nLOGS:\n{logs_brutos[:50000]}  # limita para caber no contexto\"\"\"\n                    )\n                )\n            ],\n            max_tokens=1000,\n            system=\"Você é um analisador de logs. Responda em JSON estruturado.\"\n        )\n\n        # 3. Retorna o sumário — não os 10MB de logs brutos\n        return [TextContent(\n            type=\"text\",\n            text=summary_response.content.text\n        )]"
+          }
+        }
+      ]
+    },
+    {
+      "id": "68043dbc-ff5e-4ae4-b5ad-ba75c4f2b36f",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Autenticação e segurança"
+      },
+      "children": [
+        {
+          "id": "f5bef7cc-4d6d-4d1e-bb4b-63b9e1ad1513",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "# Padrão de autenticação para servidores MCP que acessam dados sensíveis:\n\nimport os, hmac, hashlib\nfrom functools import wraps\n\n# ─── 1. Credenciais via env vars ──────────────────────────\n# Nunca hardcode. O mcp.json passa via env:\n# \"env\": {\"DATABASE_URL\": \"${DATABASE_URL}\", \"API_KEY\": \"${MY_API_KEY}\"}\n\nDATABASE_URL = os.environ[\"DATABASE_URL\"]\nINTERNAL_API_KEY = os.environ[\"INTERNAL_API_KEY\"]\n\n# ─── 2. Validação de argumentos (não confie no input) ─────\ndef validar_cliente_id(cliente_id: str) -> bool:\n    \"\"\"IDs de cliente sempre são alfanuméricos, 6-20 chars.\"\"\"\n    return bool(re.match(r'^[A-Z0-9]{6,20}$', cliente_id))\n\nasync def _buscar_cliente(arguments: dict) -> list:\n    cliente_id = arguments.get(\"cliente_id\", \"\")\n\n    if not validar_cliente_id(cliente_id):\n        return [TextContent(\n            type=\"text\",\n            text=json.dumps({\"erro\": \"ID de cliente inválido\", \"recebido\": cliente_id}),\n            isError=True\n        )]\n\n    # Agora é seguro usar o ID\n    cliente = await db.buscar(cliente_id)\n    return [TextContent(type=\"text\", text=json.dumps(cliente))]\n\n# ─── 3. Audit logging ─────────────────────────────────────\nimport structlog\n\naudit_log = structlog.get_logger(\"mcp.audit\")\n\n@app.call_tool()\nasync def call_tool(name: str, arguments: dict) -> list:\n    # Log toda chamada de tool com dados sensíveis\n    audit_log.info(\n        \"tool_called\",\n        tool=name,\n        # Redact dados sensíveis antes de logar\n        args_redacted={k: \"***\" if k in (\"senha\", \"token\", \"cpf\") else v\n                       for k, v in arguments.items()}\n    )\n    # ... resto da lógica\n\n# ─── 4. Rate limiting por sessão ──────────────────────────\nfrom collections import defaultdict\nimport time\n\n_call_counts: dict[str, list[float]] = defaultdict(list)\nRATE_LIMIT = 50  # chamadas por minuto por sessão\n\ndef check_rate_limit(session_id: str) -> bool:\n    now = time.time()\n    # Remove chamadas > 60s atrás\n    _call_counts[session_id] = [t for t in _call_counts[session_id] if now - t < 60]\n    if len(_call_counts[session_id]) >= RATE_LIMIT:\n        return False\n    _call_counts[session_id].append(now)\n    return True"
+          }
+        },
+        {
+          "id": "fd460a35-8f9a-45e6-adff-7be0d2018acb",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Aspecto",
+              "Servidor básico",
+              "Servidor produção"
+            ],
+            "rows": [
+              [
+                "Credenciais",
+                "Hardcoded ou no código",
+                "Env vars, nunca no código"
+              ],
+              [
+                "Validação",
+                "Confia nos argumentos do Claude",
+                "Valida todos os inputs antes de usar"
+              ],
+              [
+                "Erros",
+                "Exceção não tratada",
+                "isError: true com mensagem contextual"
+              ],
+              [
+                "Logging",
+                "print() ou sem log",
+                "Structured logging com audit trail"
+              ],
+              [
+                "Rate limiting",
+                "Sem limite",
+                "Limite por sessão/tool para evitar abuso"
+              ],
+              [
+                "Secrets",
+                "Em mcp.json (commitado?)",
+                "Em env vars, mcp.json no .gitignore"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "dcb72b9e-639e-40b7-85da-c8b0128ab784",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Deploy e distribuição"
+      },
+      "children": [
+        {
+          "id": "b22b6f8b-3b92-47f2-ace9-aa5e183e63a4",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "# Opções de deploy para servidores MCP:\n\n# ─── 1. Local via stdio (mais comum para dev) ──────────────\n# .claude/mcp.json:\n{\n  \"mcpServers\": {\n    \"meu-servidor\": {\n      \"command\": \"python\",\n      \"args\": [\"mcp_server/main.py\"]\n    }\n  }\n}\n\n# ─── 2. Remote via SSE (para times, SaaS) ─────────────────\n# O servidor roda como serviço HTTP com SSE endpoint\n# mcp.json para servidor remoto:\n{\n  \"mcpServers\": {\n    \"meu-servidor-remoto\": {\n      \"url\": \"https://meu-servidor.empresa.com/mcp\",\n      \"headers\": {\n        \"Authorization\": \"Bearer ${MCP_TOKEN}\"\n      }\n    }\n  }\n}\n\n# Servidor SSE com FastAPI:\nfrom fastapi import FastAPI\nfrom mcp.server.sse import SseServerTransport\n\napp_web = FastAPI()\nmcp_app = Server(\"meu-servidor\")\nsse = SseServerTransport(\"/messages/\")\n\n@app_web.get(\"/sse\")\nasync def sse_endpoint(request: Request):\n    async with sse.connect_sse(request.scope, request.receive, request._send) as streams:\n        await mcp_app.run(streams[0], streams[1], mcp_app.create_initialization_options())\n\n# ─── 3. npx para servidores Node.js (distribuição fácil) ───\n# O usuário configura assim sem instalar nada:\n{\n  \"mcpServers\": {\n    \"github\": {\n      \"command\": \"npx\",\n      \"args\": [\"-y\", \"@modelcontextprotocol/server-github\"]\n    }\n  }\n}\n# npx baixa e roda automaticamente — zero instalação manual"
+          }
+        }
+      ]
+    },
+    {
+      "id": "33c406a8-6574-42f1-8339-546ec7ebed41",
+      "type": "callout",
+      "position": 6,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Um servidor MCP profissional é um microsserviço do seu ecossistema de IA. Com error handling correto, autenticação, audit logging e rate limiting, você pode expor dados e ações sensíveis para Claude com confiança — sabendo que cada chamada é validada, rastreada e limitada. Esse é o padrão que permite escalar de protótipo para produção."
+      }
+    },
+    {
+      "id": "70e4b769-9806-4fda-8127-7a7ddb789eff",
+      "type": "callout",
+      "position": 7,
+      "data": {
+        "variant": "info",
+        "title": "",
+        "content": "Próximo: RAG Agêntico — como Claude usa retrieval como uma ferramenta, combinando busca híbrida, reranking e pipelines adaptativos para responder perguntas sobre grandes corpora de documentos."
+      }
+    }
+  ]
+}

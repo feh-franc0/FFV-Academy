@@ -1,0 +1,398 @@
+{
+  "slug": "spatial-queries-postgres",
+  "title": null,
+  "blocks": [
+    {
+      "id": "44548e2d-55d0-418a-a91e-e43428e81f61",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema das queries espaciais em escala"
+      },
+      "children": [
+        {
+          "id": "54f38e2e-9780-451c-bee6-7e9ee75ee7f7",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " PostGIS + GIST é fantástico até alguns milhões de geometrias. Acima disso — e quando o problema vira "
+              },
+              {
+                "text": "encontrar vizinhos em tempo real entre milhões de entidades móveis",
+                "italic": true
+              },
+              {
+                "text": " (motoristas, entregadores, navios) — abordagens baseadas em "
+              },
+              {
+                "text": "indexação espacial discreta",
+                "bold": true
+              },
+              {
+                "text": " (H3, S2, Quadkey, Geohash) começam a ganhar de tudo o resto. Esta aula explica por que e como integrar. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "3ad4a378-4cf9-49b1-94bc-ab6f3ba85b02",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Os quatro sistemas mais usados"
+      },
+      "children": [
+        {
+          "id": "8b348a67-ce88-462b-bc2c-7446ec0da9c1",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Sistema",
+              "Origem",
+              "Forma",
+              "Forte em",
+              "Usuários canônicos"
+            ],
+            "rows": [
+              [
+                "Geohash",
+                "Niemeyer, 2008",
+                "Retângulo (base32)",
+                "Prefix match, legibilidade",
+                "Elasticsearch, Redis Geo"
+              ],
+              [
+                "Quadkey",
+                "Bing Maps, 2006",
+                "Quadrante recursivo",
+                "Tiles XYZ, legado MS",
+                "Azure Maps, Bing"
+              ],
+              [
+                "S2",
+                "Google, 2013",
+                "Quadrante esférico + Hilbert curve",
+                "Range queries B-tree-friendly, contenção exata",
+                "Google Maps, MongoDB, Foursquare"
+              ],
+              [
+                "H3",
+                "Uber, 2018",
+                "Hexágono hierárquico",
+                "Vizinhança uniforme, agregação",
+                "Uber, AirBnB, OSM, INPE (queimadas)"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "15427d4d-fdba-4d6f-8ce5-9a74cc8e87b2",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Antes de escolher, leia: H3: Uber's Hexagonal Hierarchical Spatial Index (eng.uber.com, 2018) e S2 Geometry — A Quadrilateralized Spherical Cube (s2geometry.io, Google 2017)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "4ea56249-7c1b-47bb-a548-7a0c3a2d7c68",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "H3 em detalhe: 16 resoluções da Terra"
+      },
+      "children": [
+        {
+          "id": "fdc8e045-a39c-468b-8f4b-87b1887949f4",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Res",
+              "Área média",
+              "Hex edge",
+              "Caso típico"
+            ],
+            "rows": [
+              [
+                "0",
+                "4.250.546 km²",
+                "1107 km",
+                "Continente / país inteiro"
+              ],
+              [
+                "4",
+                "1.770 km²",
+                "22 km",
+                "Estado / região metropolitana"
+              ],
+              [
+                "7",
+                "5,16 km²",
+                "1,2 km",
+                "Bairro grande"
+              ],
+              [
+                "9",
+                "0,105 km² (10,5 ha)",
+                "174 m",
+                "Quadra urbana"
+              ],
+              [
+                "10",
+                "0,015 km² (1,5 ha)",
+                "66 m",
+                "Lote / endereço"
+              ],
+              [
+                "12",
+                "0,002 km² (~2000 m²)",
+                "9 m",
+                "Mesa / sala"
+              ],
+              [
+                "15",
+                "0,9 m²",
+                "0,5 m",
+                "Posição precisa"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ce85a143-d2e7-44f5-92c0-8226d24d31a3",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "h3-pg: a extensão Postgres"
+      },
+      "children": [
+        {
+          "id": "9591175d-6d60-457a-adc8-86f62919bdb2",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "sql",
+            "code": "-- Instalar (assume Postgres + PGXS)\n-- git clone https://github.com/zachasme/h3-pg && make && make install\nCREATE EXTENSION h3;\nCREATE EXTENSION h3_postgis CASCADE;  -- integração com geometry/geography\n\n-- Schema típico de pedidos\nCREATE TABLE pedidos (\n  id BIGSERIAL PRIMARY KEY,\n  user_id BIGINT,\n  pickup_lat DOUBLE PRECISION,\n  pickup_lng DOUBLE PRECISION,\n  pickup_geom GEOGRAPHY(Point, 4326) GENERATED ALWAYS AS\n    (ST_GeogFromText('POINT(' || pickup_lng || ' ' || pickup_lat || ')')) STORED,\n  pickup_h3_9 H3INDEX GENERATED ALWAYS AS\n    (h3_lat_lng_to_cell(POINT(pickup_lng, pickup_lat), 9)) STORED,\n  created_at TIMESTAMPTZ DEFAULT now()\n);\n\nCREATE INDEX pedidos_pickup_geom_gix ON pedidos USING GIST (pickup_geom);\nCREATE INDEX pedidos_pickup_h3_9_idx  ON pedidos (pickup_h3_9);\n\n-- Tabela de motoristas (atualizada em tempo real via Redis, snapshot em Postgres)\nCREATE TABLE motoristas (\n  id BIGINT PRIMARY KEY,\n  loc_h3_9 H3INDEX NOT NULL,\n  status TEXT NOT NULL,\n  last_seen_at TIMESTAMPTZ NOT NULL\n);\nCREATE INDEX motoristas_h3_9_status_idx ON motoristas (loc_h3_9, status) WHERE status = 'disponivel';\n\n-- \"Motoristas disponíveis a até 5 hexágonos do pedido 12345\"\nWITH p AS (\n  SELECT pickup_h3_9 FROM pedidos WHERE id = 12345\n),\nring AS (\n  SELECT unnest(h3_grid_disk((SELECT pickup_h3_9 FROM p), 5)) AS cell\n)\nSELECT m.id, m.last_seen_at\nFROM motoristas m\nJOIN ring r ON m.loc_h3_9 = r.cell\nWHERE m.status = 'disponivel'\nORDER BY h3_grid_distance(m.loc_h3_9, (SELECT pickup_h3_9 FROM p))\nLIMIT 10;"
+          }
+        },
+        {
+          "id": "a9abc136-9b01-4455-bf05-24ba7b0f6050",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Esse pattern (h3_grid_disk + JOIN por cell) tem performance constante mesmo com milhões de motoristas. PostGIS puro com ST_DWithin teria que avaliar geometria em cada candidato."
+          }
+        }
+      ]
+    },
+    {
+      "id": "f8afedda-7670-47ba-b102-edb65e933778",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Cluster por zoom: heatmap real"
+      },
+      "children": [
+        {
+          "id": "f96f1139-18e5-426e-9240-894f19d4a2b4",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Para um heatmap de 10 milhões de queimadas (caso INPE/Brasil), o cliente não pode carregar todos os pontos. Solução: agregar server-side por H3 cell na resolução adequada ao zoom. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "d73ab54d-d007-4104-8e83-cfdade4ddb17",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "sql",
+            "code": "-- Materialized view de queimadas agregadas em H3 res 7\nCREATE MATERIALIZED VIEW queimadas_h3_7 AS\nSELECT\n  h3_lat_lng_to_cell(POINT(lng, lat), 7) AS cell,\n  COUNT(*) AS total,\n  MAX(detected_at) AS last_event,\n  h3_cell_to_boundary_geometry(\n    h3_lat_lng_to_cell(POINT(lng, lat), 7)\n  ) AS geom\nFROM queimadas\nGROUP BY 1;\n\nCREATE INDEX queimadas_h3_7_cell_idx ON queimadas_h3_7 (cell);\nCREATE INDEX queimadas_h3_7_geom_gix ON queimadas_h3_7 USING GIST (geom);\n\n-- Refresh diário (pg_cron)\nSELECT cron.schedule('queimadas-refresh', '0 4 * * *',\n  $$REFRESH MATERIALIZED VIEW CONCURRENTLY queimadas_h3_7$$);\n\n-- Query da API por bbox\nSELECT\n  ST_AsGeoJSON(geom)::json AS geometry,\n  json_build_object('count', total, 'last', last_event) AS properties\nFROM queimadas_h3_7\nWHERE geom && ST_MakeEnvelope($1, $2, $3, $4, 4326);"
+          }
+        }
+      ]
+    },
+    {
+      "id": "4b614ee1-8a59-4c21-8ff0-b097c5285bbc",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "S2: o quadtree esférico do Google"
+      },
+      "children": [
+        {
+          "id": "52af6139-1fcd-4edb-b8bb-9504d1729b79",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "S2 Geometry",
+                "bold": true
+              },
+              {
+                "text": " (s2geometry.io, Google open-source 2017) representa pontos na esfera projetando em 6 faces de cubo, dividindo cada face em quadtree, e linearizando via "
+              },
+              {
+                "text": "Hilbert curve",
+                "italic": true
+              },
+              {
+                "text": ". Resultado: chave "
+              },
+              {
+                "text": "CellID",
+                "code": true
+              },
+              {
+                "text": " (int64) onde cells adjacentes em espaço têm IDs próximos. Indexar em B-tree do banco já dá range queries espaciais grátis. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "31bda7a8-53ae-4a8b-bd01-399e9d883455",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Aspecto",
+              "H3 (Uber)",
+              "S2 (Google)"
+            ],
+            "rows": [
+              [
+                "Forma das cells",
+                "Hexágonos",
+                "Quadrados curvos sobre esfera"
+              ],
+              [
+                "Hierarquia",
+                "16 níveis discretos (res 0-15)",
+                "30 níveis (level 0-30)"
+              ],
+              [
+                "Vizinhança",
+                "6 vizinhos uniformes",
+                "4 vizinhos diretos + 4 diagonais (não uniforme)"
+              ],
+              [
+                "Linearização",
+                "Não nativa",
+                "Hilbert curve nativa"
+              ],
+              [
+                "Range queries B-tree",
+                "Indireto",
+                "Direto (CellID ordenado preserva proximidade)"
+              ],
+              [
+                "Polygon coverer",
+                "h3_polygon_to_cells",
+                "S2RegionCoverer (set mínimo de cells cobre polígono)"
+              ],
+              [
+                "Casos canônicos",
+                "Matching realtime, agregação",
+                "Indexing geográfico em DB transacional, region containment"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "a16616e8-87fe-45b3-9474-33dc9c1dcab5",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "javascript",
+            "code": "// S2 em JS (s2.js / nodejs-s2)\nimport { CellId, LatLng } from 's2geometry';\n\nconst point = LatLng.fromDegrees(-23.5505, -46.6333);\nconst cell  = CellId.fromLatLng(point);\nconst lvl15 = cell.parentL(15);  // level 15 = ~250m² no equador\nconsole.log(lvl15.toToken());     // ex: \"94ce3ff4\" (string hex compacta)\n\n// Range para queries em DB:\n// \"todos os pontos em cells dentro deste polígono\"\n// → coverer.getCovering(polygon) retorna lista de cell ranges\n// → SELECT * FROM tbl WHERE cell_id BETWEEN range_min AND range_max"
+          }
+        }
+      ]
+    },
+    {
+      "id": "83da111f-d57c-4659-b209-d9f767019f19",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Quando usar cada um"
+      },
+      "children": []
+    },
+    {
+      "id": "53572900-f4fc-4e86-893d-cfc34f9dd070",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Anti-patterns"
+      },
+      "children": [
+        {
+          "id": "403f0551-4fdc-4559-99c6-aca84f006867",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "danger",
+            "title": "",
+            "content": "Indexar H3 cells como TEXT. H3INDEX é uint64 — usar VARCHAR triplica espaço de índice e mata performance. Use o tipo nativo do h3-pg (H3INDEX)."
+          }
+        },
+        {
+          "id": "45779e66-9a1c-4e15-97c7-d910318c98fb",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Misturar resoluções no mesmo índice. Compare sempre cells na mesma resolução. h3-pg tem h3_cell_to_parent(cell, res) e h3_cell_to_children(cell, res)."
+          }
+        },
+        {
+          "id": "638fe8f7-d78a-45c8-b403-38fe9ee0238e",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Esquecer que H3 cells \"quebram\" em pentágonos. 12 cells especiais no planeta (canto do icosaedro) são pentágonos em vez de hexágonos. Em escala continental raramente importa, mas algoritmos que assumem 6 vizinhos podem quebrar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "9e8d500d-94b3-4297-a651-0dc3db977fac",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Stack completa: matching realtime"
+      },
+      "children": []
+    },
+    {
+      "id": "ee0559a3-26c1-4383-868f-30c19fe39d85",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Referências"
+      },
+      "children": []
+    }
+  ]
+}

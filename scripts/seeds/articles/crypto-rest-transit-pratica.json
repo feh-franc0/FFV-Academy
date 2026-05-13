@@ -1,0 +1,251 @@
+{
+  "slug": "crypto-rest-transit-pratica",
+  "title": null,
+  "blocks": [
+    {
+      "id": "d05300c4-a7cc-4e2b-9b5b-7d675156e205",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Criptografia é a única medida do Art. 46 LGPD (segurança técnica) que ANPD inspeciona objetivamente — "
+          },
+          {
+            "text": "existe ou não, com força x ou y",
+            "italic": true
+          },
+          {
+            "text": ". Este módulo é o playbook prático: TLS 1.3 nas pontas, mTLS interno quando faz sentido, AES-256-GCM em storage com envelope encryption, KMS gerenciando KEK, rotação configurada, e a fronteira BYOK/HYOK quando regulação exige. Sem mistificação. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "ec80aacb-9d16-4e7d-8ae8-d33c2ca4db49",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Camadas — onde a criptografia mora"
+      },
+      "children": []
+    },
+    {
+      "id": "b2fce587-ce92-4841-831b-e16b597a75dd",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "TLS 1.3 — o mínimo aceitável"
+      },
+      "children": [
+        {
+          "id": "dfa44615-3625-483e-b4c4-845f97bed78e",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "nginx",
+            "code": "# TLS 1.3 only (em 2026 já dá pra exigir)\nssl_protocols TLSv1.3;\nssl_ciphers TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256;\nssl_prefer_server_ciphers off;       # TLS 1.3 client preference\nssl_session_tickets off;             # forward secrecy\nssl_stapling on;\nssl_stapling_verify on;\nadd_header Strict-Transport-Security \"max-age=63072000; includeSubDomains; preload\" always;\n# Mozilla Modern: https://ssl-config.mozilla.org/",
+            "filename": "nginx.conf"
+          }
+        }
+      ]
+    },
+    {
+      "id": "3f440386-9a34-4626-919e-657fcdc2f706",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Envelope encryption — o padrão de storage"
+      },
+      "children": [
+        {
+          "id": "9da4d0e6-c3c8-4217-ae5a-9bc249f7ebab",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "typescript",
+            "code": "import { KMSClient, GenerateDataKeyCommand, DecryptCommand } from '@aws-sdk/client-kms';\nimport { createCipheriv, createDecipheriv, randomBytes } from 'crypto';\n\nconst kms = new KMSClient({ region: 'sa-east-1' });\nconst KEK_ARN = process.env.KMS_KEK_ARN!;\n\nexport interface EncryptedPayload {\n  ciphertext: Buffer;\n  ciphertextDek: Buffer;\n  nonce: Buffer;\n  tag: Buffer;\n  aad?: Buffer;\n}\n\nexport async function encrypt(plaintext: Buffer, aad?: Buffer): Promise<EncryptedPayload> {\n  const { Plaintext, CiphertextBlob } = await kms.send(new GenerateDataKeyCommand({\n    KeyId: KEK_ARN, KeySpec: 'AES_256',\n  }));\n  const dek = Buffer.from(Plaintext!);\n  const nonce = randomBytes(12);\n  const cipher = createCipheriv('aes-256-gcm', dek, nonce);\n  if (aad) cipher.setAAD(aad);\n  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);\n  const tag = cipher.getAuthTag();\n  // CRITICAL: zerar DEK em memória\n  dek.fill(0);\n  return { ciphertext, ciphertextDek: Buffer.from(CiphertextBlob!), nonce, tag, aad };\n}\n\nexport async function decrypt(p: EncryptedPayload): Promise<Buffer> {\n  const { Plaintext } = await kms.send(new DecryptCommand({ CiphertextBlob: p.ciphertextDek }));\n  const dek = Buffer.from(Plaintext!);\n  const decipher = createDecipheriv('aes-256-gcm', dek, p.nonce);\n  if (p.aad) decipher.setAAD(p.aad);\n  decipher.setAuthTag(p.tag);\n  const result = Buffer.concat([decipher.update(p.ciphertext), decipher.final()]);\n  dek.fill(0);\n  return result;\n}",
+            "filename": "lib/envelope.ts"
+          }
+        },
+        {
+          "id": "2e92e8cb-4407-42f1-8a36-492cec9ce85e",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "AAD (Additional Authenticated Data) não é criptografado, mas é autenticado. Use para amarrar ciphertext ao contexto: . Impede swap attack (mover ciphertext entre registros)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "8587f806-488e-4385-b0c6-20e842a5d4ce",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "AES-GCM — anatomia e armadilhas"
+      },
+      "children": [
+        {
+          "id": "fcc7f131-8ce4-470b-8c28-da6e973a21ba",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "danger",
+            "title": "",
+            "content": "Nonce reuse com mesma chave em GCM é catastrófico: vaza XOR de keystreams e permite forjar mensagens autenticadas. NUNCA gere nonce com PRNG fraco. Use (CSPRNG) ou contador atômico monotônico por chave. Em alta volume, considere AES-256-GCM-SIV (RFC 8452) — resistente a nonce reuse."
+          }
+        }
+      ]
+    },
+    {
+      "id": "60c1c3d8-6fe8-4d9e-974a-9e4ea4fe8432",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Comparativo KMS — AWS, GCP, Azure, Vault"
+      },
+      "children": [
+        {
+          "id": "562e4ca6-e836-4857-b6e2-794493391e9f",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Recurso",
+              "AWS KMS",
+              "GCP Cloud KMS",
+              "Azure Key Vault",
+              "HashiCorp Vault Transit"
+            ],
+            "rows": [
+              [
+                "HSM nível",
+                "FIPS 140-2 L3 (CloudHSM L3)",
+                "FIPS 140-2 L3 opcional",
+                "Managed HSM FIPS L3",
+                "FIPS 140-2 L3 com seal HSM"
+              ],
+              [
+                "Auto-rotation",
+                "Sim, 1 ano",
+                "Configurável",
+                "Sim, configurável",
+                "Sim, configurável"
+              ],
+              [
+                "BYOK",
+                "External Key Store (XKS)",
+                "External Key Manager (EKM)",
+                "BYOK suportado",
+                "Não aplicável (você opera)"
+              ],
+              [
+                "Audit",
+                "CloudTrail",
+                "Cloud Audit Logs",
+                "Activity Log",
+                "Audit device"
+              ],
+              [
+                "Custo (USD)",
+                "$1/key/mês + $0.03/10k",
+                "$0.06/key/mês + $0.03/10k",
+                "~$1/key + ops",
+                "Self-host"
+              ],
+              [
+                "Per-record encrypt",
+                "GenerateDataKey + DEK",
+                "GenerateRandomBytes + AEAD local",
+                "wrap/unwrap",
+                "Encrypt API"
+              ],
+              [
+                "Multi-region",
+                "KMS multi-region keys",
+                "Replicated keysets",
+                "Geo-replicated",
+                "Replication enterprise"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "9df4f567-0cd7-4f78-be9e-cb660bdb452a",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "mTLS interno — service mesh ou manual?"
+      },
+      "children": []
+    },
+    {
+      "id": "bb203f6f-3c5a-4996-871e-d3fc3c176b15",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Quando criptografia at-rest não basta"
+      },
+      "children": [
+        {
+          "id": "446efaac-b72d-4371-8151-3183a993698e",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " EBS-encrypted, RDS-encrypted, S3 SSE — todos protegem contra "
+              },
+              {
+                "text": "roubo de disco",
+                "italic": true
+              },
+              {
+                "text": ". Não protegem contra credencial vazada nem contra insider com acesso de leitura legítimo. Para PII sensível (CPF + biometria, saúde, dados financeiros), aplique "
+              },
+              {
+                "text": "application-layer encryption",
+                "bold": true
+              },
+              {
+                "text": " com chave por tenant ou por campo. Operações analíticas ficam mais complexas — use Searchable Encryption (CipherStash) ou Tokenization (Vault, AWS Payment Cryptography) se precisar buscar/joinar. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "4da1dc0f-24d9-4ba1-94a7-7792d5adf041",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Erros frequentes em produção"
+      },
+      "children": []
+    },
+    {
+      "id": "7299bc99-ebd4-4a84-967a-78baf427514b",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Checklist de auditoria pre-incidente"
+      },
+      "children": []
+    },
+    {
+      "id": "896d0288-4766-4d0d-b515-fbb3b398f9d7",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Recursos canônicos"
+      },
+      "children": []
+    }
+  ]
+}

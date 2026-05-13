@@ -1,0 +1,352 @@
+{
+  "slug": "docker-compose-producao",
+  "title": null,
+  "blocks": [
+    {
+      "id": "11b7bb65-63df-47fb-b4df-84fd4fa47676",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Docker Compose transforma a orquestração de múltiplos containers em um arquivo YAML declarativo. O que levaria uma série de "
+          },
+          {
+            "text": "docker run",
+            "code": true
+          },
+          {
+            "text": " com flags complexas vira um único "
+          },
+          {
+            "text": "docker compose up -d",
+            "code": true
+          },
+          {
+            "text": ". Mas um Compose de produção é diferente do de desenvolvimento: redes separadas, health checks reais, limites de recurso, restart policies e réplicas. Neste módulo você escreve um "
+          },
+          {
+            "text": "docker-compose.prod.yml",
+            "code": true
+          },
+          {
+            "text": " profissional do zero. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "ffd1a6a2-cb23-4655-9296-1083be4e16ad",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Instalando o Docker na VPS"
+      },
+      "children": [
+        {
+          "id": "284dc665-2db8-4014-aae3-ba1ae2d5ffc3",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Antes de tudo, instale o Docker Engine na sua VPS Ubuntu 24.04. Use o método oficial (repositório da Docker), não o pacote do apt do Ubuntu (versão desatualizada): "
+              }
+            ]
+          }
+        },
+        {
+          "id": "ef6ffd8a-040c-449b-b1bf-d10314f25bda",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "# Adicionar a chave GPG oficial do Docker\ncurl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg\n\n# Adicionar o repositório Docker\necho \"deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable\" | tee /etc/apt/sources.list.d/docker.list > /dev/null\n\n# Instalar Docker Engine + Compose\napt update\napt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin\n\n# Verificar instalação\ndocker --version\n# Docker version 26.x.x, build ...\n\ndocker compose version\n# Docker Compose version v2.x.x\n\n# Adicionar o usuário deploy ao grupo docker (evitar usar sudo toda vez)\nusermod -aG docker deploy\n\n# Habilitar Docker para iniciar com o sistema\nsystemctl enable docker\nsystemctl start docker\n\n# Verifique (como usuário deploy, após relogin):\n# docker ps"
+          }
+        }
+      ]
+    },
+    {
+      "id": "c1ffb077-7eae-46da-8565-13aca0894787",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "A estrutura do docker-compose.prod.yml"
+      },
+      "children": [
+        {
+          "id": "05520936-4dc7-432a-9feb-57d1c8a60897",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Um Compose de produção tem diferenças fundamentais do de desenvolvimento. Aqui está o arquivo completo com explicações inline: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "ef963828-0e56-4d26-8b6e-b5271a8bcae7",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "yaml",
+            "code": "# Sintaxe Compose v2 (sem \"version:\" no topo — depreciado no Compose v2+)\n# Nomes EXATOS de service: nginx, api, postgres, redis.\n\nservices:\n  # ─── Nginx (proxy reverso) ──────────────────────────────────────\n  nginx:\n    image: nginx:1.27-alpine\n    ports:\n      - \"80:80\"\n      - \"443:443\"\n    volumes:\n      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro\n      - ./nginx/sites:/etc/nginx/conf.d:ro\n      - certbot-webroot:/var/www/certbot:ro\n      - /etc/letsencrypt:/etc/letsencrypt:ro\n    networks:\n      - proxy                  # só na rede de proxy — não acessa o banco\n    depends_on:\n      api:\n        condition: service_healthy\n    restart: unless-stopped\n    healthcheck:\n      test: [\"CMD\", \"nginx\", \"-t\"]\n      interval: 30s\n      timeout: 5s\n      retries: 3\n\n  # ─── API (backend Go, distroless) ──────────────────────────────\n  api:\n    image: ghcr.io/feh-franc0/ffv-api:${IMAGE_TAG:-latest}\n    env_file:\n      - .env                   # POSTGRES_PASSWORD, REDIS_PASSWORD, JWT_SECRET, DATABASE_URL, REDIS_URL\n    networks:\n      - proxy                  # fala com Nginx\n      - data                   # fala com postgres e redis\n    depends_on:\n      postgres:\n        condition: service_healthy\n      redis:\n        condition: service_started\n    restart: unless-stopped\n    deploy:\n      replicas: 2              # 2 instâncias da API (rolling update no deploy.sh)\n      resources:\n        limits:\n          cpus: '0.75'\n          memory: 512M\n        reservations:\n          cpus: '0.1'\n          memory: 128M\n    healthcheck:\n      # Distroless não tem curl/wget — o binário Go expõe --healthcheck\n      # que internamente faz GET /healthz e sai 0/1.\n      test: [\"CMD\", \"/api\", \"--healthcheck\"]\n      interval: 15s\n      timeout: 5s\n      start_period: 20s\n      retries: 3\n\n  # ─── Postgres (banco de dados) ─────────────────────────────────\n  postgres:\n    image: postgres:16-alpine\n    environment:\n      POSTGRES_USER: ffv\n      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}\n      POSTGRES_DB: ffv_prod\n    ports:\n      # Loopback only: expõe pro host (migrate CLI roda do host) mas NÃO pra internet.\n      # 0.0.0.0:5432 seria suicídio. 127.0.0.1:5432 é o pulo-do-gato.\n      - \"127.0.0.1:5432:5432\"\n    volumes:\n      - pgdata:/var/lib/postgresql/data\n    networks:\n      - data\n    restart: unless-stopped\n    deploy:\n      resources:\n        limits:\n          memory: 1G\n    healthcheck:\n      test: [\"CMD-SHELL\", \"pg_isready -U ffv -d ffv_prod\"]\n      interval: 10s\n      timeout: 5s\n      retries: 5\n      start_period: 30s\n\n  # ─── Redis (cache + rate limit) ────────────────────────────────\n  redis:\n    image: redis:7-alpine\n    command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru\n    volumes:\n      - redisdata:/data\n    networks:\n      - data\n    restart: unless-stopped\n    deploy:\n      resources:\n        limits:\n          memory: 320M\n\nnetworks:\n  proxy:\n    external: true             # criada uma vez com: docker network create proxy\n  data:\n    driver: bridge\n    internal: true             # sem acesso à internet — Postgres e Redis isolados\n\nvolumes:\n  pgdata:\n  redisdata:\n  certbot-webroot:",
+            "filename": "deployments/docker-compose.prod.yml"
+          }
+        },
+        {
+          "id": "072fec36-46e5-4f06-af39-707648c36c06",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "War story — REDIS_URL é obrigatório no .env. O backend Go usa com . Se você colocar só no .env e esquecer , o boot quebra na hora com — e a API nunca fica healthy. Aconteceu comigo no primeiro deploy."
+          }
+        },
+        {
+          "id": "7966f63f-d265-45bc-8d76-026cfd0e8383",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Por que e não publicar pra fora: o CLI roda no host (não dentro de container) durante o deploy. Para o CLI conseguir falar com o Postgres, a porta precisa estar acessível em do host. Mas exporia o banco pra internet (atacantes de Shodan acham em minutos). O loopback resolve as duas pontas."
+          }
+        }
+      ]
+    },
+    {
+      "id": "21f95fcb-89b2-47b4-91ac-7d315b770b75",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "O Dockerfile distroless (multi-stage)"
+      },
+      "children": [
+        {
+          "id": "7f310aaf-cffc-46aa-9a62-96c3f1ed9007",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " A imagem da API é construída em duas etapas: "
+              },
+              {
+                "text": "builder",
+                "bold": true
+              },
+              {
+                "text": " com o toolchain do Go e "
+              },
+              {
+                "text": "runtime",
+                "bold": true
+              },
+              {
+                "text": " que é só um sistema mínimo com o binário estático. O resultado é uma imagem minúscula (~15-20 MB), sem shell, sem package manager, sem nada além do binário — superfície de ataque praticamente nula. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "61b36f7b-0011-4b1a-a08f-0bdcb895d65d",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "dockerfile",
+            "code": "# ─── Stage 1: builder ──────────────────────────────────────────\nFROM golang:1.25-alpine AS builder\n\nWORKDIR /src\n\n# Cache de módulos: copia go.mod/go.sum primeiro para invalidar\n# o cache só quando as dependências mudam (não a cada edit de .go).\nCOPY go.mod go.sum ./\nRUN go mod download\n\nCOPY . .\n\n# Binário 100% estático para rodar em distroless (que não tem libc completa).\n# -s -w remove tabela de símbolos e DWARF, reduzindo o binário em ~30%.\nRUN CGO_ENABLED=0 GOOS=linux \\\n    go build -ldflags=\"-s -w\" -o /out/api ./cmd/api\n\n# ─── Stage 2: runtime distroless ───────────────────────────────\nFROM gcr.io/distroless/static-debian12:nonroot\n\nCOPY --from=builder /out/api /api\n\nUSER nonroot:nonroot\nEXPOSE 8080\n\n# Distroless não tem curl, wget, sh, bash. O healthcheck do Compose\n# precisa rodar ALGO — então o próprio binário Go aceita a flag\n# --healthcheck, que internamente faz http.Get(\"http://localhost:8080/healthz\")\n# e sai com 0 (OK) ou 1 (falha). Sem isso, healthcheck seria impossível.\nHEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \\\n    CMD [\"/api\", \"--healthcheck\"]\n\nENTRYPOINT [\"/api\"]",
+            "filename": "deployments/Dockerfile"
+          }
+        }
+      ]
+    },
+    {
+      "id": "d917850d-13ee-4d73-80bd-c67ac504bb9f",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Health checks: a diferença entre up e healthy"
+      },
+      "children": [
+        {
+          "id": "17203c47-f5a7-4209-80aa-10403b8f712a",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Um container pode estar "
+              },
+              {
+                "text": "running",
+                "italic": true
+              },
+              {
+                "text": " (processo existe) mas não "
+              },
+              {
+                "text": "healthy",
+                "italic": true
+              },
+              {
+                "text": " (serviço respondendo). Health checks resolvem isso: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "b214d5e4-cb55-457d-9943-1d97979c3dff",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Estado do container",
+              "O que significa",
+              "depends_on condition"
+            ],
+            "rows": [
+              [
+                "starting",
+                "Container iniciando, healthcheck ainda não rodou",
+                "-"
+              ],
+              [
+                "healthy",
+                "Healthcheck passou nas últimas N tentativas",
+                "service_healthy ✅"
+              ],
+              [
+                "unhealthy",
+                "Healthcheck falhou N vezes consecutivas",
+                "Docker pode restartar"
+              ],
+              [
+                "running (sem healthcheck)",
+                "Processo existe, mas sem verificação de saúde",
+                "service_started (pouco confiável)"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "bef3e52f-513f-4620-a479-cfd29ddd3628",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "yaml",
+            "code": "# Exemplos de healthcheck para diferentes serviços:\n\n# API Node.js que expõe /health\nhealthcheck:\n  test: [\"CMD\", \"curl\", \"-f\", \"http://localhost:3000/health\"]\n  interval: 30s\n  timeout: 10s\n  start_period: 40s    # tempo para a app inicializar antes de começar os checks\n  retries: 3\n\n# API Go com wget (alpine não tem curl por padrão)\nhealthcheck:\n  test: [\"CMD\", \"wget\", \"-qO-\", \"http://localhost:8080/health\"]\n  interval: 30s\n  timeout: 5s\n  retries: 3\n\n# PostgreSQL\nhealthcheck:\n  test: [\"CMD-SHELL\", \"pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}\"]\n  interval: 10s\n  timeout: 5s\n  retries: 5\n  start_period: 30s\n\n# Redis\nhealthcheck:\n  test: [\"CMD\", \"redis-cli\", \"ping\"]\n  interval: 10s\n  timeout: 3s\n  retries: 3"
+          }
+        }
+      ]
+    },
+    {
+      "id": "0d29e5a2-4ecd-48dd-9865-2b7910831088",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Redes separadas: segmentação como segurança"
+      },
+      "children": [
+        {
+          "id": "a4bb6719-8a67-4e74-ab50-95a30a1e2c05",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Separar a rede de proxy da rede de dados é um princípio de "
+              },
+              {
+                "text": "defense in depth",
+                "italic": true
+              },
+              {
+                "text": ". Aqui está o fluxo de comunicação com redes separadas: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "d583e068-a15a-4f4b-a7ec-3c68b9a220c0",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "text",
+            "code": "Internet\n   │\n   ▼\n[nginx] ─── rede: proxy ───► [api ×2]\n                                │\n                           rede: data\n                          ┌─────┴─────┐\n                          ▼           ▼\n                      [postgres]  [redis]\n\n• nginx só está na rede \"proxy\" — não vê postgres\n• api está em ambas as redes — faz a ponte\n• postgres e redis só estão em \"data\" — invisíveis pro nginx\n• \"internal: true\" na rede data = containers não acessam internet\n• postgres tem ports: [\"127.0.0.1:5432:5432\"] (loopback do host só)"
+          }
+        },
+        {
+          "id": "cd3fb467-8bc1-4978-9366-620fd43c9371",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Por que isso importa: se o Nginx for comprometido via um exploit (ex: configuração errada permitindo path traversal), o atacante não tem como alcançar diretamente o banco de dados — está em uma rede diferente. Precisa primeiro comprometer a API."
+          }
+        }
+      ]
+    },
+    {
+      "id": "3843e803-7731-4ead-9a77-fd7fa55b0b19",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Gerenciando o deploy na VPS"
+      },
+      "children": [
+        {
+          "id": "dc27a24f-765f-49bd-b9d2-d0fe92ec3de4",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "# Na VPS, como usuário deploy:\n\n# Clonar o repositório (ou mover os arquivos)\ngit clone https://github.com/feh-franc0/ffv-api.git /opt/ffv\ncd /opt/ffv\n\n# Criar .env com placeholders (NUNCA commitar):\nnano .env\n# POSTGRES_PASSWORD=<gerado com: openssl rand -hex 32>\n# REDIS_PASSWORD=<gerado com: openssl rand -hex 32>\n# JWT_SECRET=<gerado com: openssl rand -hex 32>\n# DATABASE_URL=postgres://ffv:SENHA@postgres:5432/ffv_prod?sslmode=disable\n# REDIS_URL=redis://:SENHA@redis:6379/0   # OBRIGATÓRIO — boot quebra sem ele\n\n# Primeira execução: pull das imagens e subir tudo\ndocker compose -f docker-compose.prod.yml pull\ndocker compose -f docker-compose.prod.yml up -d\n\n# Verificar status\ndocker compose -f docker-compose.prod.yml ps\n# NAME              IMAGE                       STATUS          PORTS\n# ffv-nginx-1       nginx:1.27-alpine           Up (healthy)    0.0.0.0:80->80/tcp\n# ffv-api-1         ghcr.io/feh-franc0/ffv-api  Up (healthy)\n# ffv-api-2         ghcr.io/feh-franc0/ffv-api  Up (healthy)\n# ffv-postgres-1    postgres:16-alpine          Up (healthy)    127.0.0.1:5432->5432/tcp\n# ffv-redis-1       redis:7-alpine              Up\n\n# Ver logs em tempo real\ndocker compose -f docker-compose.prod.yml logs -f api\n\n# Deploy de nova versão (rolling update via script — ver módulo \"deploy-script-rollback\")\ndocker compose -f docker-compose.prod.yml pull api\ndocker compose -f docker-compose.prod.yml up -d --no-deps --scale api=2 api"
+          }
+        }
+      ]
+    },
+    {
+      "id": "202290be-6e10-4b38-9c03-c2e5da291122",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Resource limits: evitando que um serviço consuma tudo"
+      },
+      "children": [
+        {
+          "id": "1cb8c7fd-86b8-4497-8246-ce6fd55a0be2",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "# Ver uso de recursos em tempo real\ndocker stats\n\n# Output:\n# CONTAINER         CPU %   MEM USAGE / LIMIT   MEM %   NET I/O\n# ffv-api-1         2.3%    89MiB / 512MiB      17.3%   1.2MB / 0.8MB\n# ffv-api-2         1.8%    91MiB / 512MiB      17.7%   1.1MB / 0.7MB\n# ffv-postgres-1    0.5%    180MiB / 1GiB       17.5%   2.3MB / 1.9MB\n# ffv-redis-1       0.1%    14MiB / 320MiB      4.3%    0.5MB / 0.3MB\n# ffv-nginx-1       0.1%    8MiB / —            —       15MB / 12MB\n\n# Ver eventos do Docker (restarts, OOMKills, etc.)\ndocker events --filter container=ffv-api-1"
+          }
+        }
+      ]
+    },
+    {
+      "id": "21f2db09-a560-4e0f-b406-a7a993fdcbea",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": []
+    },
+    {
+      "id": "825c8970-0588-424c-ab61-283f62139779",
+      "type": "callout",
+      "position": 9,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Resumo. Um Compose de produção tem: redes separadas (proxy + data), health checks em todos os serviços, restart policies, resource limits, volumes nomeados para persistência e imagens do registry (não build local). O próximo módulo configura o Nginx como proxy reverso para rotear tráfego para as réplicas da API e servir HTTPS."
+      }
+    }
+  ]
+}

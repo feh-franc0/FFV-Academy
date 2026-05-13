@@ -1,0 +1,134 @@
+{
+  "slug": "explain-analyze",
+  "title": null,
+  "blocks": [
+    {
+      "id": "8c62a230-cb6a-4e1d-a0e0-9a70f23b42f1",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " EXPLAIN ANALYZE é o raio-X de uma query PostgreSQL. Saber ler o output — identificar Seq Scans desnecessários, JOINs com estimativas ruins, sorts evitáveis — transforma debug de performance de tentativa e erro em diagnóstico preciso. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "d6d3ab37-d9a2-4f1a-a2c6-21c552df483f",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "EXPLAIN vs EXPLAIN ANALYZE"
+      },
+      "children": [
+        {
+          "id": "f422c69b-8eed-4bf8-b063-2aeaaf52d9ea",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "-- EXPLAIN — só estima, NÃO executa\nEXPLAIN SELECT * FROM pedidos WHERE cliente_id = 42;\n-- Seq Scan on pedidos  (cost=0.00..850.00 rows=12 width=48)\n--   Filter: (cliente_id = 42)\n\n-- EXPLAIN ANALYZE — executa e mede tempos reais\nEXPLAIN ANALYZE SELECT * FROM pedidos WHERE cliente_id = 42;\n-- Seq Scan on pedidos  (cost=0.00..850.00 rows=12 width=48)\n--                      (actual time=0.015..8.234 rows=156 loops=1)\n--   Filter: (cliente_id = 42)\n--   Rows Removed by Filter: 9844\n-- Planning Time: 0.3 ms\n-- Execution Time: 8.5 ms\n\n-- ⚠️ EXPLAIN ANALYZE EXECUTA a query — cuidado com INSERT/UPDATE/DELETE!\n-- Para mutations: envolver em transação e ROLLBACK\nBEGIN;\nEXPLAIN ANALYZE DELETE FROM pedidos WHERE status = 'cancelado';\nROLLBACK;\n\n-- Opções completas para diagnóstico:\nEXPLAIN (ANALYZE, BUFFERS, VERBOSE, FORMAT TEXT)\nSELECT p.id, c.nome, SUM(ip.preco * ip.quantidade) AS total\nFROM pedidos p\nJOIN clientes c ON p.cliente_id = c.id\nJOIN itens_pedido ip ON ip.pedido_id = p.id\nWHERE p.criado_em >= '2024-01-01'\nGROUP BY p.id, c.nome;"
+          }
+        }
+      ]
+    },
+    {
+      "id": "0d6f7523-605e-4717-a9db-d37b36b8934d",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Lendo o output: nós e custos"
+      },
+      "children": [
+        {
+          "id": "831de7a1-3216-4e04-b572-ea8fca272b3a",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "-- Exemplo de output anotado:\n-- Hash Join  (cost=125.00..890.00 rows=1250 width=60)\n--            (actual time=5.2..45.8 rows=1180 loops=1)\n--   Hash Cond: (p.cliente_id = c.id)\n--   ->  Seq Scan on pedidos p  (cost=0.00..750.00 rows=10000 width=32)\n--                               (actual time=0.01..12.3 rows=10000 loops=1)\n--   ->  Hash  (cost=75.00..75.00 rows=4000 width=28)\n--             (actual time=2.1..2.1 rows=4000 loops=1)\n--         ->  Seq Scan on clientes c  (cost=0.00..75.00 rows=4000 width=28)\n--                                     (actual time=0.01..1.2 rows=4000 loops=1)\n-- Planning Time: 1.2 ms\n-- Execution Time: 46.5 ms\n\n-- Interpretação das colunas:\n-- cost=startup..total: unidades de \"custo I/O estimado\"\n-- rows: número de linhas estimado\n-- width: largura média em bytes por linha\n-- actual time=startup..total: milissegundos reais (min..max se loops>1)\n-- actual rows: linhas reais retornadas\n-- loops: quantas vezes o nó foi executado (nested loop pode ser 1000x)\n\n-- BUFFERS mostra:\n-- shared hit: leituras do shared_buffers (cache em memória) ← bom\n-- shared read: leituras do disco ← ruim se muito alto\n-- shared written: blocos sujos escritos"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1961686-42cf-48fe-8f6b-b26286ce59cc",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Scan types e quando cada um aparece"
+      },
+      "children": [
+        {
+          "id": "f3763412-a86b-4aa4-a611-a611db3d92b7",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Scan Type",
+              "Quando aparece",
+              "Custo relativo"
+            ],
+            "rows": [
+              [
+                "Seq Scan",
+                "Sem índice, ou muitas linhas retornadas (>10-20% da tabela)",
+                "Baixo por linha, alto total"
+              ],
+              [
+                "Index Scan",
+                "Índice existe, poucas linhas, random_page_cost baixo",
+                "Alto por linha, baixo total"
+              ],
+              [
+                "Index Only Scan",
+                "Covering index — não precisa acessar heap",
+                "Mais eficiente que Index Scan"
+              ],
+              [
+                "Bitmap Index Scan",
+                "Índice existe mas retorna muitas linhas — agrupa I/Os",
+                "Intermediário"
+              ],
+              [
+                "Bitmap Heap Scan",
+                "Após Bitmap Index Scan — acessa heap por bloco",
+                "Melhor que Index Scan para médias quantidades"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "eea13e76-7cde-4f0b-a042-85225293140f",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "text",
+            "code": "-- Identificar queries lentas automaticamente:\n-- postgresql.conf:\n-- log_min_duration_statement = 1000  (loga queries > 1s)\n-- auto_explain.log_min_duration = 500  (loga planos de queries > 500ms)\n\n-- Encontrar tabelas sem autovacuum recente (estatísticas desatualizadas):\nSELECT\n    schemaname,\n    relname,\n    n_live_tup,\n    n_dead_tup,\n    last_autoanalyze\nFROM pg_stat_user_tables\nWHERE last_autoanalyze < NOW() - INTERVAL '1 day'\n   OR last_autoanalyze IS NULL\nORDER BY n_dead_tup DESC;\n\n-- Forçar atualização de estatísticas:\nANALYZE tabela;      -- atualiza estatísticas da tabela\nVACUUM ANALYZE;      -- vacuum + analyze em todo o banco\n\n-- pg_stat_statements — queries mais lentas:\nSELECT\n    query,\n    calls,\n    total_exec_time / calls AS avg_ms,\n    rows / calls AS avg_rows\nFROM pg_stat_statements\nWHERE calls > 100\nORDER BY avg_ms DESC\nLIMIT 20;"
+          }
+        }
+      ]
+    },
+    {
+      "id": "900bb26f-ba20-43a7-8ddd-00cfe44d0ed6",
+      "type": "callout",
+      "position": 4,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Workflow de otimização: (1) identifique a query lenta com pg_stat_statements. (2) rode EXPLAIN (ANALYZE, BUFFERS). (3) procure: Seq Scans em tabelas grandes, loops muito altos em Nested Loop, estimativas muito diferentes dos reais. (4) crie índices ou ANALYZE para estatísticas. (5) verifique melhora. Não otimize sem medir — o planner frequentemente está certo."
+      }
+    },
+    {
+      "id": "e77f5218-1b7f-47eb-90ae-ed77327d7d16",
+      "type": "callout",
+      "position": 5,
+      "data": {
+        "variant": "info",
+        "title": "",
+        "content": "Próximo: Transações e isolation levels — ACID de verdade: o que dirty read, phantom read e serialization anomaly significam na prática."
+      }
+    }
+  ]
+}

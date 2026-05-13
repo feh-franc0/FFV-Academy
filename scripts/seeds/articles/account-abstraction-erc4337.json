@@ -1,0 +1,302 @@
+{
+  "slug": "account-abstraction-erc4337",
+  "title": null,
+  "blocks": [
+    {
+      "id": "29ed1654-e7b3-4949-9355-4f73c5dc27b7",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Por que account abstraction destrava Web3 retail"
+      },
+      "children": [
+        {
+          "id": "3e5249d9-7124-4da6-9a9c-55450f6b025f",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " O modelo EOA (Externally Owned Account) original do Ethereum tem limitações brutais: uma chave ECDSA secp256k1 controla tudo, nonce é sequencial, não há pré-condições nem recovery, gas vem do mesmo signer, batch é truque de aplicação. Para retail, isso vira: seed phrase de 12 palavras, ETH na carteira antes de fazer qualquer coisa, erro fatal em assinatura de phishing. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "d046857c-56ac-41a9-bd44-9f73dceff56c",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Account Abstraction",
+                "bold": true
+              },
+              {
+                "text": " torna contas programáveis: a lógica de validação, quem paga gas, como recuperar acesso — tudo vira código. ERC-4337 fez isso sem hard fork em 2023. EIP-7702 estendeu para EOAs existentes em 2025. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "6bb1cf12-be7f-42f9-8e13-a7c9b7b44a7a",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Em 2026, todos os principais L2s têm AA em produção e adoção crescente: Coinbase Smart Wallet (Base), zkSync nativo, Polygon AA, Worldcoin, gaming chains — milhões de UserOperations por semana segundo dados de Jiffyscan e Bundlebear."
+          }
+        }
+      ]
+    },
+    {
+      "id": "714d3bdb-f472-495e-bd2b-23f4e5128fbd",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Timeline de Account Abstraction"
+      },
+      "children": []
+    },
+    {
+      "id": "53232a84-87aa-4172-8237-c6028c2ad3f1",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "A arquitetura ERC-4337"
+      },
+      "children": []
+    },
+    {
+      "id": "30a52195-3404-4685-a176-dc5e54c79618",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "UserOperation: a estrutura central"
+      },
+      "children": [
+        {
+          "id": "518c1e6e-6210-42ee-aa8b-d591f26d0b3f",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "solidity",
+            "code": "struct PackedUserOperation {\n    address sender;              // smart account\n    uint256 nonce;               // nonce do account (key + sequence)\n    bytes   initCode;            // se account ainda nao deployado, code+salt pra deploy\n    bytes   callData;            // que action executar (geralmente account.execute(target, value, data))\n    bytes32 accountGasLimits;    // verificationGasLimit + callGasLimit (packed)\n    uint256 preVerificationGas;  // gas off-chain do bundler (overhead da tx EOA)\n    bytes32 gasFees;             // maxPriorityFeePerGas + maxFeePerGas (packed)\n    bytes   paymasterAndData;    // se vazio = user paga; caso contrario = paymaster contract + data\n    bytes   signature;           // assinatura validada pelo smart account\n}\n\n// Hash da UserOp (sem signature):\nfunction getUserOpHash(PackedUserOperation op) view returns (bytes32) {\n    return keccak256(abi.encode(\n        keccak256(abi.encodePacked(\n            op.sender, op.nonce, keccak256(op.initCode), keccak256(op.callData),\n            op.accountGasLimits, op.preVerificationGas, op.gasFees,\n            keccak256(op.paymasterAndData)\n        )),\n        address(this),  // EntryPoint\n        block.chainid\n    ));\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "c3022fb8-b2e9-47cf-aee7-65be85f4795c",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Smart Account mínimo (validateUserOp)"
+      },
+      "children": [
+        {
+          "id": "597b916d-be8e-448d-9a93-06ac28317200",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "solidity",
+            "code": "// SPDX-License-Identifier: MIT\npragma solidity 0.8.24;\n\nimport { IAccount } from \"@account-abstraction/contracts/interfaces/ IAccount .sol\";\nimport { PackedUserOperation } from \"@account-abstraction/contracts/interfaces/ PackedUserOperation .sol\";\nimport { ECDSA } from \"@openzeppelin/contracts/utils/cryptography/ ECDSA .sol\";\n\ncontract SimpleAccount is IAccount {\n    address public immutable owner;\n    address public immutable entryPoint;\n    uint256 public nonce;\n\n    error InvalidSignature();\n    error InvalidNonce();\n    error NotFromEntryPoint();\n\n    constructor(address _owner, address _entryPoint) {\n        owner = _owner;\n        entryPoint = _entryPoint;\n    }\n\n    modifier onlyEntryPoint() {\n        if (msg.sender != entryPoint) revert NotFromEntryPoint();\n        _;\n    }\n\n    function validateUserOp(\n        PackedUserOperation calldata op,\n        bytes32 userOpHash,\n        uint256 missingFunds\n    ) external onlyEntryPoint returns (uint256 validationData) {\n        // 1. Verifica nonce (simples, sem key separation)\n        if (op.nonce != nonce) revert InvalidNonce();\n        unchecked { nonce++; }\n\n        // 2. Verifica assinatura ECDSA do owner\n        bytes32 ethHash = ECDSA.toEthSignedMessageHash(userOpHash);\n        address signer = ECDSA.recover(ethHash, op.signature);\n        if (signer != owner) revert InvalidSignature();\n\n        // 3. Pre-paga gas ao EntryPoint\n        if (missingFunds > 0) {\n            (bool ok,) = payable(entryPoint).call{value: missingFunds}(\"\");\n            require(ok, \"prefund fail\");\n        }\n\n        // 4. validationData = 0 = valid, sem time bounds; pode codificar validUntil/validAfter\n        return 0;\n    }\n\n    function execute(address target, uint256 value, bytes calldata data)\n        external onlyEntryPoint returns (bytes memory)\n    {\n        (bool ok, bytes memory result) = target.call{value: value}(data);\n        require(ok, \"exec fail\");\n        return result;\n    }\n\n    receive() external payable {}\n}"
+          }
+        },
+        {
+          "id": "12536480-232e-4403-bb3d-5e334ef7d7f5",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Em produção, prefira Kernel (ZeroDev), SimpleAccount da eth-infinitism reference (Yoav et al.), ou Safe (Gnosis) com módulo 4337. São auditados, modulares e suportam plugins de validação."
+          }
+        }
+      ]
+    },
+    {
+      "id": "08f153cf-ae2d-43b3-8d18-c6971e703331",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Paymasters: gas patrocinado e UX gasless"
+      },
+      "children": [
+        {
+          "id": "52558132-c7da-491e-bd27-b35775ac0885",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "solidity",
+            "code": "contract SponsorPaymaster is IPaymaster {\n    address public immutable entryPoint;\n    address public immutable owner;\n    mapping(address => bool) public sponsoredApps;\n\n    function validatePaymasterUserOp(\n        PackedUserOperation calldata op,\n        bytes32 userOpHash,\n        uint256 maxCost\n    ) external view returns (bytes memory context, uint256 validationData) {\n        // Politica: patrocinamos se o callData chama um app conhecido\n        address target = address(bytes20(op.callData[16:36]));\n        require(sponsoredApps[target], \"not sponsored\");\n        require(maxCost <= 0.01 ether, \"too expensive\");\n        return (\"\", 0);  // 0 = valid\n    }\n\n    function postOp(...) external {\n        // Refund logic se necessario\n    }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "d4de05e4-ca0d-42df-b808-7e1a2b259e86",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Session keys: o killer feature de gaming/trading"
+      },
+      "children": [
+        {
+          "id": "e979d068-6409-4555-8be3-9e02b8669b42",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "ts",
+            "code": "// Pseudocódigo com ZeroDev/Kernel SDK\nimport { createKernelAccount, createSessionKeySigner } from '@zerodev/sdk';\nimport { ParamCondition } from '@zerodev/session-key';\n\n// 1. User cria session key restrita\nconst sessionKey = generatePrivateKey();\nconst permission = {\n  target: GAME_CONTRACT,\n  abi: gameAbi,\n  functionName: 'move',\n  // Permite só certo enum de argumentos\n  args: [\n    { condition: ParamCondition.LESS_THAN_OR_EQUAL, value: 100n },  // dist max 100\n  ],\n  valueLimit: parseEther('0'),  // sem ETH\n  validAfter: now,\n  validUntil: now + 60 * 60,    // 1 hora\n};\n\n// 2. Master account assina autorizacao da session key\nconst enabledKernel = await account.enableSessionKey(sessionKey.address, permission);\n\n// 3. Game backend usa session key para enviar UserOps automaticamente\nconst sessionSigner = createSessionKeySigner({ sessionKey, kernel: enabledKernel });\nawait sessionSigner.sendUserOperation({\n  callData: encodeFunctionData({ abi: gameAbi, functionName: 'move', args: [42n] }),\n});\n// Não pede assinatura ao user — session já autorizou"
+          }
+        }
+      ]
+    },
+    {
+      "id": "78c9ebe3-a6ee-4603-aab9-7381c306ce44",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "EIP-7702: smart accounts em EOAs existentes"
+      },
+      "children": [
+        {
+          "id": "e1ada77a-7c3d-4215-8dec-5dc65be810ad",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "ts",
+            "code": "// Type-4 tx (set code) — viem suporta nativamente\nimport { walletClient } from '@/lib/wagmi';\n\n// Authorization assina: \"EOA permite usar code de X até nonce Y\"\nconst authorization = await walletClient.signAuthorization({\n  contractAddress: BATCH_DELEGATE_CONTRACT,\n  nonce: currentNonce,\n});\n\n// Tx normal + authorization tuple\nconst hash = await walletClient.sendTransaction({\n  authorizationList: [authorization],\n  to: walletClient.account.address,    // chama a propria EOA\n  data: encodeFunctionData({\n    abi: batchDelegateAbi,\n    functionName: 'executeBatch',\n    args: [calls],\n  }),\n});"
+          }
+        }
+      ]
+    },
+    {
+      "id": "78a2cdcb-ba69-4f37-b47f-57e69b338322",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "O ecossistema de infraestrutura 4337"
+      },
+      "children": [
+        {
+          "id": "de0726ec-4c4d-4b18-ab37-97094ba32230",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Provider",
+              "Forte em",
+              "SDK",
+              "Quando escolher"
+            ],
+            "rows": [
+              [
+                "Pimlico",
+                "Bundler + paymaster + permissionless.js",
+                "Excelente DX, full-stack",
+                "Stack production-ready com gas sponsorship"
+              ],
+              [
+                "ZeroDev",
+                "Kernel smart account modular, validators plug-and-play",
+                "Kernel SDK, session keys robustas",
+                "Gaming, social apps com complex permissions"
+              ],
+              [
+                "Alchemy AA",
+                "Bundler + paymaster + gas manager + indexer",
+                "aa-sdk",
+                "Time já na Alchemy stack"
+              ],
+              [
+                "Stackup",
+                "Bundler open-source (\"rip\")",
+                "userop.js",
+                "Self-hosted, indie projects"
+              ],
+              [
+                "Biconomy",
+                "Multi-chain, full SDK, MEE (multi-chain bundler)",
+                "Smart Account SDK",
+                "Apps cross-chain"
+              ],
+              [
+                "Safe (Gnosis)",
+                "Multi-sig com módulo 4337",
+                "Safe SDK",
+                "DAOs, treasury management"
+              ],
+              [
+                "Coinbase Smart Wallet",
+                "Passkey-first, gasless em Base",
+                "cb-wallet SDK",
+                "Apps Base-first, retail"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "d788d7de-e075-4d2d-be30-e3e6bd5cf05e",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Padrões de validação não-ECDSA"
+      },
+      "children": []
+    },
+    {
+      "id": "c2e0d9d7-cb44-4da0-acbb-93005e0d8ac4",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Riscos e armadilhas"
+      },
+      "children": [
+        {
+          "id": "32e0a024-e768-4955-a029-310d77da5f3c",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Storage access regras estritas no bundler: validateUserOp tem regras de mempool (ERC-7562) que limitam quais slots/storage podem ser lidos durante simulação. Bundler rejeita UserOps que violam — sintoma é \"not staked\" ou similar. Sempre testar em mempool real."
+          }
+        },
+        {
+          "id": "68ccf790-95e9-4e68-a7ab-d6e1656b43c3",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "EIP-7702 phishing: assinar authorization para contrato malicioso = wallet drained. Wallets precisam de UX clara separando \"delegate code\" de \"send tx\". Ambire, MetaMask publicaram threat models específicos."
+          }
+        },
+        {
+          "id": "cabf7780-6826-43b2-8f6e-e16e0dc0041b",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Paymaster denial-of-service: paymaster patrocinador pode ser abusado pra drenar saldo. Sempre rate-limit por user/IP/feature, e simular custo antes de aprovar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "231ecc71-f10c-4452-b7c4-1e0ec329d867",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Leituras recomendadas"
+      },
+      "children": []
+    }
+  ]
+}

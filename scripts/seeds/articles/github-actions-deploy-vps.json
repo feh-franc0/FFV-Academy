@@ -1,0 +1,431 @@
+{
+  "slug": "github-actions-deploy-vps",
+  "title": null,
+  "blocks": [
+    {
+      "id": "e677e900-6c76-44bb-81ff-17cb27b7719b",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Deploy manual é inimigo da consistência: você esquece um passo, usa a versão errada, ou comete um erro de digitação. CI/CD com GitHub Actions resolve isso: todo "
+          },
+          {
+            "text": "git push",
+            "code": true
+          },
+          {
+            "text": " na branch main dispara um pipeline automático que valida, constrói, publica a imagem e faz deploy na VPS via SSH. Este módulo monta esse pipeline do zero com boas práticas: gate de ativação, autenticação no GHCR, build de imagem Docker e deploy remoto seguro. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "b7565880-b314-471e-a326-8ff6ef2d2542",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O pipeline completo: visão geral"
+      },
+      "children": []
+    },
+    {
+      "id": "749a01ac-b79f-4efe-b7c0-6a988fc694ec",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Por que DEPLOY_ENABLED é Variable, não Secret"
+      },
+      "children": [
+        {
+          "id": "78beeef4-b7d7-4c10-a8f4-462f555bb909",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Pegadinha real: não funciona. Secrets nunca são avaliados em condições em workflows — o GitHub mascara o valor antes da expressão ser resolvida, e a comparação sempre dá falso. A única forma de usar um valor para gating é uma Repository Variable: ."
+          }
+        },
+        {
+          "id": "6132bb37-9ad3-4ac4-a5e7-12331e5829aa",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "# Cadastrar a variável:\n#   GitHub repo → Settings → Secrets and variables → Actions → tab \"Variables\" → New\n#   Name: DEPLOY_ENABLED\n#   Value: true (ou false para pausar)\n#\n# Diferente de Secrets: o valor APARECE nos logs e é avaliável em if:.\n# Para esse uso (gate booleano), não há nada secreto — só um liga/desliga."
+          }
+        }
+      ]
+    },
+    {
+      "id": "e1d2ffff-f251-4c66-b8b6-f470a587ffc2",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Pattern scp-action + ssh-action: arquivos primeiro, comando depois"
+      },
+      "children": [
+        {
+          "id": "cb7ec914-7d56-44f2-b9e7-a4b9d8379b55",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Em vez de fazer "
+              },
+              {
+                "text": "git pull",
+                "code": true
+              },
+              {
+                "text": " dentro da VPS (que exigiria chave de leitura do repo na VPS), o pipeline usa "
+              },
+              {
+                "text": "duas actions sequenciais",
+                "bold": true
+              },
+              {
+                "text": ": "
+              }
+            ]
+          }
+        },
+        {
+          "id": "46eee860-08fc-47c8-b409-508d1f434a58",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "yaml",
+            "code": "deploy-backend:\n  needs: [check, build-push]\n  runs-on: ubuntu-latest\n  steps:\n    - uses: actions/checkout@v4\n\n    - name: Copy deploy artifacts to VPS\n      uses: appleboy/scp-action@v0.1.7\n      with:\n        host: ${{ secrets.VPS_HOST }}\n        username: ${{ secrets.VPS_USER }}\n        key: ${{ secrets.VPS_SSH_KEY }}\n        port: 22\n        source: |\n          deployments/docker-compose.prod.yml\n          deployments/nginx/\n          migrations/\n          scripts/deploy.sh\n        target: /tmp/ffv-deploy/\n        strip_components: 1\n\n    - name: Run remote deploy script\n      uses: appleboy/ssh-action@v1.0.3\n      with:\n        host: ${{ secrets.VPS_HOST }}\n        username: ${{ secrets.VPS_USER }}\n        key: ${{ secrets.VPS_SSH_KEY }}\n        port: 22\n        envs: IMAGE_TAG,GHCR_TOKEN,REPO_OWNER\n        script: |\n          set -euo pipefail\n          sudo mkdir -p /opt/ffv/bin /opt/ffv/nginx /opt/ffv/migrations\n          sudo rsync -a /tmp/ffv-deploy/ /opt/ffv/\n          sudo chmod +x /opt/ffv/scripts/deploy.sh\n          IMAGE_TAG=\"${IMAGE_TAG}\" \\\n          GHCR_TOKEN=\"${GHCR_TOKEN}\" \\\n          REPO_OWNER=\"${REPO_OWNER}\" \\\n          sudo -E /opt/ffv/scripts/deploy.sh\n      env:\n        IMAGE_TAG: sha-${{ github.sha }}\n        # GITHUB_TOKEN é injetado pelo GH Actions; pode ler ghcr.io do mesmo repo.\n        GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n        REPO_OWNER: ${{ github.repository_owner }}",
+            "filename": ".github/workflows/deploy.yml — job deploy-backend (trecho)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "01246391-ee59-4c33-bef7-99add2119ccd",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "O script scripts/deploy.sh: orquestração remota"
+      },
+      "children": [
+        {
+          "id": "f10a3c62-6af4-4a13-8b17-9cd5300f1018",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Esse é o script que "
+              },
+              {
+                "text": "realmente",
+                "italic": true
+              },
+              {
+                "text": " faz o deploy na VPS. O workflow só copia arquivos e dispara — toda a lógica de rolling update, health check e rollback vive aqui. Detalhamento completo no módulo dedicado (\"Script de deploy com rollback automático\"), mas o fluxo de alto nível: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "518eb514-9b3a-4be8-8eef-31fca81d4fd7",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "#!/usr/bin/env bash\nset -euo pipefail\n\ncd /opt/ffv\n\n# 1. Login no GHCR\necho \"${GHCR_TOKEN}\" | docker login ghcr.io -u \"${REPO_OWNER}\" --password-stdin\n\n# 2. Pull da nova imagem\ndocker pull \"ghcr.io/feh-franc0/ffv-api:${IMAGE_TAG}\"\n\n# 3. Salva tag atual para rollback (lida do .env atual ou docker inspect)\nCURRENT_TAG=$(grep '^IMAGE_TAG=' /opt/ffv/.env 2>/dev/null | cut -d= -f2 || echo \"\")\necho \"${CURRENT_TAG}\" > /opt/ffv/.current_tag\n\n# 4. Sobe postgres + redis se não estiverem rodando\ndocker compose -f docker-compose.prod.yml up -d postgres redis\n\n# 5. Aguarda Postgres ficar pronto (até 60s)\nfor i in {1..30}; do\n  docker compose exec -T postgres pg_isready -U ffv && break\n  sleep 2\ndone\n\n# 6. Roda migrations (do HOST, não dentro do container — usa loopback)\n#    Trick: troca @postgres: por @localhost: porque o CLI roda fora do compose\nDB_URL_LOCAL=$(grep '^DATABASE_URL=' .env | cut -d= -f2- | sed 's/@postgres:/@localhost:/')\nmigrate -path /opt/ffv/migrations -database \"${DB_URL_LOCAL}\" up\n\n# 7. Atualiza .env com novo IMAGE_TAG e sobe nova versão da API\nsed -i \"s|^IMAGE_TAG=.*|IMAGE_TAG=${IMAGE_TAG}|\" .env\ndocker compose -f docker-compose.prod.yml up -d --no-deps --pull never --scale api=2 api\n\n# 8. Health check loop (≥1 réplica healthy em 120s)\nDEADLINE=$((SECONDS + 120))\nwhile [ $SECONDS -lt $DEADLINE ]; do\n  HEALTHY=$(docker compose ps -q api | xargs -I{} docker inspect \\\n    --format '{{.State.Health.Status}}' {} | grep -c healthy || true)\n  if [ \"$HEALTHY\" -ge 1 ]; then\n    echo \"OK: $HEALTHY réplicas healthy\"\n    docker compose -f docker-compose.prod.yml up -d --no-deps nginx\n    docker image prune -f --filter \"until=24h\"\n    exit 0\n  fi\n  sleep 3\ndone\n\n# 9. Falha → rollback automático\necho \"FAIL: nenhuma réplica ficou healthy em 120s. Rollback...\"\nPREVIOUS_TAG=$(cat /opt/ffv/.current_tag)\nsed -i \"s|^IMAGE_TAG=.*|IMAGE_TAG=${PREVIOUS_TAG}|\" .env\ndocker compose -f docker-compose.prod.yml up -d --no-deps --scale api=2 api\nexit 1",
+            "filename": "scripts/deploy.sh (esqueleto)"
+          }
+        },
+        {
+          "id": "a0130453-f996-4a54-a173-4437966d631c",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "O script é idempotente e auto-rollback: se a nova imagem subir mas não passar no healthcheck, o script volta sozinho pra tag anterior. Você nunca fica com a API quebrada por mais que ~2 minutos."
+          }
+        }
+      ]
+    },
+    {
+      "id": "28610359-0231-4f27-9844-9bef25158d6a",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Migrations no pipeline: o trick do @postgres → @localhost"
+      },
+      "children": [
+        {
+          "id": "c60aa9fb-b48b-4538-b054-b813134c3fb3",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " As migrations ("
+              },
+              {
+                "text": "migrate",
+                "code": true
+              },
+              {
+                "text": " da golang-migrate) rodam "
+              },
+              {
+                "text": "no host",
+                "bold": true
+              },
+              {
+                "text": ", não dentro de um container — isso evita ter que buildar uma imagem só com o CLI, e mantém o controle de versão dos schemas em um único lugar. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "d885049d-7df1-411b-a6c6-7a515b31ef75",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " O detalhe sutil: o "
+              },
+              {
+                "text": ".env",
+                "code": true
+              },
+              {
+                "text": " da API tem "
+              },
+              {
+                "text": "DATABASE_URL=postgres://ffv:SENHA@postgres:5432/ffv_prod",
+                "code": true
+              },
+              {
+                "text": ". O hostname "
+              },
+              {
+                "text": "postgres",
+                "code": true
+              },
+              {
+                "text": " só resolve "
+              },
+              {
+                "text": "dentro",
+                "italic": true
+              },
+              {
+                "text": " da rede do Compose. Pra rodar o CLI no host, precisamos trocar pra "
+              },
+              {
+                "text": "@localhost:",
+                "code": true
+              },
+              {
+                "text": " — que funciona porque o serviço expõe "
+              },
+              {
+                "text": "127.0.0.1:5432:5432",
+                "code": true
+              },
+              {
+                "text": " no host. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "139c0540-5f09-484d-852d-c5665f1c960a",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "code": "# Dentro do deploy.sh:\nDB_URL_LOCAL=$(grep '^DATABASE_URL=' .env | cut -d= -f2- | sed 's/@postgres:/@localhost:/')\n\n# A migrate CLI tem que estar instalada na VPS:\n# curl -L https://github.com/golang-migrate/migrate/releases/download/v4.17.0/migrate.linux-amd64.tar.gz \\\n#   | tar xz && sudo mv migrate /opt/ffv/bin/migrate\n\n# Rodar:\n/opt/ffv/bin/migrate \\\n  -path /opt/ffv/migrations \\\n  -database \"${DB_URL_LOCAL}\" \\\n  up\n\n# Migrations são versionadas em /opt/ffv/migrations/000001_init.up.sql, etc.\n# Migrate guarda o estado na tabela schema_migrations dentro do banco."
+          }
+        }
+      ]
+    },
+    {
+      "id": "875d1057-a3dd-42a3-af8a-5e84dfbfe19d",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Configurando os Secrets no GitHub"
+      },
+      "children": [
+        {
+          "id": "e72a2fc8-dcb3-4953-b0d7-e17d51ca357a",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Antes de criar o workflow, adicione os secrets em "
+              },
+              {
+                "text": "GitHub → Settings → Secrets and variables → Actions",
+                "bold": true
+              },
+              {
+                "text": ": "
+              }
+            ]
+          }
+        },
+        {
+          "id": "8767ea48-dc9c-463e-b7a7-e48a8ab8c890",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " E em "
+              },
+              {
+                "text": "GitHub → Settings → Variables",
+                "bold": true
+              },
+              {
+                "text": " (não Secrets — é visível): "
+              }
+            ]
+          }
+        },
+        {
+          "id": "d4e73703-b707-4b92-899b-0656d7aaa236",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "code": "# Como gerar e adicionar a chave SSH para o CI:\n\n# Na sua máquina local, gere uma chave dedicada para CI\nssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_ci -C \"github-actions-ci\" -N \"\"\n\n# Adicione a chave PÚBLICA na VPS (como usuário deploy):\ncat ~/.ssh/id_ed25519_ci.pub >> ~/.ssh/authorized_keys\n\n# Copie a chave PRIVADA para o GitHub Secret VPS_SSH_KEY:\ncat ~/.ssh/id_ed25519_ci\n# -----BEGIN OPENSSH PRIVATE KEY-----\n# b3BlbnNzaC1rZXktdjEAAAAA...\n# -----END OPENSSH PRIVATE KEY-----"
+          }
+        },
+        {
+          "id": "c590ed73-ce34-4749-ab8e-35be7e39a6b2",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "",
+            "content": "Segurança: gere uma chave SSH separada para o CI — não reutilize sua chave pessoal. Se o repositório for comprometido e os secrets vazarem, você pode revogar apenas a chave do CI sem afetar o acesso pessoal à VPS."
+          }
+        }
+      ]
+    },
+    {
+      "id": "3ae51267-e379-4649-9430-0f109dc665a9",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "O workflow completo"
+      },
+      "children": [
+        {
+          "id": "c5adafdf-2e0a-467e-a476-3275d9a7ebf7",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": ""
+          }
+        }
+      ]
+    },
+    {
+      "id": "e63336e4-40aa-4516-a6a7-fe2935c6bce5",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Usando a imagem correta no docker-compose.prod.yml"
+      },
+      "children": [
+        {
+          "id": "984b5cbc-0593-4227-b7d2-baf85ae5232e",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Para que o workflow injete a tag da nova imagem, o Compose precisa lê-la de uma variável de ambiente: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "9cd1755f-2ef3-441e-85e9-74f72748d308",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "yaml",
+            "code": "# docker-compose.prod.yml — use variável de ambiente para a tag da imagem\nservices:\n  api:\n    image: ghcr.io/seu-usuario/sua-api:${API_IMAGE_TAG:-latest}\n    # ..."
+          }
+        },
+        {
+          "id": "81cb4b8b-e1da-4b83-aa5b-2bdbff39985e",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "bash",
+            "code": ""
+          }
+        }
+      ]
+    },
+    {
+      "id": "17094f99-93e7-48e5-aa24-252ed76e578d",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Estratégia de rollback"
+      },
+      "children": [
+        {
+          "id": "4e49512b-1db3-464a-9679-6b0a2fcbc77e",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "# Ver histórico de imagens disponíveis no GHCR (tags)\ndocker images ghcr.io/seu-usuario/sua-api\n# REPOSITORY                      TAG          IMAGE ID   CREATED\n# ghcr.io/seu-usuario/sua-api     sha-abc1234  aaa111bbb  2 hours ago\n# ghcr.io/seu-usuario/sua-api     sha-def5678  bbb222ccc  1 day ago\n# ghcr.io/seu-usuario/sua-api     sha-ghi9012  ccc333ddd  3 days ago\n\n# Rollback para um commit específico:\nexport API_IMAGE_TAG=sha-def5678\ndocker compose -f docker-compose.prod.yml up -d --no-deps api"
+          }
+        }
+      ]
+    },
+    {
+      "id": "ef3f0aa0-499c-4dec-9946-ffbcb18040c6",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Perguntas frequentes"
+      },
+      "children": []
+    },
+    {
+      "id": "a6a2bbe9-63e7-47da-952f-1b9c3d01beba",
+      "type": "callout",
+      "position": 11,
+      "data": {
+        "variant": "warning",
+        "title": "",
+        "content": "War story — senha FTP da Hostinger não fica visível. No painel Hostinger, a senha do usuário FTP não aparece em lugar nenhum depois que você criou a conta — eles guardam só o hash. Quando for configurar o secret no GitHub e não lembrar mais qual era, vá em Hostinger → FTP Accounts → ⋮ → \"Esqueceu sua senha FTP?\" e gere uma nova. Não existe \"mostrar senha atual\" — só reset."
+      }
+    },
+    {
+      "id": "9d360fb3-761a-4c31-9dca-c86a6c0b74da",
+      "type": "callout",
+      "position": 12,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "CI/CD configurado. Todo push na main agora: (1) gate via , (2) build + push da imagem Docker para o GHCR com tag imutável por SHA, (3) scp dos artifacts + ssh executando o com rolling update, health check e rollback automático, (4) frontend via FTP incremental em paralelo. O próximo módulo abre o script de deploy em detalhes."
+      }
+    }
+  ]
+}

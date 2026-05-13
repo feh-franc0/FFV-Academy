@@ -1,0 +1,149 @@
+{
+  "slug": "cors-csrf-cookies-seguros",
+  "title": null,
+  "blocks": [
+    {
+      "id": "0a2f1117-5ac7-4d66-a0f5-984331e9b2c3",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " CORS, CSRF e configuração de cookies são as defesas de segurança que mais desenvolvedores configuram errado — seja abrindo demais (CORS: *) ou esquecendo atributos críticos em cookies de sessão. Entender o modelo de ameaça por trás de cada um evita configurações de boa vontade mas inseguras. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "4c572f04-9ba5-4691-9048-05c02d80f52e",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Same-Origin Policy e CORS"
+      },
+      "children": [
+        {
+          "id": "d8d19712-6efa-4481-ba31-476989056a60",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "# Origin = protocolo + host + porta\n# https://app.example.com:443 ← origem completa\n# http://app.example.com:80   ← origem DIFERENTE (http vs https)\n# https://api.example.com:443 ← origem DIFERENTE (host diferente)\n# https://app.example.com:8443 ← origem DIFERENTE (porta diferente)\n\n# Preflight (OPTIONS) é enviado para requests \"não simples\":\n# Não-simples: método != GET/POST/HEAD, ou headers customizados, ou Content-Type != form/text\n\n# Exemplo de preflight:\n# OPTIONS /api/users HTTP/1.1\n# Origin: https://app.example.com\n# Access-Control-Request-Method: POST\n# Access-Control-Request-Headers: Content-Type, Authorization\n\n# Resposta do servidor:\n# HTTP/1.1 200 OK\n# Access-Control-Allow-Origin: https://app.example.com\n# Access-Control-Allow-Methods: GET, POST, PUT, DELETE\n# Access-Control-Allow-Headers: Content-Type, Authorization\n# Access-Control-Max-Age: 86400   ← cacheia o preflight por 24h\n\nfrom fastapi import FastAPI, Request\nfrom fastapi.middleware.cors import CORSMiddleware\n\napp = FastAPI()\n\n# CORS middleware — configuração CORRETA para produção:\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=[\n        \"https://app.example.com\",\n        \"https://admin.example.com\",\n    ],  # NUNCA \"*\" se usar credentials\n    allow_credentials=True,         # permite cookies cross-origin\n    allow_methods=[\"GET\", \"POST\", \"PUT\", \"DELETE\", \"OPTIONS\"],\n    allow_headers=[\"Content-Type\", \"Authorization\", \"X-Request-ID\"],\n    max_age=86400,                  # cache do preflight\n)\n\n# Armadilha: allow_origins=[\"*\"] + allow_credentials=True = INVÁLIDO\n# Browser recusa se origin for * e credentials estiver true\n# Deve ser origem específica quando credentials=True\n\n# CORS NÃO protege de CSRF!\n# CORS bloqueia LEITURA da resposta, não o ENVIO da request\n# Um form HTML pode fazer POST cross-origin sem CORS (é \"simples\")\n# → CSRF protection é separada de CORS"
+          }
+        }
+      ]
+    },
+    {
+      "id": "a11a2456-c50e-4430-9a91-423dcfe30706",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "CSRF: ataques e defesas"
+      },
+      "children": [
+        {
+          "id": "2a266b7c-563a-47fa-8550-826ff03f4f9a",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "# Cenário de ataque CSRF:\n# 1. Vítima logada em bank.com (cookie de sessão ativo)\n# 2. Vítima visita evil.com\n# 3. evil.com tem: <form action=\"https://bank.com/transfer\" method=\"POST\">\n#                    <input name=\"to\" value=\"hacker_account\">\n#                    <input name=\"amount\" value=\"10000\">\n#                  </form>\n#                  <script>document.forms[0].submit();</script>\n# 4. Browser envia o POST para bank.com COM O COOKIE DA VÍTIMA\n# 5. bank.com processa a transferência como se fosse a vítima\n\n# Defesa 1: SameSite Cookie (recomendado, mais simples)\n# SameSite=Strict: cookie nunca enviado cross-site (nem em links externos)\n# SameSite=Lax:   cookie enviado em navegação top-level GET (links externos)\n#                 MAS não em POST/PUT/DELETE cross-site → mitiga CSRF\n# SameSite=None:  enviado sempre (deve ter Secure obrigatoriamente)\n\nfrom fastapi.responses import Response\nimport secrets\n\ndef set_session_cookie(response: Response, session_id: str):\n    \"\"\"Cookie de sessão com todos os atributos de segurança.\"\"\"\n    response.set_cookie(\n        key=\"session_id\",\n        value=session_id,\n        httponly=True,              # JS não acessa\n        secure=True,                # apenas HTTPS\n        samesite=\"lax\",             # mitiga CSRF, permite OAuth flows\n        max_age=86400,              # 24h\n        path=\"/\",                   # todo o site\n        # domain=\".example.com\",    # subdomínios (use com cuidado)\n    )\n\n# Defesa 2: CSRF Token (necessário quando SameSite não é suficiente)\nfrom fastapi import Cookie, Form, HTTPException\n\ndef generate_csrf_token() -> str:\n    return secrets.token_urlsafe(32)\n\n@app.post(\"/transfer\")\nasync def transfer(\n    to: str = Form(...),\n    amount: float = Form(...),\n    csrf_token: str = Form(...),        # token no body do form\n    session_csrf: str = Cookie(None),  # mesmo token no cookie\n):\n    # Valida que o token do form = token do cookie:\n    if not secrets.compare_digest(csrf_token, session_csrf):\n        raise HTTPException(status_code=403, detail=\"CSRF token inválido\")\n    # Processa transferência...\n\n# Defesa 3: Custom header (para SPAs com JSON API)\n# Browser impede JS de adicionar headers customizados em requests cross-origin\n# sem aprovação CORS — então se a API exige X-Requested-With, CSRF é impossível\n@app.post(\"/api/transfer\")\nasync def api_transfer(request: Request, ...):\n    if not request.headers.get(\"X-Requested-With\"):\n        raise HTTPException(403, \"Missing X-Requested-With header\")\n    # Não precisa de CSRF token — custom header é proteção suficiente para JSON APIs"
+          }
+        }
+      ]
+    },
+    {
+      "id": "15255cbd-d3a7-4cef-bdd8-5261ef0dbb24",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Cookies seguros: todos os atributos"
+      },
+      "children": [
+        {
+          "id": "eaf7a89d-c2c0-4365-b0cb-40dd52e6b7dc",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Atributo",
+              "Função",
+              "Recomendação"
+            ],
+            "rows": [
+              [
+                "HttpOnly",
+                "Bloqueia acesso via JS",
+                "Sempre para cookies de sessão"
+              ],
+              [
+                "Secure",
+                "Só envia em HTTPS",
+                "Sempre em produção"
+              ],
+              [
+                "SameSite=Lax",
+                "Mitiga CSRF",
+                "Padrão recomendado"
+              ],
+              [
+                "SameSite=Strict",
+                "Previne CSRF total",
+                "Se não precisa de OAuth/link externo"
+              ],
+              [
+                "SameSite=None",
+                "Cross-site explícito",
+                "Apenas com Secure, para iframes/OAuth"
+              ],
+              [
+                "Max-Age / Expires",
+                "Define expiração",
+                "Sem = session cookie (fecha browser)"
+              ],
+              [
+                "Path=/",
+                "Escopo de caminho",
+                "/ para toda a aplicação"
+              ],
+              [
+                "Domain=.example.com",
+                "Inclui subdomínios",
+                "Use com cuidado — inclui todos os subdomínios"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "c213540b-b9cf-4ddc-b76a-91cf1c1b294c",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "text",
+            "code": "# Prefixes especiais de cookies:\n# __Secure- prefix: browser exige Secure + HTTPS (protege de override por subdomínio)\n# __Host- prefix:   browser exige Secure + Path=/ + sem Domain (mais restrito)\n\n# Set-Cookie: __Host-session=abc; Secure; Path=/; HttpOnly; SameSite=Lax\n\n# Cookie Theft via XSS — por que HttpOnly importa:\n# Sem HttpOnly: <script>document.cookie</script> retorna \"session=abc123\"\n# Com HttpOnly: <script>document.cookie</script> retorna \"\" (cookie ausente)\n# Mas: XSS ainda pode fazer fetch() autenticado — HttpOnly não é suficiente sozinho\n# → Content Security Policy (CSP) reduz a superfície de XSS\n\n# Content-Security-Policy (headers de segurança complementares):\nsecurity_headers = {\n    # Restringe de onde scripts podem ser carregados:\n    \"Content-Security-Policy\": \"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'\",\n\n    # Impede o browser de \"adivinhar\" o Content-Type:\n    \"X-Content-Type-Options\": \"nosniff\",\n\n    # Controla como a página pode ser embarcada em iframe:\n    \"X-Frame-Options\": \"DENY\",  # ou \"SAMEORIGIN\"\n\n    # Força HTTPS por 1 ano:\n    \"Strict-Transport-Security\": \"max-age=31536000; includeSubDomains; preload\",\n\n    # Controla referrer em links externos:\n    \"Referrer-Policy\": \"strict-origin-when-cross-origin\",\n\n    # Permissões de browser APIs:\n    \"Permissions-Policy\": \"camera=(), microphone=(), geolocation=()\",\n}\n\n# FastAPI: adicionar todos os security headers:\nfrom starlette.middleware.base import BaseHTTPMiddleware\n\nclass SecurityHeadersMiddleware(BaseHTTPMiddleware):\n    async def dispatch(self, request, call_next):\n        response = await call_next(request)\n        for header, value in security_headers.items():\n            response.headers[header] = value\n        return response\n\napp.add_middleware(SecurityHeadersMiddleware)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "d3985ddb-40e8-4acd-929f-ea6e70629cdb",
+      "type": "callout",
+      "position": 4,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Modelo mental: Same-Origin Policy protege de leitura cross-origin. CORS relaxa o SOP de forma controlada — nunca use *, apenas origens explícitas, especialmente com credentials. CSRF explora que browsers enviam cookies automaticamente em requests cross-site — mitigado com SameSite=Lax (default moderno) ou CSRF tokens. HttpOnly bloqueia roubo de cookie por XSS. Secure garante transmissão apenas em HTTPS. Use sempre os quatro juntos para cookies de sessão: HttpOnly + Secure + SameSite=Lax + Max-Age."
+      }
+    },
+    {
+      "id": "70622de5-588c-4ac2-8d44-af16d79f314b",
+      "type": "callout",
+      "position": 5,
+      "data": {
+        "variant": "info",
+        "title": "",
+        "content": "Trilha concluída! Próxima trilha: OSI e TCP/IP — volte ao início para revisar as camadas de rede."
+      }
+    }
+  ]
+}

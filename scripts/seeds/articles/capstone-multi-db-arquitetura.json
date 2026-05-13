@@ -1,0 +1,136 @@
+{
+  "slug": "capstone-multi-db-arquitetura",
+  "title": null,
+  "blocks": [
+    {
+      "id": "309d951d-8201-48ff-b923-874a4532bdbe",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Projeto proposto"
+      },
+      "children": [
+        {
+          "id": "df225d08-a05a-4e00-a411-8a64adb18ff9",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Projete e implemente uma arquitetura polyglot realista para um SaaS de suporte ao cliente com IA. Requisitos: OLTP transacional, analytics em dashboards live, busca semântica em base de conhecimento (RAG), rate limiting + sessão, histórico de tickets pesquisável. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "3bcb8077-2497-46b6-8e57-da58d155c31b",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " O capstone vale como peça de portfolio sênior: não é um CRUD, é decisão de arquitetura documentada com trade-offs reais. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "e65dece0-c334-4257-840d-905b4bccb32d",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Stack alvo"
+      },
+      "children": [
+        {
+          "id": "dab450c5-7c2f-4230-8a91-3233332f79e0",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "# Mapa de stores por responsabilidade\n\npostgres:              # source of truth transacional\n  responsabilidade: users, orgs, tickets, messages, billing\n  por_que: ACID, FKs, JSONB flexivel, ecossistema\n  exemplos_tables: users, tickets, messages, audit_log, outbox_events\n\nredis:                 # latencia sub-ms, structures\n  responsabilidade: session, rate limit, presence, cache hot\n  por_que: estruturas (ZSET, Stream), TTL nativo, Lua atomico\n\nclickhouse:            # analytics OLAP\n  responsabilidade: eventos, metricas de produto, relatorios\n  por_que: colunar + compressao, queries agregadas em bilhoes de rows\n  ingestao: via CDC + Kafka engine\n\npgvector (mesmo Postgres): # busca semantica ate 5M vetores\n  responsabilidade: knowledge base, similaridade entre tickets\n  por_que: sem infra extra, join com tenant_id nativo, ACID\n\ns3 + athena:           # cold storage / audit\n  responsabilidade: logs > 18 meses, backup bruto\n  por_que: custo marginal zero, query ad-hoc SQL"
+          }
+        }
+      ]
+    },
+    {
+      "id": "80322783-8f37-4a81-a33a-6cb6175ae4bd",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Fluxo CDC (consistência eventual)"
+      },
+      "children": [
+        {
+          "id": "5dd5b179-32d8-421e-8bda-6b4458b8dc38",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "sql",
+            "code": "-- Outbox pattern no Postgres\nCREATE TABLE outbox_events (\n    id          BIGSERIAL PRIMARY KEY,\n    aggregate   TEXT NOT NULL,\n    event_type  TEXT NOT NULL,\n    payload     JSONB NOT NULL,\n    created_at  TIMESTAMPTZ DEFAULT now()\n);\n\n-- Na mesma transacao do business write\nBEGIN;\nINSERT INTO tickets (id, org_id, subject, status)\n  VALUES ($1, $2, $3, 'open');\nINSERT INTO outbox_events (aggregate, event_type, payload)\n  VALUES ('ticket', 'ticket.opened', jsonb_build_object(\n    'ticketId', $1, 'orgId', $2, 'subject', $3\n  ));\nCOMMIT;"
+          }
+        },
+        {
+          "id": "eb0a279d-804f-46a6-8a85-82726dcc6773",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "yaml",
+            "code": "# Debezium connector captura WAL e publica no Kafka\nname: pg-outbox-connector\nconfig:\n  connector.class: io.debezium.connector.postgresql.PostgresConnector\n  database.hostname: pg-primary\n  database.dbname: app\n  plugin.name: pgoutput\n  publication.name: dbz_pub\n  table.include.list: public.outbox_events\n  transforms: outbox\n  transforms.outbox.type: io.debezium.transforms.outbox.EventRouter\n  transforms.outbox.route.topic.replacement: events.${routedByValue}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "bb44ab34-6568-4a75-b550-8196aa9e8522",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Entregáveis"
+      },
+      "children": [
+        {
+          "id": "9e52bf53-0b5d-4da6-ac1f-17b749774adb",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "markdown",
+            "code": "# Capstone multi-DB — Entregáveis\n\n## 1. Arquitetura\n- Diagrama C4 (context, container, component)\n- Data flow com CDC e stores derivados\n- ADRs numerados: por que Postgres, por que Redis (e nao ZSET em Postgres), por que ClickHouse (e nao materialized views), por que pgvector (e nao Pinecone), quando migrar cada um\n\n## 2. Implementação\n- Postgres com schema real (users, orgs, tickets, messages, outbox)\n- Redis com ZSET para sliding rate limit + Lua script versionado\n- ClickHouse com MergeTree particionado + materialized view para rollup\n- pgvector com HNSW + pipeline de reranker\n- Debezium + Kafka (ou Redpanda) para CDC\n- Dockerfile + docker-compose para reproducao local\n\n## 3. Observability\n- Metricas por store (latencia p50/p99, error rate, conexoes, cost/day estimado)\n- Dashboard Grafana ou similar\n- Alertas (p99 acima do SLO, lag de CDC > 30s, too many parts no CH)\n\n## 4. SLOs e failover\n- SLO por endpoint (ex: GET /tickets p99 < 150ms)\n- Runbook de failover Postgres (promote replica)\n- Runbook de degradacao Redis (cache bypass)\n- Teste de chaos simples (matar replica, matar Debezium)\n\n## 5. Writeup\n- README principal com diagrama e decisoes\n- Blog post ou doc de 2-4k palavras explicando o reasoning\n- Cost breakdown mensal estimado (infra + observability)\n- Limitations honestas e next iterations"
+          }
+        }
+      ]
+    },
+    {
+      "id": "35924961-ee7c-4718-9b7c-e5896d1814cc",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "O que separa sênior de pleno aqui"
+      },
+      "children": [
+        {
+          "id": "44347e61-564b-4d01-b7c1-de56165e1243",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Pleno entrega o código funcionando. Sênior entrega o código + ADRs mostrando alternativas rejeitadas + SLO + observability + cost awareness + runbook. Um hiring manager lendo esse writeup sabe em 10 minutos que você opera sistema real."
+          }
+        },
+        {
+          "id": "1083ab39-d376-4d3c-88b3-dc40246c4e76",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Arquitetura polyglot é sobre disciplina, não sobre usar muitos bancos. Cada store a mais é custo operacional. Este capstone prova que você escolhe cada um por razão justificável — e sabe como manter consistência entre eles."
+          }
+        }
+      ]
+    }
+  ]
+}

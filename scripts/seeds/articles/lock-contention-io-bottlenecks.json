@@ -1,0 +1,203 @@
+{
+  "slug": "lock-contention-io-bottlenecks",
+  "title": null,
+  "blocks": [
+    {
+      "id": "1fd328b0-5eb1-483a-ae48-4461019aca06",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Os dois gargalos off-CPU mais comuns"
+      },
+      "children": [
+        {
+          "id": "4473d74e-352a-4554-b04f-025dae2a552d",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " CPU saturada é visível em top. Lock contention e I/O wait são invisíveis — CPU mostra 20%, mas p99 explode. Esta é a região onde off-CPU profiling e ferramentas de kernel ganham. Padrão de investigação: (1) CPU baixa + latência alta, (2) confirmar com USE method que saturation está em lock ou I/O, (3) aplicar ferramenta certa. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "91e20192-1851-4c3c-b5a6-816de8fad0e0",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Profilando lock contention (JVM)"
+      },
+      "children": [
+        {
+          "id": "742d4d6a-a285-4668-bc2d-9663d0051d50",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " async-profiler em modo lock captura monitor enter/wait via JVMTI. JFR tem eventos equivalentes habilitáveis em produção. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "9cbef186-0d35-4a3b-8f00-670cb8bed222",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "# async-profiler: lock contention\n./profiler.sh -e lock -d 30 -f lock.html &lt;PID&gt;\n\n# JFR: ativar eventos de monitor em runtime\njcmd &lt;PID&gt; JFR.start name=locks settings=profile duration=60s filename=locks.jfr\njcmd &lt;PID&gt; JFR.stop name=locks\n\n# Abrir no JMC, filtrar por jdk.JavaMonitorEnter; sort por totalDuration.\n# Resultado: monitor disputado + stack de quem entra + quem possui."
+          }
+        },
+        {
+          "id": "5121e138-bbcd-4ff7-b704-d9f387dd609d",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Adaptive spin: JVM tenta spin curto antes de bloquear em OS. Se contention é curto (ms), spin ganha; se longo, bloqueia. Biased locking foi removido em Java 15+ porque custo de desotimização superou ganho."
+          }
+        }
+      ]
+    },
+    {
+      "id": "457ead3c-7414-4284-86c6-b6046e92da3c",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Lock-free como alternativa"
+      },
+      "children": [
+        {
+          "id": "3ce54dac-bdf7-4cda-9e9f-b88e2dca082d",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Quando contention é inerente à estrutura, algoritmos lock-free (CAS loops, epoch-based reclamation) eliminam bloqueio. Mais difíceis de escrever — pule para biblioteca testada (java.util.concurrent, crossbeam em Rust, folly em C++). "
+              }
+            ]
+          }
+        },
+        {
+          "id": "3d35059e-167b-4163-9ad9-a7e28aa2dee5",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "java",
+            "code": "// Substituir HashMap sincronizado por ConcurrentHashMap (segmented)\nMap&lt;String, Integer&gt; seguro = new ConcurrentHashMap&lt;&gt;();\n\n// LongAdder: melhor que AtomicLong sob alta contention (reduz CAS)\nLongAdder contador = new LongAdder();\ncontador.increment();  // sem contention na soma total\n\n// StampedLock: optimistic read (lê sem bloquear, valida depois)\nStampedLock lock = new StampedLock();\nlong stamp = lock.tryOptimisticRead();\nint valor = campo;\nif (!lock.validate(stamp)) {\n    stamp = lock.readLock();\n    try { valor = campo; } finally { lock.unlockRead(stamp); }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "d1c130c9-6c98-4bba-8ee2-f886c9b8c192",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "I/O: iostat, iotop, bpftrace"
+      },
+      "children": [
+        {
+          "id": "0f8bb653-3119-4ad7-be13-8d870fd12e7c",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Para disk I/O, iostat -xz 1 é ponto de entrada. %util alto + await alto = disco saturado. biolatency (bcc) dá histograma por device. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "a93d2f0a-3229-4056-86ca-5c137cdf23ee",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "# Ver utilização por device\niostat -xz 1\n\n# Colunas críticas:\n#   r/s, w/s           - IOPS\n#   rkB/s, wkB/s       - throughput\n#   avgqu-sz           - saturation (fila)\n#   await              - latência média (ms)\n#   %util              - tempo ocupado\n\n# Qual processo está causando I/O? iotop ou bpftrace\nsudo iotop -oP\n\n# bpftrace: quem abriu arquivos &gt; 10ms\nsudo /usr/share/bcc/tools/opensnoop -T\nsudo /usr/share/bcc/tools/biolatency -m 10 1\n\n# strace para inspecionar syscalls de 1 PID (cuidado, overhead)\nstrace -c -p &lt;PID&gt;"
+          }
+        }
+      ]
+    },
+    {
+      "id": "53f43493-b0fe-40a2-97ef-2a565d94c97e",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "io_uring: o futuro do async I/O no Linux"
+      },
+      "children": [
+        {
+          "id": "a9b8eeaf-3c2e-4e75-b726-16dd3f17b4f8",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " io_uring (Jens Axboe, 2019+) é revolução real. Ring buffers compartilhados kernel/userspace permitem submeter N operações com 1 syscall (ou zero com SQPOLL). Rivaliza SPDK em performance e é portable. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "9127cc9b-7a71-47eb-ae02-4a38b7279879",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "c",
+            "code": "// Exemplo mínimo com liburing — leitura assíncrona\n#include &lt;liburing.h&gt;\n\nstruct io_uring ring;\nio_uring_queue_init(32, &amp;ring, 0);\n\nstruct io_uring_sqe *sqe = io_uring_get_sqe(&amp;ring);\nchar buf[4096];\nint fd = open(\"arquivo.bin\", O_RDONLY);\nio_uring_prep_read(sqe, fd, buf, sizeof(buf), 0);\nio_uring_sqe_set_data(sqe, (void*)42);\n\nio_uring_submit(&amp;ring);           // 1 syscall submete tudo\nstruct io_uring_cqe *cqe;\nio_uring_wait_cqe(&amp;ring, &amp;cqe);   // espera conclusão\n// cqe-&gt;res = bytes lidos ou -errno\nio_uring_cqe_seen(&amp;ring, cqe);"
+          }
+        },
+        {
+          "id": "e316b523-f124-4faf-a754-5f4ffc4f9ad4",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Adoção real: ScyllaDB, Cloudflare (Pingora), Meta (thrift server), Linux 5.6+ fs default. Runtimes modernos (tokio-uring em Rust, io_uring em Node 22+ experimental) abstraem a API."
+          }
+        }
+      ]
+    },
+    {
+      "id": "c2767127-5917-4fde-a304-79f5db2fcacf",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Padrão de investigação: EFIX"
+      },
+      "children": [
+        {
+          "id": "0cef5e3d-d991-42c1-b01d-cf14e2f60423",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Checklist mental para não andar em círculos: Establish baseline (latência antes), Find symptom (qual percentil sofre), Isolate (lock? I/O? CPU?), eXplain (root cause com profile), fix + verify. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "0cf05bb0-40f5-4309-a30f-02f8185c05fd",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "# 1. Baseline\nwrk2 -t4 -c100 -d30s -R1000 --latency http://app/ &gt; before.txt\n\n# 2. USE method\nvmstat 1     # CPU / swap\niostat -xz 1 # disk\nss -s        # sockets\n\n# 3. Isolar\n# - CPU alta?      -&gt; async-profiler / perf record\n# - CPU baixa?     -&gt; offcputime / biolatency / lock profiling\n# - rede?          -&gt; tcpconnect, tcpretrans\n\n# 4. Explain\n# flamegraph on-CPU + off-CPU = mapa completo\n\n# 5. Fix + verify\nwrk2 ... &gt; after.txt\n~/FlameGraph/difffolded.pl before.folded after.folded | flamegraph.pl --negate &gt; diff.svg"
+          }
+        }
+      ]
+    }
+  ]
+}

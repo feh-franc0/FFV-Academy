@@ -1,0 +1,380 @@
+{
+  "slug": "jenkins-pipelines",
+  "title": null,
+  "blocks": [
+    {
+      "id": "1de53459-204a-4dbf-8412-0b78b81c065c",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Jenkins é o avô do CI/CD e continua rodando metade da indústria. Nasceu em 2004 como Hudson, virou Jenkins em 2011, tem ~2.000 plugins e uma comunidade enorme. GitHub Actions e GitLab CI vieram depois, com sintaxe mais limpa e integração SaaS. Mas Jenkins sobrevive porque: roda on-prem em rede isolada, integra com "
+          },
+          {
+            "text": "qualquer",
+            "italic": true
+          },
+          {
+            "text": " coisa (SVN, Perforce, Bitbucket, sistemas legados), tem governança fina de permissões, e uma empresa de 20 anos provavelmente já tem 300 jobs investidos nele. Saber Jenkins é diferencial real em empresas de porte. Este guia cobre arquitetura moderna, Jenkinsfile declarativo, agents Kubernetes, shared libraries e migração de freestyle para pipeline-as-code. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "beaba1d1-055e-4031-88e5-c80eb210150a",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Por que Jenkins ainda existe em 2026"
+      },
+      "children": [
+        {
+          "id": "b0a57d87-ce59-45fc-9985-6c36669d6478",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Se você está começando hoje num stack 100% GitHub/cloud, provavelmente não deveria montar Jenkins. Mas se você trabalha em empresa com Jenkins legado, ou precisa de on-prem, esta é a plataforma — e dominar significa modernizar legado, não construir do zero."
+          }
+        }
+      ]
+    },
+    {
+      "id": "beb16d2a-be25-4912-8d94-0cfcdf7a8549",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Arquitetura: controller + agents"
+      },
+      "children": [
+        {
+          "id": "4c9c2049-93d4-4321-b14e-ea78d842e436",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Erro clássico: usar o controller como agent ( apontando pro master). O controller carrega UI, schedule, gerencia estado — se o build consumir CPU/disco dele, a plataforma inteira engasga. Regra: controller não roda build. Nunca."
+          }
+        }
+      ]
+    },
+    {
+      "id": "ae95cbdb-a4bd-4443-9c2a-d6fbe218270c",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Declarative vs Scripted Pipeline"
+      },
+      "children": [
+        {
+          "id": "a7486ac0-157a-4b89-978d-762fc03fd968",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Critério",
+              "Declarative",
+              "Scripted"
+            ],
+            "rows": [
+              [
+                "Sintaxe",
+                "Estrutura fixa: pipeline { }, agent, stages, steps, post",
+                "Groovy livre: node { } + steps imperativos"
+              ],
+              [
+                "Validação",
+                "Linter oficial: jenkins-cli declarative-linter",
+                "Só roda no Jenkins pra saber se passa"
+              ],
+              [
+                "Legibilidade",
+                "Alta — shape consistente entre projetos",
+                "Depende do autor"
+              ],
+              [
+                "Poder",
+                "Suficiente pra 95% dos casos + escape hatch via script { }",
+                "Full Groovy — loops arbitrários, classes"
+              ],
+              [
+                "Blue Ocean",
+                "Renderiza bem (grid de stages)",
+                "Renderização limitada"
+              ],
+              [
+                "Uso recomendado",
+                "Default em 2026",
+                "Só quando lógica for realmente dinâmica"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "1c1487a3-661a-45cf-a2b9-7fc9acc7fd07",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "groovy",
+            "code": "// Jenkinsfile — declarativo, 100 linhas cobrem um pipeline real\npipeline {\n  agent none                              // cada stage escolhe seu agent\n\n  options {\n    timeout(time: 30, unit: 'MINUTES')\n    timestamps()\n    disableConcurrentBuilds()\n    buildDiscarder(logRotator(numToKeepStr: '20'))\n  }\n\n  environment {\n    IMAGE = \"ghcr.io/me/api\"\n    SHA   = \"${GIT_COMMIT.take(7)}\"\n  }\n\n  stages {\n    stage('Checkout') {\n      agent { label 'linux' }\n      steps { checkout scm }\n    }\n\n    stage('Quality') {\n      parallel {\n        stage('Lint') {\n          agent { docker 'node:20-alpine' }\n          steps { sh 'npm ci && npm run lint' }\n        }\n        stage('Test') {\n          agent { docker 'node:20-alpine' }\n          steps { sh 'npm ci && npm test -- --ci' }\n          post { always { junit 'junit.xml' } }\n        }\n      }\n    }\n\n    stage('Build & push image') {\n      agent { label 'linux' }\n      when { branch 'main' }\n      steps {\n        withCredentials([usernamePassword(\n          credentialsId: 'ghcr',\n          usernameVariable: 'USER', passwordVariable: 'TOKEN')]) {\n          sh '''\n            echo \"$TOKEN\" | docker login ghcr.io -u \"$USER\" --password-stdin\n            docker buildx build --push --platform linux/amd64,linux/arm64 \\\n              -t $IMAGE:$SHA -t $IMAGE:latest .\n          '''\n        }\n      }\n    }\n\n    stage('Deploy staging') {\n      agent { label 'kubectl' }\n      when { branch 'main' }\n      steps {\n        sh '''\n          kubectl set image deploy/api api=$IMAGE:$SHA -n staging\n          kubectl rollout status deploy/api -n staging --timeout=5m\n        '''\n      }\n    }\n\n    stage('Deploy prod') {\n      agent { label 'kubectl' }\n      when { branch 'main' }\n      input {\n        message 'Promote to production?'\n        ok 'Deploy'\n        submitter 'sre,tech-lead'\n      }\n      steps {\n        sh '''\n          kubectl set image deploy/api api=$IMAGE:$SHA -n prod\n          kubectl rollout status deploy/api -n prod --timeout=5m\n        '''\n      }\n    }\n  }\n\n  post {\n    success { slackSend channel: '#deploys', color: 'good',   message: \"✅ ${env.JOB_NAME} ${env.BUILD_NUMBER} deployed\" }\n    failure { slackSend channel: '#deploys', color: 'danger', message: \"❌ ${env.JOB_NAME} ${env.BUILD_NUMBER} failed\" }\n    always  { cleanWs() }\n  }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "572b5719-3434-4520-b3c5-25611ad07f6d",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Agents Kubernetes — o padrão moderno"
+      },
+      "children": [
+        {
+          "id": "5317ef4a-a139-4568-b942-6a9cef1e9e11",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Plugin "
+              },
+              {
+                "text": "kubernetes",
+                "bold": true
+              },
+              {
+                "text": " permite que o Jenkins agende agents como Pods efêmeros em um cluster K8s. Cada pipeline declara qual imagem quer; o Pod sobe, roda, morre. Escala automática, zero drift, custo sob demanda. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "2a2521a2-4baf-4547-a399-12f549eb611b",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "groovy",
+            "code": "pipeline {\n  agent {\n    kubernetes {\n      yaml '''\napiVersion: v1\nkind: Pod\nspec:\n  containers:\n    - name: node\n      image: node:20-alpine\n      command: [cat]\n      tty: true\n    - name: docker\n      image: docker:26-dind\n      securityContext: { privileged: true }\n    - name: kubectl\n      image: bitnami/kubectl:1.30\n      command: [cat]\n      tty: true\n      '''\n      defaultContainer 'node'\n    }\n  }\n  stages {\n    stage('Install') { steps { sh 'npm ci' } }\n    stage('Test')    { steps { sh 'npm test' } }\n    stage('Build')   {\n      steps {\n        container('docker') {\n          sh 'docker build -t me/api:$GIT_COMMIT .'\n        }\n      }\n    }\n    stage('Deploy') {\n      steps {\n        container('kubectl') {\n          sh 'kubectl apply -f k8s/'\n        }\n      }\n    }\n  }\n}"
+          }
+        },
+        {
+          "id": "0c190f33-698a-44c7-b8ab-3ef9abdeff04",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Ganho real: um agent sai de “VM Linux com toda ferramenta pré-instalada” para “Pod com só o que esse pipeline precisa”. Sem conflito entre Java 11 e Java 21. Sem disco enchendo com cache. Quando não há build, zero recurso consumido."
+          }
+        }
+      ]
+    },
+    {
+      "id": "438d78fe-12cf-4115-adbc-907963bf6378",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Credentials — como não vazar segredo"
+      },
+      "children": [
+        {
+          "id": "dd7c982d-eb14-4547-b798-f86d6d6de2b3",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "groovy",
+            "code": "stage('Deploy to AWS') {\n  steps {\n    withCredentials([[\n      $class: 'AmazonWebServicesCredentialsBinding',\n      credentialsId: 'aws-prod',\n      accessKeyVariable: 'AWS_ACCESS_KEY_ID',\n      secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'\n    ]]) {\n      sh 'aws s3 sync ./dist s3://meu-bucket --delete'\n    }\n  }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "31f00b65-61f9-4a28-a86a-e1b61911c056",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Shared Libraries — DRY real na plataforma"
+      },
+      "children": [
+        {
+          "id": "c0d0381f-6c90-4810-8311-9e90c719e5d5",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Shared Library é um repo Git com estrutura convencional: "
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3a3840f-5f9b-4630-9dc8-14f6d2fd6d35",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "jenkins-shared-lib/\n├── vars/\n│   ├── buildDockerImage.groovy     # usado como: buildDockerImage(name: 'api', tag: env.GIT_COMMIT)\n│   └── deployToK8s.groovy\n├── src/\n│   └── com/minhaorg/jenkins/\n│       └── K8sClient.groovy        # classes Groovy reutilizáveis\n└── resources/\n    └── k8s/\n        └── deployment.yaml.tpl"
+          }
+        },
+        {
+          "id": "7e944936-f4b6-45dc-a375-4412f8741aba",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "groovy",
+            "code": "// vars/buildDockerImage.groovy\ndef call(Map config) {\n  def image = \"${config.registry}/${config.name}:${config.tag}\"\n  sh \"\"\"\n    docker build -t ${image} .\n    docker push ${image}\n  \"\"\"\n  return image\n}"
+          }
+        },
+        {
+          "id": "9671f23e-e36e-4460-9aa4-cb612edc297b",
+          "type": "code_block",
+          "position": 3,
+          "data": {
+            "language": "groovy",
+            "code": "// Jenkinsfile consome assim\n@Library('jenkins-shared-lib@v2') _\n\npipeline {\n  agent { label 'linux' }\n  stages {\n    stage('Build') {\n      steps {\n        script {\n          def img = buildDockerImage(\n            registry: 'ghcr.io/minha-org',\n            name: 'api',\n            tag: env.GIT_COMMIT.take(7)\n          )\n          echo \"Built ${img}\"\n        }\n      }\n    }\n  }\n}"
+          }
+        },
+        {
+          "id": "4bfca59e-f8a0-44c9-88a2-0d07a3ff172f",
+          "type": "callout",
+          "position": 4,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Versione a library: tag , . Pipelines pinam versão. Mudança breaking? Novo major. Library sem versão é bomba-relógio — uma linha mudada quebra 200 pipelines em produção ao mesmo tempo."
+          }
+        }
+      ]
+    },
+    {
+      "id": "e6fd830a-a6c1-4a90-8422-e826bc14499f",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Triggers e multibranch pipeline"
+      },
+      "children": [
+        {
+          "id": "6d978504-d3ae-4006-b2d6-df8480b36f6c",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Tipo de job",
+              "O que cria",
+              "Quando usar"
+            ],
+            "rows": [
+              [
+                "Pipeline (single)",
+                "Um job que lê Jenkinsfile de um branch",
+                "Raramente — só se repo tem 1 branch"
+              ],
+              [
+                "Multibranch Pipeline",
+                "Descobre branches e PRs automaticamente, cria sub-job por branch",
+                "Default moderno"
+              ],
+              [
+                "Organization Folder",
+                "Descobre TODOS os repos de uma org/user com Jenkinsfile",
+                "Empresas com 50+ repos"
+              ],
+              [
+                "Freestyle",
+                "UI clicada, sem Jenkinsfile",
+                "Legado — não usar em projetos novos"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "a18b679e-bac1-47ed-b894-21fde9900b8b",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Blue Ocean + Pipeline Editor"
+      },
+      "children": [
+        {
+          "id": "558c9518-1c8c-4be5-bd49-7f527ac963b2",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Blue Ocean",
+                "bold": true
+              },
+              {
+                "text": " é a UI moderna do Jenkins: grid visual de stages, logs limpos, trace de falha direto. É um plugin (um pouco desatualizado em 2026 mas ainda útil). Alternativa: UI oficial nova do Jenkins 2.4xx também tem visual de pipeline. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "169ccf35-0485-497b-809c-ac42258cf30f",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Blue Ocean não é onde você edita Jenkinsfile em produção. O editor visual é ótimo pra descobrir sintaxe, mas o artefato canônico é sempre Jenkinsfile no repo, commitado, revisado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "a93038e8-ac8c-4970-9bd7-9b047771468d",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Migração freestyle → pipeline"
+      },
+      "children": []
+    },
+    {
+      "id": "7a7c99b7-545b-4809-93b4-9bf4c901b791",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Performance e produção"
+      },
+      "children": []
+    },
+    {
+      "id": "3298a788-1390-4b00-ab0b-ef6740095686",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Decisões"
+      },
+      "children": []
+    },
+    {
+      "id": "6dd33d88-ce1d-44d0-a397-f23fedd3526f",
+      "type": "section",
+      "position": 12,
+      "data": {
+        "title": "Perguntas típicas"
+      },
+      "children": []
+    },
+    {
+      "id": "7f478c4b-5d7a-4776-b1ed-825b80773ce5",
+      "type": "callout",
+      "position": 13,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Take-aways. (1) Jenkins é plataforma — vale o investimento em empresa grande/regulada; overkill pra startup nova. (2) Declarative pipeline como padrão; scripted só pra dinâmica real. (3) Controller NÃO roda builds — agents (Kubernetes de preferência) sim. (4) Credenciais sempre via Credential Store + withCredentials; OIDC/STS é o estado da arte. (5) Shared Library versionada é o que mantém sanidade em 50+ repos. (6) Multibranch Pipeline + webhook é o default moderno — freestyle é legado. (7) JCasC + Job DSL transformam Jenkins em infra-as-code. (8) Upgrade LTS a LTS com cluster de staging — plugins são o ponto fraco."
+      }
+    }
+  ]
+}

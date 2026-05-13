@@ -1,0 +1,330 @@
+{
+  "slug": "right-to-erasure-tecnico",
+  "title": null,
+  "blocks": [
+    {
+      "id": "31a427cf-e752-4d93-8ecd-51d0e43f58e5",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Titular pede exclusão (Art. 18 V LGPD). Você tem "
+          },
+          {
+            "text": "15 dias",
+            "bold": true
+          },
+          {
+            "text": " (Art. 19) para responder. Em arquitetura moderna, \"DELETE FROM users\" não basta — PII vive em 8 a 20 lugares, e esquecer um deles é violação. Este módulo mapeia onde PII se espalha, padrões para sincronizar deleção, e quando crypto-shredding é a única opção viável. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "67c8d5c9-e2e4-4939-89f0-c32c4cd2bb52",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "O mapa de propagação de PII"
+      },
+      "children": []
+    },
+    {
+      "id": "e7326269-2873-4ec2-bcd0-126dd893e41b",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Pipeline de erasure — orquestração"
+      },
+      "children": []
+    },
+    {
+      "id": "e5f65365-170e-4f98-9c5a-527dd5a32411",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Handler idempotente — código de referência"
+      },
+      "children": [
+        {
+          "id": "2a055f47-b65f-496f-9cca-2bf48ebcff8e",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "typescript",
+            "code": "import { Kafka } from 'kafkajs';\nimport { Client as ES } from '@elastic/elasticsearch';\nimport { destroyKey } from './kms';\nimport { db } from './db';\n\ntype ErasureEvent = { request_id: string; user_id: string; scope: 'full' | 'consented_only' };\n\nexport async function handle(event: ErasureEvent) {\n  const stepKey = `${event.request_id}:postgres`;\n  // idempotência: se já processou, skip\n  const alreadyDone = await db.query(\n    'SELECT 1 FROM erasure_step WHERE step_key = $1 AND status = $2',\n    [stepKey, 'done']\n  );\n  if (alreadyDone.rows.length) return;\n\n  await db.tx(async (tx) => {\n    // 1. Hard delete em tabelas com PII\n    await tx.query('DELETE FROM user_addresses WHERE user_id = $1', [event.user_id]);\n    await tx.query('DELETE FROM user_devices  WHERE user_id = $1', [event.user_id]);\n    // 2. Anonimiza transações (retidas por obrigação fiscal)\n    await tx.query(\n      `UPDATE transactions SET cardholder_name = NULL, masked_pan = NULL,\n       email = NULL, ip_address = NULL WHERE user_id = $1`,\n      [event.user_id]\n    );\n    // 3. Tombstone na users (para audit) — mantém id, marca anonymized_at\n    await tx.query(\n      `UPDATE users SET full_name = NULL, cpf = NULL, email = NULL, phone = NULL,\n       anonymized_at = NOW() WHERE id = $1`,\n      [event.user_id]\n    );\n    await tx.query(\n      `INSERT INTO erasure_step (step_key, request_id, status, finished_at)\n       VALUES ($1, $2, 'done', NOW())\n       ON CONFLICT (step_key) DO UPDATE SET status='done', finished_at=NOW()`,\n      [stepKey, event.request_id]\n    );\n  });\n}\n\n// ES handler: deleta documentos + invalida cache\nexport async function handleES(event: ErasureEvent) {\n  const es = new ES({ node: process.env.ES_URL });\n  await es.deleteByQuery({\n    index: ['users-*', 'transactions-*'],\n    refresh: true,\n    body: { query: { term: { user_id: event.user_id } } },\n  });\n}\n\n// Backups: destrói chave per-tenant\nexport async function handleBackupCryptoShred(event: ErasureEvent) {\n  if (event.scope !== 'full') return;\n  await destroyKey(`user/${event.user_id}/dek`);  // KMS schedule deletion (7-30d window)\n}",
+            "filename": "services/erasure-handler.ts"
+          }
+        }
+      ]
+    },
+    {
+      "id": "2a5f45d4-8881-4e37-902e-7ae6b38d4b39",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Crypto-shredding — quando não dá para apagar fisicamente"
+      },
+      "children": [
+        {
+          "id": "a1c329a7-285b-45f4-867e-46ca4a213a44",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Backup mensal de RDS em snapshot S3 de 5 anos. Cliente pede erasure. Restaurar, deletar, gerar backup novo é inviável (custo, RPO, complexidade). Solução: "
+              },
+              {
+                "text": "crypto-shredding",
+                "bold": true
+              },
+              {
+                "text": " — granularidade de chave permite \"destruir\" o dado destruindo a chave. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "e8d67af8-de90-4d54-94cb-d6a0d4b44903",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Granularidade per-user é cara em KMS (custo por chave). Para volume alto, agrupe em tenants/cohorts e use re-encryption + chave de grupo. Documente no DPIA a granularidade efetiva."
+          }
+        }
+      ]
+    },
+    {
+      "id": "bc525926-8ca4-42f9-accb-ff5dcbb826d1",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Data warehouse: como deletar em colunar particionado"
+      },
+      "children": [
+        {
+          "id": "1db66679-36ac-4736-b39f-634b75046558",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Plataforma",
+              "Estratégia"
+            ],
+            "rows": [
+              [
+                "BigQuery",
+                "DML DELETE (cota: 1000/dia por tabela). Para volume: MERGE INTO ... DELETE ou recriação de partição. Time Travel até 7 dias — flush após"
+              ],
+              [
+                "Snowflake",
+                "DELETE FROM eficiente; Time Travel até 90 dias (Enterprise); precisa OFFSET para limpar antes do prazo via \"Fail-safe\" disable ou re-create"
+              ],
+              [
+                "Redshift",
+                "DELETE + VACUUM. Pode ser caro; alternativa: copy-replace com WHERE"
+              ],
+              [
+                "Databricks / Delta Lake",
+                "DELETE FROM (MERGE-on-read); VACUUM com retention < default para limpar Parquet antigo"
+              ],
+              [
+                "S3 + Athena (Iceberg)",
+                "Iceberg suporta DELETE eficiente; Hive não — exige re-escrever partições"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "3bc44c27-e286-47d3-b509-238a889178a7",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "BigQuery tem documento — referência oficial para GDPR/LGPD."
+          }
+        }
+      ]
+    },
+    {
+      "id": "59676333-23e1-46aa-972d-b7bcb8fd421e",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Kafka / SQS — PII em filas"
+      },
+      "children": [
+        {
+          "id": "fa9b9684-87bb-4069-ac3c-36ea4eeaa9e7",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Mensagens com PII em fila são pesadelo de erasure. Estratégias: "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "1ed12668-324b-455c-b07d-ff7c95463546",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "ML training set e modelos treinados"
+      },
+      "children": [
+        {
+          "id": "ee02b3cc-063b-4e35-9b7f-0dd1b2a433f9",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Item mais controverso. Frameworks de "
+              },
+              {
+                "text": "machine unlearning",
+                "bold": true
+              },
+              {
+                "text": ": "
+              }
+            ]
+          }
+        },
+        {
+          "id": "331af336-48a1-42c0-8dd4-d7999e7fa39d",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Papers de referência: Cao & Yang (2015) \"Towards Making Systems Forget with Machine Unlearning\"; Bourtoule et al. (2021) \"Machine Unlearning\" (arxiv 1912.03817)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "a25ecbc0-3af5-4d03-bdab-417873bbaec0",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Exceções legais — quando NÃO apagar"
+      },
+      "children": [
+        {
+          "id": "90ffb531-8396-4627-add9-20c3e2ccafb6",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Art. 16 LGPD permite a conservação para hipóteses específicas. Não invente exceção — cite a norma. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "9132305a-23f9-4743-9d91-6a055ca6ea65",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Categoria",
+              "Base para retenção",
+              "Prazo típico"
+            ],
+            "rows": [
+              [
+                "Logs de acesso a aplicação",
+                "Marco Civil (Lei 12.965) Art. 15",
+                "6 meses"
+              ],
+              [
+                "Registros fiscais",
+                "CTN + Lei 9.430",
+                "5 anos"
+              ],
+              [
+                "KYC bancário",
+                "Lei 9.613 antibranqueamento; Resolução BCB 4.753",
+                "10 anos pós-término"
+              ],
+              [
+                "Documentos contratuais",
+                "CC Art. 206 §5º III prescrição",
+                "5 anos pós-término"
+              ],
+              [
+                "Defesa em processo",
+                "Art. 7º VI / Art. 16 III LGPD",
+                "Até trânsito em julgado + prescrição"
+              ],
+              [
+                "Estudo por órgão de pesquisa",
+                "Art. 7º IV / Art. 11 II c",
+                "Anonimização \"sempre que possível\""
+              ]
+            ]
+          }
+        },
+        {
+          "id": "dd15e82b-dbab-412c-afe4-9bdaa9b9bca0",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Em todas as exceções, a finalidade fica limitada à que sustenta a retenção. Não use dado \"retido para fiscal\" para marketing. Acesso lógico segregado e logado."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6372a89-37e9-43bc-8210-12b4231e0998",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "DSR portal — interface mínima"
+      },
+      "children": [
+        {
+          "id": "af6a9506-6155-48ff-9325-36dcdd92be02",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "typescript",
+            "code": "import { NextRequest, NextResponse } from 'next/server';\nimport { authenticate, verifyStepUp } from '@/lib/auth';\nimport { db } from '@/lib/db';\nimport { publishToKafka } from '@/lib/kafka';\n\nexport async function POST(req: NextRequest) {\n  const user = await authenticate(req);\n  if (!user) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });\n\n  // Step-up MFA para operação destrutiva\n  const stepUpOk = await verifyStepUp(req, { factor: 'totp_or_webauthn' });\n  if (!stepUpOk) return NextResponse.json({ error: 'step_up_required' }, { status: 403 });\n\n  const { scope = 'full', reason } = await req.json();\n  const { rows: [request] } = await db.query(\n    `INSERT INTO erasure_request (user_id, scope, reason, status, requested_at)\n     VALUES ($1, $2, $3, 'received', NOW()) RETURNING id`,\n    [user.id, scope, reason]\n  );\n\n  // 1. Soft delete imediato\n  await db.query('UPDATE users SET deleted_at = NOW() WHERE id = $1', [user.id]);\n\n  // 2. Publica evento; downstream consumers processam idempotente\n  await publishToKafka('user.erased', { request_id: request.id, user_id: user.id, scope });\n\n  // Logout imediato; sessão revogada\n  return NextResponse.json({\n    request_id: request.id,\n    eta_days: 14,\n    notice: 'Sua solicitação foi recebida. Dados serão anonimizados em 15 dias úteis conforme Art. 19 LGPD.',\n  }, { status: 202 });\n}",
+            "filename": "app/api/me/erasure/route.ts"
+          }
+        }
+      ]
+    },
+    {
+      "id": "f00877ef-5a0a-4da5-b3d0-0158b3439058",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Decisão: hard delete imediato ou janela de undo?"
+      },
+      "children": []
+    },
+    {
+      "id": "d84cc927-e253-4d4a-a155-02eddb54c8e7",
+      "type": "section",
+      "position": 11,
+      "data": {
+        "title": "Recursos canônicos"
+      },
+      "children": []
+    }
+  ]
+}

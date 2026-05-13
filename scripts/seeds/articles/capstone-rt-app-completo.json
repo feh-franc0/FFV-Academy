@@ -1,0 +1,114 @@
+{
+  "slug": "capstone-rt-app-completo",
+  "title": null,
+  "blocks": [
+    {
+      "id": "682f40d7-a5f7-4e7b-8be5-000fc1129f1e",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Projeto proposto"
+      },
+      "children": [
+        {
+          "id": "ce99c75c-1978-4656-81a9-09404a5925fe",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Construa um app colaborativo do tipo \"Notion + Slack + Meet\" com três primitivas bem separadas: chat em tempo real com presence, documento colaborativo Yjs e sala de vídeo/voz via LiveKit. Scaling horizontal em Redis pubsub, failure-injection documentada, dashboards Grafana. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ea848e1e-b300-445d-9320-d5ac810bed33",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Arquitetura alvo"
+      },
+      "children": [
+        {
+          "id": "cad7651f-a562-43b0-9922-e3da0e35a800",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "Client (Next.js 16 + Tailwind):\n  - chat: WebSocket nativo\n  - doc: Yjs + TipTap (CollaborationCursor)\n  - video: livekit-client (adaptiveStream + dynacast)\n\nGateway WS (Node 22, pods stateless):\n  - upgrade WS, auth por JWT\n  - Redis pubsub para broadcast cross-pod\n  - heartbeat 25s, reconnect com Last-Seq replay\n\nYjs Sync (y-websocket + y-redis):\n  - persistência em Redis streams\n  - snapshot offload para Postgres por doc\n\nLiveKit SFU (self-host em Kubernetes):\n  - 3 replicas com region-affinity\n  - TURN via coturn dedicado\n  - egress server separado para gravações S3\n\nInfra comum:\n  - Redis Cluster (3 masters, 3 replicas)\n  - Postgres 16 (auth, users, rooms, doc snapshots)\n  - NGINX Ingress com WS upgrade + idle 5min\n  - Prometheus + Grafana + Loki\n  - Tracing OpenTelemetry (chat msg -> broadcast -> render)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "f8b75526-84cf-43e9-89db-83be98991965",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Entregáveis técnicos"
+      },
+      "children": [
+        {
+          "id": "896c7798-6d92-4d9f-8b45-ca1a1d5330be",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "1. Monorepo pnpm workspaces\n   - /apps/web        (Next.js)\n   - /apps/gateway-ws (Node)\n   - /apps/yjs-sync   (Node)\n   - /infra           (terraform + helm charts)\n   - /load            (k6 scripts)\n\n2. Features funcionais\n   - login JWT + refresh\n   - room com chat + doc + video simultâneos\n   - presence (online, typing, cursor no doc)\n   - mentions @ com notificações\n   - offline-first no doc (Yjs IndexedDB provider)\n\n3. Scaling benchmarks\n   - 10k conexões WS sustentadas em 3 pods\n   - 500 participantes simultâneos no SFU (LiveKit load tester)\n   - latência chat p50/p95/p99 cross-region\n   - throughput Yjs (ops/s por doc)\n\n4. Failure injection (chaos)\n   - kubectl delete pod gateway-ws\n   - kill SFU durante call\n   - drop 30% UDP packets (tc netem)\n   - partition Redis master\n   Documentar tempo de recovery e SLOs observados"
+          }
+        }
+      ]
+    },
+    {
+      "id": "ecdd7fd5-0f32-47c3-b168-2f7ab47ef02c",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Esqueleto do gateway WS"
+      },
+      "children": [
+        {
+          "id": "02989da3-67b1-4d42-9f52-5a88e0adb11e",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "ts",
+            "code": "import { WebSocketServer } from 'ws';\nimport Redis from 'ioredis';\nimport { verifyJwt } from './auth';\n\nconst wss = new WebSocketServer({ port: 3001 });\nconst sub = new Redis(); const pub = new Redis();\nconst local = new Map&lt;string, Set&lt;import('ws').WebSocket&gt;&gt;();\n\nsub.on('message', (ch, payload) =&gt; {\n  const room = ch.replace(/^room:/, '');\n  for (const ws of local.get(room) ?? []) {\n    if (ws.readyState === 1) ws.send(payload);\n  }\n});\n\nwss.on('connection', async (ws, req) =&gt; {\n  const user = await verifyJwt(req.headers['sec-websocket-protocol']);\n  const room = new URL(req.url!, 'http://x').searchParams.get('room')!;\n  if (!local.has(room)) { local.set(room, new Set()); sub.subscribe('room:' + room); }\n  local.get(room)!.add(ws);\n\n  ws.on('message', (raw) =&gt; {\n    const msg = JSON.parse(String(raw));\n    pub.publish('room:' + room, JSON.stringify({ ...msg, user: user.id, ts: Date.now() }));\n  });\n  ws.on('close', () =&gt; {\n    local.get(room)!.delete(ws);\n    if (local.get(room)!.size === 0) { local.delete(room); sub.unsubscribe('room:' + room); }\n  });\n});"
+          }
+        }
+      ]
+    },
+    {
+      "id": "e5a23a52-95a1-48a6-b516-fd2d7a50f5cd",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Writeup ideal"
+      },
+      "children": [
+        {
+          "id": "0574cee3-e48b-422d-bbda-64f092bf3aa0",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "markdown",
+            "code": "# RT Collab App — Design + Results\n\n## 1. Motivação e escopo\nProblema, não-objetivos, user stories.\n\n## 2. Arquitetura\nDiagrama (C4 level 2), decisões principais.\n\n## 3. ADRs\n- WS + Redis pubsub vs Socket.io\n- Yjs vs Automerge vs OT\n- LiveKit self-host vs Daily SaaS\n- sticky vs stateless gateway\n\n## 4. Benchmarks\nSetup (HW, configs), metodologia (warmup, duração),\npercentis p50/p95/p99, custo por 1k MAU.\n\n## 5. Failure injection\nCenários testados, SLOs observados, gaps conhecidos.\n\n## 6. Observability\nScreenshots Grafana, queries Prometheus chave.\n\n## 7. Limitations & next steps\nO que não foi feito, por quê, como continuar."
+          }
+        },
+        {
+          "id": "92720bac-557f-46a7-800e-dfcd9a9c1dbf",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Esse capstone, entregue com benchmarks + ADRs + failure injection + observability real, posiciona você como engineer capaz de operar real-time em escala. É o nível pedido em posições senior+ de infra/SRE em 2026."
+          }
+        }
+      ]
+    }
+  ]
+}

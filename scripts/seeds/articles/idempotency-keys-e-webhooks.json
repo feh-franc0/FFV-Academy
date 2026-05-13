@@ -1,0 +1,94 @@
+{
+  "slug": "idempotency-keys-e-webhooks",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b8e794b5-5505-45c2-b306-65ccdce22830",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O problema: retry seguro em POST"
+      },
+      "children": [
+        {
+          "id": "beb0c5ab-4871-4fd1-b49e-c3f24e7f0ca3",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " POST de pagamento falhou: timeout no cliente. O servidor processou? Não dá pra saber. Se retry, risco de cobrança dupla. Sem retry, cliente perde. Idempotency-Key resolve. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "adf604ca-8aed-4e81-8e6e-f7d6bde5525b",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Implementação de Idempotency-Key"
+      },
+      "children": [
+        {
+          "id": "dd09e731-58cb-4835-a5b8-a8e52fdf3515",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "typescript",
+            "code": "// Cliente gera UUID antes do POST\nconst key = crypto.randomUUID();\n\nawait fetch('/charges', {\n  method: 'POST',\n  headers: {\n    'Idempotency-Key': key,\n    'Content-Type': 'application/json',\n  },\n  body: JSON.stringify({ amount: 1000 }),\n});\n\n// Retry com MESMA chave — seguro"
+          }
+        },
+        {
+          "id": "977bcd4a-86c2-4aa9-8fd5-0e49d86d61cf",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "typescript",
+            "code": "// Server pseudocódigo\nasync function handleCharge(req) {\n  const key = req.headers['idempotency-key'];\n  if (!key) return 400;\n\n  const cached = await redis.get(`idem:${key}`);\n  if (cached) {\n    const { status, body } = JSON.parse(cached);\n    return new Response(body, { status, headers: { 'Idempotent-Replay': 'true' } });\n  }\n\n  // Processar — dentro de transação\n  const charge = await db.$transaction(async (tx) => {\n    await tx.charge.create({ data: req.body });\n    await tx.idempotencyKey.create({ data: { key, request: req.body } });\n  });\n  const response = { status: 201, detail: charge };\n  await redis.set(`idem:${key}`, JSON.stringify(response), 'EX', 86400 * 2);\n  return new Response(JSON.stringify(charge), { status: 201 });\n}"
+          }
+        },
+        {
+          "id": "05510a70-0c25-4b85-8732-e43625d95dff",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Stripe recomenda TTL de 24h. Uber usa 7 dias. Escolha baseado no pior caso de retry que seu cliente pode fazer (ex: replay de job em cron de outro data center)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "0b8e8463-953c-425e-ba98-8f32cbc55eb1",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Webhooks: design"
+      },
+      "children": []
+    },
+    {
+      "id": "c46e2672-313f-48fc-b163-8b363e6f0c4d",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Receiver em TS"
+      },
+      "children": [
+        {
+          "id": "31d2464f-8fea-4580-a2cf-84a05ac12121",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "typescript",
+            "code": "import crypto from 'node:crypto';\n\nexport async function webhookHandler(req: Request) {\n  const rawBody = await req.text();\n  const sig = req.headers.get('X-Signature')?.replace('sha256=', '');\n  const timestamp = req.headers.get('X-Timestamp');\n  if (!sig || !timestamp) return new Response('missing', { status: 400 });\n\n  // Anti-replay: rejeita se > 5min\n  if (Math.abs(Date.now() - Number(timestamp)) > 5 * 60_000) {\n    return new Response('stale', { status: 400 });\n  }\n\n  // Verifica HMAC\n  const expected = crypto.createHmac('sha256', process.env.WEBHOOK_SECRET!)\n    .update(timestamp + rawBody)\n    .digest('hex');\n  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {\n    return new Response('invalid sig', { status: 401 });\n  }\n\n  const event = JSON.parse(rawBody);\n\n  // Dedupe\n  const dup = await redis.set(`event:${event.id}`, '1', 'NX', 'EX', 172800);\n  if (!dup) return new Response('already processed', { status: 200 });\n\n  // Processa\n  await processEvent(event);\n  return new Response('ok', { status: 200 });\n}"
+          }
+        }
+      ]
+    }
+  ]
+}

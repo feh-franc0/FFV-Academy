@@ -1,0 +1,210 @@
+{
+  "slug": "async-tokio-producao",
+  "title": null,
+  "blocks": [
+    {
+      "id": "f5c2c58c-7d1c-47e1-9eca-53f0801bc369",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Futures são state machines, não threads"
+      },
+      "children": [
+        {
+          "id": "137e467f-87ea-48a6-b422-674f290928ed",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Em Rust, async não é thread, não é callback, não é promise. async fn desugar em uma struct que implementa "
+              },
+              {
+                "text": "Future",
+                "code": true
+              },
+              {
+                "text": " — uma state machine enumerada onde cada "
+              },
+              {
+                "text": ".await",
+                "code": true
+              },
+              {
+                "text": " é um estado de suspensão. O executor (tokio, async-std, smol) chama "
+              },
+              {
+                "text": "poll()",
+                "code": true
+              },
+              {
+                "text": " até retornar "
+              },
+              {
+                "text": "Poll::Ready",
+                "code": true
+              },
+              {
+                "text": ". Zero thread por task, zero alocação por suspensão. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "0382c3f2-b242-470b-8e82-b4d3da513f54",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "rust",
+            "code": "// você escreve assim:\nasync fn fetch(url: &str) -> String {\n    let r = reqwest::get(url).await.unwrap();\n    r.text().await.unwrap()\n}\n\n// compilador gera (conceitualmente):\n// enum FetchFuture {\n//   Start { url: &str },\n//   WaitingResponse { fut: ReqwestFut },\n//   WaitingBody      { fut: TextFut },\n//   Done,\n// }\n// impl Future for FetchFuture { fn poll(...) -> Poll<String> { ... } }"
+          }
+        }
+      ]
+    },
+    {
+      "id": "06c2477a-a721-463f-a298-b047a64d178b",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Tokio: o runtime de facto"
+      },
+      "children": [
+        {
+          "id": "11abf6a9-752f-4c9f-bdb0-522a3a7ead3b",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "rust",
+            "code": "// Cargo.toml\n// [dependencies]\n// tokio = { version = \"1\", features = [\"full\"] }\n\n#[tokio::main]\nasync fn main() {\n    let r = fetch(\"https://api.exemplo.com/status\").await;\n    println!(\"{}\", r);\n}\n\n// current-thread (CLIs, embedded)\n#[tokio::main(flavor = \"current_thread\")]\nasync fn cli_main() { /* ... */ }"
+          }
+        },
+        {
+          "id": "e9e9b19c-f0e6-4d3a-a090-181ff37e501c",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Tokio multi-thread é work-stealing: N workers (default = num_cpus) compartilham uma fila global + filas locais. Task pode migrar entre workers (por isso precisa ser "
+              },
+              {
+                "text": "Send + 'static",
+                "code": true
+              },
+              {
+                "text": " quando usa spawn). "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "91303f88-9e51-41ca-83b1-decbfd83469e",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "join!, select!, spawn — concorrência correta"
+      },
+      "children": [
+        {
+          "id": "78dc9bd3-6a09-474d-aef4-6e869731bfa9",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "rust",
+            "code": "use tokio::{join, select, time::{sleep, Duration}};\n\nasync fn request_a() -> u32 { sleep(Duration::from_millis(200)).await; 1 }\nasync fn request_b() -> u32 { sleep(Duration::from_millis(300)).await; 2 }\n\n#[tokio::main]\nasync fn main() {\n    // join!: ambas em paralelo, mesmo task — total ~300ms, não 500ms\n    let (a, b) = join!(request_a(), request_b());\n    println!(\"join: {} {}\", a, b);\n\n    // select!: primeira a responder ganha (race / timeout)\n    select! {\n        r = request_a() => println!(\"a ganhou: {}\", r),\n        r = request_b() => println!(\"b ganhou: {}\", r),\n        _ = sleep(Duration::from_millis(100)) => println!(\"timeout\"),\n    }\n\n    // spawn: fire-and-forget, nova task independente\n    let handle = tokio::spawn(async { request_a().await });\n    let v = handle.await.unwrap();\n    println!(\"spawn: {}\", v);\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "cca41dae-21cf-4c07-8e77-5de67d293a8c",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Axum: server HTTP em produção"
+      },
+      "children": [
+        {
+          "id": "aa635af2-a75e-49e5-8e27-9617c427cdda",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "rust",
+            "code": "use axum::{Router, routing::get, extract::State, Json};\nuse serde::Serialize;\nuse std::sync::Arc;\n\n#[derive(Clone)]\nstruct AppState { version: &'static str }\n\n#[derive(Serialize)]\nstruct Health { ok: bool, version: String }\n\nasync fn health(State(s): State<Arc<AppState>>) -> Json<Health> {\n    Json(Health { ok: true, version: s.version.to_string() })\n}\n\n#[tokio::main]\nasync fn main() {\n    let state = Arc::new(AppState { version: \"1.0.0\" });\n    let app = Router::new()\n        .route(\"/health\", get(health))\n        .with_state(state);\n\n    let listener = tokio::net::TcpListener::bind(\"0.0.0.0:3000\").await.unwrap();\n    axum::serve(listener, app).await.unwrap();\n}"
+          }
+        },
+        {
+          "id": "864fed5b-c664-4fba-b3a7-f6cd96c89bf6",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Axum é a stack HTTP padrão Rust em 2026: baseada em tower (middleware), hyper (http core), tokio (runtime). Typed extractors dão compile-time safety em handlers. Sem Spring, sem Express — types fazem o trabalho."
+          }
+        }
+      ]
+    },
+    {
+      "id": "431a6523-9873-4893-aaa8-41a77cfe1f0d",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Backpressure e structured concurrency"
+      },
+      "children": [
+        {
+          "id": "eb3fe7c6-bf0f-4771-af56-36e4836a0f93",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "rust",
+            "code": "// canais mpsc com buffer fixo = backpressure automático\nuse tokio::sync::mpsc;\n\n#[tokio::main]\nasync fn main() {\n    let (tx, mut rx) = mpsc::channel::<u32>(100); // buffer 100\n\n    // producer roda mais rápido que consumer? send().await bloqueia\n    tokio::spawn(async move {\n        for i in 0..10_000 {\n            tx.send(i).await.unwrap(); // aplica backpressure\n        }\n    });\n\n    while let Some(v) = rx.recv().await {\n        processar(v).await;\n    }\n}\nasync fn processar(_v: u32) { /* trabalho lento */ }"
+          }
+        },
+        {
+          "id": "016ab67f-2a3a-45e8-9f56-148e001a3923",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Structured concurrency em Rust ainda é pattern emergente (crate tokio-util::task::JoinSet, futures::stream::FuturesUnordered). A ideia: tasks filhas não sobrevivem ao escopo do pai — diferente de spawn solto, que pode vazar."
+          }
+        }
+      ]
+    },
+    {
+      "id": "3ca90bc2-668d-4f0c-90fa-6ab7a49ba85d",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Armadilhas comuns em produção"
+      },
+      "children": [
+        {
+          "id": "001081c2-08a2-4e54-837a-31fb0af44834",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Blocking dentro de async fn. Chamar std::fs::read ou std::thread::sleep dentro de uma task async trava o worker inteiro. Use tokio::fs, tokio::time::sleep, ou envolva com tokio::task::spawn_blocking quando for CPU-bound."
+          }
+        },
+        {
+          "id": "799c54f2-2c7a-4424-825a-13729df1b439",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "danger",
+            "title": "",
+            "content": "Cancel-safety. Quando você cancela um future (select! que escolheu outro branch, timeout), o future é dropado no meio. Certifique-se que seus futures são cancel-safe — não deixar lock pendurado, não metade de escrita em arquivo."
+          }
+        }
+      ]
+    }
+  ]
+}

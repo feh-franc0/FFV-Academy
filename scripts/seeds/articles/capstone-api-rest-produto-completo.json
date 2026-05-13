@@ -1,0 +1,171 @@
+{
+  "slug": "capstone-api-rest-produto-completo",
+  "title": null,
+  "blocks": [
+    {
+      "id": "3bc5077c-fb8c-437b-9f42-d1bcb5d4878a",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "O produto: Tasks API"
+      },
+      "children": [
+        {
+          "id": "a683fd1e-cfc2-4965-ae43-f26055fc0884",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Vamos construir uma API de gestão de tarefas (estilo Todoist leve) aplicando tudo da trilha. Stack: Node + Hono + Zod + Drizzle + Postgres + Redis. 80% do valor em 20% do escopo. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "60f0ef1c-566e-4998-99e6-9eae8a79b14e",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "1. Spec-first: OpenAPI"
+      },
+      "children": [
+        {
+          "id": "21e1483b-1257-4949-aaa1-03e8d6c5679c",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "yaml",
+            "code": "openapi: 3.1.0\ninfo: { label: Tasks API, version: 1.0.0 }\nservers: [{ url: https://api.example.com/v1 }]\ncomponents:\n  securitySchemes:\n    BearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }\n  schemas:\n    Task:\n      type: object\n      required: [id, title, status]\n      properties:\n        id: { type: string, format: uuid }\n        title: { type: string, maxLength: 200 }\n        status: { type: string, enum: [open, done] }\n        dueDate: { type: string, format: date-time, nullable: true }\n    Error:\n      type: object\n      required: [code, message, requestId]\n      properties:\n        code: { type: string }\n        message: { type: string }\n        requestId: { type: string }\npaths:\n  /tasks:\n    get:\n      parameters:\n        - in: query, name: limit, schema: { type: integer, default: 20, maximum: 100 }\n        - in: query, name: after, schema: { type: string }\n      responses:\n        '200': { description: OK }\n  /tasks/{id}:\n    get:\n      parameters: [{in: path, name: id, required: true, schema: {type: string}}]"
+          }
+        }
+      ]
+    },
+    {
+      "id": "00766396-45b5-46b5-b8bb-618a1f86fe1e",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "2. Auth JWT + middleware"
+      },
+      "children": [
+        {
+          "id": "0794fff8-94ba-404a-96f3-df39b07993bb",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "typescript",
+            "code": "// Hono example\nimport { jwt } from 'hono/jwt';\napp.use('/v1/*', jwt({ secret: process.env.JWT_SECRET! }));\n\n// Inner handlers recebem payload tipado\napp.get('/v1/tasks', (c) => {\n  const user = c.get('jwtPayload') as { sub: string };\n  // ... queries filtradas por user.sub\n});"
+          }
+        }
+      ]
+    },
+    {
+      "id": "d2de6b95-6c14-4703-bdd9-255478460dec",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "3. Paginação cursor"
+      },
+      "children": [
+        {
+          "id": "887bdce0-b368-46ea-8e78-ba041fd40006",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "typescript",
+            "code": "const TaskListQuery = z.object({\n  limit: z.coerce.number().int().min(1).max(100).default(20),\n  after: z.string().optional(), // base64 cursor\n});\n\napp.get('/v1/tasks', async (c) => {\n  const q = TaskListQuery.parse(c.req.query());\n  const cursor = q.after ? decodeCursor(q.after) : null;\n  const tasks = await db.query.tasks.findMany({\n    where: and(\n      eq(schema.tasks.userId, user.sub),\n      cursor ? or(\n        lt(schema.tasks.createdAt, cursor.at),\n        and(eq(schema.tasks.createdAt, cursor.at), lt(schema.tasks.id, cursor.id)),\n      ) : undefined,\n    ),\n    orderBy: [desc(schema.tasks.createdAt), desc(schema.tasks.id)],\n    limit: q.limit + 1,\n  });\n  const hasMore = tasks.length > q.limit;\n  const items = tasks.slice(0, q.limit);\n  return c.json({ items, nextCursor: hasMore ? encodeCursor(items.at(-1)) : null });\n});"
+          }
+        }
+      ]
+    },
+    {
+      "id": "70be0bf1-16d0-4184-bf5f-5d96a9b077b2",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "4. Idempotency em POST"
+      },
+      "children": [
+        {
+          "id": "3ca6189a-40a0-459b-8c2b-bba98f1206f2",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "typescript",
+            "code": "app.post('/v1/tasks', async (c) => {\n  const key = c.req.header('Idempotency-Key');\n  if (key) {\n    const cached = await redis.get(`idem:${key}`);\n    if (cached) return c.json(JSON.parse(cached), 201, { 'Idempotent-Replay': 'true' });\n  }\n\n  const body = CreateTaskSchema.parse(await c.req.json());\n  const task = await db.insert(schema.tasks).values({ ...body, userId: user.sub }).returning();\n\n  if (key) await redis.set(`idem:${key}`, JSON.stringify(task[0]), 'EX', 86400);\n  return c.json(task[0], 201);\n});"
+          }
+        }
+      ]
+    },
+    {
+      "id": "a26b7bab-3d00-4f8c-b83e-0560949a60fd",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "5. Rate limit + headers"
+      },
+      "children": [
+        {
+          "id": "694c0d19-4d0a-47ab-beb9-eeaff75b85f6",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "typescript",
+            "code": "import { Ratelimit } from '@upstash/ratelimit';\nconst limiter = new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(60, '1 m') });\n\napp.use('*', async (c, next) => {\n  const tenant = c.get('jwtPayload')?.sub ?? c.req.header('x-forwarded-for');\n  const { success, remaining, reset } = await limiter.limit(tenant);\n  c.header('RateLimit-Remaining', String(remaining));\n  c.header('RateLimit-Reset', String(reset));\n  if (!success) {\n    c.header('Retry-After', String(Math.ceil((reset - Date.now()) / 1000)));\n    return c.json({ code: 'rate_limit', message: 'slow down' }, 429);\n  }\n  await next();\n});"
+          }
+        }
+      ]
+    },
+    {
+      "id": "6533ba71-7854-4955-99f9-1429123a8ddf",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "6. Observabilidade mínima"
+      },
+      "children": [
+        {
+          "id": "6b693d9c-1472-4ca4-909a-61a4c5291757",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "typescript",
+            "code": "app.use('*', async (c, next) => {\n  const requestId = c.req.header('x-request-id') ?? crypto.randomUUID();\n  c.set('requestId', requestId);\n  c.header('x-request-id', requestId);\n  const start = Date.now();\n  await next();\n  const ms = Date.now() - start;\n  logger.info({ requestId, method: c.req.method, path: c.req.path, status: c.res.status, ms });\n  metrics.histogram('http_request_duration_ms', ms, { path: c.req.path, method: c.req.method });\n});"
+          }
+        }
+      ]
+    },
+    {
+      "id": "eba708d4-f5bd-4db6-a925-4bb82237f72f",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "7. Contract test com Pact"
+      },
+      "children": [
+        {
+          "id": "f4842b4a-e2ff-48e1-a714-af27d3b68fd6",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "# Frontend publica contract\nnpx pact publish ./pacts --consumer-app-version=1.0.0 --broker-url=...\n\n# Backend verifica no CI\nnpx pact-provider-verifier \\\n  --provider-base-url=http://localhost:3000 \\\n  --pact-broker-url=... \\\n  --provider-app-version=$(git rev-parse HEAD)\n\n# Se contrato quebra, CI falha"
+          }
+        },
+        {
+          "id": "74e2343f-0e75-404c-85a9-c93f300f7ed7",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Você aplicou: REST maduro, versionamento URL, auth JWT, cursor pagination, idempotency, rate limit com headers padronizados, logs estruturados, contract testing. Isso é API pronta pra produção — não toy project."
+          }
+        }
+      ]
+    }
+  ]
+}

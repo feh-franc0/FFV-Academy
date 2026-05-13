@@ -1,0 +1,145 @@
+{
+  "slug": "capstone-app-offline-first",
+  "title": null,
+  "blocks": [
+    {
+      "id": "8ff0a83a-9932-424f-9251-0649ecc51a5d",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Projeto: app de notas/tarefas offline-first"
+      },
+      "children": [
+        {
+          "id": "0b1a62e1-d753-404a-b8bc-d5f11e2f7cf4",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Escopo concreto: app de notas (CRUD, tags, busca) ou tracking (hábitos, timer). Todo usuário consegue ler e editar sem conectividade; sync em background quando online; export dos dados em JSON. Deploy em TestFlight + Play Internal. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ef4fd6d2-49e5-4abf-b65d-91e06ce69ab5",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Arquitetura de dados"
+      },
+      "children": [
+        {
+          "id": "65819193-ac56-45b4-a2dd-5f77ec289174",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "ts",
+            "code": "// Camadas de dados (baixo → alto):\n// 1. SQLite local (expo-sqlite) — fonte de verdade local\n// 2. Fila de mutations — operations pending pra sync\n// 3. React Query — cache em memória + subscriptions UI\n// 4. API REST/GraphQL remota — eventual consistency\n\n// Schema SQLite:\n// CREATE TABLE notes (\n//   id TEXT PRIMARY KEY,         -- UUID v4 gerado client\n//   title TEXT NOT NULL,\n//   body TEXT,\n//   updated_at INTEGER NOT NULL, -- epoch ms, pra LWW\n//   deleted_at INTEGER,          -- soft delete\n//   synced_at INTEGER            -- última sync bem-sucedida\n// );\n// CREATE INDEX idx_updated ON notes(updated_at DESC);\n//\n// CREATE TABLE mutations (\n//   id TEXT PRIMARY KEY,         -- idempotency key\n//   kind TEXT NOT NULL,          -- 'upsert' | 'delete'\n//   payload TEXT NOT NULL,       -- JSON\n//   attempts INTEGER DEFAULT 0,\n//   next_at INTEGER              -- quando retry\n// );"
+          }
+        }
+      ]
+    },
+    {
+      "id": "2fa79ce3-d34e-423d-b7f9-7a1dc2ff3625",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Entregáveis do capstone"
+      },
+      "children": [
+        {
+          "id": "ea908274-5225-474b-ba97-b6d66c03a70e",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "markdown",
+            "code": "# Capstone offline-first — checklist\n\n## 1. Setup\n- [ ] Expo SDK 51+ com dev build\n- [ ] expo-sqlite, @tanstack/react-query, react-native-mmkv\n- [ ] Expo Router com tabs (Listas | Criar | Config)\n\n## 2. Data layer\n- [ ] SQLite schema versionado (migrations numeradas)\n- [ ] DAO por tabela (insert/update/delete/query) em funções puras\n- [ ] Hooks useNotes / useNote(id) wrapping SQLite em useQuery\n\n## 3. Escrita offline-first\n- [ ] Criar/editar → UPSERT local imediato + enqueue mutation\n- [ ] UI reflete instantâneo (React Query setQueryData)\n- [ ] Delete soft (deleted_at), purge após sync confirmada\n\n## 4. Sync engine\n- [ ] Background worker (expo-task-manager) ou on-focus sync\n- [ ] Pull: GET /notes?since={lastSync} → merge LWW local\n- [ ] Push: pop fila → POST /notes com idempotency key → on 2xx remove fila\n- [ ] Retry exponencial, cap 5min, network-aware (NetInfo)\n\n## 5. Conflict resolution\n- [ ] LWW por updated_at (server + client timestamps)\n- [ ] Testes unitários: edit offline + edit outro device → último ganha\n\n## 6. Observabilidade\n- [ ] Tela /sync-status com fila atual, último sync, errors\n- [ ] Sentry breadcrumbs pra cada mutation + sync attempt\n- [ ] Export JSON de todos os dados (LGPD friendly)\n\n## 7. Deploy\n- [ ] EAS build preview + TestFlight + Play Internal\n- [ ] 3+ testers reais com dispositivos distintos\n- [ ] Teste: modo avião durante 1h criando notas, voltar online, verificar sync\n- [ ] README com screenshots + architecture diagram"
+          }
+        }
+      ]
+    },
+    {
+      "id": "856416c1-8831-4a42-8a26-39bedf606e9d",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Esqueleto do sync engine"
+      },
+      "children": [
+        {
+          "id": "5e456420-25c4-49f4-8ab3-f7afa5947abf",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "ts",
+            "code": "import NetInfo from '@react-native-community/netinfo';\nimport { openDatabaseAsync } from 'expo-sqlite';\n\nconst BACKOFF = [1000, 2000, 4000, 8000, 16000, 60_000, 300_000];\n\nexport async function processQueue(apiBase: string, token: string) {\n  const online = (await NetInfo.fetch()).isConnected;\n  if (!online) return;\n\n  const db = await openDatabaseAsync('app.db');\n  const now = Date.now();\n  const pending = await db.getAllAsync<any>(\n    'SELECT * FROM mutations WHERE next_at IS NULL OR next_at <= ? ORDER BY id LIMIT 20',\n    [now],\n  );\n\n  for (const m of pending) {\n    try {\n      const res = await fetch(apiBase + '/mutations', {\n        method: 'POST',\n        headers: {\n          'Content-Type': 'application/json',\n          'Authorization': 'Bearer ' + token,\n          'Idempotency-Key': m.id,\n        },\n        body: m.payload,\n      });\n      if (res.ok) {\n        await db.runAsync('DELETE FROM mutations WHERE id = ?', [m.id]);\n      } else if (res.status >= 500) {\n        await scheduleRetry(db, m);\n      } else {\n        // 4xx — não é retryable, logar e remover\n        await db.runAsync('DELETE FROM mutations WHERE id = ?', [m.id]);\n      }\n    } catch {\n      await scheduleRetry(db, m);\n    }\n  }\n}\n\nasync function scheduleRetry(db: any, m: any) {\n  const attempts = m.attempts + 1;\n  const delay = BACKOFF[Math.min(attempts, BACKOFF.length - 1)];\n  await db.runAsync(\n    'UPDATE mutations SET attempts = ?, next_at = ? WHERE id = ?',\n    [attempts, Date.now() + delay, m.id],\n  );\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "78ded260-20f9-4c60-9623-e07f94ab97be",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Critérios de aceitação"
+      },
+      "children": [
+        {
+          "id": "8312cd30-f526-4771-aea6-65e3d63809cc",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "(1) Modo avião por 1h criando/editando 50+ itens — zero perda ao voltar online. (2) Kill do app durante sync — retomada limpa sem duplicação. (3) Dois devices mesma conta editando offline — reconciliação correta ao sync. (4) Cold start < 1s em Android mid-range. (5) Bundle app < 40MB. (6) Crash-free rate > 99.5% em 3 dias de beta com 10+ usuários."
+          }
+        }
+      ]
+    },
+    {
+      "id": "cf35bd54-d693-43b7-be3a-4ca80119c16e",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Armadilhas que vão aparecer"
+      },
+      "children": [
+        {
+          "id": "d716d135-31fb-4ac4-91b3-5eb7fc635b69",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Clock skew entre devices (sempre confie no server pra timestamp final), soft delete vs hard delete (não purge antes de confirmar), SQLite journal mode WAL (melhor concorrência, mas tem arquivo -wal), migrations com ALTER TABLE (SQLite tem limitações — use estratégia create-copy-drop se necessário), throttle de background tasks iOS (máx ~30s por execução)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "48dfd0f0-886d-4273-bbee-d289c29208bc",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Entrega final pro portfólio"
+      },
+      "children": [
+        {
+          "id": "b25d9df7-95fa-49c3-9679-85b871238e46",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Grave vídeo de 90s: modo avião, criar notas, voltar online, mostrar sync. Poste no LinkedIn com link do TestFlight + repo público. README com architecture diagram (Mermaid), decisões (por que LWW, por que SQLite, por que MMKV), próximos passos (CRDT, E2E encryption). Esse tipo de entregável diferencia dev web-que-tocou-mobile de engenheiro mobile competente."
+          }
+        }
+      ]
+    }
+  ]
+}

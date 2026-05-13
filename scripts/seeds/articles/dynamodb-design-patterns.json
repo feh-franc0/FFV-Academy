@@ -1,0 +1,147 @@
+{
+  "slug": "dynamodb-design-patterns",
+  "title": null,
+  "blocks": [
+    {
+      "id": "0b877815-4d5e-4f15-990b-216459a3527e",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "DynamoDB pensa ao contrário"
+      },
+      "children": [
+        {
+          "id": "06b7c1b4-c655-4aec-9da1-5f231c235cf9",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Em Postgres você modela entidades e descobre as queries depois. Em DynamoDB você lista todas as access patterns primeiro e modela as chaves para que cada padrão seja Query (nunca Scan). Isso exige disciplina e quebra a intuição relacional. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "cfee8725-56ab-4533-9d5a-34227a3d81f6",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Se você não sabe listar os 5-10 access patterns do seu domínio antes de criar a tabela, ainda não está pronto para DynamoDB. Volte ao whiteboard."
+          }
+        }
+      ]
+    },
+    {
+      "id": "db7a0cad-7f1f-44b8-8b36-70bc2d01eda1",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Single-table design: exemplo real"
+      },
+      "children": [
+        {
+          "id": "3d261091-b6a2-484e-bbf9-e50e48ce6556",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Domínio: e-commerce com User, Order e OrderItem. Access patterns: (1) perfil do user, (2) pedidos do user ordenados por data, (3) itens de um pedido, (4) login por email. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "9c76e938-1cc9-42d4-bf90-e22e405566a9",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "json",
+            "code": "// Mesma tabela \"App\", PK e SK sinteticos\n\n// User profile\n{ \"PK\": \"USER#42\", \"SK\": \"PROFILE\",         \"email\": \"fe@x.com\", \"name\": \"Fernando\" }\n\n// Pedidos do user (ordenados por data via SK)\n{ \"PK\": \"USER#42\", \"SK\": \"ORDER#2026-04-19#o123\", \"total\": 199.0, \"status\": \"paid\" }\n{ \"PK\": \"USER#42\", \"SK\": \"ORDER#2026-04-20#o124\", \"total\":  89.5, \"status\": \"paid\" }\n\n// Itens do pedido (PK = ORDER#id)\n{ \"PK\": \"ORDER#o123\", \"SK\": \"ITEM#sku-001\", \"qty\": 2, \"price\": 49.9 }\n{ \"PK\": \"ORDER#o123\", \"SK\": \"ITEM#sku-042\", \"qty\": 1, \"price\": 99.2 }\n\n// GSI por email (GSI1PK = EMAIL#...)\n{ \"PK\": \"USER#42\", \"SK\": \"PROFILE\", \"GSI1PK\": \"EMAIL#fe@x.com\", \"GSI1SK\": \"USER#42\" }"
+          }
+        }
+      ]
+    },
+    {
+      "id": "ccfb5ef8-6c29-41de-b372-04a438965406",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Queries correspondentes"
+      },
+      "children": [
+        {
+          "id": "90385070-a9ac-4f16-a138-71452f065f56",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "ts",
+            "code": "import { DynamoDBClient } from '@aws-sdk/client-dynamodb';\nimport { DynamoDBDocumentClient, QueryCommand } from '@aws-sdk/lib-dynamodb';\n\nconst ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));\n\n// 1) Perfil + ultimos 10 pedidos em UMA query\nconst r = await ddb.send(new QueryCommand({\n  TableName: 'App',\n  KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',\n  ExpressionAttributeValues: {\n    ':pk': 'USER#42',\n    ':sk': 'ORDER#'\n  },\n  ScanIndexForward: false,  // mais recentes primeiro\n  Limit: 10\n}));\n\n// 2) Login por email (usa GSI1)\nconst login = await ddb.send(new QueryCommand({\n  TableName: 'App',\n  IndexName: 'GSI1',\n  KeyConditionExpression: 'GSI1PK = :e',\n  ExpressionAttributeValues: { ':e': 'EMAIL#fe@x.com' }\n}));\n\n// 3) Itens do pedido o123\nconst items = await ddb.send(new QueryCommand({\n  TableName: 'App',\n  KeyConditionExpression: 'PK = :pk AND begins_with(SK, :it)',\n  ExpressionAttributeValues: { ':pk': 'ORDER#o123', ':it': 'ITEM#' }\n}));"
+          }
+        }
+      ]
+    },
+    {
+      "id": "8011486c-cffc-445e-9ed2-8aae1dd355a6",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Hot partition: o assassino silencioso"
+      },
+      "children": [
+        {
+          "id": "a0b8aa78-bf25-4660-92f0-46fd4f026529",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "danger",
+            "title": "",
+            "content": "DynamoDB particiona por hash(PK). Limite físico: ~3000 RCU / 1000 WCU por partição. Se sua PK tem baixa cardinalidade (status, tenant_id de cliente gigante), você sofre throttling mesmo pagando capacity alta. Solução: write sharding — adicione sufixo aleatório (status#0..status#9) e faça fan-out na leitura."
+          }
+        },
+        {
+          "id": "13109066-0ed2-4d2a-9570-48881ad5fc2a",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "ts",
+            "code": "// Antes (hot)\nPK = 'STATUS#active'\n\n// Depois (sharded em 10 buckets)\nPK = 'STATUS#active#' + (hash(itemId) % 10)\n\n// Leitura: faz 10 queries em paralelo e merge\nconst buckets = await Promise.all(\n  Array.from({ length: 10 }, (_, i) => query('STATUS#active#' + i))\n);"
+          }
+        }
+      ]
+    },
+    {
+      "id": "696f12cd-eb1c-4869-ba0e-256bbe0c4d2a",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Quando NÃO usar DynamoDB"
+      },
+      "children": [
+        {
+          "id": "e462cfb2-53ed-4f70-8b3e-02e8bead38f5",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Access patterns evolutivos (startup fase 0): você não sabe como vai consultar. Relatórios ad-hoc. Analytics agregando tabela inteira. Joins frequentes entre entidades não relacionadas. Nesses casos, Postgres ganha. DynamoDB brilha quando a escala é massiva e o acesso é previsível."
+          }
+        },
+        {
+          "id": "c7231f4d-c6ce-4d16-8675-aa3a5a00d07e",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "DynamoDB bem modelado entrega latência p99 < 10ms em qualquer escala por custo previsível. Mal modelado, vira inferno de operação e custo explosivo."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,143 @@
+{
+  "slug": "capstone-go-cli-api",
+  "title": null,
+  "blocks": [
+    {
+      "id": "cf689020-ee92-463d-85f3-ac63927e2b82",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Projeto proposto"
+      },
+      "children": [
+        {
+          "id": "2affd757-3de4-4e87-ac96-bf88d1b3317f",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Construir um serviço de gerenciamento de links curtos (shortener): API REST + CLI administrativa no mesmo repo. API com chi router, Postgres, context em toda a stack, graceful shutdown, health/ready probes, métricas Prometheus. CLI em cobra que fala com a API. Dockerfile scratch, testes com Testcontainers, pprof habilitado. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "90046274-614a-40a3-b8ec-b34a9908435c",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Layout"
+      },
+      "children": [
+        {
+          "id": "c5a5f05b-02e9-4276-8ccd-2c56044fe1ce",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "shorty/\n├── go.mod\n├── cmd/\n│   ├── shorty/          # API server\n│   │   └── main.go\n│   └── shortyctl/       # CLI admin\n│       └── main.go\n├── internal/\n│   ├── link/\n│   │   ├── link.go       # domain\n│   │   ├── service.go\n│   │   ├── repo.go       # interface\n│   │   └── pg_repo.go    # impl Postgres\n│   ├── http/\n│   │   ├── handler.go\n│   │   └── middleware.go\n│   └── config/\n│       └── config.go\n├── migrations/\n│   └── 001_init.sql\n├── Dockerfile\n└── loadtest/\n    └── bench.go"
+          }
+        }
+      ]
+    },
+    {
+      "id": "e72ee297-bd37-436b-ada3-3f359d37ca0e",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "main.go com graceful shutdown"
+      },
+      "children": [
+        {
+          "id": "51437b05-d1a5-4489-81bd-a53cfcca9ceb",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "go",
+            "code": "func main() {\n    cfg := config.Load()\n    logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))\n\n    db, err := sql.Open(\"pgx\", cfg.DatabaseURL)\n    if err != nil { logger.Error(\"db open\", \"err\", err); os.Exit(1) }\n    defer db.Close()\n\n    repo := link.NewPGRepo(db)\n    svc  := link.NewService(repo)\n\n    r := chi.NewRouter()\n    r.Use(middleware.RequestID, middleware.Recoverer, httpmw.Logging(logger))\n    r.Mount(\"/api/v1\", httpapi.Routes(svc))\n    r.Handle(\"/metrics\", promhttp.Handler())\n    r.Get(\"/healthz\", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })\n\n    srv := &http.Server{\n        Addr: cfg.Addr, Handler: r,\n        ReadHeaderTimeout: 5*time.Second,\n        WriteTimeout:     10*time.Second,\n    }\n\n    ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)\n    defer stop()\n\n    go func() {\n        logger.Info(\"listening\", \"addr\", cfg.Addr)\n        if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {\n            logger.Error(\"listen\", \"err\", err)\n        }\n    }()\n\n    <-ctx.Done()\n    logger.Info(\"shutting down\")\n    shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)\n    defer cancel()\n    if err := srv.Shutdown(shutdownCtx); err != nil {\n        logger.Error(\"shutdown\", \"err\", err)\n    }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "eacc6063-09f8-435e-ba3a-f2a138e374ee",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "CLI com cobra"
+      },
+      "children": [
+        {
+          "id": "68a51a35-310a-4822-9877-0621b28bc0d2",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "go",
+            "code": "var rootCmd = &cobra.Command{Use: \"shortyctl\"}\n\nvar createCmd = &cobra.Command{\n    Use: \"create <url>\",\n    Args: cobra.ExactArgs(1),\n    RunE: func(cmd *cobra.Command, args []string) error {\n        body, _ := json.Marshal(map[string]string{\"url\": args[0]})\n        resp, err := http.Post(apiURL+\"/api/v1/links\", \"application/json\", bytes.NewReader(body))\n        if err != nil { return err }\n        defer resp.Body.Close()\n        _, err = io.Copy(os.Stdout, resp.Body)\n        return err\n    },\n}\n\nfunc main() {\n    rootCmd.AddCommand(createCmd)\n    if err := rootCmd.Execute(); err != nil { os.Exit(1) }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "f7a55305-602d-456d-ae73-0a7d6f096711",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Dockerfile scratch"
+      },
+      "children": [
+        {
+          "id": "202a625b-c7d1-426c-bd27-9c6b2ff0c23c",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "bash",
+            "code": "FROM golang:1.23-alpine AS build\nWORKDIR /src\nCOPY . .\nRUN CGO_ENABLED=0 go build -ldflags=\"-s -w\" -o /out/shorty ./cmd/shorty\n\nFROM gcr.io/distroless/static\nCOPY --from=build /out/shorty /shorty\nEXPOSE 8080\nENTRYPOINT [\"/shorty\"]"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b81d3798-72cd-48dd-b8b6-11e69943dac4",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Teste de integração com Testcontainers"
+      },
+      "children": [
+        {
+          "id": "690aeba6-fe6d-47a7-ba25-d528b3f992fe",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "go",
+            "code": "func TestCreateAndResolve(t *testing.T) {\n    ctx := context.Background()\n    pg, err := postgres.Run(ctx, \"postgres:16-alpine\")\n    if err != nil { t.Fatal(err) }\n    defer pg.Terminate(ctx)\n\n    db := openAndMigrate(t, pg)\n    repo := link.NewPGRepo(db)\n    svc  := link.NewService(repo)\n\n    l, err := svc.Create(ctx, \"https://ffv.com\")\n    if err != nil { t.Fatal(err) }\n    got, err := svc.Resolve(ctx, l.Code)\n    if err != nil { t.Fatal(err) }\n    if got.URL != \"https://ffv.com\" { t.Fatalf(\"got %s\", got.URL) }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "9dda0f1b-85e5-4bc2-99fc-8060eeb2afc3",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Entregáveis finais"
+      },
+      "children": [
+        {
+          "id": "ad3ad1ac-5b70-4c49-abff-9231ae57c1cb",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Repo público com README explicando decisões (chi vs gin, pgx vs database/sql, scratch vs distroless). CI verde: go test -race, go vet, staticcheck, build container. Screenshot de pprof mostrando CPU profile saudável. Binário ~15 MB. Esse é o pacote que convence recrutador sênior de Go."
+          }
+        }
+      ]
+    }
+  ]
+}

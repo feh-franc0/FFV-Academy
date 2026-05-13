@@ -1,0 +1,284 @@
+{
+  "slug": "sd-url-shortener",
+  "title": null,
+  "blocks": [
+    {
+      "id": "62e77405-ef20-4b80-93d7-e228566b03e5",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Por que essa pergunta é quase universal em entrevista"
+      },
+      "children": [
+        {
+          "id": "cc956a7c-0041-42b4-927f-02a7d7230a81",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " URL shortener é a questão canônica de System Design porque toca em "
+              },
+              {
+                "text": "todos os trade-offs essenciais",
+                "bold": true
+              },
+              {
+                "text": " em 45 minutos: geração de ID única em escala, read-heavy caching, counter distribuído, analytics assíncrona. Se você domina isso, Twitter feed e Instagram também caem. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "e3e9ed69-f4d5-4682-be49-2f8a1e6d8652",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " O teste não é se você \"sabe fazer\" — é se você consegue "
+              },
+              {
+                "text": "defender decisões",
+                "bold": true
+              },
+              {
+                "text": " quando o entrevistador aumenta escala progressivamente: \"e se forem 100M URLs? 1B? 10B?\" "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "52a9b543-e59b-431b-9723-2c09434df641",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Passo 1: estabelecer escala (back-of-envelope)"
+      },
+      "children": [
+        {
+          "id": "58f1e17f-0a15-442b-babc-bf31d65fd022",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Sempre começa com premissas. Nunca pule. Premissas típicas:"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "765c72dd-0462-4eee-aa6b-5d951d73f1ed",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Passo 2: geração de short code — 3 estratégias"
+      },
+      "children": []
+    },
+    {
+      "id": "f55926dc-674c-4aca-844e-21d86e0e3e5b",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Passo 3: storage — schema e escolha de DB"
+      },
+      "children": [
+        {
+          "id": "31dbde92-b0bd-4b5f-97f6-bdc24abd9598",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "sql",
+            "code": "-- Postgres / MySQL — serve confortavelmente até ~1B rows\nCREATE TABLE short_urls (\n  short_code    VARCHAR(7) PRIMARY KEY,        -- PK compacta, index clustered\n  long_url      TEXT NOT NULL,\n  user_id       BIGINT,\n  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),\n  expires_at    TIMESTAMPTZ,                   -- opcional; TTL\n  click_count   BIGINT DEFAULT 0,              -- updated async\n  last_clicked  TIMESTAMPTZ\n);\n\nCREATE INDEX idx_short_urls_user ON short_urls (user_id, created_at DESC);\nCREATE INDEX idx_short_urls_expires ON short_urls (expires_at) WHERE expires_at IS NOT NULL;"
+          }
+        },
+        {
+          "id": "2146401b-8c8e-4d84-9626-52c1a290c136",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Escala",
+              "DB sugerido",
+              "Por quê"
+            ],
+            "rows": [
+              [
+                "< 100M URLs",
+                "Postgres single primary + read replica",
+                "Simples, transacional, aguenta até ~5k write/s"
+              ],
+              [
+                "100M-1B",
+                "Postgres com table partitioning por mês",
+                "Partition pruning acelera queries; drop partition é limpeza instantânea"
+              ],
+              [
+                "1B-10B",
+                "Cassandra ou Vitess (MySQL sharded)",
+                "Escala linear em writes; consistente com quórum"
+              ],
+              [
+                "> 10B",
+                "DynamoDB (key-value) + CDC pra analytics",
+                "Escala horizontal sem ops de sharding; custo justifica em escala"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "d006ccab-5160-4dbc-955d-baf1296375c1",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Passo 4: caching — onde está o leverage"
+      },
+      "children": [
+        {
+          "id": "1511a741-b467-4c07-8f21-7f9ac4d35aee",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Com 100:1 read:write e "
+              },
+              {
+                "text": "power law",
+                "bold": true
+              },
+              {
+                "text": " no tráfego (poucas URLs dominam), cache em frente ao DB é decisão óbvia. Sem cache: 10k QPS no DB — viável mas caro. Com cache: 10k QPS no Redis, 50-500 QPS no DB. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "4b3444dd-f530-481c-8392-8eea527b9f90",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# Redis cache-aside pattern\ndef resolve(short_code: str) -> str | None:\n    cached = redis.get(f\"url:{short_code}\")\n    if cached:\n        return cached\n    row = db.query(\"SELECT long_url FROM short_urls WHERE short_code = %s\", short_code)\n    if not row:\n        return None\n    redis.setex(f\"url:{short_code}\", 86400, row.long_url)  # TTL 1 dia\n    return row.long_url"
+          }
+        },
+        {
+          "id": "21b0ffd4-f5bd-4115-93ce-04aa7d1aa254",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "TTL matters: sem TTL, cache cresce infinitamente. Com TTL de 1 dia + LRU eviction, Redis de 16GB cabe ~16M URLs hot. Power law garante hit rate > 95%."
+          }
+        }
+      ]
+    },
+    {
+      "id": "2321bcce-6560-4883-9724-d3d43519dfca",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Passo 5: analytics de cliques — fire and forget"
+      },
+      "children": [
+        {
+          "id": "0454a7cd-daaa-44c7-bfa2-89a350f57c8b",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "python",
+            "code": "async def redirect_handler(short_code: str, request):\n    long_url = await resolve(short_code)\n    if not long_url:\n        return Response(status=404)\n\n    # Fire-and-forget\n    asyncio.create_task(emit_click_event({\n        \"short_code\": short_code,\n        \"ts\": time.time(),\n        \"ip\": request.headers.get(\"X-Forwarded-For\"),\n        \"ua\": request.headers.get(\"User-Agent\"),\n        \"referer\": request.headers.get(\"Referer\"),\n    }))\n    return RedirectResponse(long_url, status_code=301)\n\n\nasync def emit_click_event(event: dict):\n    await kafka_producer.send(\"url.click\", event)\n    # Worker offline enriquece (geo via IP), grava em BigQuery/Snowflake"
+          }
+        }
+      ]
+    },
+    {
+      "id": "f885ba9a-7082-4059-93a8-8e431ba8b760",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Passo 6: o que entrevistador aumenta progressivamente"
+      },
+      "children": [
+        {
+          "id": "a5431464-908e-452e-b451-772421a9faa5",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Pergunta",
+              "Resposta esperada"
+            ],
+            "rows": [
+              [
+                "&quot;E se forem 100B URLs?&quot;",
+                "Sharding por hash(short_code). 100+ shards. Consistent hashing para rebalance. DynamoDB ou Cassandra."
+              ],
+              [
+                "&quot;E se quiser custom alias?&quot;",
+                "Nova tabela custom_aliases (code → url), lookup primeiro em custom depois em generated. Validação contra palavrões."
+              ],
+              [
+                "&quot;E se URL tiver malware?&quot;",
+                "Scan async (Google Safe Browsing) no write. Bloom filter na hot path para known-bad. Quarantine queue."
+              ],
+              [
+                "&quot;E se DB cair?&quot;",
+                "Read replica pra redirect (read-only degrade), fila pra writes (Kafka buffer), graceful degrade. RTO/RPO definidos."
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "0455688e-b4b6-4b9f-9dc9-82094e784dcb",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Armadilhas que eliminam candidato"
+      },
+      "children": [
+        {
+          "id": "8e8774bb-9544-4dc8-9b1b-42b24e820f80",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "danger",
+            "title": "",
+            "content": ""
+          }
+        }
+      ]
+    },
+    {
+      "id": "cc5e6cb2-c1bc-4556-8a7e-c4a3c732b2fa",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Take-aways"
+      },
+      "children": [
+        {
+          "id": "77dccfd4-7181-4bae-bdef-2c2929db9d9b",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "URL shortener é canônica porque a resposta sênior mostra 4 habilidades simultaneamente: (1) quantificar com back-of-envelope, (2) escolher geração de ID correta, (3) isolar hot path (redirect) de cold path (analytics), (4) adicionar cache onde há power law."
+          }
+        }
+      ]
+    }
+  ]
+}

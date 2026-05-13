@@ -1,0 +1,619 @@
+{
+  "slug": "event-sourcing-cqrs",
+  "title": null,
+  "blocks": [
+    {
+      "id": "1173a59b-2083-445d-88fa-d869dbc2b603",
+      "type": "paragraph",
+      "position": 0,
+      "data": {
+        "content": [
+          {
+            "text": " Quase todo sistema que você conhece persiste o "
+          },
+          {
+            "text": "estado atual",
+            "italic": true
+          },
+          {
+            "text": ": user.balance = 150. Foi 200, virou 150. A mutação aconteceu, o valor anterior morreu. Event Sourcing inverte essa premissa: grava a "
+          },
+          {
+            "text": "sequência de eventos",
+            "bold": true
+          },
+          {
+            "text": " que aconteceram (Credited 200, Debited 50) e deriva o estado dessa lista imutável. Dá pra voltar no tempo, reconstruir qualquer view, auditar tudo — ao preço de complexidade real. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "e8db93d7-b49d-4b37-828c-1750ddc83248",
+      "type": "paragraph",
+      "position": 1,
+      "data": {
+        "content": [
+          {
+            "text": " CQRS é o primo frequentemente associado: separar "
+          },
+          {
+            "text": "commands",
+            "bold": true
+          },
+          {
+            "text": " (escrita) de "
+          },
+          {
+            "text": "queries",
+            "bold": true
+          },
+          {
+            "text": " (leitura) em modelos/bancos/escalas diferentes. Este módulo mostra o que são, como implementar, armadilhas reais (versionamento de eventos é um pesadelo), e quando "
+          },
+          {
+            "text": "não",
+            "italic": true
+          },
+          {
+            "text": " usar — porque 80% dos casos são overengineering. "
+          }
+        ]
+      }
+    },
+    {
+      "id": "17c2dff8-637e-4561-8c2f-60b1ed979f35",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Event Sourcing: eventos como fonte da verdade"
+      },
+      "children": [
+        {
+          "id": "91c55181-45d2-43b7-a40f-122212da432c",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Propriedades",
+                "bold": true
+              },
+              {
+                "text": ":"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "3a2193a4-ef23-4ce5-832d-086949b6e150",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Command → Event → Aggregate: o ciclo básico"
+      },
+      "children": [
+        {
+          "id": "6f2cd04f-690d-479f-9fc5-5df38aaac321",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Exemplo: BankAccount em Python",
+                "bold": true
+              },
+              {
+                "text": ":"
+              }
+            ]
+          }
+        },
+        {
+          "id": "51b296c0-642f-4c24-95a4-e0fa74a75d14",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# bank_account.py — agregado em Event Sourcing\n\nfrom dataclasses import dataclass, field\nfrom typing import Literal\n\n# ─── Events (imutáveis) ───\n@dataclass(frozen=True)\nclass AccountOpened:\n    account_id: str\n    owner: str\n\n@dataclass(frozen=True)\nclass Credited:\n    account_id: str\n    amount: float\n\n@dataclass(frozen=True)\nclass Debited:\n    account_id: str\n    amount: float\n\nEvent = AccountOpened | Credited | Debited\n\n# ─── Aggregate ───\n@dataclass\nclass BankAccount:\n    account_id: str = \"\"\n    owner: str = \"\"\n    balance: float = 0.0\n    version: int = 0                    # número do último evento aplicado\n    _uncommitted: list[Event] = field(default_factory=list)\n\n    @classmethod\n    def load(cls, history: list[Event]) -> \"BankAccount\":\n        acc = cls()\n        for e in history:\n            acc._apply(e)\n            acc.version += 1\n        return acc\n\n    def _apply(self, e: Event) -> None:\n        if isinstance(e, AccountOpened):\n            self.account_id = e.account_id\n            self.owner = e.owner\n        elif isinstance(e, Credited):\n            self.balance += e.amount\n        elif isinstance(e, Debited):\n            self.balance -= e.amount\n\n    # ─── Commands (validam + produzem eventos) ───\n    def open(self, account_id: str, owner: str) -> None:\n        if self.account_id:\n            raise ValueError(\"Already opened\")\n        self._raise(AccountOpened(account_id, owner))\n\n    def credit(self, amount: float) -> None:\n        if amount <= 0:\n            raise ValueError(\"Amount must be positive\")\n        self._raise(Credited(self.account_id, amount))\n\n    def debit(self, amount: float) -> None:\n        if amount <= 0:\n            raise ValueError(\"Amount must be positive\")\n        if self.balance - amount < 0:\n            raise ValueError(\"Insufficient funds\")   # regra de negócio\n        self._raise(Debited(self.account_id, amount))\n\n    def _raise(self, e: Event) -> None:\n        self._apply(e)\n        self._uncommitted.append(e)\n        self.version += 1\n\n# ─── Repository ───\nclass AccountRepository:\n    def __init__(self, event_store):\n        self.store = event_store\n\n    async def load(self, account_id: str) -> BankAccount:\n        events = await self.store.load_stream(account_id)\n        return BankAccount.load(events)\n\n    async def save(self, acc: BankAccount) -> None:\n        if not acc._uncommitted:\n            return\n        expected_version = acc.version - len(acc._uncommitted)\n        await self.store.append(\n            acc.account_id, acc._uncommitted, expected_version\n        )\n        acc._uncommitted.clear()"
+          }
+        },
+        {
+          "id": "9b4e2e39-f267-48dc-a36b-1c3551959cf7",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Optimistic concurrency: ao salvar, o repo manda pro event store. Se dois writers carregaram version=5 e os dois tentam anexar, o segundo falha (o version já virou 6) e precisa reload + retry. É o padrão padrão em ES."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2e13a18-fabb-4573-916e-6ee419bb76fa",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "CQRS: separar escrita e leitura"
+      },
+      "children": [
+        {
+          "id": "a084ce3d-f2ab-4f5b-9af2-cf671f28c3c6",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " CQRS é independente de Event Sourcing, mas se casam lindamente. A ideia: o modelo de escrita (command side) é "
+              },
+              {
+                "text": "otimizado pra invariantes",
+                "italic": true
+              },
+              {
+                "text": "; o modelo de leitura (query side) é "
+              },
+              {
+                "text": "otimizado pra consultas",
+                "italic": true
+              },
+              {
+                "text": ". Podem morar em bancos diferentes. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "c8d340a3-286c-4047-9e92-2e0736e8da77",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Lado",
+              "Otimizado para",
+              "Modelos"
+            ],
+            "rows": [
+              [
+                "Command (write)",
+                "Consistency, invariantes, validação",
+                "Aggregate rico, DDD"
+              ],
+              [
+                "Query (read)",
+                "Performance de leitura, view-specific",
+                "Read models denormalizados"
+              ]
+            ]
+          }
+        },
+        {
+          "id": "48941d51-ef68-479b-a898-c6137e336eb9",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "CQRS sem Event Sourcing também existe — é só separar modelos de escrita e leitura usando o mesmo banco com views materializadas, ou replicação lógica pra DB de leitura. Muita gente confunde: CQRS + ES são ortogonais."
+          }
+        }
+      ]
+    },
+    {
+      "id": "e949a9b4-c6e5-4e60-8680-176090e286f0",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Projections: as views do mundo"
+      },
+      "children": [
+        {
+          "id": "90b4e6e4-23ad-4a1e-9ab5-e5d542c9569e",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Projeção é um consumer que lê o event stream e mantém uma \"view\" do estado. Cada projeção é independente — você pode criar quantas quiser, deletar, refazer do zero (replay). "
+              }
+            ]
+          }
+        },
+        {
+          "id": "6f20ecd1-3952-4429-8281-f70b5f854fcf",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# projections.py — projector async alimentando tabela de leitura\n\nasync def account_balance_projector(event_stream):\n    \"\"\"Projeção simples: saldo atual por conta.\"\"\"\n    async for event in event_stream:\n        async with db.begin() as tx:\n            if isinstance(event, AccountOpened):\n                await tx.execute(\n                    text(\"INSERT INTO accounts_view (id, owner, balance) VALUES (:id, :o, 0)\"),\n                    {\"id\": event.account_id, \"o\": event.owner},\n                )\n            elif isinstance(event, Credited):\n                await tx.execute(\n                    text(\"UPDATE accounts_view SET balance = balance + :a WHERE id = :id\"),\n                    {\"id\": event.account_id, \"a\": event.amount},\n                )\n            elif isinstance(event, Debited):\n                await tx.execute(\n                    text(\"UPDATE accounts_view SET balance = balance - :a WHERE id = :id\"),\n                    {\"id\": event.account_id, \"a\": event.amount},\n                )\n            # ledger de checkpoint: última offset processada (pra replay/resume)\n            await tx.execute(\n                text(\"UPDATE projection_offsets SET last_event_id = :id WHERE name = 'balance'\"),\n                {\"id\": event.id},\n            )\n\nasync def transactions_history_projector(event_stream):\n    \"\"\"Outra projeção do MESMO stream: histórico de operações.\"\"\"\n    async for event in event_stream:\n        if isinstance(event, (Credited, Debited)):\n            await db.execute(\n                text(\"\"\"INSERT INTO transactions_view\n                        (account_id, type, amount, at)\n                        VALUES (:id, :t, :a, :ts)\"\"\"),\n                {\n                    \"id\": event.account_id,\n                    \"t\": type(event).__name__,\n                    \"a\": getattr(event, \"amount\", 0),\n                    \"ts\": event.timestamp,\n                },\n            )"
+          }
+        },
+        {
+          "id": "2a7d3f56-d2cb-40ec-b070-f21c1b469cd0",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Power move: quer uma nova feature que precisa de uma view diferente (ex: \"histórico agregado por mês\")? Crie uma nova projeção, rode replay do event store, tabela pronta. Sem migration complexa, sem backfill frágil. Esse é o caso de uso mais vendedor de Event Sourcing."
+          }
+        }
+      ]
+    },
+    {
+      "id": "98bea9a3-01f2-4598-a1bd-ab3610569c40",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Snapshots: otimizando o load"
+      },
+      "children": [
+        {
+          "id": "cae9aa1f-362e-4ae2-98c3-a6e7f82c5e54",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Carregar uma conta com 100k eventos pra cada comando vira inviável. Snapshots salvam o estado em momentos específicos (ex: a cada 100 eventos), então o load puxa o snapshot mais recente + só os eventos posteriores. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "3a70ce07-b792-4ecd-a5b0-a4512f7c5044",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "python",
+            "code": "# snapshot.py — carregamento com snapshot\n\nasync def load_with_snapshot(account_id: str) -> BankAccount:\n    # 1. Busca snapshot mais recente\n    snapshot = await db.fetchrow(\n        \"SELECT state, at_version FROM snapshots WHERE aggregate_id = $1 ORDER BY at_version DESC LIMIT 1\",\n        account_id,\n    )\n\n    if snapshot:\n        acc = BankAccount(**snapshot[\"state\"])\n        acc.version = snapshot[\"at_version\"]\n        start_version = snapshot[\"at_version\"] + 1\n    else:\n        acc = BankAccount()\n        start_version = 0\n\n    # 2. Carrega eventos APÓS o snapshot\n    events = await load_events(account_id, from_version=start_version)\n    for e in events:\n        acc._apply(e)\n        acc.version += 1\n\n    return acc\n\nasync def save_snapshot_if_needed(acc: BankAccount):\n    # A cada 100 eventos, persiste snapshot\n    if acc.version % 100 == 0:\n        await db.execute(\n            \"INSERT INTO snapshots (aggregate_id, state, at_version) VALUES ($1, $2, $3)\",\n            acc.account_id, serialize(acc), acc.version,\n        )"
+          }
+        },
+        {
+          "id": "54adb858-b913-4337-a408-e140f1f3cb80",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Snapshot não é source of truth. Se você muda lógica do agregado (ex: adiciona campo), snapshots antigos podem virar inválidos. Solução: versionar snapshots e ter migrador que descarta snapshots antigos (event log é sempre valido)."
+          }
+        }
+      ]
+    },
+    {
+      "id": "a805d48f-6bf1-4c25-89a1-5f6bd183d6e1",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Versionamento de eventos: o maior pain point"
+      },
+      "children": [
+        {
+          "id": "3c25203a-347b-4bcc-9f4c-e87ef92d92a2",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Eventos são "
+              },
+              {
+                "text": "imutáveis pra sempre",
+                "italic": true
+              },
+              {
+                "text": ". Se daqui a 3 anos você precisa adicionar campo, mudar nome, ou quebrar formato — precisa de estratégia. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "0d8a2ada-7c66-47a8-b416-a6794aac9fa6",
+          "type": "comparison_table",
+          "position": 1,
+          "data": {
+            "columns": [
+              "Estratégia",
+              "Quando usa"
+            ],
+            "rows": [
+              [
+                "Adicionar campo opcional",
+                "Maior parte dos casos. Ignorar se ausente em eventos antigos."
+              ],
+              [
+                "Versionamento do evento (v1, v2)",
+                "Quando breaking change inevitável. Consumers deserializam por versão."
+              ],
+              [
+                "Upcasters (transformers)",
+                "Converter eventos v1 pra v2 ao carregar. Isola a lógica nova da antiga."
+              ],
+              [
+                "Copy-and-transform",
+                "Replay completo transformando eventos pra nova schema. Custoso mas limpo."
+              ]
+            ]
+          }
+        },
+        {
+          "id": "1a21c5f7-6485-407e-8009-b771d636f005",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "python",
+            "code": "# upcaster.py — exemplo de upcaster\ndef upcast(raw: dict) -> Event:\n    event_type = raw[\"type\"]\n    version = raw.get(\"version\", 1)\n\n    if event_type == \"Credited\":\n        if version == 1:\n            # v1 não tinha currency. Antes, todos BRL.\n            raw[\"currency\"] = \"BRL\"\n            raw[\"version\"] = 2\n        return Credited(**raw)\n\n    if event_type == \"Debited\":\n        ..."
+          }
+        },
+        {
+          "id": "7260ceb2-d526-4c3c-81f6-dff2501f52e8",
+          "type": "callout",
+          "position": 3,
+          "data": {
+            "variant": "danger",
+            "title": "",
+            "content": "A tentação de editar eventos antigos: NUNCA. Event store é append-only por design. Editar = você quebrou o contrato com todos os consumers e projeções. Se um evento foi gravado errado, grave um novo. A história permanece auditável."
+          }
+        }
+      ]
+    },
+    {
+      "id": "86f5fa9d-0d80-48f8-a3a7-f93fb46100a9",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Event stores na prática"
+      },
+      "children": [
+        {
+          "id": "6e626275-377f-49f0-bc56-ca2625d0b1a2",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Opção",
+              "Descrição",
+              "Quando usa"
+            ],
+            "rows": [
+              [
+                "EventStoreDB (Kurrent)",
+                "Event store dedicado, streams nativos, projections built-in.",
+                "Quando você quer o produto feito pra isso. Setup novo."
+              ],
+              [
+                "Postgres append-only table",
+                "events (id, aggregate_id, version, type, payload, ts) com UNIQUE(aggregate_id, version).",
+                "A escolha mais comum em 2026. ACID local, migrations normais."
+              ],
+              [
+                "Kafka",
+                "Log imutável por partição. Compaction se precisar.",
+                "Escalas massivas, múltiplos consumers independentes."
+              ],
+              [
+                "DynamoDB streams",
+                "DynamoDB + DDB Streams pra projeções.",
+                "AWS native, alto throughput."
+              ],
+              [
+                "Marten (C# sobre Postgres)",
+                "Framework maduro Postgres+JSON.",
+                "Stack .NET."
+              ]
+            ]
+          }
+        },
+        {
+          "id": "edcd1b43-c1cd-43fb-8f48-802e607c8673",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": "Schema Postgres comum",
+                "bold": true
+              },
+              {
+                "text": ":"
+              }
+            ]
+          }
+        },
+        {
+          "id": "34aeb56a-91f4-47f5-ac7a-1e082c7a4189",
+          "type": "code_block",
+          "position": 2,
+          "data": {
+            "language": "sql",
+            "code": "-- event store simples em Postgres\nCREATE TABLE events (\n    id                BIGSERIAL PRIMARY KEY,            -- ordem global\n    aggregate_id      UUID NOT NULL,\n    aggregate_version INT NOT NULL,                     -- ordem dentro do aggregate\n    event_type        TEXT NOT NULL,\n    payload           JSONB NOT NULL,\n    metadata          JSONB DEFAULT '{}',               -- correlação, causação, user\n    occurred_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),\n    UNIQUE(aggregate_id, aggregate_version)             -- optimistic concurrency\n);\n\nCREATE INDEX ON events (aggregate_id, aggregate_version);\nCREATE INDEX ON events (event_type);                    -- por tipo p/ projeções\nCREATE INDEX ON events (occurred_at);                   -- filtros temporais\n\n-- append com otimista\nINSERT INTO events (aggregate_id, aggregate_version, event_type, payload)\nVALUES ($1, $2, $3, $4);\n-- vai falhar com \"unique constraint violation\" se outro writer já gravou aquela versão"
+          }
+        }
+      ]
+    },
+    {
+      "id": "77f3b8b7-65f9-41c4-a689-e448c9b5380b",
+      "type": "section",
+      "position": 9,
+      "data": {
+        "title": "Decisões reais"
+      },
+      "children": []
+    },
+    {
+      "id": "5f39cc24-0edf-470e-8470-0d11fc017af6",
+      "type": "section",
+      "position": 10,
+      "data": {
+        "title": "Perguntas típicas (Q&A)"
+      },
+      "children": [
+        {
+          "id": "4245f304-3ce9-4e1f-ba36-534b95f7ea12",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Como apagar dados (LGPD right-to-be-forgotten) em event store imutável?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "c62509c9-8586-495d-a5fd-b7f589d23ba8",
+          "type": "paragraph",
+          "position": 1,
+          "data": {
+            "content": [
+              {
+                "text": " Patterns: (1) "
+              },
+              {
+                "text": "crypto-shredding",
+                "italic": true
+              },
+              {
+                "text": " — criptografar campos PII com chave por-usuário, jogar a chave fora quando solicitado (dado vira ilegível); (2) "
+              },
+              {
+                "text": "soft delete",
+                "italic": true
+              },
+              {
+                "text": " + tombstone event + reescrita dos snapshots; (3) segregar PII em loja separada referenciada por ID. A crypto-shredding é o padrão moderno. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "5affad8d-67ba-4f00-911b-fda9a9f4fde9",
+          "type": "paragraph",
+          "position": 2,
+          "data": {
+            "content": [
+              {
+                "text": "Projeções podem ficar inconsistentes com o event store?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "1566fa35-2b5d-408d-8153-62c4e3b0d66f",
+          "type": "paragraph",
+          "position": 3,
+          "data": {
+            "content": [
+              {
+                "text": " Sim, transientemente — projeção é eventual consistency. Monitor o lag do projector. Em caso de bug, delete a view, rode replay. Essa é a belezura: o source of truth é sempre os eventos. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "e38bcfba-2267-42e3-924c-7cd805ce6338",
+          "type": "paragraph",
+          "position": 4,
+          "data": {
+            "content": [
+              {
+                "text": "Event store e eventos de integração (inter-serviços) são a mesma coisa?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "e6adc762-c08c-43fb-9888-3439dbdd87f0",
+          "type": "paragraph",
+          "position": 5,
+          "data": {
+            "content": [
+              {
+                "text": " Não! Domain events (internos) vivem no event store. Integration events (publicados pra outros serviços) são um conceito separado. Comum: domain event interno → handler → publica integration event diferente (com schema estável). Mistura os dois e você acopla todo mundo ao seu domínio interno. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "910dd92a-6421-460e-adb0-df02df11df96",
+          "type": "paragraph",
+          "position": 6,
+          "data": {
+            "content": [
+              {
+                "text": "ES é bom pra real-time analytics?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "d692c2de-a5ce-4d5d-914d-4911807e2fe6",
+          "type": "paragraph",
+          "position": 7,
+          "data": {
+            "content": [
+              {
+                "text": " Ótimo — cada evento vira input pro streaming. Combine com Kafka + Flink/ksqlDB: projeções viram agregações em tempo real. Data warehouse populado via Kafka Connect. Event Sourcing empurra análise pra ser de primeira classe. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "0d35920a-0ec0-480c-b28a-148680466ebe",
+          "type": "paragraph",
+          "position": 8,
+          "data": {
+            "content": [
+              {
+                "text": "Tamanho do event store explode?",
+                "bold": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "282636e8-7aa9-4f3f-b272-e98dbfeda946",
+          "type": "paragraph",
+          "position": 9,
+          "data": {
+            "content": [
+              {
+                "text": " Cresce, mas é append-only (muito eficiente). Compressão JSONB, particionamento por aggregate_id, cold storage pra eventos antigos (S3 + Parquet) se necessário. Raramente é gargalo real — mais comum é projeção mal dimensionada. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "e7baffb2-3876-483d-8d7a-b753c643f37c",
+      "type": "callout",
+      "position": 11,
+      "data": {
+        "variant": "success",
+        "title": "",
+        "content": "Take-aways:"
+      }
+    },
+    {
+      "id": "2386dd42-e93b-41f3-9cca-49815a09e406",
+      "type": "paragraph",
+      "position": 12,
+      "data": {
+        "content": [
+          {
+            "text": " Próximo módulo: voltando ao single-node, mas com profundidade — Postgres MVCC e isolation levels. "
+          }
+        ]
+      }
+    }
+  ]
+}

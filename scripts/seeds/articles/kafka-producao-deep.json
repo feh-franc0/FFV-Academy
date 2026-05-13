@@ -1,0 +1,170 @@
+{
+  "slug": "kafka-producao-deep",
+  "title": null,
+  "blocks": [
+    {
+      "id": "b29a81e5-c7a1-482a-a180-49e040e60e85",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Anatomia de um cluster 2026"
+      },
+      "children": [
+        {
+          "id": "d8199866-221f-4941-afaf-81779f0d4901",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Um cluster Kafka moderno tem brokers (storage + serve), controller quorum (KRaft, substituindo Zookeeper) e clients (producers, consumers). Cada topic é particionado; cada partition tem um leader e N-1 followers. ISR (in-sync replicas) é o conjunto que está caught-up o suficiente para assumir como leader sem perda. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "42f1a0f3-2f2a-482e-a9aa-9b5fb956d1c1",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Regra prática: replication.factor=3, min.insync.replicas=2, acks=all. Tolera 1 broker caído sem perder write. Menos que isso é aceitar perda de dado silenciosa em partition failure."
+          }
+        }
+      ]
+    },
+    {
+      "id": "fab30f5d-d663-4170-9955-220101682dd4",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "KRaft: controller sem Zookeeper"
+      },
+      "children": [
+        {
+          "id": "0e64558d-ea68-4326-bd48-116551bc2fae",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Desde Kafka 3.3 GA, o controller roda um consenso Raft entre nodes dedicados (ou combined com brokers em dev). O metadata log vira um topic interno replicado. Resultado: menos um stack para operar, failover em milissegundos e escala para milhões de partitions. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "c9a72ffd-0a7f-4f23-b83f-711922e3b36e",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "bash",
+            "code": "# Bootstrap KRaft cluster (controllers dedicados)\nkafka-storage.sh format -t $(kafka-storage.sh random-uuid) \\\n  -c config/kraft/controller.properties\n\n# server.properties (broker)\nprocess.roles=broker\nnode.id=1\ncontroller.quorum.voters=100@ctrl1:9093,101@ctrl2:9093,102@ctrl3:9093\nlisteners=PLAINTEXT://:9092\ninter.broker.listener.name=PLAINTEXT"
+          }
+        }
+      ]
+    },
+    {
+      "id": "011a2a0f-6f1e-40f3-97f6-476ac4773585",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Producer: idempotence, acks e batching"
+      },
+      "children": [
+        {
+          "id": "6282bf66-a35b-4447-8060-7530b44a3d5e",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "java",
+            "code": "Properties p = new Properties();\np.put(\"bootstrap.servers\", \"b1:9092,b2:9092,b3:9092\");\np.put(\"key.serializer\", \"org.apache.kafka.common.serialization.StringSerializer\");\np.put(\"value.serializer\", \"org.apache.kafka.common.serialization.StringSerializer\");\np.put(\"acks\", \"all\");\np.put(\"enable.idempotence\", true);\np.put(\"max.in.flight.requests.per.connection\", 5);\np.put(\"compression.type\", \"zstd\");\np.put(\"linger.ms\", 20);\np.put(\"batch.size\", 65536);\n\ntry (KafkaProducer<String,String> prod = new KafkaProducer<>(p)) {\n  prod.send(new ProducerRecord<>(\"orders\", orderId, json), (meta, err) -> {\n    if (err != null) log.error(\"send failed\", err);\n  });\n}"
+          }
+        },
+        {
+          "id": "644d70c4-f70d-404f-a778-ffabc102f2ed",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "acks=1 (só leader) parece mais rápido mas perde dado se leader cair antes de replicar. Em 2026 com zstd+linger, a perda de throughput de acks=all é pequena e o risco de perda silenciosa não compensa."
+          }
+        }
+      ]
+    },
+    {
+      "id": "7d06e7b5-1131-46c1-b04f-e7e63d431a2c",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Consumer groups e rebalance"
+      },
+      "children": [
+        {
+          "id": "e5344f8c-ecb2-4077-b3de-7eaf82f615ae",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Consumer group distribui partitions entre N consumers. Qualquer join/leave dispara rebalance: stop-the-world que pausa consumo. Use cooperative-sticky assignor (default 3.0+) para rebalance incremental — só as partitions que trocam de dono param, o resto continua consumindo. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "eae7e572-76d2-4556-889a-207e1afa1b8d",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "java",
+            "code": "props.put(\"partition.assignment.strategy\",\n  \"org.apache.kafka.clients.consumer.CooperativeStickyAssignor\");\nprops.put(\"session.timeout.ms\", 45000);\nprops.put(\"max.poll.interval.ms\", 300000);\nprops.put(\"isolation.level\", \"read_committed\");"
+          }
+        }
+      ]
+    },
+    {
+      "id": "0faaea76-a866-4018-a3b2-15a2e2c0fd6c",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Tiered storage: retention sem explodir custo"
+      },
+      "children": [
+        {
+          "id": "6eda0d72-3a5b-42df-94b2-b409e316a7e4",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " KIP-405 permite offload de segments antigos para S3/GCS. Hot data em NVMe local, cold data em object storage a 1/10 do custo. Rebalance fica ordens de magnitude mais rápido. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "9699abc5-c242-4103-81a3-8f7d88a561ed",
+          "type": "code_block",
+          "position": 1,
+          "data": {
+            "language": "yaml",
+            "code": "# Topic com tiered storage habilitado\nremote.storage.enable: true\nlocal.retention.ms: 86400000       # 1 dia local\nretention.ms: 2592000000           # 30 dias total (29 em S3)\nremote.log.storage.manager.class.name: org.apache.kafka.server.log.remote.storage.RemoteLogManager"
+          }
+        },
+        {
+          "id": "c9112572-6b38-4a34-80a9-e28532e99054",
+          "type": "callout",
+          "position": 2,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Para auditoria/compliance com retention de 1 ano+, tiered storage transforma Kafka em sistema viável economicamente. Antes exigia offload manual para data lake."
+          }
+        }
+      ]
+    }
+  ]
+}

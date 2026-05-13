@@ -1,0 +1,144 @@
+{
+  "slug": "full-text-search-postgres",
+  "title": null,
+  "blocks": [
+    {
+      "id": "92f64e00-147c-43ba-bc66-455ed13762a3",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Postgres FTS é surpreendentemente capaz"
+      },
+      "children": [
+        {
+          "id": "588510af-1735-47ae-89ad-b243f8f7634d",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Muito time salta pra Elasticsearch na primeira feature de busca, carregando complexidade operacional desnecessária. Para corpus abaixo de ~10M documentos e queries moderadamente complexas, Postgres com tsvector + GIN entrega resultado sólido com zero infra adicional. Só saia de Postgres quando o FTS dele deixar de servir. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "f5a1f252-299f-422e-97bc-142675a5ebcf",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "Setup básico"
+      },
+      "children": [
+        {
+          "id": "582c4685-b481-41ec-9020-1c0233a02886",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "sql",
+            "code": "-- Estender capacidades do Postgres\nCREATE EXTENSION IF NOT EXISTS unaccent;\nCREATE EXTENSION IF NOT EXISTS pg_trgm;\n\n-- Tabela exemplo\nCREATE TABLE articles (\n  id bigserial PRIMARY KEY,\n  title text NOT NULL,\n  body text NOT NULL,\n  tags text[] DEFAULT '{}',\n  published_at timestamptz DEFAULT now(),\n  -- Coluna generated mantém tsvector sincronizado\n  search_vector tsvector GENERATED ALWAYS AS (\n    setweight(to_tsvector('portuguese', coalesce(title, '')),  'A') ||\n    setweight(to_tsvector('portuguese', coalesce(body, '')),   'B') ||\n    setweight(to_tsvector('portuguese', array_to_string(tags, ' ')), 'C')\n  ) STORED\n);\n\n-- Índice GIN é o coração da performance\nCREATE INDEX articles_search_idx ON articles USING GIN (search_vector);\n\n-- Índice trigram pra fuzzy / similarity\nCREATE INDEX articles_title_trgm_idx ON articles USING GIN (title gin_trgm_ops);"
+          }
+        }
+      ]
+    },
+    {
+      "id": "9a3c4bbb-3857-4649-b34a-a0163778d125",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Query básica com ranking"
+      },
+      "children": [
+        {
+          "id": "0eb4b987-eff1-4085-9c5c-e595fb3fcd4f",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "sql",
+            "code": "-- Busca simples\nSELECT id, title,\n       ts_rank_cd(search_vector, query) AS rank\nFROM articles,\n     websearch_to_tsquery('portuguese', 'react server components') AS query\nWHERE search_vector @@ query\nORDER BY rank DESC\nLIMIT 20;\n\n-- websearch_to_tsquery entende sintaxe tipo Google:\n--   \"aspas\" exato, -exclude, OR\n-- Alternativas: plainto_tsquery (simples), to_tsquery (bruto)\n\n-- ts_rank (conta frequência) vs ts_rank_cd (cover density, proximidade)\n-- Em geral ts_rank_cd produz melhor ranking para humanos."
+          }
+        }
+      ]
+    },
+    {
+      "id": "c070a082-f484-4458-8a97-e1111dffbb8d",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Weights A/B/C/D"
+      },
+      "children": [
+        {
+          "id": "b98c3bcb-c771-43ce-9609-4b4448d37ea0",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " Cada token pode receber peso (A > B > C > D). Convenção prática: título = A, corpo = B, tags/categorias = C, metadata = D. ts_rank aceita array "
+              },
+              {
+                "text": "{0.1, 0.2, 0.4, 1.0}",
+                "code": true
+              },
+              {
+                "text": " (índices D, C, B, A) pra ajustar impacto. Resultado: matches em título pesam muito mais que no corpo — reflete intuição de relevância. "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "06828024-ceab-457a-ae4d-3a84c745c802",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Fuzzy fallback com pg_trgm"
+      },
+      "children": [
+        {
+          "id": "47161d68-1e71-4286-b2f1-0d56c192afed",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "sql",
+            "code": "-- \"Did you mean\" — quando a busca FTS não retornar nada\nSELECT title, similarity(title, 'databse') AS sim\nFROM articles\nWHERE title % 'databse'           -- operador trigram\nORDER BY sim DESC\nLIMIT 5;\n\n-- Workflow híbrido no backend:\n-- 1. Tenta tsvector @@ websearch_to_tsquery\n-- 2. Se zero resultado, roda similarity fallback\n-- 3. UI sugere \"Você quis dizer: <top match>?\"\n\n-- Autocomplete com pg_trgm:\n-- trigram index permite WHERE title ILIKE 'prefix%' rápido em milhões de rows"
+          }
+        }
+      ]
+    },
+    {
+      "id": "04f3f710-7e6d-436a-a326-c396d844fe97",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Limites e quando migrar"
+      },
+      "children": [
+        {
+          "id": "09f70733-26a0-47fa-9ec0-43823d272cb8",
+          "type": "callout",
+          "position": 0,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "Postgres FTS começa a doer em: corpus > ~10M docs, necessidade de sharding pesado, queries com aggregations/facets complexas (faceted navigation e-commerce), ou quando relevance tuning com learning-to-rank vira prioridade. Nessas horas, Elasticsearch/OpenSearch ou Typesense fazem sentido."
+          }
+        },
+        {
+          "id": "95880726-0aaf-4b45-a860-d6f8fe9c8d79",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "success",
+            "title": "",
+            "content": "Mas até esse ponto, Postgres FTS evita um banco inteiro de infra paralela — e mantém consistência transacional com seus dados. Economia operacional real."
+          }
+        }
+      ]
+    }
+  ]
+}

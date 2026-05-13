@@ -1,0 +1,260 @@
+{
+  "slug": "cedar-aws-authorization",
+  "title": null,
+  "blocks": [
+    {
+      "id": "624075ce-f604-4625-aea0-f5d6f352eba7",
+      "type": "section",
+      "position": 0,
+      "data": {
+        "title": "Cedar em uma frase"
+      },
+      "children": [
+        {
+          "id": "a0916335-0f71-4fbe-9aa7-1260b0aa683b",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": "Cedar",
+                "bold": true
+              },
+              {
+                "text": " é a policy language open-source da AWS (lançada em maio de 2023, Apache 2.0), implementada em Rust, com type system explícito e partes "
+              },
+              {
+                "text": "formalmente verificadas",
+                "italic": true
+              },
+              {
+                "text": ". É o motor por trás do serviço Amazon Verified Permissions. Foi desenhado para preencher um espaço específico: "
+              },
+              {
+                "text": "tipagem forte e analisabilidade estática",
+                "italic": true
+              },
+              {
+                "text": " — algo que Rego (dinâmico) e SpiceDB (data-centric) não oferecem do mesmo jeito. "
+              }
+            ]
+          }
+        },
+        {
+          "id": "b7e3f588-1c9d-4996-963f-5addacc2be5c",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "info",
+            "title": "",
+            "content": "Cedar não é \"mais um\" — é a primeira policy language mainstream com análise estática rigorosa: você pode provar que duas policies são equivalentes, encontrar policies inalcançáveis, verificar \"esta mudança nega acesso a alguém que tinha antes?\" via diferencial. Para fintech/govcloud/saúde, isso é o que torna Cedar relevante."
+          }
+        }
+      ]
+    },
+    {
+      "id": "e73a2eb9-dc07-4cbc-b430-0148b659c719",
+      "type": "section",
+      "position": 1,
+      "data": {
+        "title": "A sintaxe: legibilidade > densidade"
+      },
+      "children": [
+        {
+          "id": "dd28a8cf-ae55-42db-8876-b29424d84f2f",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "text",
+            "code": "// Permit explícito com scope e condições\npermit (\n  principal in Group::\"engineering\",\n  action in [Action::\"viewDocument\", Action::\"editDocument\"],\n  resource in Folder::\"engineering-docs\"\n)\nwhen {\n  resource.owner == principal ||\n  principal in resource.collaborators\n}\nunless {\n  resource.classification == \"secret\" &&\n  !context.mfa_authenticated\n};\n\n// Forbid sempre vence — guard absoluto\nforbid (\n  principal,\n  action,\n  resource\n)\nwhen {\n  context.ip_address.isInRange(\"0.0.0.0/0\") &&\n  resource.classification in [\"secret\", \"top-secret\"]\n};\n\n// Policy template (parametrizada)\npermit (\n  principal == ?principal,\n  action in [Action::\"viewDocument\"],\n  resource == ?resource\n);",
+            "filename": "policies.cedar"
+          }
+        }
+      ]
+    },
+    {
+      "id": "1e32dc9c-bd90-4c4c-9007-e9c83c12f00f",
+      "type": "section",
+      "position": 2,
+      "data": {
+        "title": "Schema: o que distingue Cedar"
+      },
+      "children": [
+        {
+          "id": "d902e2ea-df29-4638-9227-630ba20acc40",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "json",
+            "code": "{\n  \"FFV\": {\n    \"entityTypes\": {\n      \"User\": {\n        \"memberOfTypes\": [\"Group\", \"Organization\"],\n        \"shape\": {\n          \"type\": \"Record\",\n          \"attributes\": {\n            \"department\": { \"type\": \"String\" },\n            \"level\": { \"type\": \"Long\" }\n          }\n        }\n      },\n      \"Group\": { \"memberOfTypes\": [\"Organization\"] },\n      \"Organization\": {},\n      \"Document\": {\n        \"memberOfTypes\": [\"Folder\"],\n        \"shape\": {\n          \"type\": \"Record\",\n          \"attributes\": {\n            \"owner\": { \"type\": \"Entity\", \"name\": \"User\" },\n            \"collaborators\": { \"type\": \"Set\", \"element\": { \"type\": \"Entity\", \"name\": \"User\" } },\n            \"classification\": { \"type\": \"String\" }\n          }\n        }\n      }\n    },\n    \"actions\": {\n      \"viewDocument\": {\n        \"appliesTo\": {\n          \"principalTypes\": [\"User\"],\n          \"resourceTypes\": [\"Document\"],\n          \"context\": {\n            \"type\": \"Record\",\n            \"attributes\": {\n              \"mfa_authenticated\": { \"type\": \"Boolean\" },\n              \"ip_address\": { \"type\": \"String\" }\n            }\n          }\n        }\n      }\n    }\n  }\n}",
+            "filename": "schema.cedarschema.json"
+          }
+        },
+        {
+          "id": "a7a272a5-961b-47b8-8f37-01c902590076",
+          "type": "callout",
+          "position": 1,
+          "data": {
+            "variant": "warning",
+            "title": "",
+            "content": "O compiler Cedar valida cada policy contra esse schema: existe Action::\"viewDocument\"? Aceita principal do tipo Group? resource.classification é String? Erros saem antes de chegar em produção — ao contrário de Rego, onde campo inexistente vira e a policy passa silenciosamente."
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3220d0f-2a58-4aea-93d2-b9e5ebc21387",
+      "type": "section",
+      "position": 3,
+      "data": {
+        "title": "Fluxo de avaliação"
+      },
+      "children": [
+        {
+          "id": "d0dba078-7f33-4671-bc39-ccfc94972ef8",
+          "type": "code_block",
+          "position": 0,
+          "data": {
+            "language": "rust",
+            "code": "use cedar_policy::{Authorizer, Context, Entities, PolicySet, Request, Schema};\n\nlet schema: Schema = serde_json::from_str(SCHEMA_JSON)?.try_into()?;\nlet policies: PolicySet = POLICIES_TEXT.parse()?;\nlet entities: Entities = Entities::from_json_str(ENTITIES_JSON, Some(&schema))?;\n\nlet request = Request::new(\n    Some(r#\"User::\"alice\"\"#.parse()?),\n    Some(r#\"Action::\"viewDocument\"\"#.parse()?),\n    Some(r#\"Document::\"report-q1\"\"#.parse()?),\n    Context::from_json_value(json!({\n        \"mfa_authenticated\": true,\n        \"ip_address\": \"10.0.0.5\"\n    }), Some((&schema, &\"Action::\\\"viewDocument\\\"\".parse()?)))?,\n    Some(&schema),\n)?;\n\nlet authorizer = Authorizer::new();\nlet response = authorizer.is_authorized(&request, &policies, &entities);\n\nmatch response.decision() {\n    Decision::Allow => println!(\"granted\"),\n    Decision::Deny => println!(\"denied: {:?}\", response.diagnostics().reason()),\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "4f6c38f7-e820-4cd7-bf25-cf225a6501e0",
+      "type": "section",
+      "position": 4,
+      "data": {
+        "title": "Amazon Verified Permissions (AVP): Cedar managed"
+      },
+      "children": [
+        {
+          "id": "1f9b3791-f26d-4075-828d-211089402e1d",
+          "type": "paragraph",
+          "position": 0,
+          "data": {
+            "content": [
+              {
+                "text": " AVP cobra por "
+              },
+              {
+                "text": "authorization request",
+                "italic": true
+              },
+              {
+                "text": ". Para SaaS B2B on AWS, é a maneira mais rápida de adicionar autorização fine-grained sem operar engine. Limitações: latência ~10-30ms (call AWS), tier máximo por policy store ~10k policies, sem multi-region active-active (replicação assíncrona). "
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ef61696d-1bd8-436c-9d9a-2cd9cb0ca0c6",
+      "type": "section",
+      "position": 5,
+      "data": {
+        "title": "Cedar vs Rego vs SpiceDB/OpenFGA"
+      },
+      "children": [
+        {
+          "id": "3947b8da-dcd5-4192-86f9-3ce81573ec97",
+          "type": "comparison_table",
+          "position": 0,
+          "data": {
+            "columns": [
+              "Aspecto",
+              "Cedar",
+              "Rego (OPA)",
+              "SpiceDB / OpenFGA"
+            ],
+            "rows": [
+              [
+                "Paradigma",
+                "Policy-as-code, tipado",
+                "Policy-as-code, dinâmico",
+                "Policy-as-data (tuplas)"
+              ],
+              [
+                "Schema obrigatório",
+                "✓ entities + actions",
+                "✗ (qualquer JSON)",
+                "✓ schema language"
+              ],
+              [
+                "Type safety",
+                "Forte (compile-time)",
+                "Fraca (runtime)",
+                "Forte (schema)"
+              ],
+              [
+                "Análise estática",
+                "Excelente (verified)",
+                "Boa (opa parse)",
+                "Boa (schema validation)"
+              ],
+              [
+                "Reverse query",
+                "Limitada",
+                "Via partial eval",
+                "Nativa (LookupSubjects)"
+              ],
+              [
+                "Linguagem",
+                "Rust",
+                "Go",
+                "Go"
+              ],
+              [
+                "Managed cloud",
+                "AVP (AWS)",
+                "Styra DAS",
+                "Authzed / Auth0 FGA"
+              ],
+              [
+                "Casos de uso fortes",
+                "SaaS, fintech, compliance",
+                "Infra/K8s, condições, ABAC",
+                "Sharing per-resource"
+              ],
+              [
+                "Maturidade (2026)",
+                "Crescendo rápido",
+                "CNCF Graduated, padrão",
+                "Maduro, adoção alta"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "3211184b-3c7e-45c3-ae2f-20b89c7aaaee",
+      "type": "section",
+      "position": 6,
+      "data": {
+        "title": "Onde Cedar vence"
+      },
+      "children": []
+    },
+    {
+      "id": "a2f7c36d-8c16-4f6a-b144-469ffb98f050",
+      "type": "section",
+      "position": 7,
+      "data": {
+        "title": "Anti-patterns Cedar"
+      },
+      "children": []
+    },
+    {
+      "id": "68a289f5-eef9-40d3-a220-3feb063d57b5",
+      "type": "section",
+      "position": 8,
+      "data": {
+        "title": "Resumo executivo"
+      },
+      "children": []
+    }
+  ]
+}
