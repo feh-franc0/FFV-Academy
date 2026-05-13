@@ -115,6 +115,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// Rota search deve vir ANTES de /{slug} para não capturar "search" como slug.
 		r.Get("/api/v1/curriculum/search", cfg.Curriculum.Search)
 		r.Get("/api/v1/curriculum/{slug}", cfg.Curriculum.GetBySlug)
+		// NEW: rota CMS-driven, retorna artigo + árvore de blocks JSON estruturados.
+		// Frontend dinâmico (BlockRenderer) consome este endpoint.
+		r.Get("/api/v1/curriculum/{slug}/blocks", cfg.Curriculum.GetBlocks)
 	}
 
 	// Body size limits por grupo de rota.

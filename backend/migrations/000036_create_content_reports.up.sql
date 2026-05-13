@@ -9,13 +9,13 @@
 
 CREATE TABLE content_reports (
     id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    reporter_user_id   UUID NOT NULL,
+    reporter_user_id   TEXT NOT NULL,
     target_type        TEXT NOT NULL,
     target_id          TEXT NOT NULL,
     reason             TEXT NOT NULL,
     description        TEXT,
     status             TEXT NOT NULL DEFAULT 'open',
-    resolved_by        UUID,
+    resolved_by        TEXT,
     resolved_at        TIMESTAMPTZ,
     resolution_note    TEXT,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),

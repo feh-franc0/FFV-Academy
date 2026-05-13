@@ -11,7 +11,7 @@
 
 CREATE TABLE comments (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id      UUID NOT NULL,
+    user_id      TEXT NOT NULL,
     target_type  TEXT NOT NULL,
     target_id    TEXT NOT NULL,
     parent_id    UUID,

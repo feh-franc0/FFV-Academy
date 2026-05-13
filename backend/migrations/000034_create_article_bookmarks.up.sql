@@ -4,7 +4,7 @@
 -- HANDLERS HTTP AINDA NÃO EXISTEM. Schema preparado.
 
 CREATE TABLE article_bookmarks (
-    user_id        UUID NOT NULL,
+    user_id        TEXT NOT NULL,
     article_slug   TEXT NOT NULL,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
 

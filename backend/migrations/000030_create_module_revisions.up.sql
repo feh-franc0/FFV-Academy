@@ -10,7 +10,7 @@ CREATE TABLE module_revisions (
     article_slug  TEXT NOT NULL,
     revision      INT  NOT NULL,
     snapshot      JSONB NOT NULL,
-    edited_by     UUID,
+    edited_by     TEXT,
     edited_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     note          TEXT,
 

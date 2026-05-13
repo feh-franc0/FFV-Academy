@@ -8,7 +8,7 @@
 -- handlers, fazer migração one-time (push) dos ratings locais pro DB.
 
 CREATE TABLE article_ratings (
-    user_id        UUID NOT NULL,
+    user_id        TEXT NOT NULL,
     article_slug   TEXT NOT NULL,
     rating         SMALLINT NOT NULL,
     feedback       TEXT,

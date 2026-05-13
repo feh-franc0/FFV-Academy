@@ -253,3 +253,130 @@ func isPostgresUniqueViolation(err error) bool {
 	}
 	return false
 }
+
+// ─── Blocks (CMS-driven content) ─────────────────────────────────────────────
+
+// FindBlocksBySlug retorna todos os blocos de um artigo pré-organizados em árvore.
+//
+// Estratégia: 1 query plana ordenada por position, depois reconstrução da árvore
+// em Go (mais simples e rápido que CTE recursivo para profundidade < 5).
+// Para artigos típicos (até ~100 blocos, 2 níveis de profundidade), esta abordagem
+// gera 1 round-trip ao banco e processa em microssegundos.
+func (r *CurriculumRepo) FindBlocksBySlug(ctx context.Context, slug string) ([]*domcurriculum.Block, error) {
+	// COALESCE garante string vazia em vez de NULL para parent_id em blocos top-level.
+	const q = `
+		SELECT id::text, COALESCE(parent_id::text, '') AS parent_id, position, block_type, block_data
+		FROM module_blocks
+		WHERE article_slug = $1
+		ORDER BY parent_id NULLS FIRST, position
+	`
+	rows, err := r.pool.Query(ctx, q, slug)
+	if err != nil {
+		return nil, fmt.Errorf("curriculum: query blocks: %w", err)
+	}
+	defer rows.Close()
+
+	// Coleta plana.
+	type flatBlock struct {
+		ID       string
+		ParentID *string
+		Position int
+		Type     string
+		Data     []byte
+	}
+	flat := make([]flatBlock, 0, 64)
+	for rows.Next() {
+		var (
+			id, parentIDStr string
+			position        int
+			blockType       string
+			data            []byte
+		)
+		if err := rows.Scan(&id, &parentIDStr, &position, &blockType, &data); err != nil {
+			return nil, fmt.Errorf("curriculum: scan block: %w", err)
+		}
+		var parentID *string
+		if parentIDStr != "" {
+			p := parentIDStr
+			parentID = &p
+		}
+		flat = append(flat, flatBlock{ID: id, ParentID: parentID, Position: position, Type: blockType, Data: data})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("curriculum: iterate blocks: %w", err)
+	}
+
+	// Indexa por ID para reconstrução O(n).
+	byID := make(map[string]*domcurriculum.Block, len(flat))
+	roots := make([]*domcurriculum.Block, 0, len(flat)/2)
+
+	for _, fb := range flat {
+		b := &domcurriculum.Block{
+			ID:       fb.ID,
+			Type:     fb.Type,
+			Position: fb.Position,
+			Data:     fb.Data,
+			ParentID: fb.ParentID,
+			Children: []*domcurriculum.Block{},
+		}
+		byID[fb.ID] = b
+	}
+
+	// Anexa filhos aos pais.
+	for _, fb := range flat {
+		b := byID[fb.ID]
+		if fb.ParentID == nil {
+			roots = append(roots, b)
+			continue
+		}
+		if parent, ok := byID[*fb.ParentID]; ok {
+			parent.Children = append(parent.Children, b)
+		}
+	}
+	return roots, nil
+}
+
+// SaveBlocks substitui todos os blocks de um artigo em transação.
+// DELETE + INSERT atômico. Recursão recursiva (Section→Callouts) suportada.
+func (r *CurriculumRepo) SaveBlocks(ctx context.Context, slug string, blocks []*domcurriculum.Block) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("curriculum: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `DELETE FROM module_blocks WHERE article_slug = $1`, slug); err != nil {
+		return fmt.Errorf("curriculum: delete old blocks: %w", err)
+	}
+
+	// Walker recursivo: insere bloco, depois children referenciando ID do pai.
+	var insertBlock func(b *domcurriculum.Block, parentID *string) error
+	insertBlock = func(b *domcurriculum.Block, parentID *string) error {
+		var insertedID string
+		const q = `
+			INSERT INTO module_blocks (article_slug, parent_id, position, block_type, block_data)
+			VALUES ($1, $2, $3, $4, $5)
+			RETURNING id::text
+		`
+		if err := tx.QueryRow(ctx, q, slug, parentID, b.Position, b.Type, b.Data).Scan(&insertedID); err != nil {
+			return fmt.Errorf("curriculum: insert block (type=%s): %w", b.Type, err)
+		}
+		for _, child := range b.Children {
+			if err := insertBlock(child, &insertedID); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for _, root := range blocks {
+		if err := insertBlock(root, nil); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("curriculum: commit tx: %w", err)
+	}
+	return nil
+}

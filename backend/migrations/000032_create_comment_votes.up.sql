@@ -6,7 +6,7 @@
 
 CREATE TABLE comment_votes (
     comment_id   UUID NOT NULL,
-    user_id      UUID NOT NULL,
+    user_id      TEXT NOT NULL,
     vote         SMALLINT NOT NULL,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),

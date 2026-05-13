@@ -8,7 +8,7 @@
 -- inferir enrollment a partir do primeiro módulo completado de cada trilha.
 
 CREATE TABLE trail_enrollments (
-    user_id          UUID NOT NULL,
+    user_id          TEXT NOT NULL,
     trail_id         TEXT NOT NULL,
     started_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     completed_at     TIMESTAMPTZ,
