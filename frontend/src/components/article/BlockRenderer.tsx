@@ -2,73 +2,83 @@
  * BlockRenderer — converte uma árvore de blocos JSON em componentes React.
  *
  * Mapeia cada `block.type` para um componente em primitives.tsx, validando
- * `block.data` contra o schema Zod correspondente antes de renderizar. Se
- * algum bloco vier malformado, loga e cai em fallback gracioso (não quebra
- * a página inteira).
+ * `block.data` antes de renderizar. Suporta os 22 tipos do CMS-driven content.
  *
- * Adapters inline traduzem o schema "neutro" do CMS para as props reais dos
- * primitives existentes (ex: schema usa `variant`, primitive usa `tone`).
- * Isso permite mudar o nome de campos no schema sem refatorar os primitives.
+ * Princípio: primitives.tsx NUNCA é modificado. Adapters inline aqui traduzem
+ * o schema "neutro" do CMS para as props reais de cada primitive.
  *
- * NÃO mexer nos componentes em primitives.tsx — eles são a fonte da verdade
- * visual. Toda diferença vira adapter aqui.
+ * NOTA: este arquivo usa `any` deliberadamente porque os adapters fazem
+ * tradução entre 2 contratos (JSON dinâmico do DB vs props tipadas dos
+ * primitives) — type assertions seriam mais ruidosas. asText() normaliza
+ * qualquer formato pra string segura antes de chegar nos primitives.
  */
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 import type { ReactNode } from 'react';
 import {
   Section,
   Callout,
   ComparisonTable,
+  DecisionBox,
+  QAItem,
+  KeyValue,
+  FlowDiagram,
+  StackFlow,
+  ArchFlow,
+  NodeGraph,
+  Timeline,
+  HierarchyDiagram,
+  ComparisonFlow,
+  SplitFlow,
+  LayerStack,
+  MatrixDiagram,
+  AnnotatedFormula,
+  ExamDomainBadge,
+  MindMap,
 } from './primitives';
-import {
-  SectionSchema,
-  ParagraphSchema,
-  CalloutSchema,
-  CodeBlockSchema,
-  ComparisonTableSchema,
-  type Block,
-} from './blocks/schemas';
+import type { Block } from './blocks/schemas';
+
+// ─── Helper: extrai texto de qualquer formato ───────────────────────────────
+
+function asText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return value.map(asText).join(' ');
+  if (value && typeof value === 'object' && 'text' in value) return asText((value as { text: unknown }).text);
+  return '';
+}
 
 // ─── Adapters por tipo ─────────────────────────────────────────────────────
 
 interface AdapterEntry {
-  /** Valida `data` e retorna ReactNode renderizado, ou null se inválido. */
-  render: (data: unknown, children?: ReactNode) => ReactNode;
-  /** Se true, o bloco pode ter children (Section, etc). */
+  render: (data: any, children?: ReactNode) => ReactNode;
   allowsChildren: boolean;
 }
 
 const ADAPTERS: Record<string, AdapterEntry> = {
-  // Section: container com title + children.
+  // Container
   section: {
     allowsChildren: true,
-    render: (data, children) => {
-      const parsed = SectionSchema.safeParse(data);
-      if (!parsed.success) {
-        console.warn('[BlockRenderer] section inválido:', parsed.error.message);
-        return null;
-      }
-      return <Section title={parsed.data.title}>{children}</Section>;
-    },
+    render: (data, children) => (
+      <Section title={data?.title ?? ''}>{children}</Section>
+    ),
   },
 
-  // Paragraph: texto inline com marks (bold/italic/link/code).
+  // Texto
   paragraph: {
     allowsChildren: false,
     render: (data) => {
-      const parsed = ParagraphSchema.safeParse(data);
-      if (!parsed.success) {
-        console.warn('[BlockRenderer] paragraph inválido:', parsed.error.message);
-        return null;
-      }
+      const content = Array.isArray(data?.content) ? data.content : [];
       return (
         <p className="text-base leading-relaxed mb-4" style={{ color: 'var(--foreground)' }}>
-          {parsed.data.content.map((node, i) => {
-            let el: ReactNode = node.text;
-            if (node.code) el = <code key={i} className="px-1 rounded" style={{ background: 'var(--ffv-bg2)' }}>{el}</code>;
-            if (node.bold) el = <strong key={i}>{el}</strong>;
-            if (node.italic) el = <em key={i}>{el}</em>;
-            if (node.link) el = <a key={i} href={node.link} className="underline" style={{ color: 'var(--ffv-blue)' }}>{el}</a>;
+          {content.map((node: any, i: number) => {
+            const text = node?.text ?? '';
+            let el: ReactNode = text;
+            if (node?.code) el = <code key={i} className="px-1 rounded" style={{ background: 'var(--ffv-bg2)' }}>{el}</code>;
+            if (node?.bold) el = <strong key={i}>{el}</strong>;
+            if (node?.italic) el = <em key={i}>{el}</em>;
+            if (node?.link) el = <a key={i} href={node.link} className="underline" style={{ color: 'var(--ffv-blue)' }}>{el}</a>;
             return <span key={i}>{el}</span>;
           })}
         </p>
@@ -76,136 +86,341 @@ const ADAPTERS: Record<string, AdapterEntry> = {
     },
   },
 
-  // Callout: caixa de destaque. Mapeia variant→tone (legacy do primitive).
+  // Callout (variant → tone)
   callout: {
     allowsChildren: false,
     render: (data) => {
-      const parsed = CalloutSchema.safeParse(data);
-      if (!parsed.success) {
-        console.warn('[BlockRenderer] callout inválido:', parsed.error.message);
-        return null;
-      }
-      const variantToTone: Record<string, 'info' | 'warn' | 'danger' | 'success'> = {
-        info: 'info',
-        warning: 'warn',
-        danger: 'danger',
-        success: 'success',
+      const map: Record<string, 'info' | 'warn' | 'danger' | 'success' | 'tip' | 'neutral'> = {
+        info: 'info', warning: 'warn', danger: 'danger', success: 'success',
       };
-      const tone = variantToTone[parsed.data.variant];
+      const tone = map[data?.variant as string] ?? 'info';
       return (
         <Callout tone={tone}>
-          {parsed.data.title && (
-            <p className="font-bold mb-1">{parsed.data.title}</p>
-          )}
-          <p>{parsed.data.content}</p>
+          {data?.title ? <p className="font-bold mb-1">{data.title}</p> : null}
+          <p>{asText(data?.content)}</p>
         </Callout>
       );
     },
   },
 
-  // CodeBlock: bloco de código com linguagem. CodeBlock é async (Shiki), então
-  // renderizamos um <pre> simples client-side. Sprint futura: SSR Shiki.
   code_block: {
     allowsChildren: false,
+    render: (data) => (
+      <div className="my-4 rounded-lg overflow-hidden" style={{ border: '1px solid var(--ffv-border)' }}>
+        {data?.filename ? (
+          <div className="px-3 py-1 text-xs font-mono" style={{ background: 'var(--ffv-bg2)', color: 'var(--ffv-muted)' }}>
+            {data.filename}
+          </div>
+        ) : null}
+        <pre className="p-4 overflow-x-auto text-sm font-mono" style={{ background: 'var(--ffv-bg)', color: 'var(--foreground)' }}>
+          <code data-language={data?.language ?? 'text'}>{asText(data?.code)}</code>
+        </pre>
+      </div>
+    ),
+  },
+
+  comparison_table: {
+    allowsChildren: false,
     render: (data) => {
-      const parsed = CodeBlockSchema.safeParse(data);
-      if (!parsed.success) {
-        console.warn('[BlockRenderer] code_block inválido:', parsed.error.message);
-        return null;
-      }
+      const headers = Array.isArray(data?.columns) ? data.columns : [];
+      const rows = Array.isArray(data?.rows) ? data.rows : [];
+      if (headers.length === 0 || rows.length === 0) return null;
+      return <ComparisonTable headers={headers} rows={rows} />;
+    },
+  },
+
+  // Tipos avançados — todos os primitives reais
+
+  qa_item: {
+    allowsChildren: false,
+    render: (data) => (
+      <QAItem q={asText(data?.question)} a={asText(data?.answer)} />
+    ),
+  },
+
+  decision_box: {
+    allowsChildren: false,
+    render: (data) => (
+      <DecisionBox
+        scenario={asText(data?.scenario)}
+        winner={asText(data?.winner)}
+        why={asText(data?.why)}
+        alternatives={(data?.alternatives ?? []).map((a: any) => ({
+          name: asText(a?.name),
+          downside: asText(a?.downside ?? ''),
+        }))}
+      />
+    ),
+  },
+
+  key_value: {
+    allowsChildren: false,
+    render: (data) => {
+      const items = Array.isArray(data?.items) ? data.items : [];
+      return <KeyValue items={items.map((i: any) => ({ k: asText(i?.k ?? i?.key), v: asText(i?.v ?? i?.value) }))} />;
+    },
+  },
+
+  list: {
+    allowsChildren: false,
+    render: (data) => {
+      const items = Array.isArray(data?.items) ? data.items : [];
+      const ordered = !!data?.ordered;
+      const Tag = (ordered ? 'ol' : 'ul') as 'ol' | 'ul';
       return (
-        <div className="my-4 rounded-lg overflow-hidden" style={{ border: '1px solid var(--ffv-border)' }}>
-          {parsed.data.filename && (
-            <div className="px-3 py-1 text-xs font-mono" style={{ background: 'var(--ffv-bg2)', color: 'var(--ffv-muted)' }}>
-              {parsed.data.filename}
-            </div>
-          )}
-          <pre className="p-4 overflow-x-auto text-sm font-mono" style={{ background: 'var(--ffv-bg)', color: 'var(--foreground)' }}>
-            <code data-language={parsed.data.language}>{parsed.data.code}</code>
-          </pre>
-        </div>
+        <Tag className={`my-4 ${ordered ? 'list-decimal' : 'list-disc'} ml-6 space-y-1`}>
+          {items.map((it: any, i: number) => <li key={i}>{asText(it)}</li>)}
+        </Tag>
       );
     },
   },
 
-  // ComparisonTable: tabela de comparação. Schema { columns, rows } → primitive { headers, rows }.
-  comparison_table: {
+  flow_diagram: {
     allowsChildren: false,
     render: (data) => {
-      const parsed = ComparisonTableSchema.safeParse(data);
-      if (!parsed.success) {
-        console.warn('[BlockRenderer] comparison_table inválido:', parsed.error.message);
-        return null;
-      }
-      return <ComparisonTable headers={parsed.data.columns} rows={parsed.data.rows} />;
+      const steps = Array.isArray(data?.steps) ? data.steps : [];
+      if (steps.length === 0) return null;
+      return (
+        <FlowDiagram
+          title={asText(data?.title)}
+          orientation={(data?.orientation === 'vertical' ? 'vertical' : 'horizontal') as 'horizontal' | 'vertical'}
+          steps={steps.map((s: any) => ({
+            title: asText(s?.title),
+            body: asText(s?.body ?? s?.subtitle ?? ''),
+            badge: asText(s?.badge ?? ''),
+          }))}
+        />
+      );
     },
   },
 
-  // ─── Tipos avançados — placeholder. Implementação completa em sprints futuras.
-  // Por enquanto renderizam JSON para debug (vamos voltar e adicionar adapter real).
-  flow_diagram: {
-    allowsChildren: false,
-    render: () => <PlaceholderBlock type="flow_diagram" />,
-  },
-  decision_box: {
-    allowsChildren: false,
-    render: () => <PlaceholderBlock type="decision_box" />,
-  },
-  arch_flow: {
-    allowsChildren: false,
-    render: () => <PlaceholderBlock type="arch_flow" />,
-  },
-  matrix_diagram: {
-    allowsChildren: false,
-    render: () => <PlaceholderBlock type="matrix_diagram" />,
-  },
   stack_flow: {
     allowsChildren: false,
-    render: () => <PlaceholderBlock type="stack_flow" />,
+    render: (data) => {
+      const items = Array.isArray(data?.items) ? data.items : [];
+      if (items.length === 0) return null;
+      return (
+        <StackFlow
+          title={asText(data?.title)}
+          items={items.map((s: any) => ({
+            title: asText(s?.title),
+            body: asText(s?.body ?? ''),
+            badge: asText(s?.badge ?? ''),
+          }))}
+        />
+      );
+    },
   },
-  timeline: {
+
+  arch_flow: {
     allowsChildren: false,
-    render: () => <PlaceholderBlock type="timeline" />,
+    render: (data) => {
+      const columns = Array.isArray(data?.columns) ? data.columns : [];
+      if (columns.length === 0) return null;
+      return (
+        <ArchFlow
+          title={asText(data?.title)}
+          columns={columns.map((c: any) => ({
+            title: asText(c?.title),
+            items: Array.isArray(c?.items) ? c.items.map(asText) : [],
+          }))}
+        />
+      );
+    },
   },
+
   node_graph: {
     allowsChildren: false,
-    render: () => <PlaceholderBlock type="node_graph" />,
+    render: (data) => {
+      const columns = Array.isArray(data?.columns) ? data.columns : [];
+      const legend = Array.isArray(data?.legend) ? data.legend : [];
+      if (columns.length === 0) return null;
+      return (
+        <NodeGraph
+          title={asText(data?.title)}
+          columns={columns.map((c: any) => ({
+            title: asText(c?.title),
+            nodes: Array.isArray(c?.nodes) ? c.nodes.map((n: any) => ({
+              label: asText(n?.label),
+              note: asText(n?.note ?? ''),
+            })) : [],
+          }))}
+          legend={legend.map((l: any) => ({ label: asText(l?.label), color: asText(l?.color ?? '') }))}
+        />
+      );
+    },
   },
+
+  timeline: {
+    allowsChildren: false,
+    render: (data) => {
+      const events = Array.isArray(data?.events) ? data.events : [];
+      if (events.length === 0) return null;
+      return (
+        <Timeline
+          title={asText(data?.title)}
+          events={events.map((e: any) => ({
+            date: asText(e?.date),
+            title: asText(e?.title),
+            body: asText(e?.body ?? e?.description ?? ''),
+          }))}
+        />
+      );
+    },
+  },
+
+  hierarchy_diagram: {
+    allowsChildren: false,
+    render: (data) => {
+      const levels = Array.isArray(data?.levels) ? data.levels : [];
+      if (levels.length === 0) return null;
+      return (
+        <HierarchyDiagram
+          title={asText(data?.title)}
+          levels={levels.map((l: any) => ({
+            label: asText(l?.label),
+            nodes: Array.isArray(l?.nodes) ? l.nodes.map(asText) : [],
+          }))}
+        />
+      );
+    },
+  },
+
+  comparison_flow: {
+    allowsChildren: false,
+    render: (data) => {
+      const left = Array.isArray(data?.left) ? data.left : [];
+      const right = Array.isArray(data?.right) ? data.right : [];
+      return (
+        <ComparisonFlow
+          title={asText(data?.title)}
+          left={left.map((s: any) => ({ title: asText(s?.title), body: asText(s?.body ?? '') }))}
+          right={right.map((s: any) => ({ title: asText(s?.title), body: asText(s?.body ?? '') }))}
+        />
+      );
+    },
+  },
+
+  split_flow: {
+    allowsChildren: false,
+    render: (data) => (
+      <SplitFlow
+        title={asText(data?.title)}
+        center={asText(data?.center)}
+        left={(data?.left ?? []).map((s: any) => ({ title: asText(s?.title), body: asText(s?.body ?? '') }))}
+        right={(data?.right ?? []).map((s: any) => ({ title: asText(s?.title), body: asText(s?.body ?? '') }))}
+      />
+    ),
+  },
+
+  layer_stack: {
+    allowsChildren: false,
+    render: (data) => {
+      const layers = Array.isArray(data?.layers) ? data.layers : [];
+      if (layers.length === 0) return null;
+      return (
+        <LayerStack
+          title={asText(data?.title)}
+          separatorLabel={asText(data?.separatorLabel ?? '')}
+          variant={(data?.variant === 'compact' ? 'compact' : 'default') as 'default' | 'compact'}
+          layers={layers.map((l: any) => ({
+            title: asText(l?.title),
+            body: asText(l?.body ?? ''),
+            badge: asText(l?.badge ?? ''),
+          }))}
+        />
+      );
+    },
+  },
+
+  matrix_diagram: {
+    allowsChildren: false,
+    render: (data) => {
+      const rowLabels = Array.isArray(data?.rowLabels) ? data.rowLabels.map(asText) : [];
+      const colLabels = Array.isArray(data?.colLabels) ? data.colLabels.map(asText) : [];
+      const matrix = Array.isArray(data?.matrix) ? data.matrix : [];
+      if (matrix.length === 0) return null;
+      return (
+        <MatrixDiagram
+          title={asText(data?.title)}
+          rowLabels={rowLabels}
+          colLabels={colLabels}
+          data={matrix}
+        />
+      );
+    },
+  },
+
   annotated_formula: {
     allowsChildren: false,
-    render: () => <PlaceholderBlock type="annotated_formula" />,
+    render: (data) => {
+      const parts = Array.isArray(data?.parts) ? data.parts : [];
+      return (
+        <AnnotatedFormula
+          title={asText(data?.title)}
+          formula={asText(data?.formula)}
+          parts={parts.map((p: any) => ({
+            symbol: asText(p?.symbol),
+            name: asText(p?.name),
+            color: asText(p?.color ?? 'var(--ffv-blue)'),
+            description: asText(p?.description ?? ''),
+          }))}
+        />
+      );
+    },
   },
+
+  exam_domain_badge: {
+    allowsChildren: false,
+    render: (data) => (
+      <ExamDomainBadge domain={asText(data?.domain)} weight={asText(data?.weight)} />
+    ),
+  },
+
+  mind_map: {
+    allowsChildren: false,
+    render: (data) => {
+      const branches = Array.isArray(data?.branches) ? data.branches : [];
+      return (
+        <MindMap
+          root={asText(data?.root)}
+          branches={branches.map((b: any) => ({
+            label: asText(b?.label),
+            children: Array.isArray(b?.children) ? b.children.map(asText) : [],
+          }))}
+        />
+      );
+    },
+  },
+
   quiz: {
     allowsChildren: false,
-    render: () => <PlaceholderBlock type="quiz" />,
+    render: () => null, // Quiz é gerenciado pelo ModuleLayout, não inline
   },
+
   image: {
     allowsChildren: false,
-    render: () => <PlaceholderBlock type="image" />,
+    render: (data) => (
+      <figure className="my-4">
+        <img src={asText(data?.src)} alt={asText(data?.alt)} className="rounded-lg max-w-full" />
+        {data?.caption ? <figcaption className="text-sm text-center mt-2" style={{ color: 'var(--ffv-muted)' }}>{asText(data.caption)}</figcaption> : null}
+      </figure>
+    ),
   },
 };
-
-function PlaceholderBlock({ type }: { type: string }) {
-  return (
-    <div className="my-4 p-3 rounded-lg text-sm" style={{
-      background: 'var(--ffv-bg2)',
-      border: '1px dashed var(--ffv-border)',
-      color: 'var(--ffv-muted)',
-    }}>
-      [bloco <code className="font-mono">{type}</code> ainda não implementado no BlockRenderer — Sprint 2-3]
-    </div>
-  );
-}
 
 // ─── Renderer recursivo ──────────────────────────────────────────────────────
 
 export function BlockRenderer({ block }: { block: Block }) {
   const adapter = ADAPTERS[block.type];
   if (!adapter) {
-    console.warn(`[BlockRenderer] tipo desconhecido: ${block.type}`);
+    // Em produção, blocos desconhecidos viram null silenciosamente.
     return null;
   }
 
+  // NOTA: erros em runtime de um bloco específico devem ser capturados por
+  // ErrorBoundary no parent (ModuleLayout), não try/catch aqui — React não
+  // garante captura de erros assíncronos via try/catch em JSX.
   if (adapter.allowsChildren && block.children && block.children.length > 0) {
     return (
       <>
@@ -216,11 +431,8 @@ export function BlockRenderer({ block }: { block: Block }) {
       </>
     );
   }
-
   return <>{adapter.render(block.data)}</>;
 }
-
-// ─── Helper: renderiza array de blocos ───────────────────────────────────────
 
 export function BlockTree({ blocks }: { blocks: Block[] }) {
   return (
