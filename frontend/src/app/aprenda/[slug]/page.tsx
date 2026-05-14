@@ -26,12 +26,32 @@ interface PageProps {
   params: Promise<{ slug: string }>;
 }
 
+import { CURRICULUM } from '@/lib/curriculum';
+
+/**
+ * Slugs de fallback — extraídos do CURRICULUM constant local.
+ *
+ * Por que: em CI (`npm run build` sem NEXT_PUBLIC_API_BASE_URL setado),
+ * o backend está fora. Sem fallback, generateStaticParams retornaria []
+ * e Next.js 16 com `output: export` rejeita a build inteira.
+ *
+ * Os 765+ slugs estão na fonte de verdade `src/lib/curriculum.ts`,
+ * que continua sendo o índice de metadados do frontend. O conteúdo
+ * vem do backend em runtime via fetchArticleWithBlocks.
+ */
+function fallbackSlugs(): Array<{ slug: string }> {
+  return CURRICULUM.flatMap(t => t.modules.map(m => ({ slug: m.slug })));
+}
+
 // Pré-gera 1 HTML por slug publicado no banco.
 // Backend tem cap de 100/página — paginamos até pegar todos.
 export async function generateStaticParams() {
   const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || '';
   if (!apiBase) {
-    return [];
+    // CI / dev sem backend: usa CURRICULUM local como fonte de slugs.
+    // O conteúdo de cada página vem do backend em runtime, mas a LISTA
+    // de slugs estática é suficiente pra Next.js gerar HTML placeholder.
+    return fallbackSlugs();
   }
   try {
     const all: Array<{ slug: string }> = [];
@@ -50,11 +70,15 @@ export async function generateStaticParams() {
       if (items.length < pageSize) break;
       offset += pageSize;
     }
+    if (all.length === 0) {
+      // Backend respondeu vazio — usa fallback pra não quebrar build.
+      return fallbackSlugs();
+    }
     console.log(`[aprenda/generateStaticParams] ${all.length} slugs do backend`);
     return all.map(item => ({ slug: item.slug }));
   } catch (err) {
-    console.warn('[aprenda/generateStaticParams] erro:', err);
-    return [];
+    console.warn('[aprenda/generateStaticParams] erro, usando fallback:', err);
+    return fallbackSlugs();
   }
 }
 
@@ -77,6 +101,20 @@ export default async function ModulePage({ params }: PageProps) {
   const article = await fetchArticleWithBlocks(slug);
 
   if (!article) {
+    // Sem backend disponível no build (CI) ou slug fora do índice: renderiza
+    // placeholder. Em produção com backend ativo, qualquer slug válido vem do
+    // banco; este caminho só dispara em build estático sem API_BASE_URL.
+    const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || '';
+    if (!apiBase) {
+      return (
+        <main className="max-w-3xl mx-auto px-6 py-12">
+          <h1 className="text-3xl font-bold mb-3">Módulo: {slug}</h1>
+          <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
+            Conteúdo será carregado do backend quando disponível.
+          </p>
+        </main>
+      );
+    }
     notFound();
   }
 

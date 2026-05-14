@@ -39,15 +39,21 @@ async function fetchCheatsheet(slug: string): Promise<CheatsheetFull | null> {
   }
 }
 
+// Fallback usado quando backend não está disponível (CI sem API_BASE_URL,
+// ou falha de rede). Os 5 slugs originais — Next.js precisa de >0 itens
+// para `output: export` aceitar a rota.
+const FALLBACK_SLUGS = ['postgres', 'git', 'kubernetes', 'rust', 'system-design'];
+
 async function fetchAllSlugs(): Promise<string[]> {
-  if (!API_BASE) return ['postgres', 'git', 'kubernetes', 'rust', 'system-design'];
+  if (!API_BASE) return FALLBACK_SLUGS;
   try {
     const res = await fetch(`${API_BASE}/api/v1/cheatsheets`, { cache: 'no-store' });
-    if (!res.ok) return [];
+    if (!res.ok) return FALLBACK_SLUGS;
     const body = (await res.json()) as { data?: { slug: string }[] };
-    return (body.data ?? []).map(it => it.slug);
+    const slugs = (body.data ?? []).map(it => it.slug);
+    return slugs.length > 0 ? slugs : FALLBACK_SLUGS;
   } catch {
-    return [];
+    return FALLBACK_SLUGS;
   }
 }
 
@@ -71,7 +77,21 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 export default async function Page({ params }: PageProps) {
   const { slug } = await params;
   const it = await fetchCheatsheet(slug);
-  if (!it) notFound();
+
+  if (!it) {
+    // Build sem backend (CI) renderiza placeholder pra não quebrar SSG.
+    if (!API_BASE) {
+      return (
+        <article className="max-w-3xl mx-auto px-6 py-10">
+          <h1 className="text-3xl font-bold mb-3">Cheatsheet: {slug}</h1>
+          <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
+            Conteúdo será carregado do backend quando disponível.
+          </p>
+        </article>
+      );
+    }
+    notFound();
+  }
 
   const html = renderMarkdown(it.bodyMd);
 
