@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { loadNewsFeed, sortByDateDesc } from '@/lib/news';
+import { loadNewsFeedAsync, sortByDateDesc } from '@/lib/news';
 import { NewsClient } from '@/components/news/NewsClient';
 
 export const metadata: Metadata = {
@@ -18,8 +18,8 @@ export const metadata: Metadata = {
   },
 };
 
-export default function NewsPage() {
-  const feed = loadNewsFeed();
+export default async function NewsPage() {
+  const feed = await loadNewsFeedAsync();
   const items = sortByDateDesc(feed.items);
   const hotCount = items.filter(i => i.hot).length;
 

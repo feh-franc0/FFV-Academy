@@ -263,6 +263,9 @@ func run() error {
 	commentsH := handlers.NewCommentsHandler(&pgxCommentsRepo{pool: pool})
 	trendingH := handlers.NewTrendingHandler(&pgxTrendingRepo{pool: pool})
 	trailLbH := handlers.NewTrailLeaderboardHandler(&pgxTrailLeaderboardRepo{pool: pool})
+	newsH := handlers.NewNewsHandler(&pgxNewsRepo{pool: pool})
+	cheatH := handlers.NewCheatsheetsHandler(&pgxCheatsheetsRepo{pool: pool})
+	playH := handlers.NewPlaylistsHandler(&pgxPlaylistsRepo{pool: pool})
 
 	// ─── Observabilidade: Prometheus ────────────────────────────────────────────
 	metricsReg := middleware.NewMetricsRegistry()
@@ -293,6 +296,9 @@ func run() error {
 		Comments:       commentsH,
 		Trending:       trendingH,
 		TrailLeaderboard: trailLbH,
+		News:             newsH,
+		Cheatsheets:      cheatH,
+		Playlists:        playH,
 		Curriculum:     curriculumH,
 		Features:       featuresH,
 		Metrics:        metricsH,

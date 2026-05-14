@@ -1,0 +1,101 @@
+/**
+ * /cheatsheets/[slug] — render dinâmico de cheatsheet do backend.
+ *
+ * Substitui as 5 page.tsx hardcoded (postgres, git, kubernetes, rust,
+ * system-design). Conteúdo agora vem de GET /api/v1/cheatsheets/{slug}
+ * e é renderizado via renderMarkdown — sem dependência externa de marked.
+ */
+import type { Metadata } from 'next';
+import { notFound } from 'next/navigation';
+import Link from 'next/link';
+import { renderMarkdown } from '@/lib/markdown';
+
+interface PageProps {
+  params: Promise<{ slug: string }>;
+}
+
+interface CheatsheetFull {
+  slug: string;
+  title: string;
+  subtitle?: string;
+  description?: string;
+  accent: string;
+  emoji?: string;
+  bodyMd: string;
+}
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
+
+async function fetchCheatsheet(slug: string): Promise<CheatsheetFull | null> {
+  if (!API_BASE) return null;
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/cheatsheets/${encodeURIComponent(slug)}`, {
+      next: { revalidate: 600 },
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as CheatsheetFull;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchAllSlugs(): Promise<string[]> {
+  if (!API_BASE) return ['postgres', 'git', 'kubernetes', 'rust', 'system-design'];
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/cheatsheets`, { cache: 'no-store' });
+    if (!res.ok) return [];
+    const body = (await res.json()) as { data?: { slug: string }[] };
+    return (body.data ?? []).map(it => it.slug);
+  } catch {
+    return [];
+  }
+}
+
+export async function generateStaticParams() {
+  const slugs = await fetchAllSlugs();
+  return slugs.map(slug => ({ slug }));
+}
+
+export const dynamicParams = false;
+
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  const { slug } = await params;
+  const it = await fetchCheatsheet(slug);
+  if (!it) return { title: 'Cheatsheet — FFV Academy' };
+  return {
+    title: `${it.title} — FFV Academy`,
+    description: it.description ?? it.subtitle ?? `Cheatsheet ${it.title}`,
+  };
+}
+
+export default async function Page({ params }: PageProps) {
+  const { slug } = await params;
+  const it = await fetchCheatsheet(slug);
+  if (!it) notFound();
+
+  const html = renderMarkdown(it.bodyMd);
+
+  return (
+    <article className="max-w-3xl mx-auto px-6 py-10">
+      <nav className="text-xs mb-6" style={{ color: 'var(--ffv-muted)' }}>
+        <Link href="/cheatsheets" style={{ color: 'var(--ffv-muted)' }}>Cheatsheets</Link>
+        <span className="mx-1">/</span>
+        <span style={{ color: 'var(--foreground)' }}>{it.title}</span>
+      </nav>
+      <header className="mb-8 pb-6" style={{ borderBottom: `1px solid ${it.accent}40` }}>
+        <div className="flex items-center gap-3 mb-2">
+          {it.emoji && <span className="text-3xl">{it.emoji}</span>}
+          <h1 className="text-3xl font-bold" style={{ color: it.accent }}>{it.title}</h1>
+        </div>
+        {it.subtitle && (
+          <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>{it.subtitle}</p>
+        )}
+      </header>
+      <div
+        className="ffv-md-content prose-ffv text-sm leading-relaxed"
+        // eslint-disable-next-line react/no-danger
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    </article>
+  );
+}

@@ -44,6 +44,9 @@ type RouterConfig struct {
 	Comments    *handlers.CommentsHandler       // opcional — comentários por artigo/trilha/bloco
 	Trending    *handlers.TrendingHandler       // opcional — top módulos por views recentes
 	TrailLeaderboard *handlers.TrailLeaderboardHandler // opcional — top users por trilha
+	News        *handlers.NewsHandler         // opcional — notícias curadas
+	Cheatsheets *handlers.CheatsheetsHandler  // opcional — referências rápidas em markdown
+	Playlists   *handlers.PlaylistsHandler    // opcional — agrupamentos curados de módulos
 	Curriculum  *handlers.CurriculumHandler     // opcional — nil desabilita rotas de currículo
 	Features    *handlers.FeaturesHandler       // opcional — expõe estado das feature flags
 	Metrics     *handlers.MetricsHandler        // opcional — se nil, /metrics não é registrado
@@ -139,6 +142,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/api/v1/leaderboard/trail/{trailId}", cfg.TrailLeaderboard.Get)
 	}
 
+	// Os endpoints públicos de news/cheatsheets/playlists ficam após a
+	// declaração de `contentLimit` mais abaixo nesta função — Go é fluent
+	// sobre escopo léxico mas precisa que a variável esteja declarada antes
+	// do uso. Veja o bloco logo após `viewLimit`.
+
 	// Body size limits por grupo de rota.
 	// Aplicar antes do rate-limit para rejeitar payloads gigantes antes de qualquer processamento.
 	// Auth endpoints: 10KB — email + token cabem em < 1KB; limit generoso para evitar falsos positivos.
@@ -158,6 +166,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// events/view é público — limite generoso pra usuários reais (1-2 pings/min
 	// por slug) e estrangular bots de scraping abusivo.
 	viewLimit := middleware.NewRateLimiter(cfg.Redis, 240, time.Minute, "rl:view")
+	// Listagens públicas (news, cheatsheets, playlists) — cache de 5-10min no
+	// header já protege, mas rate-limit fecha vetor de scraping massivo.
+	contentLimit := middleware.NewRateLimiter(cfg.Redis, 300, time.Minute, "rl:content")
 
 	// Tracking de acesso a módulo — público, fire-and-forget. Body limit
 	// pequeno + rate limit por IP previnem abuso.
@@ -165,6 +176,20 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.With(viewLimit.Middleware()).
 			With(middleware.BodyLimit(2*1024)).
 			Post("/api/v1/events/view", cfg.ModuleView.Record)
+	}
+
+	// News, cheatsheets, playlists — leitura pública com rate-limit.
+	if cfg.News != nil {
+		r.With(contentLimit.Middleware()).Get("/api/v1/news", cfg.News.List)
+		r.With(contentLimit.Middleware()).Get("/api/v1/news/{slug}", cfg.News.Get)
+	}
+	if cfg.Cheatsheets != nil {
+		r.With(contentLimit.Middleware()).Get("/api/v1/cheatsheets", cfg.Cheatsheets.List)
+		r.With(contentLimit.Middleware()).Get("/api/v1/cheatsheets/{slug}", cfg.Cheatsheets.Get)
+	}
+	if cfg.Playlists != nil {
+		r.With(contentLimit.Middleware()).Get("/api/v1/playlists", cfg.Playlists.List)
+		r.With(contentLimit.Middleware()).Get("/api/v1/playlists/{slug}", cfg.Playlists.Get)
 	}
 
 	// Verificação pública de certificado com rate-limit — previne enumeração de hashes.
@@ -257,6 +282,23 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			// Moderação de comentários.
 			if cfg.Comments != nil {
 				r.Post("/api/v1/admin/comments/{id}/hide", cfg.Comments.Hide)
+			}
+
+			// CRUD admin: news, cheatsheets, playlists.
+			if cfg.News != nil {
+				r.With(middleware.BodyLimit(64*1024)).Post("/api/v1/admin/news", cfg.News.Create)
+				r.With(middleware.BodyLimit(64*1024)).Patch("/api/v1/admin/news/{slug}", cfg.News.Update)
+				r.Delete("/api/v1/admin/news/{slug}", cfg.News.Delete)
+			}
+			if cfg.Cheatsheets != nil {
+				r.With(middleware.BodyLimit(256*1024)).Post("/api/v1/admin/cheatsheets", cfg.Cheatsheets.Create)
+				r.With(middleware.BodyLimit(256*1024)).Patch("/api/v1/admin/cheatsheets/{slug}", cfg.Cheatsheets.Update)
+				r.Delete("/api/v1/admin/cheatsheets/{slug}", cfg.Cheatsheets.Delete)
+			}
+			if cfg.Playlists != nil {
+				r.With(middleware.BodyLimit(32*1024)).Post("/api/v1/admin/playlists", cfg.Playlists.Create)
+				r.With(middleware.BodyLimit(32*1024)).Patch("/api/v1/admin/playlists/{slug}", cfg.Playlists.Update)
+				r.Delete("/api/v1/admin/playlists/{slug}", cfg.Playlists.Delete)
 			}
 		})
 	})

@@ -1,13 +1,54 @@
 'use client';
 
 import Link from 'next/link';
-import { useMemo } from 'react';
-import { PLAYLISTS, resolvePlaylist } from '@/lib/playlists';
+import { useEffect, useMemo, useState } from 'react';
+import { PLAYLISTS, resolvePlaylist, type Playlist } from '@/lib/playlists';
 import { useGameState } from '@/hooks/useGameState';
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || '';
+
+interface BackendPlaylist {
+  slug: string;
+  title: string;
+  subtitle?: string;
+  audience?: string;
+  color: string;
+  emoji?: string;
+  moduleSlugs: string[];
+}
+
+function backendToFrontend(b: BackendPlaylist): Playlist {
+  return {
+    id: b.slug,
+    title: b.title,
+    subtitle: b.subtitle ?? '',
+    audience: b.audience ?? '',
+    color: b.color,
+    emoji: b.emoji ?? '🎯',
+    moduleSlugs: b.moduleSlugs ?? [],
+  };
+}
 
 export function PlaylistsClient() {
   const { state } = useGameState();
   const completed = useMemo(() => new Set(state?.completedModules ?? []), [state]);
+
+  // Backend é fonte de verdade; PLAYLISTS local é fallback offline / build.
+  const [playlists, setPlaylists] = useState<Playlist[]>(PLAYLISTS);
+  useEffect(() => {
+    if (!API_BASE) return;
+    let cancelled = false;
+    fetch(`${API_BASE}/api/v1/playlists`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(json => {
+        if (cancelled || !json?.data?.length) return;
+        setPlaylists((json.data as BackendPlaylist[]).map(backendToFrontend));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <div className="max-w-4xl mx-auto px-6 py-12">
@@ -24,7 +65,7 @@ export function PlaylistsClient() {
       </header>
 
       <div className="flex flex-col gap-6">
-        {PLAYLISTS.map(pl => {
+        {playlists.map(pl => {
           const mods = resolvePlaylist(pl);
           const done = mods.filter(m => completed.has(m.slug)).length;
           const pct = mods.length > 0 ? Math.round((done / mods.length) * 100) : 0;

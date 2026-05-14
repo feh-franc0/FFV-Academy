@@ -94,11 +94,66 @@ export const NewsFeedSchema = z.object({
 export type NewsFeed = z.infer<typeof NewsFeedSchema>;
 
 /**
- * Carrega o feed validado. Lança em dev se o JSON estiver corrompido —
- * preferido a silenciar: um JSON quebrado significa build quebrada.
+ * Carrega o feed validado a partir do JSON local. Mantido como fallback
+ * offline quando o backend CMS não está disponível em build/dev.
  */
 export function loadNewsFeed(): NewsFeed {
   return NewsFeedSchema.parse(newsData);
+}
+
+interface BackendNewsItem {
+  slug: string;
+  title: string;
+  summary: string;
+  source: string;
+  sourceUrl: string;
+  imageUrl?: string;
+  category: string;
+  hot?: boolean;
+  tags?: string[];
+  publishedAt: string;
+}
+
+function backendToFrontend(b: BackendNewsItem): NewsItem {
+  // Backend usa "slug"; o tipo legacy frontend chama de "id".
+  return {
+    id: b.slug,
+    title: b.title,
+    summary: b.summary,
+    source: b.source,
+    sourceUrl: b.sourceUrl,
+    imageUrl: b.imageUrl,
+    category: (b.category as NewsCategory) ?? 'launch',
+    hot: !!b.hot,
+    tags: b.tags ?? [],
+    publishedAt: b.publishedAt,
+  };
+}
+
+/**
+ * Versão async — busca do backend CMS. Usada por Server Components em build
+ * time. Sem NEXT_PUBLIC_API_BASE_URL ou em falha de rede, cai pro JSON local.
+ */
+export async function loadNewsFeedAsync(): Promise<NewsFeed> {
+  const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
+  if (!apiBase) {
+    return loadNewsFeed();
+  }
+  try {
+    const res = await fetch(`${apiBase}/api/v1/news?limit=200`, {
+      next: { revalidate: 300 },
+    });
+    if (!res.ok) return loadNewsFeed();
+    const body = (await res.json()) as { data?: BackendNewsItem[] };
+    const items = (body.data ?? []).map(backendToFrontend);
+    if (items.length === 0) return loadNewsFeed();
+    return {
+      updatedAt: items[0].publishedAt,
+      items,
+    };
+  } catch {
+    return loadNewsFeed();
+  }
 }
 
 export function sortByDateDesc(items: NewsItem[]): NewsItem[] {
