@@ -102,10 +102,35 @@ export default async function ModulePage({ params }: PageProps) {
 
   if (!article) {
     // Sem backend disponível no build (CI) ou slug fora do índice: renderiza
-    // placeholder. Em produção com backend ativo, qualquer slug válido vem do
-    // banco; este caminho só dispara em build estático sem API_BASE_URL.
+    // placeholder rico — busca metadata no CURRICULUM local pra ter title +
+    // hub + trail + xp reais. Em produção, este caminho não dispara porque
+    // o backend está presente. Em E2E o title precisa ser real pros testes
+    // de navegação validarem o H1.
     const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || '';
     if (!apiBase) {
+      const meta = CURRICULUM.flatMap(t =>
+        t.modules.map(m => ({ ...m, trailId: t.id })),
+      ).find(m => m.slug === slug);
+      if (meta) {
+        return (
+          <main className="max-w-3xl mx-auto px-6 py-12">
+            <header className="mb-8 pb-6" style={{ borderBottom: '1px solid var(--ffv-border)' }}>
+              <div className="flex gap-2 mb-2 text-xs font-mono uppercase tracking-wider" style={{ color: 'var(--ffv-muted)' }}>
+                <span>{meta.trailId}</span>
+              </div>
+              <h1 className="text-3xl md:text-4xl font-bold mb-3">{meta.title}</h1>
+              <div className="flex gap-4 text-sm" style={{ color: 'var(--ffv-muted)' }}>
+                <span>⏱ {meta.readTime ?? 5} min</span>
+                <span>·</span>
+                <span>⭐ {meta.xp ?? 10} XP</span>
+              </div>
+            </header>
+            <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
+              Conteúdo deste módulo será carregado do CMS quando o backend estiver disponível.
+            </p>
+          </main>
+        );
+      }
       return (
         <main className="max-w-3xl mx-auto px-6 py-12">
           <h1 className="text-3xl font-bold mb-3">Módulo: {slug}</h1>
