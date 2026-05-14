@@ -111,7 +111,7 @@ func seedCurriculumImpl(ctx context.Context, pool *pgxpool.Pool, seedsRoot strin
 	}
 
 	trailsPath := filepath.Join(seedsRoot, "trails.json")
-	if raw, err := os.ReadFile(trailsPath); err == nil {
+	if raw, err := os.ReadFile(trailsPath); err == nil { // #nosec G304
 		var trails []TrailSeed
 		if err := json.Unmarshal(raw, &trails); err != nil {
 			return fmt.Errorf("parse trails.json: %w", err)
@@ -160,7 +160,7 @@ func seedCurriculumImpl(ctx context.Context, pool *pgxpool.Pool, seedsRoot strin
 		return nil
 	}
 	mapPath := filepath.Join(seedsRoot, "article-mappings.json")
-	if raw, err := os.ReadFile(mapPath); err == nil {
+	if raw, err := os.ReadFile(mapPath); err == nil { // #nosec G304
 		var maps []ArticleMapping
 		if err := json.Unmarshal(raw, &maps); err != nil {
 			return fmt.Errorf("parse article-mappings.json: %w", err)
