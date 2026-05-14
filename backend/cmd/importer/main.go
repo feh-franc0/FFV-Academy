@@ -1,9 +1,9 @@
 // Comando importer: carrega seeds JSON (gerados pelo parser TSX) e popula o banco.
 //
 // Lê scripts/seeds/articles/*.json, para cada arquivo:
-//   1. UPSERT em curriculum_articles
-//   2. DELETE blocks antigos do slug
-//   3. INSERT blocks novos em transação
+//  1. UPSERT em curriculum_articles
+//  2. DELETE blocks antigos do slug
+//  3. INSERT blocks novos em transação
 //
 // Idempotente: pode rodar quantas vezes quiser.
 package main
@@ -125,7 +125,10 @@ func main() {
 		path := filepath.Join(*seedsDir, name)
 		slug := strings.TrimSuffix(name, ".json")
 
-		raw, err := os.ReadFile(path)
+		// path é montado a partir de filepath.Join(seedsDir, name) onde name
+		// vem do diretório controlado por flag — esse importer roda só em
+		// build/dev/CI, nunca em runtime exposto. G304 aqui é falso positivo.
+		raw, err := os.ReadFile(path) // #nosec G304
 		if err != nil {
 			log.Printf("[%d/%d] %s: read error: %v", i+1, len(jsonFiles), slug, err)
 			stats.Failed++

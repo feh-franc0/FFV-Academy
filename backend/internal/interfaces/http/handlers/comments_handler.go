@@ -31,17 +31,17 @@ type CommentsRepository interface {
 
 // Comment é a projeção pública de um comentário.
 type Comment struct {
-	ID           string    `json:"id"`
-	UserID       string    `json:"userId"`
-	AuthorName   string    `json:"authorName"`
-	TargetType   string    `json:"targetType"`
-	TargetID     string    `json:"targetId"`
-	ParentID     string    `json:"parentId,omitempty"`
-	Content      string    `json:"content"`
-	Status       string    `json:"status"`
-	Edited       bool      `json:"edited"`
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
+	ID         string    `json:"id"`
+	UserID     string    `json:"userId"`
+	AuthorName string    `json:"authorName"`
+	TargetType string    `json:"targetType"`
+	TargetID   string    `json:"targetId"`
+	ParentID   string    `json:"parentId,omitempty"`
+	Content    string    `json:"content"`
+	Status     string    `json:"status"`
+	Edited     bool      `json:"edited"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 // CommentCreateInput — entrada normalizada após validação do handler.

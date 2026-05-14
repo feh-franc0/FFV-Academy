@@ -22,20 +22,20 @@ type AdminStatsRepository interface {
 
 // AdminStats é o snapshot agregado retornado por /api/v1/admin/stats.
 type AdminStats struct {
-	TotalUsers       int64 `json:"totalUsers"`
-	UsersLast7Days   int64 `json:"usersLast7Days"`
-	UsersLast30Days  int64 `json:"usersLast30Days"`
-	ActiveDaily      int64 `json:"activeDaily"`
-	ActiveWeekly     int64 `json:"activeWeekly"`
-	ActiveMonthly    int64 `json:"activeMonthly"`
-	TotalXPAwarded   int64 `json:"totalXpAwarded"`
-	TotalAttempts    int64 `json:"totalAttempts"`
-	TotalCertifs     int64 `json:"totalCertificates"`
-	TotalArticles    int64 `json:"totalArticles"`
-	TotalBlocks      int64 `json:"totalBlocks"`
-	ViewsLast7Days   int64 `json:"viewsLast7Days"`
-	ViewsLast30Days  int64 `json:"viewsLast30Days"`
-	GeneratedAt      time.Time `json:"generatedAt"`
+	TotalUsers      int64     `json:"totalUsers"`
+	UsersLast7Days  int64     `json:"usersLast7Days"`
+	UsersLast30Days int64     `json:"usersLast30Days"`
+	ActiveDaily     int64     `json:"activeDaily"`
+	ActiveWeekly    int64     `json:"activeWeekly"`
+	ActiveMonthly   int64     `json:"activeMonthly"`
+	TotalXPAwarded  int64     `json:"totalXpAwarded"`
+	TotalAttempts   int64     `json:"totalAttempts"`
+	TotalCertifs    int64     `json:"totalCertificates"`
+	TotalArticles   int64     `json:"totalArticles"`
+	TotalBlocks     int64     `json:"totalBlocks"`
+	ViewsLast7Days  int64     `json:"viewsLast7Days"`
+	ViewsLast30Days int64     `json:"viewsLast30Days"`
+	GeneratedAt     time.Time `json:"generatedAt"`
 }
 
 // TrailViewStat — entrada do top trails (views agregados por trilha).

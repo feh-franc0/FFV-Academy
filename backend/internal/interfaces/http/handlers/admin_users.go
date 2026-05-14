@@ -24,14 +24,14 @@ type AdminUserFilter struct {
 //
 // Campos sensíveis (senha, magic tokens) nunca aparecem aqui.
 type AdminUserListItem struct {
-	ID               string    `json:"id"`
-	Email            string    `json:"email"`
-	Name             string    `json:"name,omitempty"`
-	Phone            string    `json:"phone,omitempty"`
-	Role             string    `json:"role"`
-	MarketingConsent bool      `json:"marketingConsent"`
-	CreatedAt        time.Time `json:"createdAt"`
-	UpdatedAt        time.Time `json:"updatedAt"`
+	ID               string     `json:"id"`
+	Email            string     `json:"email"`
+	Name             string     `json:"name,omitempty"`
+	Phone            string     `json:"phone,omitempty"`
+	Role             string     `json:"role"`
+	MarketingConsent bool       `json:"marketingConsent"`
+	CreatedAt        time.Time  `json:"createdAt"`
+	UpdatedAt        time.Time  `json:"updatedAt"`
 	DeletedAt        *time.Time `json:"deletedAt,omitempty"`
 }
 

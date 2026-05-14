@@ -377,7 +377,7 @@ func (h *CurriculumHandler) SaveBlocks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"slug":        slug,
+		"slug":         slug,
 		"blocks_count": countBlocks(blocks),
 	})
 }

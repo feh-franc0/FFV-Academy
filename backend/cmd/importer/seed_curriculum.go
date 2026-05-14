@@ -58,15 +58,11 @@ func seedArticleMappings(ctx context.Context, pool *pgxpool.Pool, seedsRoot stri
 	return seedCurriculumImpl(ctx, pool, seedsRoot, true /* updateArticles */)
 }
 
-// seedCurriculum (legacy alias para chamadas externas).
-func seedCurriculum(ctx context.Context, pool *pgxpool.Pool, seedsRoot string) error {
-	return seedCurriculumImpl(ctx, pool, seedsRoot, true)
-}
-
 func seedCurriculumImpl(ctx context.Context, pool *pgxpool.Pool, seedsRoot string, updateArticles bool) error {
-	// 1. Hubs
+	// 1. Hubs — paths montados a partir de seedsRoot controlado pela CLI.
+	// Importer só roda em build/dev/CI, nunca em runtime exposto.
 	hubsPath := filepath.Join(seedsRoot, "hubs.json")
-	if raw, err := os.ReadFile(hubsPath); err == nil {
+	if raw, err := os.ReadFile(hubsPath); err == nil { // #nosec G304
 		var hubs []HubSeed
 		if err := json.Unmarshal(raw, &hubs); err != nil {
 			return fmt.Errorf("parse hubs.json: %w", err)
@@ -99,7 +95,7 @@ func seedCurriculumImpl(ctx context.Context, pool *pgxpool.Pool, seedsRoot strin
 	// 2. Trails — também precisamos saber a qual hub cada trilha pertence.
 	// O hubs.json tem trailIds; invertemos isso aqui.
 	trailToHub := make(map[string]string)
-	if raw, err := os.ReadFile(hubsPath); err == nil {
+	if raw, err := os.ReadFile(hubsPath); err == nil { // #nosec G304
 		var hubs []HubSeed
 		if err := json.Unmarshal(raw, &hubs); err == nil {
 			for _, h := range hubs {
