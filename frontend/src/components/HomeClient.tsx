@@ -26,6 +26,7 @@ import { useGameState } from '@/hooks/useGameState';
 import { ContinueCard } from '@/components/ContinueCard';
 import { DailyModuleCard } from '@/components/DailyModuleCard';
 import { TrilhaDoDia } from '@/components/TrilhaDoDia';
+import { DailyQuestionCard } from '@/components/daily/DailyQuestionCard';
 
 import { Hero } from '@/components/home/Hero';
 import { SocialProofBar } from '@/components/home/SocialProofBar';
@@ -43,10 +44,24 @@ const TOTAL_TRAILS = CURRICULUM.length;
 export function HomeClient() {
   const { state } = useGameState();
   const hasProgress = state !== null && state.completedModules.length > 0;
+  // Card da Pergunta do Dia: aparece pra qualquer user que já interagiu
+  // (totalXP > 0) — evita mostrar pra visitante totalmente novo.
+  const showDailyQuestion = state !== null && state.xp > 0;
 
   return (
     <div style={{ background: 'var(--ffv-bg)', color: 'var(--foreground)' }}>
       <Hero totalArticles={TOTAL_ARTICLES} totalTrails={TOTAL_TRAILS} />
+      {showDailyQuestion && (
+        <section
+          className="px-6 pt-10"
+          aria-labelledby="daily-question-heading"
+        >
+          <div className="max-w-6xl mx-auto">
+            <h2 id="daily-question-heading" className="sr-only">Pergunta do Dia</h2>
+            <DailyQuestionCard />
+          </div>
+        </section>
+      )}
       <SocialProofBar />
       <HowItWorks />
 

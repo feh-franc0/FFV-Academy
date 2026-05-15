@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 
 // engine.ts usa 'use client' — ok em Vitest, a diretiva é ignorada
 // Mas depende de localStorage (jsdom fornece) e de CURRICULUM/LEVELS
-import { completeModule, loadState } from '../lib/engine';
+import { completeModule, loadState, answerDailyQuestion } from '../lib/engine';
 import { getLevelInfo } from '../lib/curriculum';
 
 // Módulo real do currículo (existe no CURRICULUM)
@@ -102,6 +102,103 @@ describe('completeModule', () => {
     // streak 7 → deve ganhar 1 freeze
     expect(after.streak).toBe(7);
     expect(after.freezes).toBe(1);
+  });
+});
+
+describe('migrateState v3 → v5', () => {
+  it('preserva campos antigos e adiciona dailyQuestionStreak/History', () => {
+    localStorage.clear();
+    const legacy = {
+      schemaVersion: 3,
+      xp: 100,
+      level: 2,
+      completedModules: ['m1'],
+      bookmarks: ['m1'],
+      moduleRatings: { m1: 1 },
+    };
+    localStorage.setItem('ffv_academy', JSON.stringify(legacy));
+    const state = loadState();
+    expect(state.xp).toBe(100);
+    expect(state.completedModules).toContain('m1');
+    expect(state.bookmarks).toContain('m1');
+    expect(state.schemaVersion).toBe(5);
+    expect(state.dailyQuestionStreak).toBe(0);
+    expect(state.dailyQuestionHistory).toEqual([]);
+    expect(state.quests).toEqual({ daily: [], weekly: [] });
+  });
+});
+
+describe('answerDailyQuestion', () => {
+  it('acerto soma 5 XP, incrementa streak, registra no histórico', () => {
+    localStorage.clear();
+    const result = answerDailyQuestion({
+      questionId: 'sim_x_q1',
+      answeredId: 'A',
+      correctId: 'A',
+      source: 'simulado',
+      stem: 'Stem?',
+      options: ['A', 'B', 'C', 'D'],
+      correctIndex: 0,
+      explanation: 'porque',
+      topic: 'IAM',
+    });
+    expect(result.correct).toBe(true);
+    expect(result.xpGained).toBe(5);
+    expect(result.streak).toBe(1);
+    const state = loadState();
+    expect(state.dailyQuestion?.correct).toBe(true);
+    expect(state.dailyQuestionHistory?.length).toBe(1);
+  });
+
+  it('erro soma 1 XP, reseta streak, cria card SRS', () => {
+    localStorage.clear();
+    const before = loadState();
+    expect(before.reviewCards.length).toBe(0);
+    const result = answerDailyQuestion({
+      questionId: 'sim_x_q1',
+      answeredId: 'B',
+      correctId: 'A',
+      source: 'simulado',
+      stem: 'Stem?',
+      options: ['A', 'B', 'C', 'D'],
+      correctIndex: 0,
+      explanation: 'porque',
+      topic: 'IAM',
+    });
+    expect(result.correct).toBe(false);
+    expect(result.xpGained).toBe(1);
+    expect(result.streak).toBe(0);
+    const state = loadState();
+    expect(state.reviewCards.length).toBe(1);
+  });
+
+  it('idempotente: segunda chamada no mesmo dia não muda XP', () => {
+    localStorage.clear();
+    answerDailyQuestion({
+      questionId: 'sim_x_q1',
+      answeredId: 'A',
+      correctId: 'A',
+      source: 'simulado',
+      stem: 'S',
+      options: ['A', 'B', 'C', 'D'],
+      correctIndex: 0,
+      explanation: '',
+      topic: 't',
+    });
+    const xpAfterFirst = loadState().xp;
+    const second = answerDailyQuestion({
+      questionId: 'sim_x_q1',
+      answeredId: 'A',
+      correctId: 'A',
+      source: 'simulado',
+      stem: 'S',
+      options: ['A', 'B', 'C', 'D'],
+      correctIndex: 0,
+      explanation: '',
+      topic: 't',
+    });
+    expect(second.xpGained).toBe(0);
+    expect(loadState().xp).toBe(xpAfterFirst);
   });
 });
 
