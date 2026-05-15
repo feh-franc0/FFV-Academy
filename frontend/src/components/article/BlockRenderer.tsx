@@ -466,7 +466,6 @@ export function BlockRenderer({ block }: { block: Block }) {
   if (schema) {
     const parsed = schema.safeParse(block.data);
     if (!parsed.success) {
-      // eslint-disable-next-line no-console
       console.warn(
         '[BlockRenderer] validation failed — block dropped',
         block.type,
@@ -476,7 +475,6 @@ export function BlockRenderer({ block }: { block: Block }) {
     }
     safeData = parsed.data;
   } else {
-    // eslint-disable-next-line no-console
     console.warn('[BlockRenderer] no schema for block type, rendering raw', block.type);
   }
 

@@ -285,6 +285,73 @@ describe("handler: update_article", () => {
   });
 });
 
+// ─── XSS payloads — fronteira de segurança no MCP ─────────────────────────────
+//
+// Estes testes validam que payloads de XSS conhecidos são rejeitados pelo Zod
+// no MCP server ANTES de chegar ao backend. É a primeira camada de defesa em
+// profundidade — backend (bluemonday + ValidateBlockURLs) é a segunda.
+//
+// Nota: texto plano contendo `<script>` literal NÃO é bloqueado aqui (Zod só
+// vê string) — o conteúdo é escapado pelo React/JSX no render. Isso é
+// comportamento correto: o vetor real é protocolo perigoso em href/src, não
+// texto bruto.
+
+describe("MCP fronteira XSS — payloads bloqueados pelo Zod", () => {
+  it("create_news rejeita source_url com data:text/html", async () => {
+    const { sdkClient } = await makeConnectedPair();
+    // O SDK do MCP retorna isError=true (não throw) quando o input falha no Zod
+    // schema do tool. Validamos via callTool direto pra evitar o assert do
+    // wrapper ct() (que assume sucesso).
+    const raw = (await sdkClient.callTool({
+      name: "create_news",
+      arguments: {
+        id: "xss-test",
+        title: "Título suficientemente longo para passar no min",
+        summary: "Resumo razoavelmente longo para passar no min de 20 chars.",
+        source: "Attacker",
+        source_url: "data:text/html,<script>alert(1)</script>",
+        published_at: "2026-05-14",
+        category: "launch",
+      },
+    })) as unknown as TR;
+    expect(raw.isError).toBe(true);
+  });
+
+  it("create_news rejeita source_url com protocolo javascript:", async () => {
+    const { sdkClient } = await makeConnectedPair();
+    const raw = (await sdkClient.callTool({
+      name: "create_news",
+      arguments: {
+        id: "xss-test2",
+        title: "Título suficientemente longo para passar no min",
+        summary: "Resumo razoavelmente longo para passar no min de 20 chars.",
+        source: "Attacker",
+        source_url: "javascript:alert(1)",
+        published_at: "2026-05-14",
+        category: "launch",
+      },
+    })) as unknown as TR;
+    expect(raw.isError).toBe(true);
+  });
+
+  it("create_article aceita conteúdo Markdown com <script> literal (escape acontece no render)", async () => {
+    // Comportamento intencional: `content_md` é string opaca aqui — backend
+    // sanitiza via bluemonday antes de persistir; frontend escapa em JSX.
+    // Bloquear aqui daria falsos positivos em conteúdo didático (artigos sobre XSS).
+    const { sdkClient, mockClient } = await makeConnectedPair();
+    const result = await ct(sdkClient, "create_article", {
+      slug: "didatico-xss",
+      title: "Tutorial XSS",
+      trail_id: "trail1",
+      hub_id: "hub-ia",
+      content_md: "Exemplo didático: `<script>alert(1)</script>`.",
+      difficulty: "beginner",
+    });
+    expect(result.isError).toBeFalsy();
+    expect(vi.mocked(mockClient.createArticle)).toHaveBeenCalledOnce();
+  });
+});
+
 // ─── delete_article ───────────────────────────────────────────────────────────
 
 describe("handler: delete_article", () => {

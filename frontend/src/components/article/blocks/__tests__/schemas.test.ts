@@ -16,7 +16,51 @@ import {
   BlockSchema,
   BlockTypeSchema,
   ArticleWithBlocksSchema,
+  safeUrl,
+  safeImageUrl,
 } from '../schemas';
+
+describe('safeUrl (bloqueia protocolos perigosos)', () => {
+  const schema = safeUrl();
+  it.each([
+    'https://example.com',
+    'http://example.com',
+    'mailto:foo@bar.com',
+  ])('aceita %s', (url) => {
+    expect(schema.safeParse(url).success).toBe(true);
+  });
+
+  it.each([
+    'javascript:alert(1)',
+    'JaVaScRiPt:alert(1)',
+    'data:text/html,<script>alert(1)</script>',
+    'vbscript:msgbox(1)',
+    'file:///etc/passwd',
+  ])('rejeita %s', (url) => {
+    expect(schema.safeParse(url).success).toBe(false);
+  });
+});
+
+describe('safeImageUrl (allowlist de hosts)', () => {
+  const schema = safeImageUrl();
+  it.each([
+    'https://images.unsplash.com/x.png',
+    'https://lh3.googleusercontent.com/avatar.jpg',
+    'https://fernandofrancovalle.com/img.png',
+    'https://cdn.fernandofrancovalle.com/img.png', // subdomain
+  ])('aceita host na allowlist: %s', (url) => {
+    expect(schema.safeParse(url).success).toBe(true);
+  });
+
+  it.each([
+    'https://attacker.com/x.png',
+    'data:image/svg+xml;base64,PHN2Zw==',
+    'javascript:1',
+    'http://images.unsplash.com.evil.com/x.png', // suffix attack
+  ])('rejeita host fora da allowlist: %s', (url) => {
+    expect(schema.safeParse(url).success).toBe(false);
+  });
+});
 
 describe('SectionSchema', () => {
   it('aceita title não-vazio', () => {
@@ -102,11 +146,18 @@ describe('ComparisonTableSchema', () => {
 });
 
 describe('ImageSchema', () => {
-  it('aceita src URL + alt não-vazio', () => {
-    expect(ImageSchema.safeParse({ src: 'https://x.com/a.png', alt: 'desc' }).success).toBe(true);
+  it('aceita src URL de host na allowlist + alt não-vazio', () => {
+    expect(
+      ImageSchema.safeParse({ src: 'https://images.unsplash.com/a.png', alt: 'desc' }).success,
+    ).toBe(true);
   });
   it('rejeita src que não é URL', () => {
     expect(ImageSchema.safeParse({ src: 'a.png', alt: 'd' }).success).toBe(false);
+  });
+  it('rejeita src com host fora da allowlist', () => {
+    expect(ImageSchema.safeParse({ src: 'https://attacker.com/a.png', alt: 'd' }).success).toBe(
+      false,
+    );
   });
 });
 

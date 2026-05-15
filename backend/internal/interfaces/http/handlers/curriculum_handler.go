@@ -262,6 +262,11 @@ func (h *CurriculumHandler) Create(w http.ResponseWriter, r *http.Request) {
 		req.ReadTime = 5 // default
 	}
 
+	// Defesa em profundidade: sanitiza conteúdo Markdown/HTML antes de persistir.
+	// Remove <script>, on*, javascript: e demais vetores via bluemonday UGCPolicy.
+	req.ContentMD = domcurriculum.SanitizeArticleContent(req.ContentMD)
+	req.Title = domcurriculum.SanitizeString(req.Title)
+
 	article, err := domcurriculum.NewArticle(
 		req.Slug, req.Title, req.TrailID, req.HubID,
 		req.ContentMD, req.Difficulty, req.XP, req.ReadTime, req.Order, req.Published,
@@ -296,6 +301,10 @@ func (h *CurriculumHandler) Update(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "body inválido", "validation-error")
 		return
 	}
+
+	// Sanitização server-side (defesa em profundidade).
+	req.ContentMD = domcurriculum.SanitizeArticleContent(req.ContentMD)
+	req.Title = domcurriculum.SanitizeString(req.Title)
 
 	// Aplica as atualizações via método do domínio.
 	article.Update(req.Title, req.ContentMD, req.Difficulty, req.XP, req.ReadTime, req.Order, req.Published)
@@ -370,6 +379,20 @@ func (h *CurriculumHandler) SaveBlocks(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, err.Error(), "validation-error")
 		return
 	}
+
+	// Sanitização + validação de URLs em cada bloco antes de persistir.
+	// Rejeita protocolos perigosos (javascript:, data:, vbscript:, file:) em
+	// qualquer campo conhecido de URL e remove HTML malicioso de campos textuais.
+	sanitized := make([]*domcurriculum.Block, 0, len(blocks))
+	for _, b := range blocks {
+		clean, err := domcurriculum.SanitizeBlock(b)
+		if err != nil {
+			WriteError(w, http.StatusBadRequest, err.Error(), "validation-error")
+			return
+		}
+		sanitized = append(sanitized, clean)
+	}
+	blocks = sanitized
 
 	if err := h.repo.SaveBlocks(r.Context(), slug, blocks); err != nil {
 		HandleDomainErrorCtx(r, w, err)
