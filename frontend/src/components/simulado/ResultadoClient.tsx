@@ -7,6 +7,8 @@ import { idFromSlug } from '@/components/SimuladoCard';
 import { completeSimulado } from '@/lib/engine';
 import { useAuth } from '@/hooks/useAuth';
 import { CertificateModal } from './CertificateModal';
+import { PeerComparisonChip } from '@/components/peer/PeerComparisonChip';
+import { calculatePeerPercentile } from '@/lib/peer-stats';
 
 interface Props {
   slug: string;
@@ -98,6 +100,10 @@ export function ResultadoClient({ slug }: Props) {
         <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
           {scored.correctCount}/{simulado.questions.length} corretas
         </p>
+        {(() => {
+          const peer = calculatePeerPercentile(scored.score, simulado.id);
+          return <PeerComparisonChip score={peer.score} percentile={peer.percentile} />;
+        })()}
         {xpGained !== null && (
           <p className="mt-4 text-xs font-semibold" style={{ color: 'var(--ffv-yellow)' }}>
             ⚡ +{xpGained} XP creditados

@@ -26,6 +26,8 @@ import { BookmarkButton } from '@/components/BookmarkButton';
 import { ModuleRating } from '@/components/ModuleRating';
 import { TextSelectionShare } from '@/components/TextSelectionShare';
 import { ArticleDiscussion } from '@/components/ArticleDiscussion';
+import { PeerComparisonChip } from '@/components/peer/PeerComparisonChip';
+import { calculatePeerPercentile } from '@/lib/peer-stats';
 
 export interface QuizQuestion {
   question: string;
@@ -617,6 +619,11 @@ export function ModuleLayout({
                 <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
                   {score}/{quiz.length} corretas · +{result.xpGained} XP ganhos
                 </p>
+                {(() => {
+                  const scorePct = quiz.length > 0 ? Math.round((score / quiz.length) * 100) : 0;
+                  const peer = calculatePeerPercentile(scorePct, slug);
+                  return <PeerComparisonChip score={peer.score} percentile={peer.percentile} />;
+                })()}
                 {timeAttack && !timeAttackFailed && perfect && (
                   <p className="mt-1 text-xs font-semibold" style={{ color: 'var(--ffv-yellow)' }}>
                     ⚡ Time Attack · +{TIME_ATTACK_BONUS_XP} XP bônus
