@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, fireEvent } from '@testing-library/react';
 
 vi.mock('next/link', () => ({
   default: ({ children, href, ...rest }: React.PropsWithChildren<{ href: string }>) => (
@@ -66,8 +66,26 @@ describe('<TrailCompletionModal> render', () => {
         onClose={() => {}}
       />
     );
-    const certLink = screen.getByRole('link', { name: /ver certificado/i }) as HTMLAnchorElement;
+    const certLink = screen.getByRole('link', { name: /verificação/i }) as HTMLAnchorElement;
     expect(certLink.getAttribute('href')).toBe('/verificar?cert=abc123');
+  });
+
+  it('botão "Baixar certificado" abre overlay do Certificate', () => {
+    const trail = CURRICULUM[0];
+    render(
+      <TrailCompletionModal trail={trail} totalXp={100} onClose={() => {}} />
+    );
+    expect(screen.getByTestId('trail-download-certificate')).toBeInTheDocument();
+  });
+
+  it('botão "Compartilhar em outras redes" expande o ShareSocial', () => {
+    const trail = CURRICULUM[0];
+    render(
+      <TrailCompletionModal trail={trail} totalXp={100} onClose={() => {}} />
+    );
+    expect(screen.queryByTestId('trail-share-social')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('trail-share-more'));
+    expect(screen.getByTestId('trail-share-social')).toBeInTheDocument();
   });
 
   it('retorna null após onClose ser chamado e re-render com trail=null (anti-double-fire)', () => {

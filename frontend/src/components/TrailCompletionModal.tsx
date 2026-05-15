@@ -16,8 +16,10 @@
  */
 
 import Link from 'next/link';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { BADGES_DEF, CURRICULUM, type Trail } from '@/lib/curriculum';
+import { Certificate } from '@/components/Certificate';
+import { ShareSocial } from '@/components/ShareSocial';
 
 export interface TrailCompletionModalProps {
   trail: Trail | null;
@@ -39,6 +41,9 @@ export function TrailCompletionModal({
   nextTrail,
   onClose,
 }: TrailCompletionModalProps) {
+  const [certOpen, setCertOpen] = useState(false);
+  const [shareExpanded, setShareExpanded] = useState(false);
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') {
@@ -189,6 +194,22 @@ export function TrailCompletionModal({
           )}
 
           <div className="flex flex-col gap-2.5">
+            <button
+              type="button"
+              onClick={() => setCertOpen(true)}
+              data-testid="trail-download-certificate"
+              className="w-full flex items-center justify-center gap-2 py-3 rounded-xl font-semibold"
+              style={{
+                background: trail.color,
+                color: '#0d1117',
+                fontSize: 14,
+                border: 'none',
+                cursor: 'pointer',
+              }}
+            >
+              🏆 Baixar certificado (PNG)
+            </button>
+
             <a
               href={linkedInUrl}
               target="_blank"
@@ -206,18 +227,46 @@ export function TrailCompletionModal({
               <span>Compartilhar no LinkedIn</span>
             </a>
 
+            {!shareExpanded ? (
+              <button
+                type="button"
+                onClick={() => setShareExpanded(true)}
+                data-testid="trail-share-more"
+                className="w-full text-center py-2.5 rounded-xl font-medium"
+                style={{
+                  background: 'transparent',
+                  color: 'var(--ffv-muted)',
+                  fontSize: 12,
+                  border: '1px solid var(--ffv-border)',
+                  cursor: 'pointer',
+                }}
+              >
+                + Compartilhar em outras redes
+              </button>
+            ) : (
+              <div data-testid="trail-share-social">
+                <ShareSocial
+                  slug={trail.id}
+                  title={`Concluí a trilha "${trail.name}" no FFV Academy`}
+                  accent={trail.color}
+                  variant="compact"
+                />
+              </div>
+            )}
+
             <Link
               href={certificateHref}
               onClick={onClose}
-              className="w-full flex items-center justify-center gap-2 py-3 rounded-xl font-semibold"
+              className="w-full flex items-center justify-center gap-2 py-2 rounded-xl text-xs font-medium"
               style={{
-                background: trail.color,
-                color: '#0d1117',
-                fontSize: 14,
+                background: 'transparent',
+                color: 'var(--ffv-muted)',
+                fontSize: 12,
                 textDecoration: 'none',
+                border: '1px solid var(--ffv-border)',
               }}
             >
-              Ver certificado →
+              Ver na página de verificação →
             </Link>
 
             {computedNext && (
@@ -259,6 +308,8 @@ export function TrailCompletionModal({
           </div>
         </div>
       </div>
+
+      {certOpen && <Certificate trailId={trail.id} onClose={() => setCertOpen(false)} />}
     </div>
   );
 }
