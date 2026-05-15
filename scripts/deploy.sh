@@ -97,6 +97,9 @@ IMAGE_TAG="$IMAGE_TAG" docker compose -f "$COMPOSE_FILE" up -d --no-deps --pull 
 
 # ─── 6.5. Deploy do frontend ─────────────────────────────────────────────────
 if [[ -n "${FRONTEND_TAG:-}" ]]; then
+  FRONTEND_IMAGE="ghcr.io/${REPO_OWNER}/ffv-frontend:${FRONTEND_TAG}"
+  log "Baixando imagem frontend $FRONTEND_IMAGE..."
+  docker pull "$FRONTEND_IMAGE"
   log "Subindo frontend (FRONTEND_TAG=$FRONTEND_TAG)..."
   FRONTEND_TAG="$FRONTEND_TAG" IMAGE_TAG="$IMAGE_TAG" \
     docker compose -f "$COMPOSE_FILE" up -d --no-deps --pull never frontend
