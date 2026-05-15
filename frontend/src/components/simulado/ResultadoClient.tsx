@@ -2,13 +2,17 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import { getSimulado, getAttempt, scoreAttempt, getWeakTopics, getExplanationText, type SimuladoAttempt } from '@/lib/simulados';
+import { getSimulado, getAttempt, scoreAttempt, getWeakTopics, getExplanationText, type SimuladoAttempt, type SimuladoQuestion } from '@/lib/simulados';
+import { loadClfBankFlat } from '@/lib/clf-bank';
+import { getJSON } from '@/lib/storage';
 import { idFromSlug } from '@/components/SimuladoCard';
 import { completeSimulado } from '@/lib/engine';
 import { useAuth } from '@/hooks/useAuth';
 import { CertificateModal } from './CertificateModal';
 import { PeerComparisonChip } from '@/components/peer/PeerComparisonChip';
 import { calculatePeerPercentile } from '@/lib/peer-stats';
+
+const simQsKey = (id: string) => `ffv_sim_qs_${id}`;
 
 interface Props {
   slug: string;
@@ -20,9 +24,24 @@ export function ResultadoClient({ slug }: Props) {
   const simulado = getSimulado(simuladoId);
 
   const [attempt, setAttempt] = useState<SimuladoAttempt | null>(null);
+  const [questions, setQuestions] = useState<SimuladoQuestion[]>(simulado?.questions ?? []);
   const [xpGained, setXpGained] = useState<number | null>(null);
   const [awardedBadges, setAwardedBadges] = useState<string[]>([]);
   const [showCert, setShowCert] = useState(false);
+
+  // Carrega questões do banco usando IDs persistidos pelo SimuladoRunner
+  useEffect(() => {
+    if (!simulado) return;
+    const storedIds = getJSON<string[]>(simQsKey(simuladoId), null);
+    if (!storedIds || storedIds.length === 0) return;
+    loadClfBankFlat()
+      .then(bank => {
+        const byId = new Map(bank.map(q => [q.id, q]));
+        const found = storedIds.map(id => byId.get(id)).filter((q): q is SimuladoQuestion => !!q);
+        if (found.length > 0) setQuestions(found);
+      })
+      .catch(() => {}); // mantém fallback estático
+  }, [simulado, simuladoId]);
 
   useEffect(() => {
     if (!simulado) return;
@@ -32,26 +51,29 @@ export function ResultadoClient({ slug }: Props) {
     // Concede XP + badges apenas uma vez (quando attempt tem finishedAt mas ainda não creditado).
     const CREDITED_KEY = `ffv_simulado_credited_${simuladoId}`;
     if (a.finishedAt && !sessionStorage.getItem(CREDITED_KEY)) {
-      const scored = scoreAttempt(simulado, a);
-      const result = completeSimulado({
-        simuladoId,
-        score: scored.score,
-        passed: scored.passed,
-      });
+      // Usa score salvo pelo SimuladoRunner (calculado com questões corretas); recalcula se ausente
+      const score = a.score ?? scoreAttempt(simulado, a).score;
+      const passed = a.passed ?? score >= simulado.passingScore;
+      const result = completeSimulado({ simuladoId, score, passed });
       setXpGained(result.xpGained);
       setAwardedBadges(result.newBadges);
       sessionStorage.setItem(CREDITED_KEY, '1');
     }
   }, [simulado, simuladoId]);
 
-  const scored = useMemo(
-    () => simulado && attempt ? scoreAttempt(simulado, attempt) : null,
-    [simulado, attempt],
-  );
+  const scored = useMemo(() => {
+    if (!simulado || !attempt) return null;
+    if (attempt.score !== undefined && attempt.passed !== undefined) {
+      // Score calculado com questões corretas — recalcula byTopic para exibição
+      const sim = { ...simulado, questions };
+      return scoreAttempt(sim, attempt);
+    }
+    return scoreAttempt({ ...simulado, questions }, attempt);
+  }, [simulado, attempt, questions]);
 
   const weakTopics = useMemo(
-    () => simulado && attempt ? getWeakTopics(attempt, simulado) : [],
-    [simulado, attempt],
+    () => simulado && attempt ? getWeakTopics(attempt, { ...simulado, questions }) : [],
+    [simulado, attempt, questions],
   );
 
   if (!simulado) return <p className="px-6 py-20 text-center">Simulado não encontrado.</p>;
@@ -98,7 +120,7 @@ export function ResultadoClient({ slug }: Props) {
             : `Você precisa de ${simulado.passingScore}% para passar.`}
         </p>
         <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
-          {scored.correctCount}/{simulado.questions.length} corretas
+          {scored.correctCount}/{questions.length} corretas
         </p>
         {(() => {
           const peer = calculatePeerPercentile(scored.score, simulado.id);
@@ -153,7 +175,7 @@ export function ResultadoClient({ slug }: Props) {
       <section className="mb-10">
         <h2 className="text-lg font-bold mb-4">Revisão das questões</h2>
         <div className="flex flex-col gap-3">
-          {[...simulado.questions]
+          {[...questions]
             .sort((a, b) => {
               const aCorrect = attempt.answers[a.id] === a.correctId;
               const bCorrect = attempt.answers[b.id] === b.correctId;

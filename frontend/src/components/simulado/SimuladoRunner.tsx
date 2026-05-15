@@ -5,11 +5,14 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   type SimuladoAttempt,
+  type SimuladoQuestion,
   getSimulado,
   getAttempt,
   saveAttempt,
   getExplanationText,
+  scoreAttempt,
 } from '@/lib/simulados';
+import { loadClfBankFlat, pickRandomBatch } from '@/lib/clf-bank';
 import { useAuth } from '@/hooks/useAuth';
 import { idFromSlug } from '@/components/SimuladoCard';
 import { TutorChat } from './TutorChat';
@@ -24,14 +27,8 @@ interface Props {
 
 type Mode = 'prova' | 'estudo';
 
-/**
- * SimuladoRunner — engine principal do simulado.
- *
- * - Split-pane: 70% enunciado + 30% grid de navegação + timer + flags
- * - Timer persistente (deadline em localStorage — sobrevive a refresh)
- * - Paywall automático na 11ª questão se user não pagou
- * - Gate de auth no mount (redirect pro detalhe se não logado)
- */
+const simQsKey = (id: string) => `ffv_sim_qs_${id}`;
+
 export function SimuladoRunner({ slug }: Props) {
   const router = useRouter();
   const { isLoggedIn, requireLogin } = useAuth();
@@ -39,6 +36,8 @@ export function SimuladoRunner({ slug }: Props) {
   const simulado = getSimulado(simuladoId);
 
   const [attempt, setAttempt] = useState<SimuladoAttempt | null>(null);
+  const [questions, setQuestions] = useState<SimuladoQuestion[]>(simulado?.questions ?? []);
+  const [questionsReady, setQuestionsReady] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [mode, setMode] = useState<Mode>('estudo');
   const [confirmed, setConfirmed] = useState<Record<string, boolean>>({});
@@ -59,6 +58,8 @@ export function SimuladoRunner({ slug }: Props) {
     if (!simulado || !isLoggedIn) return;
     let current = getAttempt(simuladoId);
     if (!current || current.finishedAt) {
+      // Nova attempt: limpa questões sorteadas anteriores para novo sorteio
+      removeKey(simQsKey(simuladoId));
       current = {
         simuladoId,
         startedAt: new Date().toISOString(),
@@ -86,6 +87,39 @@ export function SimuladoRunner({ slug }: Props) {
     setHydrated(true);
   }, [simulado, simuladoId, isLoggedIn]);
 
+  // Carrega questões do banco Postgres (ou estáticas como fallback)
+  useEffect(() => {
+    if (!simulado || !isLoggedIn) return;
+    loadClfBankFlat()
+      .then(bank => {
+        if (bank.length === 0) throw new Error('banco vazio');
+        const storedIds = getJSON<string[]>(simQsKey(simuladoId), null);
+        let qs: SimuladoQuestion[];
+        if (storedIds && storedIds.length > 0) {
+          // Retoma attempt existente: usa mesmo conjunto de questões
+          const byId = new Map(bank.map(q => [q.id, q]));
+          const found = storedIds.map(id => byId.get(id)).filter((q): q is SimuladoQuestion => !!q);
+          qs = found.length > 0 ? found : pickNew(bank);
+        } else {
+          qs = pickNew(bank);
+        }
+        setQuestions(qs);
+      })
+      .catch(() => {
+        setQuestions(simulado.questions); // fallback estático
+      })
+      .finally(() => setQuestionsReady(true));
+
+    function pickNew(bank: SimuladoQuestion[]): SimuladoQuestion[] {
+      const n = simulado!.questionCount;
+      const picked = bank.length >= n
+        ? pickRandomBatch(bank, n, { weightedByDomain: true })
+        : bank;
+      setJSON(simQsKey(simuladoId), picked.map(q => q.id));
+      return picked;
+    }
+  }, [simulado, simuladoId, isLoggedIn]);
+
   // Tick do timer — wall-clock based
   useEffect(() => {
     if (!hydrated) return;
@@ -108,14 +142,14 @@ export function SimuladoRunner({ slug }: Props) {
   if (!simulado) {
     return <p className="px-6 py-20 text-center">Simulado não encontrado.</p>;
   }
-  if (!isLoggedIn || !attempt) {
-    return <p className="px-6 py-20 text-center">Carregando…</p>;
+  if (!isLoggedIn || !attempt || !questionsReady || questions.length === 0) {
+    return <p className="px-6 py-20 text-center">Carregando questões…</p>;
   }
   if (simulado.comingSoon) {
     return <p className="px-6 py-20 text-center">Este simulado ainda não está disponível.</p>;
   }
 
-  const currentQuestion = simulado.questions[currentIndex];
+  const currentQuestion = questions[currentIndex];
 
   function selectOption(optionId: string) {
     if (!attempt || confirmed[currentQuestion.id]) return;
@@ -145,14 +179,18 @@ export function SimuladoRunner({ slug }: Props) {
   }
 
   function goTo(idx: number) {
-    if (idx >= 0 && idx < simulado!.questions.length) setCurrentIndex(idx);
+    if (idx >= 0 && idx < questions.length) setCurrentIndex(idx);
   }
 
   function finalize() {
     if (!attempt) return;
+    const sim = { ...simulado!, questions };
+    const { score, passed } = scoreAttempt(sim, attempt);
     const finished: SimuladoAttempt = {
       ...attempt,
       finishedAt: new Date().toISOString(),
+      score,
+      passed,
     };
     saveAttempt(finished);
     removeKey(STORAGE_KEYS.SIMULADO_TIMER);
@@ -215,7 +253,7 @@ export function SimuladoRunner({ slug }: Props) {
           <>
             <div className="mb-5">
                 <p className="text-xs font-mono uppercase tracking-widest mb-2" style={{ color: 'var(--ffv-muted)' }}>
-                  Questão {currentIndex + 1} de {simulado.questions.length} · {currentQuestion.topic}
+                  Questão {currentIndex + 1} de {questions.length} · {currentQuestion.topic}
                 </p>
                 <p className="text-base md:text-lg font-semibold leading-relaxed">{currentQuestion.stem}</p>
               </div>
@@ -270,7 +308,7 @@ export function SimuladoRunner({ slug }: Props) {
                     className="flex-1 py-3 rounded-xl font-semibold text-sm"
                     style={{ background: accent, color: '#0d1117' }}
                   >
-                    {currentIndex < simulado.questions.length - 1 ? 'Próxima →' : 'Revisar tudo'}
+                    {currentIndex < questions.length - 1 ? 'Próxima →' : 'Revisar tudo'}
                   </button>
                   {FEATURES.tutorAI ? (
                     <button
@@ -318,7 +356,7 @@ export function SimuladoRunner({ slug }: Props) {
               Navegação
             </p>
             <div className="grid grid-cols-5 gap-1.5 mb-4">
-              {simulado.questions.map((q, i) => {
+              {questions.map((q, i) => {
                 const isCurrent = i === currentIndex;
                 const isAnswered = !!attempt.answers[q.id];
                 const isFlagged = reviewFlags.has(q.id);

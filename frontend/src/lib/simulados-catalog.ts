@@ -17,10 +17,10 @@ const AWS_PRACTITIONER: Simulado = {
   certification: 'AWS Certified Cloud Practitioner (CLF-C02)',
   title: 'Simulado AWS Cloud Practitioner',
   description:
-    'Avalie seu preparo para a prova oficial AWS CLF-C02 com 20 questões nos principais domínios: IAM, compute, storage, billing, global infrastructure e modelo de responsabilidade compartilhada. Explicações detalhadas por questão no estilo tutor.',
+    'Avalie seu preparo para a prova oficial AWS CLF-C02 com 65 questões aleatórias nos domínios do exame real: Cloud Concepts, Security & Compliance, Cloud Technology & Services e Billing. Banco com 500+ questões — cada tentativa é única.',
   price: 47,
-  questionCount: 20,
-  timeLimitMin: 30,
+  questionCount: 65,
+  timeLimitMin: 90,
   passingScore: 70,
   topics: [
     'IAM & Segurança',
