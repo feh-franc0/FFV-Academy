@@ -281,68 +281,11 @@ jobs:
           curl -fsSL https://api.fernandofrancovalle.com/api/v1/stats
           echo "✓ /api/v1/stats OK"
 
-  # ─── Seed de questões CLF/DVA na VPS ─────────────────────────────────────
-  seed-questions:
-    name: Seed CLF/DVA questions
-    needs: [check, deploy-backend]
-    if: needs.check.outputs.should_run == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.check.outputs.commit_sha }}
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: backend/go.mod
-
-      - name: Build seed binary (linux/amd64)
-        working-directory: backend
-        # Compila para path relativo ao workspace — scp-action não aceita /tmp/
-        run: GOOS=linux GOARCH=amd64 go build -o seed-clf-questions ./cmd/seed-clf-questions
-
-      - name: Copiar binário + question-bank para VPS
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT || 22 }}
-          # Dois sources relativos ao workspace — scp-action tarda um único tar
-          source: "backend/seed-clf-questions,frontend/data/question-bank"
-          target: "/tmp/ffv-seed/"
-
-      - name: Instalar seed na VPS e executar
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT || 22 }}
-          command_timeout: 5m
-          script: |
-            set -euo pipefail
-            mkdir -p /opt/ffv/bin
-            mv /tmp/ffv-seed/backend/seed-clf-questions /opt/ffv/bin/seed-clf-questions
-            chmod +x /opt/ffv/bin/seed-clf-questions
-            rm -rf /opt/ffv/question-bank
-            mv /tmp/ffv-seed/frontend/data/question-bank /opt/ffv/question-bank
-            rm -rf /tmp/ffv-seed
-
-            # Rodar seed usando DATABASE_URL do .env.
-            # O .env usa @postgres: (hostname interno Docker), mas o binário roda
-            # no host — substitui pelo loopback 127.0.0.1 que o compose expõe.
-            DATABASE_URL=$(grep '^DATABASE_URL=' /opt/ffv/.env | cut -d= -f2-)
-            DATABASE_URL="${DATABASE_URL//@postgres:/@localhost:}"
-            DATABASE_URL="$DATABASE_URL" /opt/ffv/bin/seed-clf-questions /opt/ffv/question-bank
-            echo "Seed concluído."
-
   # ─── Notificação pós-deploy (Discord/Slack) ───────────────────────────────
   # Roda mesmo se algum job anterior falhou — assim o usuário sabe se deu errado.
   # Se DEPLOY_NOTIFY_WEBHOOK_URL não estiver setada, só loga e termina OK.
   notify:
-    needs: [check, build-push, build-push-frontend, deploy-backend, smoke-test-backend, seed-questions]
+    needs: [check, build-push, build-push-frontend, deploy-backend, smoke-test-backend]
     if: always() && needs.check.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -353,9 +296,8 @@ jobs:
           BUILD_FRONT: ${{ needs.build-push-frontend.result }}
           BACK: ${{ needs.deploy-backend.result }}
           SMOKE: ${{ needs.smoke-test-backend.result }}
-          SEED: ${{ needs.seed-questions.result }}
         run: |
-          if [[ "$BUILD" == "success" && "$BUILD_FRONT" == "success" && "$BACK" == "success" && "$SMOKE" == "success" && "$SEED" == "success" ]]; then
+          if [[ "$BUILD" == "success" && "$BUILD_FRONT" == "success" && "$BACK" == "success" && "$SMOKE" == "success" ]]; then
             echo "status=success" >> "$GITHUB_OUTPUT"
             echo "emoji=:white_check_mark:" >> "$GITHUB_OUTPUT"
           else
@@ -400,5 +342,4 @@ jobs:
             echo "| build-push-frontend | ${{ needs.build-push-frontend.result }} |"
             echo "| deploy-backend | ${{ needs.deploy-backend.result }} |"
             echo "| smoke-test-backend | ${{ needs.smoke-test-backend.result }} |"
-            echo "| seed-questions | ${{ needs.seed-questions.result }} |"
           } >> "$GITHUB_STEP_SUMMARY"

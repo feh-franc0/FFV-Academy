@@ -65,30 +65,6 @@ docker run --rm \
   up \
   || die "Migrations falharam. Deploy abortado."
 
-# ─── 5.5. Seed de questões CLF/DVA ──────────────────────────────────────────
-# Faz upsert das questões — idempotente, pode rodar múltiplas vezes sem dano.
-# Só falha se não conseguir conectar ao banco.
-log "Rodando seed de questões CLF/DVA..."
-SEED_BINARY="/opt/ffv/bin/seed-clf-questions"
-QUESTION_BANK="/opt/ffv/question-bank"
-
-if [[ -f "$SEED_BINARY" ]]; then
-  DATABASE_URL_INTERNAL=$(grep '^DATABASE_URL=' "$ENV_FILE" | cut -d= -f2-)
-  NETWORK_NAME="ffv-prod_data"
-
-  docker run --rm \
-    --network "$NETWORK_NAME" \
-    -e DATABASE_URL="$DATABASE_URL_INTERNAL" \
-    -v "$SEED_BINARY:/usr/local/bin/seed-clf-questions:ro" \
-    -v "$QUESTION_BANK:/question-bank:ro" \
-    alpine:3.20 \
-    /usr/local/bin/seed-clf-questions /question-bank \
-    && log "Seed concluído." \
-    || log "::warning::Seed falhou — banco pode estar com dados desatualizados."
-else
-  log "Binário de seed não encontrado em $SEED_BINARY — pulando. Rode manualmente."
-fi
-
 # ─── 6. Deploy da nova imagem da API (2 réplicas) ────────────────────────────
 # --scale api=2: sobe 2 réplicas. Nginx faz round-robin entre elas.
 # Se uma réplica travar, Nginx detecta via max_fails e roteia 100% para a outra.
