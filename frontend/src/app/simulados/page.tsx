@@ -32,6 +32,23 @@ export default function SimuladosPage() {
         </p>
       </header>
 
+      <Link
+        href="/simulados/cloud-practitioner/estudo"
+        className="block p-6 rounded-xl mb-8 transition-transform hover:scale-[1.005]"
+        style={{ background: 'linear-gradient(135deg, rgba(247,129,102,0.15), rgba(247,129,102,0.05))', border: '1px solid #f78166' }}
+      >
+        <p className="text-[10px] font-mono uppercase tracking-widest mb-2" style={{ color: '#f78166' }}>
+          Novo · Modo de estudo livre
+        </p>
+        <h2 className="text-xl md:text-2xl font-bold mb-2">Estudo livre Cloud Practitioner</h2>
+        <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
+          335+ questões reais do banco CLF-C02, sorteadas com distribuição oficial do blueprint AWS. Modo livre, sem timer, com tutor IA para tirar dúvidas. Gratuito.
+        </p>
+        <p className="text-xs mt-3 font-medium" style={{ color: '#f78166' }}>
+          Começar a estudar →
+        </p>
+      </Link>
+
       <section className="grid md:grid-cols-2 gap-5 mb-12">
         {SIMULADOS_CATALOG.map(s => (
           <SimuladoCard key={s.id} simulado={s} />
