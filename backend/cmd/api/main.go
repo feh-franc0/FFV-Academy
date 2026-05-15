@@ -266,6 +266,9 @@ func run() error {
 	newsH := handlers.NewNewsHandler(&pgxNewsRepo{pool: pool})
 	cheatH := handlers.NewCheatsheetsHandler(&pgxCheatsheetsRepo{pool: pool})
 	playH := handlers.NewPlaylistsHandler(&pgxPlaylistsRepo{pool: pool})
+	questionRepo := postgresinfra.NewQuestionRepo(pool)
+	studyH := handlers.NewStudyHandler(questionRepo)
+	adminQuestionsH := handlers.NewAdminQuestionsHandler(questionRepo)
 
 	// ─── Observabilidade: Prometheus ────────────────────────────────────────────
 	metricsReg := middleware.NewMetricsRegistry()
@@ -303,6 +306,8 @@ func run() error {
 		Features:         featuresH,
 		Metrics:          metricsH,
 		MetricsMW:        metricsReg.Middleware(),
+		Study:            studyH,
+		AdminQuestions:   adminQuestionsH,
 	}
 	router := httpserver.NewRouter(routerCfg)
 

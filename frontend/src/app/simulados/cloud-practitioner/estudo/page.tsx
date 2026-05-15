@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { EstudoClient } from '@/components/simulado/EstudoClient';
+import { RequireAuth } from '@/components/auth/RequireAuth';
 
 export const metadata: Metadata = {
   title: 'Estudo livre — AWS Cloud Practitioner | FFV Academy',
@@ -15,5 +16,13 @@ export const metadata: Metadata = {
 };
 
 export default function EstudoCloudPractitionerPage() {
-  return <EstudoClient />;
+  return (
+    <RequireAuth
+      reason="acessar os simulados"
+      title="Login necessário para o modo de estudo"
+      description="Faça login para praticar as questões do CLF-C02, acompanhar seu progresso e usar o tutor IA. É gratuito."
+    >
+      <EstudoClient />
+    </RequireAuth>
+  );
 }

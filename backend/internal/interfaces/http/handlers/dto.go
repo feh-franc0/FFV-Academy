@@ -212,3 +212,77 @@ func max(a, b int64) int64 {
 	}
 	return b
 }
+
+// --- DBQuestion DTOs ---
+
+// QuestionOptionDTO é a representação pública de uma opção de resposta.
+type QuestionOptionDTO struct {
+	ID   string `json:"id"`
+	Text string `json:"text"`
+}
+
+// QuestionExplanationDTO é a representação pública da explicação rica.
+type QuestionExplanationDTO struct {
+	Summary          string            `json:"summary"`
+	WhyCorrect       string            `json:"whyCorrect"`
+	WhyWrong         map[string]string `json:"whyWrong,omitempty"`
+	KeyConcept       string            `json:"keyConcept,omitempty"`
+	CompareWith      []string          `json:"compareWith,omitempty"`
+	RealWorldContext string            `json:"realWorldContext,omitempty"`
+	CommonMistakes   []string          `json:"commonMistakes,omitempty"`
+	TutorSeeds       []string          `json:"tutorSeeds,omitempty"`
+}
+
+// DBQuestionDTO é a representação pública de uma questão persistida.
+type DBQuestionDTO struct {
+	ID           string                 `json:"id"`
+	SimuladoID   string                 `json:"simuladoId"`
+	Stem         string                 `json:"stem"`
+	Options      []QuestionOptionDTO    `json:"options"`
+	CorrectID    string                 `json:"correctId"`
+	Explanation  QuestionExplanationDTO `json:"explanation"`
+	Topic        string                 `json:"topic"`
+	Domain       string                 `json:"domain"`
+	Difficulty   string                 `json:"difficulty"`
+	ScenarioType string                 `json:"scenarioType,omitempty"`
+	Tags         []string               `json:"tags"`
+	Source       string                 `json:"source,omitempty"`
+	Status       string                 `json:"status"`
+}
+
+func dbQuestionToDTO(q *domsim.DBQuestion) DBQuestionDTO {
+	opts := make([]QuestionOptionDTO, len(q.Options))
+	for i, o := range q.Options {
+		opts[i] = QuestionOptionDTO{ID: string(o.ID), Text: o.Text}
+	}
+
+	tags := q.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+
+	return DBQuestionDTO{
+		ID:         q.ID,
+		SimuladoID: q.SimuladoID,
+		Stem:       q.Stem,
+		Options:    opts,
+		CorrectID:  string(q.CorrectID),
+		Explanation: QuestionExplanationDTO{
+			Summary:          q.Explanation.Summary,
+			WhyCorrect:       q.Explanation.WhyCorrect,
+			WhyWrong:         q.Explanation.WhyWrong,
+			KeyConcept:       q.Explanation.KeyConcept,
+			CompareWith:      q.Explanation.CompareWith,
+			RealWorldContext: q.Explanation.RealWorldContext,
+			CommonMistakes:   q.Explanation.CommonMistakes,
+			TutorSeeds:       q.Explanation.TutorSeeds,
+		},
+		Topic:        string(q.Topic),
+		Domain:       q.Domain,
+		Difficulty:   string(q.Difficulty),
+		ScenarioType: q.ScenarioType,
+		Tags:         tags,
+		Source:       q.Source,
+		Status:       q.Status,
+	}
+}

@@ -51,6 +51,8 @@ type RouterConfig struct {
 	Features         *handlers.FeaturesHandler         // opcional — expõe estado das feature flags
 	Metrics          *handlers.MetricsHandler          // opcional — se nil, /metrics não é registrado
 	MetricsMW        func(http.Handler) http.Handler   // opcional — middleware de instrumentação
+	Study            *handlers.StudyHandler            // opcional — modo estudo livre (JWT)
+	AdminQuestions   *handlers.AdminQuestionsHandler   // opcional — CRUD admin de questões
 }
 
 // NewRouter monta o chi.Router com todos os middlewares e rotas.
@@ -102,6 +104,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// Endpoints públicos do catálogo (leitura sem auth).
 	r.Get("/api/v1/simulados", cfg.Simulado.ListSimulados)
 	r.Get("/api/v1/simulados/{simuladoId}", cfg.Simulado.GetSimulado)
+
+	// Contagem pública de questões — frontend usa para gate de UI.
+	if cfg.Study != nil {
+		r.Get("/api/v1/simulados/{simuladoId}/questions/count", cfg.Study.CountQuestions)
+	}
 
 	// Stats agregados públicos para a home (social proof).
 	if cfg.Stats != nil {
@@ -229,6 +236,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Post("/api/v1/simulados/{simuladoId}/attempts", cfg.Simulado.StartAttempt)
 		r.Get("/api/v1/simulados/{simuladoId}/attempts/active", cfg.Simulado.ResumeAttempt)
 
+		// Modo estudo livre — questões aleatórias sem timer (requer login).
+		if cfg.Study != nil {
+			r.Get("/api/v1/simulados/{simuladoId}/study/random", cfg.Study.GetRandomQuestions)
+		}
+
 		// Tentativas.
 		r.Get("/api/v1/attempts", cfg.Simulado.ListAttempts)
 		r.With(simuladoBodyLimit).Post("/api/v1/attempts/{attemptId}/answers", cfg.Simulado.AnswerQuestion)
@@ -299,6 +311,15 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				r.With(middleware.BodyLimit(32*1024)).Post("/api/v1/admin/playlists", cfg.Playlists.Create)
 				r.With(middleware.BodyLimit(32*1024)).Patch("/api/v1/admin/playlists/{slug}", cfg.Playlists.Update)
 				r.Delete("/api/v1/admin/playlists/{slug}", cfg.Playlists.Delete)
+			}
+
+			// CRUD admin: questões de simulado.
+			if cfg.AdminQuestions != nil {
+				r.Get("/api/v1/admin/questions", cfg.AdminQuestions.ListQuestions)
+				r.Get("/api/v1/admin/questions/{questionId}", cfg.AdminQuestions.GetQuestion)
+				r.With(middleware.BodyLimit(64*1024)).Post("/api/v1/admin/questions", cfg.AdminQuestions.CreateQuestion)
+				r.With(middleware.BodyLimit(64*1024)).Put("/api/v1/admin/questions/{questionId}", cfg.AdminQuestions.UpdateQuestion)
+				r.Delete("/api/v1/admin/questions/{questionId}", cfg.AdminQuestions.DeleteQuestion)
 			}
 		})
 	})

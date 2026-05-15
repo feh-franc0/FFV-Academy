@@ -14,6 +14,7 @@ import { useAuth } from '@/hooks/useAuth';
 const NAV = [
   { href: '/admin', label: 'Dashboard' },
   { href: '/admin/users', label: 'Usuários' },
+  { href: '/admin/questions', label: 'Questões CLF' },
   { href: '/admin/curriculum', label: 'Currículo' },
   { href: '/admin/news', label: 'News' },
   { href: '/admin/cheatsheets', label: 'Cheatsheets' },
