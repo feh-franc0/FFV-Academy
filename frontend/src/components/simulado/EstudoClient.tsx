@@ -16,7 +16,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import type { SimuladoQuestion, OptionId } from '@/lib/simulados';
 import { loadClfBank, flattenBank, pickRandomBatch } from '@/lib/clf-bank';
+import { FEATURES } from '@/lib/features';
 import { TutorAsk } from './TutorAsk';
+
+const TUTOR_AVAILABLE = FEATURES.tutorAI;
 
 type Phase = 'selecting' | 'answered';
 
@@ -234,11 +237,14 @@ export function EstudoClient() {
 
           <div className="flex flex-wrap gap-2 pt-2">
             <button
-              onClick={() => setTutorOpen(true)}
-              className="px-4 py-2 rounded-lg text-sm font-medium"
+              onClick={() => TUTOR_AVAILABLE && setTutorOpen(true)}
+              disabled={!TUTOR_AVAILABLE}
+              title={TUTOR_AVAILABLE ? undefined : 'Tutor IA disponível em breve (requer NEXT_PUBLIC_FEATURE_TUTOR_AI_ENABLED=true + backend Anthropic configurado)'}
+              aria-disabled={!TUTOR_AVAILABLE}
+              className="px-4 py-2 rounded-lg text-sm font-medium transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
               style={{ background: 'var(--ffv-bg2)', border: '1px solid #f78166', color: '#f78166' }}
             >
-              Tire minha dúvida
+              {TUTOR_AVAILABLE ? 'Tire minha dúvida' : '💤 Tutor IA em breve'}
             </button>
             <button
               onClick={next}
