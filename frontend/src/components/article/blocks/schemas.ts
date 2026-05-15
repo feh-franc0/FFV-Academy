@@ -15,6 +15,46 @@
 
 import { z } from 'zod';
 
+// ─── URL helpers — defesa contra XSS por protocolo ──────────────────────────
+//
+// `z.string().url()` aceita `javascript:`, `data:`, `vbscript:`, `file:` etc.
+// Permitir esses protocolos em `href` de `<a>` ou `src` de `<img>` abre XSS
+// direto. Restringimos protocolos a um conjunto seguro (https, http, mailto)
+// + paths relativos/internos (`/...`, `#...`).
+//
+// Para imagens, exigimos adicionalmente que o host esteja numa allowlist
+// (espelha CSP `img-src` em app/layout.tsx). Bloqueia data:image/svg+xml
+// (vetor clássico de XSS), trackers e exfiltração silenciosa.
+
+const SAFE_PROTOCOLS = /^(https?:|\/|#|mailto:)/i;
+
+export const safeUrl = () =>
+  z.string().url().refine((u) => SAFE_PROTOCOLS.test(u), {
+    message: 'Protocolo não permitido (use https, http, /, #, mailto:)',
+  });
+
+const IMG_HOST_ALLOWLIST = [
+  'fernandofrancovalle.com',
+  'images.unsplash.com',
+  'lh3.googleusercontent.com',
+  'avatars.githubusercontent.com',
+];
+
+export const safeImageUrl = () =>
+  safeUrl().refine(
+    (u) => {
+      try {
+        const url = new URL(u);
+        return IMG_HOST_ALLOWLIST.some(
+          (h) => url.hostname === h || url.hostname.endsWith('.' + h),
+        );
+      } catch {
+        return false;
+      }
+    },
+    { message: 'Origem de imagem não permitida (host fora da allowlist)' },
+  );
+
 // ─── Blocos básicos (Sprint 1) ──────────────────────────────────────────────
 
 export const SectionSchema = z.object({
@@ -26,7 +66,7 @@ export const InlineNodeSchema = z.object({
   bold: z.boolean().optional(),
   italic: z.boolean().optional(),
   code: z.boolean().optional(),
-  link: z.string().url().optional(),
+  link: safeUrl().optional(),
 });
 
 export const ParagraphSchema = z.object({
@@ -133,7 +173,7 @@ export const QuizSchema = z.object({
 });
 
 export const ImageSchema = z.object({
-  src: z.string().url(),
+  src: safeImageUrl(),
   alt: z.string().min(1),
   caption: z.string().optional(),
 });
@@ -188,3 +228,42 @@ export const ArticleWithBlocksSchema = z.object({
 });
 
 export type ArticleWithBlocks = z.infer<typeof ArticleWithBlocksSchema>;
+
+// ─── Map type → data schema (usado no BlockRenderer pra safeParse em runtime)
+//
+// Cobertura mínima: os tipos que renderizam URLs (paragraph com `link`, image
+// com `src`) usam schemas estritos com `safeUrl`/`safeImageUrl`. Os demais
+// usam um schema permissivo (passthrough) — bloqueamos só os vetores de XSS
+// já conhecidos. Tipos sem entrada caem em "permitir mas logar".
+
+const PassthroughObject = z.object({}).passthrough();
+
+export const BLOCK_DATA_SCHEMAS: Record<string, z.ZodTypeAny> = {
+  section: SectionSchema,
+  paragraph: ParagraphSchema,
+  callout: CalloutSchema,
+  code_block: CodeBlockSchema,
+  comparison_table: ComparisonTableSchema,
+  image: ImageSchema,
+  quiz: QuizSchema,
+  // Tipos sem schema estrito ainda: aceita qualquer objeto. Renderer faz
+  // asText() defensivo e BlockRenderer escapa via JSX (atributos não-URL
+  // são seguros por padrão no React).
+  qa_item: PassthroughObject,
+  key_value: PassthroughObject,
+  list: PassthroughObject,
+  decision_box: PassthroughObject,
+  flow_diagram: PassthroughObject,
+  arch_flow: PassthroughObject,
+  matrix_diagram: PassthroughObject,
+  stack_flow: PassthroughObject,
+  timeline: PassthroughObject,
+  node_graph: PassthroughObject,
+  annotated_formula: PassthroughObject,
+  hierarchy_diagram: PassthroughObject,
+  comparison_flow: PassthroughObject,
+  split_flow: PassthroughObject,
+  layer_stack: PassthroughObject,
+  mind_map: PassthroughObject,
+  exam_domain_badge: PassthroughObject,
+};

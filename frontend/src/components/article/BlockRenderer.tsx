@@ -37,7 +37,9 @@ import {
   ExamDomainBadge,
   MindMap,
 } from './primitives';
+import { QuizBlock } from './QuizBlock';
 import type { Block } from './blocks/schemas';
+import { BLOCK_DATA_SCHEMAS } from './blocks/schemas';
 
 // ─── Helper: extrai texto de qualquer formato ───────────────────────────────
 
@@ -431,7 +433,7 @@ const ADAPTERS: Record<string, AdapterEntry> = {
 
   quiz: {
     allowsChildren: false,
-    render: () => null, // Quiz é gerenciado pelo ModuleLayout, não inline
+    render: (data) => <QuizBlock data={data} />,
   },
 
   image: {
@@ -454,6 +456,30 @@ export function BlockRenderer({ block }: { block: Block }) {
     return null;
   }
 
+  // Defesa em profundidade: revalida `block.data` com o schema Zod do tipo
+  // ANTES de renderizar. Bloqueia payloads maliciosos que possam ter
+  // contornado a validação do backend (ex: `link: "javascript:..."` em
+  // paragraph, `src: "data:..."` em image). Se não há schema registrado,
+  // log warning mas renderiza (retrocompatibilidade com tipos novos).
+  const schema = BLOCK_DATA_SCHEMAS[block.type];
+  let safeData: unknown = block.data;
+  if (schema) {
+    const parsed = schema.safeParse(block.data);
+    if (!parsed.success) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[BlockRenderer] validation failed — block dropped',
+        block.type,
+        parsed.error.issues,
+      );
+      return null;
+    }
+    safeData = parsed.data;
+  } else {
+    // eslint-disable-next-line no-console
+    console.warn('[BlockRenderer] no schema for block type, rendering raw', block.type);
+  }
+
   // NOTA: erros em runtime de um bloco específico devem ser capturados por
   // ErrorBoundary no parent (ModuleLayout), não try/catch aqui — React não
   // garante captura de erros assíncronos via try/catch em JSX.
@@ -461,13 +487,13 @@ export function BlockRenderer({ block }: { block: Block }) {
     return (
       <>
         {adapter.render(
-          block.data,
+          safeData,
           block.children.map(c => <BlockRenderer key={c.id} block={c} />)
         )}
       </>
     );
   }
-  return <>{adapter.render(block.data)}</>;
+  return <>{adapter.render(safeData)}</>;
 }
 
 export function BlockTree({ blocks }: { blocks: Block[] }) {

@@ -324,21 +324,69 @@ describe('BlockRenderer — adapters por tipo', () => {
     expect(container.firstChild).not.toBeNull();
   });
 
-  it('quiz renderiza vazio (gerenciado pelo ModuleLayout)', () => {
-    const { container } = render(<BlockRenderer block={b('quiz', { question: 'q' })} />);
-    expect(container.textContent).toBe('');
+  it('quiz renderiza pergunta + opções interativas (CMS dinâmico)', () => {
+    render(<BlockRenderer block={b('quiz', {
+      question: 'Quanto é 2 + 2?',
+      options: ['3', '4', '5'],
+      correctIndex: 1,
+      explanation: 'Aritmética básica.',
+    })} />);
+    expect(screen.getByText(/Quanto é 2 \+ 2\?/)).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /^4/ })).toBeInTheDocument();
   });
 
-  it('image renderiza img com src + alt + caption', () => {
+  it('image renderiza img com src + alt + caption (host na allowlist)', () => {
+    const src = 'https://images.unsplash.com/photo-1.png';
     const { container } = render(
       <BlockRenderer
-        block={b('image', { src: 'https://x.com/a.png', alt: 'desc', caption: 'fonte' })}
+        block={b('image', { src, alt: 'desc', caption: 'fonte' })}
       />,
     );
     const img = container.querySelector('img');
-    expect(img?.getAttribute('src')).toBe('https://x.com/a.png');
+    expect(img?.getAttribute('src')).toBe(src);
     expect(img?.getAttribute('alt')).toBe('desc');
     expect(screen.getByText('fonte')).toBeInTheDocument();
+  });
+
+  it('image bloqueia host fora da allowlist (XSS via subdomínio attacker)', () => {
+    const { container } = render(
+      <BlockRenderer
+        block={b('image', { src: 'https://attacker.com/x.png', alt: 'desc' })}
+      />,
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('image bloqueia data:image (vetor XSS clássico)', () => {
+    const { container } = render(
+      <BlockRenderer
+        block={b('image', { src: 'data:image/svg+xml;base64,PHN2Zw==', alt: 'x' })}
+      />,
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('paragraph bloqueia link com protocolo javascript:', () => {
+    const { container } = render(
+      <BlockRenderer
+        block={b('paragraph', {
+          content: [{ text: 'click me', link: 'javascript:alert(1)' }],
+        })}
+      />,
+    );
+    // safeParse no schema rejeita → renderer descarta o bloco inteiro.
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('paragraph bloqueia link com protocolo data:', () => {
+    const { container } = render(
+      <BlockRenderer
+        block={b('paragraph', {
+          content: [{ text: 'x', link: 'data:text/html,<script>alert(1)</script>' }],
+        })}
+      />,
+    );
+    expect(container.firstChild).toBeNull();
   });
 
   it('tipo desconhecido cai em fallback null (não crasha)', () => {
