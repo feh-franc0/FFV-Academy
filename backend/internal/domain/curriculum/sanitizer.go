@@ -27,11 +27,11 @@ import (
 // urlKeys são as chaves cujos valores precisam validação de protocolo.
 // Manter sincronizado com schemas Zod do frontend.
 var urlKeys = map[string]struct{}{
-	"link":      {},
-	"src":       {},
-	"href":      {},
-	"url":       {},
-	"sourceUrl": {},
+	"link":       {},
+	"src":        {},
+	"href":       {},
+	"url":        {},
+	"sourceUrl":  {},
 	"source_url": {},
 }
 

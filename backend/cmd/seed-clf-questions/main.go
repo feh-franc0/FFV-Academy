@@ -29,17 +29,17 @@ type questionFileJSON struct {
 }
 
 type questionJSON struct {
-	ID           string            `json:"id"`
-	Stem         string            `json:"stem"`
-	Options      []optionJSON      `json:"options"`
-	CorrectID    string            `json:"correctId"`
-	Explanation  explanationJSON   `json:"explanation"`
-	Topic        string            `json:"topic"`
-	Domain       string            `json:"domain"`
-	Difficulty   string            `json:"difficulty"`
-	ScenarioType string            `json:"scenarioType"`
-	Tags         []string          `json:"tags"`
-	Source       string            `json:"source"`
+	ID           string          `json:"id"`
+	Stem         string          `json:"stem"`
+	Options      []optionJSON    `json:"options"`
+	CorrectID    string          `json:"correctId"`
+	Explanation  explanationJSON `json:"explanation"`
+	Topic        string          `json:"topic"`
+	Domain       string          `json:"domain"`
+	Difficulty   string          `json:"difficulty"`
+	ScenarioType string          `json:"scenarioType"`
+	Tags         []string        `json:"tags"`
+	Source       string          `json:"source"`
 }
 
 type optionJSON struct {
@@ -69,8 +69,8 @@ func main() {
 		bankPath = os.Args[1]
 	}
 
-	if info, err := os.Stat(bankPath); err != nil || !info.IsDir() {
-		log.Fatalf("diretório não encontrado: %s", bankPath)
+	if info, err := os.Stat(bankPath); err != nil || !info.IsDir() { //nolint:gosec // G703: path vem do operador via CLI args, não de input externo
+		log.Fatalf("diretório não encontrado: %s", bankPath) //nolint:gosec // G706: log de path controlado pelo operador
 	}
 
 	ctx := context.Background()
@@ -119,7 +119,7 @@ func main() {
 	for _, path := range clfFiles {
 		count, err := processFile(ctx, pool, path)
 		if err != nil {
-			log.Printf("ERRO %s: %v", filepath.Base(path), err)
+			log.Printf("ERRO %s: %v", filepath.Base(path), err) //nolint:gosec // G706: filename é do question-bank do repositório
 			continue
 		}
 		fmt.Printf("  %s: %d questoes\n", filepath.Base(path), count)
@@ -135,8 +135,7 @@ func main() {
 }
 
 func processFile(ctx context.Context, pool *pgxpool.Pool, path string) (int, error) {
-	// #nosec G304 — path controlado pelo operador via args, não por input externo
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // G304,G703: path vem do operador via CLI args
 	if err != nil {
 		return 0, fmt.Errorf("read file: %w", err)
 	}
