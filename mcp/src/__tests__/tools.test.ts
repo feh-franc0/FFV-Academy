@@ -4,8 +4,8 @@ import {
   TRAILS_STATIC,
   getTrails,
   groupByTrail,
-  buildDiff,
-} from "../tools.js";
+} from "../tools/index.js";
+import { buildDiff } from "../util.js";
 import type { Article, ArticleListItem } from "../client.js";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────

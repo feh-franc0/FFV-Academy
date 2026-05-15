@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 
 import { loadConfig } from "./config.js";
 import { FFVClient } from "./client.js";
-import { registerTools } from "./tools.js";
+import { registerAllTools } from "./tools/index.js";
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
@@ -15,7 +15,7 @@ async function main(): Promise<void> {
     version: "0.2.0",
   });
 
-  registerTools(server, client, cfg);
+  registerAllTools(server, client, cfg);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

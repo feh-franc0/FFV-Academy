@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { registerTools } from "../tools.js";
+import { registerAllTools } from "../tools/index.js";
 import { ApiError } from "../client.js";
 import type { FFVClient } from "../client.js";
 
@@ -59,7 +59,7 @@ const MOCK_CFG = {
 async function makeConnectedPair(clientOverrides: Partial<{ [K in keyof FFVClient]: unknown }> = {}) {
   const server = new McpServer({ name: "test", version: "0.0.0" });
   const mockClient = makeMockClient(clientOverrides);
-  registerTools(server, mockClient, MOCK_CFG);
+  registerAllTools(server, mockClient, MOCK_CFG);
 
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const sdkClient = new Client({ name: "test-client", version: "0.0.0" });

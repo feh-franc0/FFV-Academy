@@ -1,13 +1,20 @@
 # MCP — FFV Academy
 
-MCP server que expõe o currículo da FFV Academy ao Claude via 10 tools. Roda como processo stdio.
+MCP server que expõe o currículo da FFV Academy ao Claude via 24 tools, divididas em 4 grupos:
+
+- **curriculum** (10): `list_hubs`, `list_trails`, `list_articles`, `read_article`, `search_articles`, `find_similar_titles`, `create_article`, `preview_article_update`, `update_article`, `delete_article`
+- **simulados/questions** (7): `list_simulados`, `read_simulado`, `verify_certificate`, `list_questions`, `create_question`, `update_question`, `delete_question`
+- **admin** (3): `get_leaderboard`, `get_admin_stats`, `get_audit_log`
+- **news** (4): `list_news`, `create_news`, `update_news`, `delete_news`
+
+Roda como processo stdio.
 
 ## Comandos rápidos
 
 ```bash
 npm run build      # compila TypeScript → dist/index.js
 npm run typecheck  # verifica tipos sem emitir arquivos
-npm test           # 77 testes (100% linhas/funções, 94% branches)
+npm test           # 101 testes (100% linhas/funções, 94% branches)
 npm run test:watch # Vitest em modo interativo
 npm run dev        # tsc --watch (recompila ao salvar)
 npm run clean      # remove dist/
@@ -20,19 +27,26 @@ src/
 ├── index.ts          # bootstrap stdio (conecta McpServer ao StdioTransport)
 ├── config.ts         # loadConfig() — lê e valida variáveis de ambiente
 ├── client.ts         # FFVClient — HTTP client tipado + ApiError
-└── tools.ts          # registerTools() + funções puras exportadas
-    │                 # HUBS_STATIC, TRAILS_STATIC (taxonomia estática, as const)
-    │                 # getTrails(hubId?)
-    │                 # groupByTrail(data, topic)
-    │                 # buildDiff(current, patches)
+├── util.ts           # helpers compartilhados: safe(), log(), json(), fail(),
+│                     # readJson(), writeJson(), today(), buildDiff()
+└── tools/
+    ├── index.ts          # registerAllTools(server, client, cfg)
+    ├── curriculum.ts     # HUBS_STATIC, TRAILS_STATIC, getTrails, groupByTrail + 10 tools
+    ├── simulados.ts      # simulados + 4 tools de questions
+    ├── admin.ts          # leaderboard, stats, audit log
+    └── news.ts           # 4 tools de news.json
     └── __tests__/
-        ├── config.test.ts    # 10 testes
-        ├── client.test.ts    # 27 testes
-        ├── tools.test.ts     # 28 testes — funções puras
-        └── handlers.test.ts  # 12 testes — handlers via InMemoryTransport
+        ├── config.test.ts        # 10 testes
+        ├── client.test.ts        # 27 testes
+        ├── tools.test.ts         # 28 testes — funções puras
+        ├── handlers.test.ts      # 12 testes — handlers via InMemoryTransport
+        ├── news.test.ts          # 14 testes — news.json com tmpfs real
+        ├── questions.test.ts     # 10 testes — catalog.json com tmpfs real
+        ├── helpers/tmpfs.ts      # withTempJson(initial) → { path, cleanup }
+        └── fixtures/             # news.fixture.json, catalog.fixture.json
 ```
 
-## As 10 tools
+## As 24 tools
 
 | Tool | Autenticação | Propósito |
 |---|---|---|

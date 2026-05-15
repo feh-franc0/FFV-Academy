@@ -98,7 +98,7 @@ Instalável como PWA no iOS/Android. Service worker com cache. Reading progress 
 | `frontend/` | App web Next.js (artigos, simulados, gamificação, ranking) | Next.js 16, TypeScript, Tailwind, Vitest |
 | `backend/` | API REST + workers (auth, sync, leaderboard, certificados, billing) | Go 1.25, Chi, PostgreSQL, Redis |
 | `video-pipeline/` | Pipeline de geração de vídeos de marketing | TypeScript, Remotion 4, Playwright |
-| `mcp/` | MCP server — expõe o currículo FFV ao Claude (10 tools) | TypeScript, Node 20, MCP SDK |
+| `mcp/` | MCP server — expõe o currículo FFV ao Claude (24 tools) | TypeScript, Node 20, MCP SDK |
 | `drawio-tools/` | Scripts para diagramas de arquitetura AWS | Python, Bash, draw.io |
 | `legacy-site/` | Site estático HTML/CSS/JS anterior | HTML/CSS/JS puro |
 | `docs/` | Decisões de projeto e planejamento | Markdown |

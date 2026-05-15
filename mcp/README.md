@@ -2,7 +2,7 @@
 
 MCP Server que transforma o Claude em funcionário editorial e educacional da **FFV Academy**: cria notícias, gerencia questões de simulado, publica artigos, monitora o portal e muito mais — tudo em uma conversa, sem abrir nenhum painel.
 
-**Versão:** v0.3.0 · **24 tools** · 77 testes (100% linhas/funções)
+**Versão:** v0.3.0 · **24 tools** · 101 testes (100% linhas/funções)
 
 > Planejamento, decisões arquiteturais e revisão crítica: [`docs/`](./docs/README.md) · Backlog futuro: [`docs/BACKLOG.md`](./docs/BACKLOG.md)
 
