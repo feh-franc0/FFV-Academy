@@ -49,7 +49,7 @@ export function SocialProofBar() {
 
         <div className="flex items-center gap-6 text-xs" style={{ color: 'var(--ffv-muted)' }}>
           <Tag icon="⚡" label="100% gratuito" />
-          <Tag icon="🔒" label="Sem cadastro obrigatório" />
+          <Tag icon="🔁" label="Revisão espaçada (SM-2)" />
           <Tag icon="🇧🇷" label="Conteúdo em PT-BR" />
         </div>
       </div>

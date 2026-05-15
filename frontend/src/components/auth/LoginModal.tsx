@@ -8,6 +8,8 @@ const IS_DEV = process.env.NODE_ENV !== 'production';
 
 interface Props {
   reason?: string;
+  /** Pré-preenche e auto-submete o email — usado pelo formulário inline da home. */
+  initialEmail?: string;
   onSuccess: (user: UserProfile) => void;
   onCancel: () => void;
 }
@@ -23,12 +25,12 @@ type Step = 'email' | 'register' | 'code';
  * 2a. Novo usuário: nome + celular + consentimento + código.
  * 2b. Retornante: apenas código.
  */
-export function LoginModal({ reason, onSuccess, onCancel }: Props) {
+export function LoginModal({ reason, initialEmail, onSuccess, onCancel }: Props) {
   const [step, setStep] = useState<Step>('email');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(initialEmail ?? '');
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [consent, setConsent] = useState(false);
@@ -46,6 +48,19 @@ export function LoginModal({ reason, onSuccess, onCancel }: Props) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onCancel]);
+
+  // Auto-submete o email quando vem pré-preenchido do formulário inline da home
+  useEffect(() => {
+    if (!initialEmail?.trim()) return;
+    const trimmed = initialEmail.trim();
+    if (!emailSchema.safeParse(trimmed).success) return;
+    setLoading(true);
+    requestToken(trimmed)
+      .then(result => setStep(result.isNewUser ? 'register' : 'code'))
+      .catch(err => setError((err as Error).message))
+      .finally(() => setLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // intencional: só executa uma vez ao montar
 
   useEffect(() => {
     if (step === 'code' || step === 'register') codeInputRef.current?.focus();

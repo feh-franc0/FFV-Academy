@@ -4,14 +4,16 @@ import { GameDemo } from './GameDemo';
 import { FfvButton } from '@/components/ui/ffv-button';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { useGameState } from '@/hooks/useGameState';
+import { useAuth } from '@/hooks/useAuth';
 
 export function Hero({ totalArticles, totalTrails }: { totalArticles: number; totalTrails: number }) {
   const { state } = useGameState();
+  const { isLoggedIn, requireLogin } = useAuth();
   const lastArticle = state?.lastArticle;
   const isReturning = !!lastArticle && (state?.completedModules?.length ?? 0) > 0;
 
   return (
-    <section className="relative px-6 pt-16 pb-20 md:pt-24 md:pb-24 overflow-hidden">
+    <section className="relative px-6 pt-16 pb-20 md:pt-24 md:pb-28 overflow-hidden">
       <div
         aria-hidden
         className="absolute inset-0 pointer-events-none"
@@ -23,21 +25,27 @@ export function Hero({ totalArticles, totalTrails }: { totalArticles: number; to
 
       <div className="relative max-w-6xl mx-auto grid lg:grid-cols-[1.1fr,1fr] gap-12 items-center">
         <div>
-          <div className="flex items-center gap-2 mb-6">
+          <div className="flex items-center gap-2 mb-5">
             <StatusBadge tone="live">ATIVO · NOVOS ARTIGOS TODA SEMANA</StatusBadge>
           </div>
 
+          <p
+            className="font-mono uppercase tracking-widest text-xs mb-4"
+            style={{ color: 'var(--ffv-blue)', letterSpacing: '0.12em' }}
+          >
+            Para devs que levam a carreira a sério
+          </p>
+
           <h1
-            className="font-bold"
             style={{
               fontSize: 'var(--text-hero)',
               fontWeight: 800,
-              lineHeight: 1.1,
+              lineHeight: 1.08,
               letterSpacing: '-0.02em',
               marginBottom: 20,
             }}
           >
-            Vire um dos profissionais mais qualificados da{' '}
+            Aprenda IA, AWS e engenharia{' '}
             <span
               style={{
                 background: 'linear-gradient(90deg, var(--ffv-blue), var(--ffv-purple))',
@@ -46,7 +54,7 @@ export function Hero({ totalArticles, totalTrails }: { totalArticles: number; to
                 backgroundClip: 'text',
               }}
             >
-              nova era da IA no digital.
+              como engenheiro. Não como usuário de hype.
             </span>
           </h1>
 
@@ -54,14 +62,14 @@ export function Hero({ totalArticles, totalTrails }: { totalArticles: number; to
             style={{
               fontSize: 'clamp(0.95rem, 1.3vw, 1.1rem)',
               color: 'var(--ffv-muted)',
-              lineHeight: 1.65,
-              maxWidth: 560,
+              lineHeight: 1.7,
+              maxWidth: 540,
               marginBottom: 28,
             }}
           >
-            IA, AWS, engenharia, comunicação, carreira e empreendedorismo digital — em uma plataforma
-            gamificada com XP, badges e ranking. {totalArticles}+ artigos técnicos em {totalTrails} trilhas,
-            100% gratuito.
+            {totalArticles}+ artigos técnicos em {totalTrails} trilhas — os internals reais de
+            transformers, sistemas distribuídos, RAG, AWS e muito mais. Gamificado com XP, badges e
+            ranking. 100% gratuito.
           </p>
 
           <div className="flex items-center gap-3 flex-wrap">
@@ -76,22 +84,42 @@ export function Hero({ totalArticles, totalTrails }: { totalArticles: number; to
               </>
             ) : (
               <>
-                <FfvButton href="/mapa" variant="primary" size="lg">
-                  Começar agora — é gratuito →
-                </FfvButton>
-                <FfvButton href="/progresso" variant="secondary" size="lg">
-                  Ver meu progresso
+                {!isLoggedIn ? (
+                  <FfvButton
+                    onClick={() => requireLogin('criar sua conta na FFV Academy').catch(() => {})}
+                    variant="primary"
+                    size="lg"
+                  >
+                    Criar conta grátis →
+                  </FfvButton>
+                ) : (
+                  <FfvButton href="/mapa" variant="primary" size="lg">
+                    Explorar trilhas →
+                  </FfvButton>
+                )}
+                <FfvButton href="/mapa" variant="secondary" size="lg">
+                  Ver o currículo
                 </FfvButton>
               </>
             )}
           </div>
+
+          {!isReturning && (
+            <div className="flex items-center gap-6 mt-8 flex-wrap">
+              <StatPill value={`${totalArticles}+`} label="artigos" />
+              <Divider />
+              <StatPill value={`${totalTrails}`} label="trilhas" />
+              <Divider />
+              <StatPill value="128+" label="badges" />
+              <Divider />
+              <StatPill value="SM-2" label="revisão espaçada" />
+            </div>
+          )}
         </div>
 
-        {/* Mobile: GameDemo só após CTAs, com versão compacta */}
         <div className="lg:hidden">
           <GameDemo compact />
         </div>
-        {/* Desktop: GameDemo completo na coluna direita */}
         <div className="hidden lg:block">
           <GameDemo />
         </div>
@@ -100,3 +128,15 @@ export function Hero({ totalArticles, totalTrails }: { totalArticles: number; to
   );
 }
 
+function StatPill({ value, label }: { value: string; label: string }) {
+  return (
+    <span className="flex flex-col">
+      <span className="text-sm font-bold" style={{ color: 'var(--foreground)' }}>{value}</span>
+      <span className="text-xs" style={{ color: 'var(--ffv-muted)' }}>{label}</span>
+    </span>
+  );
+}
+
+function Divider() {
+  return <span className="h-6 w-px" style={{ background: 'var(--ffv-border)' }} />;
+}
