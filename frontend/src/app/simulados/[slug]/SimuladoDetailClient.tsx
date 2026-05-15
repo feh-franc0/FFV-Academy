@@ -99,7 +99,7 @@ export function SimuladoDetailClient({ slug }: Props) {
         </details>
       </section>
 
-      <section>
+      <section className="flex flex-col gap-3">
         {simulado.comingSoon ? (
           <div className="w-full p-5 rounded-xl text-center" style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}>
             <p className="text-lg font-bold mb-1">Em breve</p>
@@ -113,8 +113,18 @@ export function SimuladoDetailClient({ slug }: Props) {
             className="w-full px-5 py-3 rounded-xl font-semibold text-sm"
             style={{ background: accent, color: '#0d1117' }}
           >
-            Começar simulado →
+            Começar simulado (65 questões · 90 min) →
           </button>
+        )}
+
+        {simulado.studyModeUrl && (
+          <Link
+            href={simulado.studyModeUrl}
+            className="w-full block text-center px-5 py-3 rounded-xl font-semibold text-sm"
+            style={{ background: 'var(--ffv-bg2)', border: `1px solid ${accent}50`, color: accent }}
+          >
+            📚 Modo estudo livre — 500+ questões, sem timer
+          </Link>
         )}
       </section>
     </article>

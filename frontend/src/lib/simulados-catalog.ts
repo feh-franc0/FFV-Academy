@@ -22,6 +22,7 @@ const AWS_PRACTITIONER: Simulado = {
   questionCount: 65,
   timeLimitMin: 90,
   passingScore: 70,
+  studyModeUrl: '/simulados/cloud-practitioner/estudo',
   topics: [
     'IAM & Segurança',
     'Compute (EC2)',

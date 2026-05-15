@@ -271,6 +271,8 @@ export interface Simulado {
   passingScore: number;
   /** Se true, ainda não está disponível (mostrar "Em breve"). */
   comingSoon?: boolean;
+  /** URL do modo de estudo livre associado (sem timer, banco completo). */
+  studyModeUrl?: string;
 }
 
 export interface SimuladoAttempt {
