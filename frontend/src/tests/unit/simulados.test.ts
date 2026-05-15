@@ -1,11 +1,11 @@
 /**
- * Simulados — scoring, weak topics, paywall gate, persistência.
+ * Simulados — scoring, weak topics, acesso, persistência.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   getSimulado, scoreAttempt, getWeakTopics,
-  isQuestionAccessible, FREE_QUESTIONS_LIMIT,
+  isQuestionAccessible,
   saveAttempt, getAttempt, listAttempts, clearAttempt,
   type SimuladoAttempt,
 } from '../../lib/simulados';
@@ -75,21 +75,10 @@ describe('getWeakTopics', () => {
   });
 });
 
-describe('isQuestionAccessible — gate de 10 grátis', () => {
-  it(`primeiras ${FREE_QUESTIONS_LIMIT} questões são free sem pagar`, () => {
-    for (let i = 0; i < FREE_QUESTIONS_LIMIT; i++) {
-      expect(isQuestionAccessible(i, false)).toBe(true);
-    }
-  });
-
-  it(`questão ${FREE_QUESTIONS_LIMIT + 1} exige pagamento`, () => {
-    expect(isQuestionAccessible(FREE_QUESTIONS_LIMIT, false)).toBe(false);
-    expect(isQuestionAccessible(FREE_QUESTIONS_LIMIT, true)).toBe(true);
-  });
-
-  it('user pago acessa qualquer questão', () => {
+describe('isQuestionAccessible — acesso gratuito completo', () => {
+  it('qualquer questão é acessível (simulados são gratuitos)', () => {
     for (let i = 0; i < 100; i++) {
-      expect(isQuestionAccessible(i, true)).toBe(true);
+      expect(isQuestionAccessible()).toBe(true);
     }
   });
 });

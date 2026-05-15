@@ -105,10 +105,17 @@ export async function requestToken(email: string): Promise<{ ok: true; isNewUser
     return { ok: true, isNewUser };
   }
 
-  const res = await apiPost<{ message: string; isNewUser: boolean }>(
-    '/api/v1/auth/request-token', { email }, false,
-  );
-  return { ok: true, isNewUser: res.isNewUser };
+  try {
+    const res = await apiPost<{ message: string; isNewUser: boolean }>(
+      '/api/v1/auth/request-token', { email }, false,
+    );
+    return { ok: true, isNewUser: res.isNewUser };
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 429) {
+      throw new Error('Limite de tentativas atingido. Aguarde 15 minutos antes de tentar novamente.');
+    }
+    throw err;
+  }
 }
 
 // ─── verifyToken ───────────────────────────────────────────────────────────
@@ -207,6 +214,9 @@ export async function refreshSession(): Promise<UserProfile | null> {
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) {
       // Token de refresh expirado ou revogado — sessão encerrada legitimamente.
+      // Limpa storage local para que getCurrentUser() também retorne null.
+      clearAccessToken();
+      clearUser();
       return null;
     }
     // Erro transitório (5xx, rede, timeout): não encerra a sessão.

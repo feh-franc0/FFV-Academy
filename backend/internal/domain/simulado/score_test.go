@@ -60,16 +60,12 @@ func Test_Scorer_Calculate_NoAnswers_Returns0NotPassed(t *testing.T) {
 	assert.False(t, result.Passed)
 }
 
-func Test_PaywallPolicy_IsAccessible_FreeIndex_ReturnsTrue(t *testing.T) {
+func Test_PaywallPolicy_IsAccessible_AlwaysTrue(t *testing.T) {
 	p := simulado.PaywallPolicy{}
 	assert.True(t, p.IsAccessible(0, false))
 	assert.True(t, p.IsAccessible(9, false))
-}
-
-func Test_PaywallPolicy_IsAccessible_PaidIndex_RequiresPaid(t *testing.T) {
-	p := simulado.PaywallPolicy{}
-	assert.False(t, p.IsAccessible(10, false))
-	assert.True(t, p.IsAccessible(10, true))
+	assert.True(t, p.IsAccessible(10, false))
+	assert.True(t, p.IsAccessible(100, false))
 }
 
 func Test_Score_WeakTopics_BelowThreshold_ReturnsTopics(t *testing.T) {

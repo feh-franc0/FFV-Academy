@@ -8,15 +8,11 @@ import {
   getSimulado,
   getAttempt,
   saveAttempt,
-  isQuestionAccessible,
-  FREE_QUESTIONS_LIMIT,
   getExplanationText,
 } from '@/lib/simulados';
-import { isPaidFor, grantProduct } from '@/lib/auth';
 import { useAuth } from '@/hooks/useAuth';
 import { idFromSlug } from '@/components/SimuladoCard';
 import { TutorChat } from './TutorChat';
-import { PaywallCard } from './PaywallCard';
 import { FEATURES } from '@/lib/features';
 import { STORAGE_KEYS } from '@/lib/constants';
 import { getJSON, setJSON, removeKey } from '@/lib/storage';
@@ -38,7 +34,7 @@ type Mode = 'prova' | 'estudo';
  */
 export function SimuladoRunner({ slug }: Props) {
   const router = useRouter();
-  const { user, isLoggedIn, refresh, requireLogin } = useAuth();
+  const { isLoggedIn, requireLogin } = useAuth();
   const simuladoId = idFromSlug(slug);
   const simulado = getSimulado(simuladoId);
 
@@ -50,8 +46,6 @@ export function SimuladoRunner({ slug }: Props) {
   const [timeLeft, setTimeLeft] = useState<number>(0);
   const [showTutor, setShowTutor] = useState(false);
   const [hydrated, setHydrated] = useState(false);
-
-  const hasPaid = user ? isPaidFor(simuladoId) : false;
 
   // Gate inicial: precisa estar logado
   useEffect(() => {
@@ -122,7 +116,6 @@ export function SimuladoRunner({ slug }: Props) {
   }
 
   const currentQuestion = simulado.questions[currentIndex];
-  const accessible = isQuestionAccessible(currentIndex, hasPaid);
 
   function selectOption(optionId: string) {
     if (!attempt || confirmed[currentQuestion.id]) return;
@@ -153,11 +146,6 @@ export function SimuladoRunner({ slug }: Props) {
 
   function goTo(idx: number) {
     if (idx >= 0 && idx < simulado!.questions.length) setCurrentIndex(idx);
-  }
-
-  function handleUnlock() {
-    grantProduct(simuladoId);
-    refresh();
   }
 
   function finalize() {
@@ -224,15 +212,8 @@ export function SimuladoRunner({ slug }: Props) {
       <div className="grid md:grid-cols-[1fr_280px] gap-6">
         {/* Painel esquerdo — questão */}
         <section>
-          {!accessible ? (
-            <PaywallCard
-              price={simulado.price}
-              freeLimit={FREE_QUESTIONS_LIMIT}
-              onUnlock={handleUnlock}
-            />
-          ) : (
-            <>
-              <div className="mb-5">
+          <>
+            <div className="mb-5">
                 <p className="text-xs font-mono uppercase tracking-widest mb-2" style={{ color: 'var(--ffv-muted)' }}>
                   Questão {currentIndex + 1} de {simulado.questions.length} · {currentQuestion.topic}
                 </p>
@@ -327,8 +308,7 @@ export function SimuladoRunner({ slug }: Props) {
                   <p className="text-sm leading-relaxed">{getExplanationText(currentQuestion.explanation)}</p>
                 </div>
               )}
-            </>
-          )}
+          </>
         </section>
 
         {/* Painel direito — grid + flag */}

@@ -99,7 +99,6 @@ func (h *SimuladoHandler) StartAttempt(w http.ResponseWriter, r *http.Request) {
 	cmd := appsim.StartAttemptCommand{
 		UserID:     userID,
 		SimuladoID: simuladoID,
-		HasPaid:    userHasPaidSimulado(r, simuladoID),
 	}
 
 	result, err := h.startAttempt.Execute(r.Context(), cmd)
@@ -160,7 +159,6 @@ func (h *SimuladoHandler) AnswerQuestion(w http.ResponseWriter, r *http.Request)
 		AttemptID:  attemptID,
 		QuestionID: shared.QuestionID(req.QuestionID),
 		OptionID:   domsim.OptionID(req.OptionID),
-		HasPaid:    false, // será verificado via claim no JWT em produção
 	}
 
 	if err := h.answerQ.Execute(r.Context(), cmd); err != nil {
@@ -313,8 +311,3 @@ func (h *SimuladoHandler) ReportQuestion(w http.ResponseWriter, r *http.Request)
 	WriteJSON(w, http.StatusCreated, map[string]string{"reportId": res.ReportID})
 }
 
-// userHasPaidSimulado verifica via context se o usuário pagou pelo simulado.
-// Em produção, isso vem do JWT claim ou da DB — simplificado aqui via header.
-func userHasPaidSimulado(_ *http.Request, _ shared.SimuladoID) bool {
-	return false // enforçado no middleware/JWT em produção
-}

@@ -44,7 +44,6 @@ func Test_AnswerQuestion_Execute_HappyPath_RecordsAnswer(t *testing.T) {
 		AttemptID:  attemptID,
 		QuestionID: "a",
 		OptionID:   domsim.OptionA,
-		HasPaid:    false,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -121,15 +120,13 @@ func Test_AnswerQuestion_Execute_QuestionNotInSimulado_ReturnsQuestionNotFound(t
 	}
 }
 
-func Test_AnswerQuestion_Execute_PaywallBlocked_ReturnsPaywallBlocked(t *testing.T) {
+func Test_AnswerQuestion_Execute_BeyondTenQuestions_StillAccessible(t *testing.T) {
 	now := time.Now()
 	userID := shared.NewUserID()
 	simID := shared.SimuladoID("s1")
 	attemptID := shared.NewAttemptID()
 	attempt := domsim.StartAttempt(attemptID, userID, simID, 90, now)
 
-	// Criar simulado com 12 perguntas; índices 10 e 11 são pagos (>= FreeQuestionsLimit=10).
-	// Rune 'a' + 10 = 'k'.
 	sim := makeSimulado(simID, 10, 2)
 	repo := &startAttemptMockRepo{byID: map[shared.AttemptID]*domsim.Attempt{attemptID: attempt}}
 	catalog := &startAttemptMockCatalog{sim: sim}
@@ -140,9 +137,8 @@ func Test_AnswerQuestion_Execute_PaywallBlocked_ReturnsPaywallBlocked(t *testing
 		AttemptID:  attemptID,
 		QuestionID: shared.QuestionID("k"),
 		OptionID:   domsim.OptionA,
-		HasPaid:    false,
 	})
-	if err == nil || !errors.Is(err, domsim.ErrPaywallBlocked) {
-		t.Fatalf("expected ErrPaywallBlocked, got %v", err)
+	if err != nil {
+		t.Fatalf("expected no error for question beyond index 10, got %v", err)
 	}
 }

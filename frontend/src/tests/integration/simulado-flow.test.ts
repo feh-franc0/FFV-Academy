@@ -1,15 +1,14 @@
 /**
  * Integração — fluxo end-to-end de simulado.
  *
- * Simula: login → responde questões → atinge paywall → paga (mock) → continua
- * → finaliza → score → emite certificado.
+ * Simula: login → responde questões → finaliza → score → emite certificado.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { verifyToken, grantProduct, isPaidFor, MOCK_TOKEN } from '../../lib/auth';
+import { verifyToken, MOCK_TOKEN } from '../../lib/auth';
 import {
   getSimulado, saveAttempt, scoreAttempt, getAttempt,
-  isQuestionAccessible, FREE_QUESTIONS_LIMIT,
+  isQuestionAccessible,
 } from '../../lib/simulados';
 import { issueCertificate, getCertificateLocal } from '../../lib/certificates';
 import { completeSimulado, loadState } from '../../lib/engine';
@@ -29,24 +28,15 @@ async function login() {
 }
 
 describe('Fluxo completo de simulado', () => {
-  it('user loga → gate paywall na 11ª → paga → continua → finaliza', async () => {
+  it('user loga → todas as questões acessíveis → finaliza', async () => {
     await login();
     const sim = getSimulado(SIM_ID)!;
 
-    // Primeiras 10 grátis — accessível sem pagar
-    for (let i = 0; i < FREE_QUESTIONS_LIMIT; i++) {
-      expect(isQuestionAccessible(i, false)).toBe(true);
+    // Todas as questões acessíveis — sem paywall
+    expect(isQuestionAccessible()).toBe(true);
+    for (let i = 0; i < sim.questions.length; i++) {
+      expect(isQuestionAccessible()).toBe(true);
     }
-
-    // 11ª bloqueada
-    expect(isQuestionAccessible(FREE_QUESTIONS_LIMIT, false)).toBe(false);
-
-    // Mock pagamento
-    grantProduct(SIM_ID);
-    expect(isPaidFor(SIM_ID)).toBe(true);
-
-    // Agora todas acessíveis
-    expect(isQuestionAccessible(FREE_QUESTIONS_LIMIT, true)).toBe(true);
 
     // Responde todas corretamente
     const answers: Record<string, string> = {};

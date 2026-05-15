@@ -10,6 +10,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
+import { useCallback } from 'react';
 
 const NAV = [
   { href: '/admin', label: 'Dashboard' },
@@ -23,19 +24,30 @@ const NAV = [
 ];
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
-  const { user, isLoggedIn } = useAuth();
+  const { user, isLoggedIn, requireLogin } = useAuth();
   const pathname = usePathname();
+
+  const handleLogin = useCallback(() => {
+    requireLogin('acessar o painel admin').catch(() => {});
+  }, [requireLogin]);
 
   if (!isLoggedIn) {
     return (
       <main className="min-h-screen flex items-center justify-center p-8">
-        <div className="max-w-md text-center">
-          <h1 className="text-2xl font-bold mb-3">Acesso restrito</h1>
-          <p className="text-sm mb-4" style={{ color: 'var(--ffv-muted)' }}>
-            Esta área é apenas para administradores. Faça login com uma conta
-            com permissão admin.
+        <div className="max-w-sm text-center flex flex-col items-center gap-4">
+          <div className="text-4xl">🔒</div>
+          <h1 className="text-2xl font-bold">Acesso restrito</h1>
+          <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
+            Esta área é apenas para administradores.
           </p>
-          <Link href="/" className="underline" style={{ color: 'var(--ffv-blue)' }}>
+          <button
+            onClick={handleLogin}
+            className="w-full py-2.5 rounded-xl text-sm font-bold"
+            style={{ background: 'linear-gradient(135deg, var(--ffv-blue) 0%, #60a5fa 100%)', color: '#0d1117' }}
+          >
+            Fazer login →
+          </button>
+          <Link href="/" className="text-sm underline" style={{ color: 'var(--ffv-muted)' }}>
             Voltar pra home
           </Link>
         </div>

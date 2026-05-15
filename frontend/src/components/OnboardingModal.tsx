@@ -193,8 +193,9 @@ export function OnboardingModal() {
       role="dialog"
       aria-modal="true"
       aria-label="Boas-vindas ao FFV Academy"
-      className="fixed inset-0 z-[90] flex items-center justify-center px-4"
+      className="fixed inset-x-0 bottom-0 z-[90] flex items-center justify-center px-4"
       style={{
+        top: 'calc(56px + env(safe-area-inset-top, 0px))',
         background: 'color-mix(in srgb, #000 62%, transparent)',
         backdropFilter: 'blur(8px)',
         WebkitBackdropFilter: 'blur(8px)',

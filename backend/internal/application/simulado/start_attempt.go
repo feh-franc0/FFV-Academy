@@ -14,7 +14,6 @@ import (
 type StartAttemptCommand struct {
 	UserID     shared.UserID
 	SimuladoID shared.SimuladoID
-	HasPaid    bool
 }
 
 // StartAttemptResult contém a attempt resultante.

@@ -294,12 +294,6 @@ export interface ScoredAttempt {
   byTopic: Record<string, { correct: number; total: number }>;
 }
 
-/**
- * Limite gratuito (sem pagar) — primeiras N questões acessíveis a qualquer
- * user logado. Após a N+1ª, mostra paywall.
- */
-export const FREE_QUESTIONS_LIMIT = 10;
-
 // ─────────────────────────────────────────────────────────────────
 // Catálogo lookup
 // ─────────────────────────────────────────────────────────────────
@@ -392,19 +386,10 @@ export function getWeakTopics(attempt: SimuladoAttempt, simulado: Simulado): str
   return weak;
 }
 
-// ─────────────────────────────────────────────────────────────────
-// Paywall gate
-// ─────────────────────────────────────────────────────────────────
+/** Número de questões incluídas no pool de questões aleatórias por simulado. */
+export const FREE_QUESTIONS_LIMIT = 10;
 
-/**
- * Decide se uma questão está acessível para este user.
- * - N primeiras questões (FREE_QUESTIONS_LIMIT): sempre free
- * - Depois: só se user pagou pelo simulado
- */
-export function isQuestionAccessible(
-  questionIndex: number,
-  hasPaid: boolean,
-): boolean {
-  if (questionIndex < FREE_QUESTIONS_LIMIT) return true;
-  return hasPaid;
+// Todas as questões são gratuitas — acesso via nível do usuário, sem pagamento.
+export function isQuestionAccessible(): boolean {
+  return true;
 }

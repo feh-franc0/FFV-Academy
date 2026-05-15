@@ -170,8 +170,12 @@ func run() error {
 	clock := shared.SystemClock{}
 
 	// ─── Application: Use Cases ─────────────────────────────────────────────────
-	const magicTokenTTL = 10 * time.Minute
-	const magicMaxAttempts = 5
+	const magicTokenTTL = 15 * time.Minute
+	// Em dev, limite alto para não bloquear durante testes manuais.
+	magicMaxAttempts := int64(5)
+	if cfg.App.Env == "development" {
+		magicMaxAttempts = 999
+	}
 	// Cada use case recebe o logger via WithLogger para correlacionar logs com
 	// o request_id injetado pelo middleware. O padrão WithLogger mantém
 	// retrocompatibilidade — testes usam o construtor sem logger.

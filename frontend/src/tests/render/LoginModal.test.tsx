@@ -7,8 +7,8 @@ import { LoginModal } from '@/components/auth/LoginModal';
 describe('<LoginModal> render', () => {
   it('renderiza título e campo de email no passo inicial', () => {
     render(<LoginModal onSuccess={vi.fn()} onCancel={vi.fn()} />);
-    expect(screen.getByRole('heading', { name: /entrar ou criar conta/i })).toBeInTheDocument();
-    expect(screen.getByLabelText('Email')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /bem-vindo de volta/i })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/voce@email\.com/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /continuar/i })).toBeInTheDocument();
     // Nome e celular não aparecem no passo inicial
     expect(screen.queryByLabelText('Nome completo')).not.toBeInTheDocument();

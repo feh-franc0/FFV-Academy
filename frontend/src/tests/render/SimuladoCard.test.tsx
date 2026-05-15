@@ -27,17 +27,17 @@ const fakeSimulado: Simulado = {
 };
 
 describe('<SimuladoCard> render', () => {
-  it('renderiza título, preço e topics principais', () => {
+  it('renderiza título, "Gratuito" e topics principais', () => {
     render(<SimuladoCard simulado={fakeSimulado} />);
     expect(screen.getByRole('heading', { name: /aws cloud practitioner/i })).toBeInTheDocument();
-    expect(screen.getByText(/R\$ 47/)).toBeInTheDocument();
+    expect(screen.getByText('Gratuito')).toBeInTheDocument();
     expect(screen.getByText('IAM')).toBeInTheDocument();
   });
 
   it('mostra "Em breve" quando comingSoon', () => {
     render(<SimuladoCard simulado={{ ...fakeSimulado, comingSoon: true }} />);
     expect(screen.getByText(/em breve · preview/i)).toBeInTheDocument();
-    expect(screen.getByText('—')).toBeInTheDocument();
+    expect(screen.getByText('Em breve')).toBeInTheDocument();
   });
 
   it('link navega para a página do simulado ao clicar', async () => {

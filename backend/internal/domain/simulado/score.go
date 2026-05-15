@@ -118,20 +118,12 @@ func (Scorer) Calculate(simulado *Simulado, answers Answers) ScoreResult {
 // Paywall Policy
 // ─────────────────────────────────────────────────────────────────
 
-// FreeQuestionsLimit é o número de questões acessíveis sem pagamento.
-// Espelha FREE_QUESTIONS_LIMIT do frontend.
-const FreeQuestionsLimit = 10
-
-// PaywallPolicy decide se uma questão está acessível.
+// PaywallPolicy controla o acesso às questões do simulado.
 //
-// PADRÃO DDD Domain Service: regra de negócio que cruza User e Simulado.
-// Não pertence a nenhum aggregate isoladamente.
+// Todas as questões são gratuitas — acesso via nível do usuário, não pagamento.
 type PaywallPolicy struct{}
 
-// IsAccessible retorna true se a questão no índice pode ser respondida.
-func (PaywallPolicy) IsAccessible(questionIndex int, hasPaid bool) bool {
-	if questionIndex < FreeQuestionsLimit {
-		return true
-	}
-	return hasPaid
+// IsAccessible retorna true para qualquer questão: simulados são 100% gratuitos.
+func (PaywallPolicy) IsAccessible(_ int, _ bool) bool {
+	return true
 }

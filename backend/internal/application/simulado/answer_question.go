@@ -14,18 +14,15 @@ type AnswerQuestionCommand struct {
 	AttemptID  shared.AttemptID
 	QuestionID shared.QuestionID
 	OptionID   domsimulado.OptionID
-	HasPaid    bool
 }
 
 // AnswerQuestionUseCase salva a resposta de uma questão (onde o usuário parou).
 //
 // IDEMPOTENTE: chamar duas vezes com mesma resposta tem mesmo efeito.
-// PAYWALL: questões além do limite free requerem pagamento (enforçado aqui).
 // SERVIDOR AUTORITATIVO: valida que a questão existe no catálogo.
 type AnswerQuestionUseCase struct {
 	attemptRepo domsimulado.AttemptRepository
 	catalog     domsimulado.CatalogProvider
-	paywall     domsimulado.PaywallPolicy
 	clock       shared.Clock
 }
 
@@ -37,7 +34,6 @@ func NewAnswerQuestionUseCase(
 	return &AnswerQuestionUseCase{
 		attemptRepo: repo,
 		catalog:     catalog,
-		paywall:     domsimulado.PaywallPolicy{},
 		clock:       clock,
 	}
 }
@@ -53,7 +49,7 @@ func (uc *AnswerQuestionUseCase) Execute(ctx context.Context, cmd AnswerQuestion
 		return fmt.Errorf("answer question: %w", shared.ErrForbidden)
 	}
 
-	// Busca o simulado para encontrar o índice da questão (necessário para paywall).
+	// Busca o simulado para encontrar o índice da questão (necessário para validação).
 	sim, err := uc.catalog.GetSimulado(attempt.SimuladoID())
 	if err != nil {
 		return fmt.Errorf("answer question: get simulado: %w", err)
@@ -69,11 +65,6 @@ func (uc *AnswerQuestionUseCase) Execute(ctx context.Context, cmd AnswerQuestion
 	}
 	if questionIndex == -1 {
 		return fmt.Errorf("answer question: %w", domsimulado.ErrQuestionNotFound)
-	}
-
-	// Verifica paywall: questões além do free limit requerem pagamento.
-	if !uc.paywall.IsAccessible(questionIndex, cmd.HasPaid) {
-		return fmt.Errorf("answer question: %w", domsimulado.ErrPaywallBlocked)
 	}
 
 	// Delega a lógica de invariantes ao aggregate.

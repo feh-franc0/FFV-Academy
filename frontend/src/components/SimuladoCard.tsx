@@ -69,9 +69,8 @@ export function SimuladoCard({ simulado, variant = 'grid' }: Props) {
             )}
           </div>
           <div className="text-right">
-            <p className="text-xs" style={{ color: 'var(--ffv-muted)' }}>a partir de</p>
-            <p className="text-lg font-bold" style={{ color: accent }}>
-              {simulado.comingSoon ? '—' : `R$ ${simulado.price}`}
+            <p className="text-lg font-bold" style={{ color: simulado.comingSoon ? 'var(--ffv-muted)' : accent }}>
+              {simulado.comingSoon ? 'Em breve' : 'Gratuito'}
             </p>
           </div>
         </div>

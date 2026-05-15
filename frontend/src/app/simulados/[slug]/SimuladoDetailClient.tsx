@@ -4,9 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { getSimulado, getExplanationText } from '@/lib/simulados';
-import { isPaidFor, grantProduct } from '@/lib/auth';
 import { idFromSlug } from '@/components/SimuladoCard';
-import { useState } from 'react';
 
 interface Props {
   slug: string;
@@ -14,8 +12,7 @@ interface Props {
 
 export function SimuladoDetailClient({ slug }: Props) {
   const router = useRouter();
-  const { user, requireLogin, refresh } = useAuth();
-  const [processing, setProcessing] = useState(false);
+  const { requireLogin } = useAuth();
 
   const simuladoId = idFromSlug(slug);
   const simulado = getSimulado(simuladoId);
@@ -31,7 +28,6 @@ export function SimuladoDetailClient({ slug }: Props) {
     );
   }
 
-  const hasPaid = user ? isPaidFor(simuladoId) : false;
   const preview = simulado.questions[0];
 
   async function handleStart() {
@@ -39,21 +35,6 @@ export function SimuladoDetailClient({ slug }: Props) {
       await requireLogin('fazer o simulado');
       router.push(`/simulados/${slug}/fazer`);
     } catch { /* cancelado */ }
-  }
-
-  async function handleUnlock() {
-    try {
-      await requireLogin('desbloquear o simulado');
-      setProcessing(true);
-      // TODO(backend): chamar POST /api/checkout → webhook Stripe confirma → grantProduct server-side.
-      await new Promise(r => setTimeout(r, 700));
-      grantProduct(simuladoId);
-      refresh();
-      setProcessing(false);
-      router.push(`/simulados/${slug}/fazer`);
-    } catch {
-      setProcessing(false);
-    }
   }
 
   const accent = simulado.comingSoon ? '#a371f7' : '#f78166';
@@ -76,12 +57,11 @@ export function SimuladoDetailClient({ slug }: Props) {
         <p className="text-base" style={{ color: 'var(--ffv-muted)' }}>{simulado.description}</p>
       </header>
 
-      <section className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-10">
+      <section className="grid grid-cols-3 gap-3 mb-10">
         {[
           { label: 'Questões', value: simulado.questionCount },
           { label: 'Tempo', value: `${simulado.timeLimitMin} min` },
           { label: 'Mínimo', value: `${simulado.passingScore}%` },
-          { label: 'Preço', value: simulado.comingSoon ? '—' : `R$ ${simulado.price}` },
         ].map(m => (
           <div key={m.label} className="p-4 rounded-xl text-center" style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}>
             <p className="text-xs" style={{ color: 'var(--ffv-muted)' }}>{m.label}</p>
@@ -119,7 +99,7 @@ export function SimuladoDetailClient({ slug }: Props) {
         </details>
       </section>
 
-      <section className="flex flex-col md:flex-row gap-3">
+      <section>
         {simulado.comingSoon ? (
           <div className="w-full p-5 rounded-xl text-center" style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}>
             <p className="text-lg font-bold mb-1">Em breve</p>
@@ -128,29 +108,13 @@ export function SimuladoDetailClient({ slug }: Props) {
             </p>
           </div>
         ) : (
-          <>
-            <button
-              onClick={handleStart}
-              className="flex-1 px-5 py-3 rounded-xl font-semibold text-sm"
-              style={{ background: 'var(--ffv-bg2)', color: 'var(--foreground)', border: '1px solid var(--ffv-border)' }}
-            >
-              Começar grátis (10 questões)
-            </button>
-            {!hasPaid ? (
-              <button
-                onClick={handleUnlock}
-                disabled={processing}
-                className="flex-1 px-5 py-3 rounded-xl font-semibold text-sm disabled:opacity-50"
-                style={{ background: accent, color: '#0d1117' }}
-              >
-                {processing ? 'Processando…' : `Desbloquear por R$ ${simulado.price}`}
-              </button>
-            ) : (
-              <span className="flex-1 px-5 py-3 rounded-xl font-semibold text-sm text-center" style={{ background: 'rgba(63,185,80,0.1)', color: 'var(--ffv-green)', border: '1px solid rgba(63,185,80,0.3)' }}>
-                ✓ Você tem acesso completo
-              </span>
-            )}
-          </>
+          <button
+            onClick={handleStart}
+            className="w-full px-5 py-3 rounded-xl font-semibold text-sm"
+            style={{ background: accent, color: '#0d1117' }}
+          >
+            Começar simulado →
+          </button>
         )}
       </section>
     </article>

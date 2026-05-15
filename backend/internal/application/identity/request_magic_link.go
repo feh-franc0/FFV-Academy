@@ -195,12 +195,23 @@ func (uc *RequestMagicLinkUseCase) Execute(ctx context.Context, cmd RequestMagic
 	}
 
 	if err := uc.emailer.SendMagicLink(ctx, email, token.Value(), uc.tokenTTL); err != nil {
-		uc.logger.ErrorContext(ctx, "falha ao enviar email",
-			"use_case", "RequestMagicLink",
-			"request_id", middleware.RequestIDFromContext(ctx),
-			"error", err.Error(),
-		)
-		return RequestMagicLinkResult{}, fmt.Errorf("request magic link: send email: %w", err)
+		if uc.devMode {
+			// Em dev, falha no envio de email não bloqueia o fluxo — o token já
+			// está logado acima e o bypass 000000 funciona sem SMTP.
+			uc.logger.WarnContext(ctx, "DEV MODE — falha ao enviar email (não crítico)",
+				"use_case", "RequestMagicLink",
+				"request_id", middleware.RequestIDFromContext(ctx),
+				"error", err.Error(),
+				"hint", "use 000000 para autenticar sem precisar do email",
+			)
+		} else {
+			uc.logger.ErrorContext(ctx, "falha ao enviar email",
+				"use_case", "RequestMagicLink",
+				"request_id", middleware.RequestIDFromContext(ctx),
+				"error", err.Error(),
+			)
+			return RequestMagicLinkResult{}, fmt.Errorf("request magic link: send email: %w", err)
+		}
 	}
 
 	// Log de saída: confirma que o token foi enviado com sucesso.

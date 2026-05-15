@@ -150,113 +150,175 @@ export function LoginModal({ reason, initialEmail, onSuccess, onCancel }: Props)
       aria-modal="true"
       aria-label="Login"
       className="fixed inset-0 z-[100] flex items-center justify-center px-4"
-      style={{ background: 'rgba(0,0,0,0.55)' }}
+      style={{
+        background: 'rgba(0,0,0,0.7)',
+        backdropFilter: 'blur(12px)',
+        WebkitBackdropFilter: 'blur(12px)',
+      }}
       onClick={e => e.target === e.currentTarget && onCancel()}
     >
       <div
-        className="w-full max-w-md rounded-2xl p-7 relative"
-        style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}
+        className="w-full max-w-md rounded-2xl relative overflow-hidden"
+        style={{
+          background: 'var(--ffv-bg2)',
+          border: '1px solid var(--ffv-border)',
+          boxShadow: '0 32px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.04)',
+        }}
       >
-        {IS_DEV && (
-          <div
-            className="absolute top-3 right-3 text-[10px] font-mono uppercase tracking-widest px-2 py-0.5 rounded-full"
-            style={{ background: 'rgba(255,193,7,0.12)', color: '#ffc107', border: '1px solid rgba(255,193,7,0.3)' }}
-          >
-            🧪 Dev · token {MOCK_TOKEN}
-          </div>
-        )}
+        {/* Accent line topo */}
+        <div
+          className="h-0.5 w-full"
+          style={{ background: 'linear-gradient(90deg, var(--ffv-blue) 0%, #a78bfa 50%, var(--ffv-green) 100%)' }}
+        />
 
-        <h2 className="text-xl font-bold mb-2 pr-24">Entrar ou criar conta</h2>
-        {reason && (
-          <p className="text-sm mb-5" style={{ color: 'var(--ffv-muted)' }}>
-            Precisamos confirmar sua identidade para {reason}.
-          </p>
-        )}
-
-        {step === 'email' && (
-          <form onSubmit={handleSubmitEmail} className="flex flex-col gap-3">
-            <label className="text-xs font-semibold" style={{ color: 'var(--ffv-muted)' }}>
-              Email
-              <input
-                type="email"
-                autoComplete="email"
-                required
-                autoFocus
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                placeholder="voce@email.com"
-                className="mt-1 w-full px-3 py-2.5 rounded-lg text-sm font-normal"
-                style={{ background: 'var(--ffv-bg)', border: '1px solid var(--ffv-border)', color: 'var(--foreground)' }}
-              />
-            </label>
-
-            {error && (
-              <p className="text-xs" role="alert" aria-live="assertive" style={{ color: 'var(--ffv-red)' }}>{error}</p>
+        <div className="p-7">
+          {/* Logo + badge dev */}
+          <div className="flex items-start justify-between mb-6">
+            <div className="flex items-center gap-2">
+              <div
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-base font-black"
+                style={{ background: 'color-mix(in srgb, var(--ffv-blue) 18%, transparent)', border: '1px solid color-mix(in srgb, var(--ffv-blue) 35%, transparent)', color: 'var(--ffv-blue)' }}
+              >
+                F
+              </div>
+              <span className="text-sm font-bold tracking-tight">FFV Academy</span>
+            </div>
+            {IS_DEV && (
+              <div
+                className="text-[10px] font-mono uppercase tracking-widest px-2 py-0.5 rounded-full"
+                style={{ background: 'rgba(255,193,7,0.1)', color: '#ffc107', border: '1px solid rgba(255,193,7,0.25)' }}
+              >
+                dev · {MOCK_TOKEN}
+              </div>
             )}
+          </div>
 
-            <div className="flex items-center gap-3 mt-3">
-              <button
-                type="button"
-                onClick={onCancel}
-                className="text-sm px-4 py-2 rounded-lg transition-colors"
-                style={{ color: 'var(--ffv-muted)', background: 'transparent' }}
-              >
-                Cancelar
-              </button>
-              <button
-                type="submit"
-                disabled={loading}
-                className="flex-1 text-sm font-semibold px-4 py-2.5 rounded-lg disabled:opacity-50"
-                style={{ background: 'var(--ffv-blue)', color: '#0d1117' }}
-              >
-                {loading ? 'Verificando…' : 'Continuar'}
-              </button>
-            </div>
-          </form>
-        )}
+          {/* Título por step */}
+          {step === 'email' && (
+            <>
+              <h2 className="text-2xl font-bold mb-1">Bem-vindo de volta</h2>
+              <p className="text-sm mb-6" style={{ color: 'var(--ffv-muted)' }}>
+                {reason ? `Para ${reason}, confirme seu email.` : 'Entre com seu email para continuar aprendendo.'}
+              </p>
+            </>
+          )}
+          {step === 'register' && (
+            <>
+              <h2 className="text-2xl font-bold mb-1">Criar sua conta</h2>
+              <p className="text-sm mb-6" style={{ color: 'var(--ffv-muted)' }}>
+                Primeira vez por aqui! Preencha os dados e use o código recebido.
+              </p>
+            </>
+          )}
+          {step === 'code' && (
+            <>
+              <h2 className="text-2xl font-bold mb-1">Verifique seu email</h2>
+              <p className="text-sm mb-6" style={{ color: 'var(--ffv-muted)' }}>
+                Enviamos um código de 6 dígitos para <strong style={{ color: 'var(--foreground)' }}>{email}</strong>.
+              </p>
+            </>
+          )}
 
-        {(step === 'register' || step === 'code') && (
-          <form onSubmit={handleSubmitCode} className="flex flex-col gap-3">
-            {/* Confirmação de envio — verde, proeminente, sempre visível */}
-            <div
-              className="flex items-start gap-2 px-3 py-2.5 rounded-lg text-xs"
-              style={{
-                background: 'color-mix(in srgb, var(--ffv-green) 10%, transparent)',
-                border: '1px solid color-mix(in srgb, var(--ffv-green) 25%, transparent)',
-                color: 'var(--ffv-green)',
-              }}
-            >
-              <span className="shrink-0 mt-0.5">📧</span>
-              <span>
-                Código enviado para <strong>{email}</strong>. Verifique sua caixa de entrada (e o spam, só por via das dúvidas).
-              </span>
-            </div>
-
-            {step === 'register' && (
-              <>
-                <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
-                  Parece que é sua primeira vez! Preencha os dados abaixo e cole o código recebido.
-                </p>
-
-                <label className="text-xs font-semibold" style={{ color: 'var(--ffv-muted)' }}>
-                  Nome completo
-                  <input
-                    type="text"
-                    autoComplete="name"
-                    required
-                    value={name}
-                    onChange={e => setName(e.target.value)}
-                    className="mt-1 w-full px-3 py-2.5 rounded-lg text-sm font-normal"
-                    style={{ background: 'var(--ffv-bg)', border: '1px solid var(--ffv-border)', color: 'var(--foreground)' }}
-                  />
+          {step === 'email' && (
+            <form onSubmit={handleSubmitEmail} className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--ffv-muted)' }}>
+                  Email
                 </label>
+                <input
+                  type="email"
+                  autoComplete="email"
+                  required
+                  autoFocus
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                  placeholder="voce@email.com"
+                  className="w-full px-4 py-3 rounded-xl text-sm transition-all outline-none"
+                  style={{
+                    background: 'var(--ffv-bg)',
+                    border: '1px solid var(--ffv-border)',
+                    color: 'var(--foreground)',
+                  }}
+                  onFocus={e => { e.currentTarget.style.borderColor = 'var(--ffv-blue)'; e.currentTarget.style.boxShadow = '0 0 0 3px color-mix(in srgb, var(--ffv-blue) 15%, transparent)'; }}
+                  onBlur={e => { e.currentTarget.style.borderColor = 'var(--ffv-border)'; e.currentTarget.style.boxShadow = 'none'; }}
+                />
+              </div>
 
-                <label className="text-xs font-semibold" style={{ color: 'var(--ffv-muted)' }}>
-                    Celular
-                    <div className="mt-1 flex items-center rounded-lg overflow-hidden text-sm"
-                      style={{ border: '1px solid var(--ffv-border)', background: 'var(--ffv-bg)' }}>
-                      <span className="px-3 py-2.5 font-mono font-semibold select-none border-r shrink-0"
-                        style={{ color: 'var(--ffv-blue)', borderColor: 'var(--ffv-border)', background: 'rgba(88,166,255,0.06)' }}>
+              {error && (
+                <p className="text-xs px-3 py-2 rounded-lg" role="alert" aria-live="assertive"
+                  style={{ background: 'color-mix(in srgb, var(--ffv-red) 10%, transparent)', color: 'var(--ffv-red)', border: '1px solid color-mix(in srgb, var(--ffv-red) 25%, transparent)' }}>
+                  {error}
+                </p>
+              )}
+
+              <div className="flex items-center gap-2 mt-1">
+                <button
+                  type="button"
+                  onClick={onCancel}
+                  className="px-4 py-2.5 rounded-xl text-sm font-medium transition-colors"
+                  style={{ color: 'var(--ffv-muted)', background: 'var(--ffv-bg)', border: '1px solid var(--ffv-border)' }}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="flex-1 py-2.5 rounded-xl text-sm font-bold transition-opacity disabled:opacity-40"
+                  style={{ background: 'linear-gradient(135deg, var(--ffv-blue) 0%, #60a5fa 100%)', color: '#0d1117' }}
+                >
+                  {loading ? 'Verificando…' : 'Continuar →'}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {(step === 'register' || step === 'code') && (
+            <form onSubmit={handleSubmitCode} className="flex flex-col gap-4">
+              {/* Banner de confirmação de envio */}
+              <div
+                className="flex items-start gap-2.5 px-3.5 py-3 rounded-xl text-xs"
+                style={{
+                  background: 'color-mix(in srgb, var(--ffv-green) 8%, transparent)',
+                  border: '1px solid color-mix(in srgb, var(--ffv-green) 20%, transparent)',
+                  color: 'var(--ffv-green)',
+                }}
+              >
+                <span className="shrink-0 mt-0.5 text-sm">✉️</span>
+                <span>Código enviado para <strong>{email}</strong>. Verifique sua caixa de entrada (e o spam).</span>
+              </div>
+
+              {step === 'register' && (
+                <>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--ffv-muted)' }}>
+                      Nome completo
+                    </label>
+                    <input
+                      type="text"
+                      autoComplete="name"
+                      required
+                      value={name}
+                      onChange={e => setName(e.target.value)}
+                      placeholder="Seu nome"
+                      className="w-full px-4 py-3 rounded-xl text-sm outline-none transition-all"
+                      style={{ background: 'var(--ffv-bg)', border: '1px solid var(--ffv-border)', color: 'var(--foreground)' }}
+                      onFocus={e => { e.currentTarget.style.borderColor = 'var(--ffv-blue)'; e.currentTarget.style.boxShadow = '0 0 0 3px color-mix(in srgb, var(--ffv-blue) 15%, transparent)'; }}
+                      onBlur={e => { e.currentTarget.style.borderColor = 'var(--ffv-border)'; e.currentTarget.style.boxShadow = 'none'; }}
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--ffv-muted)' }}>
+                      Celular
+                    </label>
+                    <div
+                      className="flex items-center rounded-xl overflow-hidden text-sm"
+                      style={{ border: '1px solid var(--ffv-border)', background: 'var(--ffv-bg)' }}
+                    >
+                      <span
+                        className="px-3 py-3 font-mono font-semibold select-none border-r shrink-0 text-xs"
+                        style={{ color: 'var(--ffv-blue)', borderColor: 'var(--ffv-border)', background: 'color-mix(in srgb, var(--ffv-blue) 6%, transparent)' }}
+                      >
                         +55
                       </span>
                       <input
@@ -266,80 +328,97 @@ export function LoginModal({ reason, initialEmail, onSuccess, onCancel }: Props)
                         value={phone}
                         onChange={formatPhone}
                         placeholder="(11) 98765-4321"
-                        className="flex-1 px-3 py-2.5 bg-transparent outline-none font-normal"
+                        className="flex-1 px-3 py-3 bg-transparent outline-none"
                         style={{ color: 'var(--foreground)' }}
                       />
                     </div>
+                  </div>
+
+                  <label className="flex items-start gap-2 text-xs cursor-pointer" style={{ color: 'var(--ffv-muted)' }}>
+                    <input
+                      type="checkbox"
+                      checked={consent}
+                      onChange={e => setConsent(e.target.checked)}
+                      className="mt-0.5 flex-shrink-0 accent-[var(--ffv-blue)]"
+                    />
+                    <span>
+                      <span className="opacity-60 mr-1">(opcional)</span>
+                      Quero receber novidades por email. Leia nossa{' '}
+                      <a href="/privacidade" style={{ color: 'var(--ffv-blue)' }}>política de privacidade</a>.
+                    </span>
                   </label>
+                </>
+              )}
 
-                <label className="flex items-start gap-2 text-xs mt-1 cursor-pointer" style={{ color: 'var(--ffv-muted)' }}>
-                  <input
-                    type="checkbox"
-                    checked={consent}
-                    onChange={e => setConsent(e.target.checked)}
-                    className="mt-0.5 flex-shrink-0"
-                  />
-                  <span>
-                    <span className="text-[10px] uppercase tracking-wide mr-1" style={{ color: 'var(--ffv-muted)', opacity: 0.7 }}>(opcional)</span>
-                    Quero receber novidades por email — novos simulados, conteúdos e atualizações. Posso cancelar quando quiser em /preferencias. Leia nossa <a href="/privacidade" style={{ color: 'var(--ffv-blue)' }}>política de privacidade</a>.
-                  </span>
+              {IS_DEV && (
+                <div
+                  className="flex items-center gap-2 px-3 py-2.5 rounded-xl text-xs"
+                  style={{ background: 'color-mix(in srgb, var(--ffv-blue) 8%, transparent)', color: 'var(--ffv-blue)', border: '1px solid color-mix(in srgb, var(--ffv-blue) 20%, transparent)' }}
+                >
+                  <span>💡</span>
+                  <span>Dev: use o token <strong className="font-mono">{MOCK_TOKEN}</strong></span>
+                </div>
+              )}
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--ffv-muted)' }}>
+                  Código de verificação
                 </label>
-              </>
-            )}
+                <input
+                  ref={codeInputRef}
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  pattern="[0-9]{6}"
+                  maxLength={6}
+                  value={code}
+                  onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  className="w-full text-center text-3xl font-mono tracking-[0.6em] px-4 py-4 rounded-xl outline-none transition-all"
+                  style={{
+                    background: 'var(--ffv-bg)',
+                    border: '1px solid var(--ffv-border)',
+                    color: 'var(--foreground)',
+                    letterSpacing: '0.6em',
+                  }}
+                  placeholder="· · · · · ·"
+                  onFocus={e => { e.currentTarget.style.borderColor = 'var(--ffv-blue)'; e.currentTarget.style.boxShadow = '0 0 0 3px color-mix(in srgb, var(--ffv-blue) 15%, transparent)'; }}
+                  onBlur={e => { e.currentTarget.style.borderColor = code.length === 6 ? 'var(--ffv-green)' : 'var(--ffv-border)'; e.currentTarget.style.boxShadow = 'none'; }}
+                />
+                {code.length > 0 && code.length < 6 && (
+                  <p className="text-xs text-center" style={{ color: 'var(--ffv-muted)' }}>
+                    {6 - code.length} dígito{6 - code.length !== 1 ? 's' : ''} restante{6 - code.length !== 1 ? 's' : ''}
+                  </p>
+                )}
+              </div>
 
-            {step === 'code' && (
-              <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
-                Bem-vindo de volta! Cole o código de 6 dígitos abaixo.
-              </p>
-            )}
+              {error && (
+                <p className="text-xs px-3 py-2 rounded-lg" role="alert" aria-live="assertive"
+                  style={{ background: 'color-mix(in srgb, var(--ffv-red) 10%, transparent)', color: 'var(--ffv-red)', border: '1px solid color-mix(in srgb, var(--ffv-red) 25%, transparent)' }}>
+                  {error}
+                </p>
+              )}
 
-            {IS_DEV && (
-              <p className="text-xs p-3 rounded-lg" style={{ background: 'rgba(88,166,255,0.08)', color: 'var(--ffv-blue)', border: '1px solid rgba(88,166,255,0.2)' }}>
-                💡 Dev: use <b>{MOCK_TOKEN}</b>
-              </p>
-            )}
-
-            <label className="text-xs font-semibold" style={{ color: 'var(--ffv-muted)' }}>
-              Código de verificação
-              <input
-                ref={codeInputRef}
-                type="text"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                pattern="[0-9]{6}"
-                maxLength={6}
-                value={code}
-                onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                className="mt-1 w-full text-center text-2xl font-mono tracking-[0.5em] px-3 py-3 rounded-lg"
-                style={{ background: 'var(--ffv-bg)', border: '1px solid var(--ffv-border)', color: 'var(--foreground)' }}
-                placeholder="••••••"
-              />
-            </label>
-
-            {error && (
-              <p className="text-xs" role="alert" aria-live="assertive" style={{ color: 'var(--ffv-red)' }}>{error}</p>
-            )}
-
-            <div className="flex items-center gap-3 mt-2">
-              <button
-                type="button"
-                onClick={() => setStep('email')}
-                className="text-sm px-4 py-2 rounded-lg"
-                style={{ color: 'var(--ffv-muted)', background: 'transparent' }}
-              >
-                Voltar
-              </button>
-              <button
-                type="submit"
-                disabled={loading || code.length !== 6}
-                className="flex-1 text-sm font-semibold px-4 py-2.5 rounded-lg disabled:opacity-50"
-                style={{ background: 'var(--ffv-blue)', color: '#0d1117' }}
-              >
-                {loading ? 'Validando…' : 'Entrar'}
-              </button>
-            </div>
-          </form>
-        )}
+              <div className="flex items-center gap-2 mt-1">
+                <button
+                  type="button"
+                  onClick={() => setStep('email')}
+                  className="px-4 py-2.5 rounded-xl text-sm font-medium"
+                  style={{ color: 'var(--ffv-muted)', background: 'var(--ffv-bg)', border: '1px solid var(--ffv-border)' }}
+                >
+                  ← Voltar
+                </button>
+                <button
+                  type="submit"
+                  disabled={loading || code.length !== 6}
+                  className="flex-1 py-2.5 rounded-xl text-sm font-bold transition-all disabled:opacity-40"
+                  style={{ background: 'linear-gradient(135deg, var(--ffv-blue) 0%, #60a5fa 100%)', color: '#0d1117' }}
+                >
+                  {loading ? 'Validando…' : 'Entrar na conta'}
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
       </div>
     </div>
   );
