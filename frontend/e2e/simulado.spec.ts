@@ -31,17 +31,13 @@ test.describe('simulado aws-practitioner', () => {
 
     await page.waitForURL(/\/simulados\/aws-practitioner\/fazer/, { timeout: 15_000 });
 
-    // Simula salto pra 11ª questão escrevendo attempt direto; o SimuladoRunner
-    // navega por grid — mas o gate de acessibilidade é declarativo:
-    // isQuestionAccessible(index) retorna false p/ index >= 10 sem pagamento.
-    // Clicar no item 11 do grid abre o paywall.
-    // Procura pelo botão que seleciona questão 11 — número visível no grid.
-    const q11 = page.getByRole('button', { name: /^11$/ });
-    if (await q11.count() > 0) {
-      await q11.first().click();
-    }
+    // Navega para a 11ª questão via grid de navegação (aria-label="Questão 11").
+    // isQuestionAccessible(10, false) retorna false → SimuladoRunner exibe PaywallCard.
+    const q11 = page.getByRole('button', { name: 'Questão 11' });
+    await expect(q11).toBeVisible({ timeout: 10_000 });
+    await q11.click();
 
-    // Paywall deve aparecer (PaywallCard contém texto sobre desbloquear).
-    await expect(page.getByText(/Desbloquear|paywall|desbloqueie|10 questões/i).first()).toBeVisible({ timeout: 10_000 });
+    // PaywallCard contém "Você terminou as 10 questões grátis" e "Desbloqueie…"
+    await expect(page.getByText(/Desbloqueie|10 questões grátis/i).first()).toBeVisible({ timeout: 10_000 });
   });
 });

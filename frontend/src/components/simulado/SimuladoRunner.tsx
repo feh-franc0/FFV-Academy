@@ -359,7 +359,7 @@ export function SimuladoRunner({ slug }: Props) {
                     onClick={() => goTo(i)}
                     className="text-xs font-mono w-9 h-9 rounded-md transition-all font-semibold"
                     style={{ background: bg, border: `1px solid ${border}`, color }}
-                    title={`Questão ${i + 1}`}
+                    aria-label={`Questão ${i + 1}`}
                   >
                     {i + 1}
                   </button>
