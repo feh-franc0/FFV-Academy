@@ -21,12 +21,22 @@
  * AllPostsSection (570 cards) foi removida — link "Ver todos" leva a /explorar.
  */
 
+import { useEffect, useState } from 'react';
 import { CURRICULUM } from '@/lib/curriculum';
 import { useGameState } from '@/hooks/useGameState';
 import { ContinueCard } from '@/components/ContinueCard';
 import { DailyModuleCard } from '@/components/DailyModuleCard';
 import { TrilhaDoDia } from '@/components/TrilhaDoDia';
 import { DailyQuestionCard } from '@/components/daily/DailyQuestionCard';
+import { StreakRepairModal } from '@/components/streak/StreakRepairModal';
+import {
+  detectStreakBreak,
+  markRepairModalSeen,
+  repairStreak,
+  REPAIR_COST_XP,
+} from '@/lib/streak-repair';
+import { toast } from '@/lib/toast';
+import { playXPCoin } from '@/lib/sounds';
 
 import { Hero } from '@/components/home/Hero';
 import { SocialProofBar } from '@/components/home/SocialProofBar';
@@ -42,8 +52,36 @@ const TOTAL_ARTICLES = CURRICULUM.flatMap(t => t.modules).length;
 const TOTAL_TRAILS = CURRICULUM.length;
 
 export function HomeClient() {
-  const { state } = useGameState();
+  const { state, refresh } = useGameState();
   const hasProgress = state !== null && state.completedModules.length > 0;
+
+  // Streak Repair — 1x por dia, se streak quebrou ontem e usuário pode pagar
+  const [repairModal, setRepairModal] = useState<{ open: boolean; streak: number }>({ open: false, streak: 0 });
+  useEffect(() => {
+    if (!state) return;
+    const status = detectStreakBreak(state.streak, state.xp);
+    if (status.eligible) {
+      setRepairModal({ open: true, streak: status.brokenStreak });
+    }
+  }, [state]);
+
+  function handleRepairConfirm() {
+    const res = repairStreak();
+    if (res.ok) {
+      playXPCoin();
+      toast.streak(res.restoredStreak);
+      setRepairModal({ open: false, streak: 0 });
+      refresh();
+    } else {
+      toast.info('Não foi possível salvar a streak. Tente novamente mais tarde.');
+      setRepairModal({ open: false, streak: 0 });
+    }
+  }
+
+  function handleRepairDismiss() {
+    markRepairModalSeen();
+    setRepairModal({ open: false, streak: 0 });
+  }
   // Card da Pergunta do Dia: aparece pra qualquer user que já interagiu
   // (totalXP > 0) — evita mostrar pra visitante totalmente novo.
   const showDailyQuestion = state !== null && state.xp > 0;
@@ -105,6 +143,15 @@ export function HomeClient() {
       <HomeRanking />
       <ComunidadeAutor />
       <FinalCta />
+
+      <StreakRepairModal
+        open={repairModal.open}
+        streak={repairModal.streak}
+        cost={REPAIR_COST_XP}
+        currentXP={state?.xp ?? 0}
+        onConfirm={handleRepairConfirm}
+        onDismiss={handleRepairDismiss}
+      />
     </div>
   );
 }
