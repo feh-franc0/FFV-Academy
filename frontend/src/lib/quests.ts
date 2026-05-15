@@ -146,4 +146,126 @@ export function claimQuest(state: GameState, questId: string): GameState {
   };
 }
 
-export { todayISO, weekStartISO };
+// ─────────────────────────────────────────────────────────────────
+// Novo sistema: Quest + QuestProgress (com questsClaimedAt)
+// ─────────────────────────────────────────────────────────────────
+
+export interface Quest {
+  id: string;
+  type: 'daily' | 'weekly';
+  icon: string;
+  title: string;
+  description: string;
+  xpReward: number;
+  target: number;
+}
+
+export interface QuestProgress {
+  quest: Quest;
+  current: number;
+  completed: boolean;
+  claimed: boolean;
+}
+
+const QUESTS: Quest[] = [
+  {
+    id: 'daily-module',
+    type: 'daily',
+    icon: '📖',
+    title: 'Complete 1 módulo hoje',
+    description: 'Leia e complete qualquer artigo da plataforma.',
+    xpReward: 50,
+    target: 1,
+  },
+  {
+    id: 'daily-review',
+    type: 'daily',
+    icon: '🃏',
+    title: 'Revise 3 cards',
+    description: 'Complete 3 revisões de SRS no dia.',
+    xpReward: 30,
+    target: 3,
+  },
+  {
+    id: 'daily-streak',
+    type: 'daily',
+    icon: '🔥',
+    title: 'Estude hoje para manter a streak',
+    description: 'Qualquer atividade de estudo conta para o streak.',
+    xpReward: 25,
+    target: 1,
+  },
+  {
+    id: 'weekly-modules',
+    type: 'weekly',
+    icon: '🎯',
+    title: 'Complete 5 módulos esta semana',
+    description: 'Complete pelo menos 5 artigos em 7 dias.',
+    xpReward: 200,
+    target: 5,
+  },
+  {
+    id: 'weekly-xp',
+    type: 'weekly',
+    icon: '⚡',
+    title: 'Ganhe 500 XP esta semana',
+    description: 'Acumule 500 XP através de módulos e revisões.',
+    xpReward: 150,
+    target: 500,
+  },
+  {
+    id: 'weekly-review',
+    type: 'weekly',
+    icon: '🧠',
+    title: 'Revise 15 cards',
+    description: 'Revisão espaçada é ciência — mantenha o ritmo.',
+    xpReward: 100,
+    target: 15,
+  },
+];
+
+function getCurrentForQuest(quest: Quest, state: GameState, today: string, weekStart: string): number {
+  if (quest.type === 'daily') {
+    const studyDay = state.studyDays.find(d => d.date === today);
+    if (quest.id === 'daily-module') return studyDay?.modulesCompleted ?? 0;
+    if (quest.id === 'daily-review') return studyDay?.cardsReviewed ?? 0;
+    if (quest.id === 'daily-streak') return state.lastStudyDate === today ? 1 : 0;
+    return 0;
+  }
+  // weekly
+  const weekDays = state.studyDays.filter(d => d.date >= weekStart);
+  if (quest.id === 'weekly-modules') {
+    return weekDays.reduce((acc, d) => acc + d.modulesCompleted, 0);
+  }
+  if (quest.id === 'weekly-xp') {
+    return weekDays.reduce((acc, d) => acc + d.xpEarned, 0);
+  }
+  if (quest.id === 'weekly-review') {
+    return weekDays.reduce((acc, d) => acc + d.cardsReviewed, 0);
+  }
+  return 0;
+}
+
+function isQuestClaimed(quest: Quest, claimedAt: Record<string, string>, today: string, weekStart: string): boolean {
+  const ts = claimedAt[quest.id];
+  if (!ts) return false;
+  const claimedDate = ts.slice(0, 10); // YYYY-MM-DD
+  if (quest.type === 'daily') return claimedDate === today;
+  // weekly: claimedDate >= weekStart
+  return claimedDate >= weekStart;
+}
+
+export function getQuestProgress(state: GameState): QuestProgress[] {
+  const today = todayISO();
+  const weekStart = weekStartISO();
+  const claimedAt = state.questsClaimedAt ?? {};
+
+  return QUESTS.map(quest => {
+    const claimed = isQuestClaimed(quest, claimedAt, today, weekStart);
+    const current = getCurrentForQuest(quest, state, today, weekStart);
+    const completed = current >= quest.target;
+    return { quest, current, completed, claimed };
+  });
+}
+
+export { QUESTS, todayISO, weekStartISO };

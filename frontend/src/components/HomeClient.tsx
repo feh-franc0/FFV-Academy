@@ -27,6 +27,7 @@ import { useGameState } from '@/hooks/useGameState';
 import { ContinueCard } from '@/components/ContinueCard';
 import { DailyModuleCard } from '@/components/DailyModuleCard';
 import { TrilhaDoDia } from '@/components/TrilhaDoDia';
+import { QuestPanel } from '@/components/QuestPanel';
 import { DailyQuestionCard } from '@/components/daily/DailyQuestionCard';
 import { StreakRepairModal } from '@/components/streak/StreakRepairModal';
 import {
@@ -134,6 +135,9 @@ export function HomeClient() {
             </div>
             <div className="mt-4">
               <TrilhaDoDia />
+            </div>
+            <div className="mt-4">
+              <QuestPanel />
             </div>
           </div>
         </section>

@@ -217,10 +217,25 @@ export function LoginModal({ reason, initialEmail, onSuccess, onCancel }: Props)
 
         {(step === 'register' || step === 'code') && (
           <form onSubmit={handleSubmitCode} className="flex flex-col gap-3">
+            {/* Confirmação de envio — verde, proeminente, sempre visível */}
+            <div
+              className="flex items-start gap-2 px-3 py-2.5 rounded-lg text-xs"
+              style={{
+                background: 'color-mix(in srgb, var(--ffv-green) 10%, transparent)',
+                border: '1px solid color-mix(in srgb, var(--ffv-green) 25%, transparent)',
+                color: 'var(--ffv-green)',
+              }}
+            >
+              <span className="shrink-0 mt-0.5">📧</span>
+              <span>
+                Código enviado para <strong>{email}</strong>. Verifique sua caixa de entrada (e o spam, só por via das dúvidas).
+              </span>
+            </div>
+
             {step === 'register' && (
               <>
                 <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
-                  Parece que é sua primeira vez! Preencha os dados abaixo e use o código que enviamos para <b>{email}</b>.
+                  Parece que é sua primeira vez! Preencha os dados abaixo e cole o código recebido.
                 </p>
 
                 <label className="text-xs font-semibold" style={{ color: 'var(--ffv-muted)' }}>
@@ -274,7 +289,7 @@ export function LoginModal({ reason, initialEmail, onSuccess, onCancel }: Props)
 
             {step === 'code' && (
               <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
-                Enviamos um código de 6 dígitos para <b>{email}</b>.
+                Bem-vindo de volta! Cole o código de 6 dígitos abaixo.
               </p>
             )}
 

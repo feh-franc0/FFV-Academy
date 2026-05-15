@@ -105,8 +105,8 @@ describe('completeModule', () => {
   });
 });
 
-describe('migrateState v3 → v5', () => {
-  it('preserva campos antigos e adiciona dailyQuestionStreak/History', () => {
+describe('migrateState v3 → v6', () => {
+  it('preserva campos antigos e adiciona dailyQuestionStreak/History e questsClaimedAt', () => {
     localStorage.clear();
     const legacy = {
       schemaVersion: 3,
@@ -121,10 +121,11 @@ describe('migrateState v3 → v5', () => {
     expect(state.xp).toBe(100);
     expect(state.completedModules).toContain('m1');
     expect(state.bookmarks).toContain('m1');
-    expect(state.schemaVersion).toBe(5);
+    expect(state.schemaVersion).toBe(6);
     expect(state.dailyQuestionStreak).toBe(0);
     expect(state.dailyQuestionHistory).toEqual([]);
     expect(state.quests).toEqual({ daily: [], weekly: [] });
+    expect(state.questsClaimedAt).toEqual({});
   });
 });
 

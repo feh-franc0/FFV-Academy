@@ -70,6 +70,8 @@ export interface GameState {
     daily: Array<{ id: string; completedAt: string }>;
     weekly: Array<{ id: string; completedAt: string }>;
   };
+  /** Mapa de questId → ISO timestamp quando XP foi reivindicado (novo sistema). */
+  questsClaimedAt?: Record<string, string>;
   // v5 — Pergunta do Dia
   /** Estado da pergunta sorteada hoje. */
   dailyQuestion?: {
@@ -85,7 +87,7 @@ export interface GameState {
   dailyQuestionHistory?: Array<{ id: string; date: string; correct: boolean; source: 'module' | 'simulado' | 'pool'; hubId?: string }>;
 }
 
-const CURRENT_SCHEMA = 5;
+const CURRENT_SCHEMA = 6;
 
 /** Migra estado antigo (sem schemaVersion) para versão atual. */
 function migrateState(parsed: Record<string, unknown>): Partial<GameState> {
@@ -129,6 +131,14 @@ function migrateState(parsed: Record<string, unknown>): Partial<GameState> {
       dailyQuestionHistory: Array.isArray(state.dailyQuestionHistory) ? state.dailyQuestionHistory : [],
     };
   }
+  // v5 → v6: questsClaimedAt (mapa questId → ISO timestamp)
+  if (version < 6) {
+    state = {
+      ...state,
+      schemaVersion: 6,
+      questsClaimedAt: state.questsClaimedAt && typeof state.questsClaimedAt === 'object' ? state.questsClaimedAt : {},
+    };
+  }
   return state as Partial<GameState>;
 }
 
@@ -167,6 +177,7 @@ const DEFAULT_STATE: GameState = {
   bookmarks: [],
   moduleRatings: {},
   quests: { daily: [], weekly: [] },
+  questsClaimedAt: {},
   dailyQuestion: undefined,
   dailyQuestionStreak: 0,
   dailyQuestionHistory: [],
@@ -211,6 +222,7 @@ export function loadState(): GameState {
         bookmarks: Array.isArray(migrated.bookmarks) ? migrated.bookmarks : [],
         moduleRatings: migrated.moduleRatings && typeof migrated.moduleRatings === 'object' ? migrated.moduleRatings as Record<string, 1 | -1> : {},
         quests: migrated.quests && typeof migrated.quests === 'object' ? migrated.quests as GameState['quests'] : { daily: [], weekly: [] },
+        questsClaimedAt: migrated.questsClaimedAt && typeof migrated.questsClaimedAt === 'object' ? migrated.questsClaimedAt as Record<string, string> : {},
         dailyQuestion: migrated.dailyQuestion && typeof migrated.dailyQuestion === 'object' ? migrated.dailyQuestion as GameState['dailyQuestion'] : undefined,
         dailyQuestionStreak: typeof migrated.dailyQuestionStreak === 'number' ? migrated.dailyQuestionStreak : 0,
         dailyQuestionHistory: Array.isArray(migrated.dailyQuestionHistory) ? migrated.dailyQuestionHistory as GameState['dailyQuestionHistory'] : [],
@@ -738,6 +750,7 @@ export function claimQuestReward(questId: string, xpReward: number): void {
   const entry = { id: questId, completedAt: new Date().toISOString() };
   // Determine period from questId prefix
   const isWeekly = questId.startsWith('weekly_');
+  const claimedAt = state.questsClaimedAt ?? {};
   saveState({
     ...state,
     xp: state.xp + xpReward,
@@ -745,6 +758,20 @@ export function claimQuestReward(questId: string, xpReward: number): void {
       daily: isWeekly ? state.quests.daily : [...state.quests.daily, entry],
       weekly: isWeekly ? [...state.quests.weekly, entry] : state.quests.weekly,
     },
+    questsClaimedAt: { ...claimedAt, [questId]: entry.completedAt },
+  });
+}
+
+/** Reivindica recompensa de quest usando o novo campo questsClaimedAt. */
+export function claimQuestRewardV2(questId: string, xpReward: number): void {
+  const state = loadState();
+  const claimedAt = state.questsClaimedAt ?? {};
+  if (claimedAt[questId]) return; // already claimed
+  const now = new Date().toISOString();
+  const addRes = addXP(state, xpReward);
+  saveState({
+    ...addRes.state,
+    questsClaimedAt: { ...claimedAt, [questId]: now },
   });
 }
 

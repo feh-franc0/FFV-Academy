@@ -28,6 +28,17 @@ import { TextSelectionShare } from '@/components/TextSelectionShare';
 import { ArticleDiscussion } from '@/components/ArticleDiscussion';
 import { PeerComparisonChip } from '@/components/peer/PeerComparisonChip';
 import { calculatePeerPercentile } from '@/lib/peer-stats';
+import { NextModuleCard } from '@/components/article/NextModuleCard';
+
+function getNextModule(slug: string) {
+  for (const trail of CURRICULUM) {
+    const idx = trail.modules.findIndex(m => m.slug === slug);
+    if (idx !== -1 && idx < trail.modules.length - 1) {
+      return { module: trail.modules[idx + 1], trail };
+    }
+  }
+  return null;
+}
 
 export interface QuizQuestion {
   question: string;
@@ -755,6 +766,13 @@ export function ModuleLayout({
           </div>
         )}
       </section>
+
+      {(submitted || isCompleted) && (() => {
+        const next = getNextModule(slug);
+        return next ? (
+          <NextModuleCard module={next.module} trail={next.trail} />
+        ) : null;
+      })()}
 
       <ArticleDiscussion slug={slug} title={title} accentColor={trailColor} />
 

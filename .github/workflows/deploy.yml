@@ -142,9 +142,56 @@ jobs:
           sha: ${{ github.event.workflow_run.head_sha || github.sha }}
           ref: ${{ github.event.workflow_run.head_branch && format('refs/heads/{0}', github.event.workflow_run.head_branch) || github.ref }}
 
+  # ─── Build & Push imagem Docker frontend → GHCR ───────────────────────────
+  build-push-frontend:
+    name: Build & Push frontend Docker image
+    needs: check
+    if: needs.check.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      frontend_tag: ${{ steps.meta.outputs.version }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.check.outputs.commit_sha }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login no GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Gerar tags e labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/ffv-frontend
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build e push frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            NEXT_PUBLIC_API_BASE_URL=${{ secrets.NEXT_PUBLIC_API_BASE_URL }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
   # ─── Deploy: Backend na VPS ────────────────────────────────────────────────
   deploy-backend:
-    needs: [check, build-push]
+    needs: [check, build-push, build-push-frontend]
     if: needs.check.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     environment: production
@@ -168,6 +215,7 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         env:
           IMAGE_TAG: ${{ needs.build-push.outputs.image_tag }}
+          FRONTEND_TAG: ${{ needs.build-push-frontend.outputs.frontend_tag }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO_OWNER: ${{ github.repository_owner }}
         with:
@@ -175,7 +223,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
-          envs: IMAGE_TAG,GHCR_TOKEN,REPO_OWNER
+          envs: IMAGE_TAG,FRONTEND_TAG,GHCR_TOKEN,REPO_OWNER
           command_timeout: 10m
           script: |
             set -euo pipefail
@@ -188,7 +236,7 @@ jobs:
             chmod +x /opt/ffv/bin/deploy.sh
             rm  -rf /tmp/ffv-deploy
 
-            # Executar o script de deploy (recebe IMAGE_TAG, GHCR_TOKEN, REPO_OWNER via env)
+            # Executar o script de deploy (recebe IMAGE_TAG, FRONTEND_TAG, GHCR_TOKEN, REPO_OWNER via env)
             /opt/ffv/bin/deploy.sh
 
   # ─── Smoke tests pós-deploy ────────────────────────────────────────────────
@@ -233,91 +281,73 @@ jobs:
           curl -fsSL https://api.fernandofrancovalle.com/api/v1/stats
           echo "✓ /api/v1/stats OK"
 
-  # ─── Deploy: Frontend na Hostinger (FTP) ───────────────────────────────────
-  deploy-frontend:
-    needs: [check, build-push]
+  # ─── Seed de questões CLF/DVA na VPS ─────────────────────────────────────
+  seed-questions:
+    name: Seed CLF/DVA questions
+    needs: [check, deploy-backend]
     if: needs.check.outputs.should_run == 'true'
     runs-on: ubuntu-latest
-    environment: production
-    defaults:
-      run:
-        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.check.outputs.commit_sha }}
 
-      - name: Setup Node + caches
-        uses: ./.github/actions/setup-node
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          working-directory: frontend
+          go-version-file: backend/go.mod
 
-      - name: Build export estático com URL da API de produção
-        env:
-          NEXT_PUBLIC_API_BASE_URL: ${{ secrets.NEXT_PUBLIC_API_BASE_URL }}
-        run: npm run build
+      - name: Build seed binary (linux/amd64)
+        working-directory: backend
+        run: GOOS=linux GOARCH=amd64 go build -o /tmp/seed-clf-questions ./cmd/seed-clf-questions
 
-      - name: Upload para Hostinger via FTP
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+      - name: Copiar seed + question-bank para VPS
+        uses: appleboy/scp-action@v0.1.7
         with:
-          server: ${{ secrets.HOSTINGER_FTP_SERVER }}
-          username: ${{ secrets.HOSTINGER_FTP_USERNAME }}
-          password: ${{ secrets.HOSTINGER_FTP_PASSWORD }}
-          local-dir: ./frontend/out/
-          server-dir: ${{ secrets.HOSTINGER_FTP_DIR }}
-          # Sync incremental: só envia arquivos que mudaram (compara hash).
-          # public_html/ foi limpo manualmente em 2026-05-13 — daqui em diante
-          # o state file é criado do zero e mantém os deploys rápidos.
-          #
-          # state-name versionado: trocar o nome força o action a tratar como
-          # primeiro deploy (sem tentar deletar arquivos do state antigo).
-          # Bump quando a árvore de arquivos no servidor divergir do state —
-          # foi o caso após clean-slate manual + delete dos 765 page.tsx em
-          # 33e4c09. Erro 550 "No such file or directory" indica state
-          # apontando pra pastas que já não existem no FTP.
-          state-name: .ftp-deploy-state-v2-2026-05-14.json
-          log-level: standard
-          dangerous-clean-slate: false
-          exclude: |
-            **/.git*
-            **/.git*/**
-            **/node_modules/**
-            **/.DS_Store
-            **/Thumbs.db
-            # ─── RSC payloads (ADR-0002) ──────────────────────────────────────
-            # Next.js gera 6.287 arquivos __next.*.txt (153 MB, 76% do build).
-            # Hostinger Cloud Startup tem timeout fixo de 3600s no FTP server,
-            # impossível de upar 8k arquivos. Excluindo, deploy cai de 1h+ para
-            # ~15 min. SEO/funcionalidade 100% preservados (HTML completo está
-            # em *.html); só degrada soft-navigation client-side entre rotas
-            # (~80ms → ~400ms por clique em <Link>).
-            # Decisão temporária até migração para SSR/ISR na VPS — ver
-            # frontend/docs/adr/0002-exclude-rsc-payloads-from-ftp-deploy.md
-            **/__next.*.txt
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          source: "frontend/data/question-bank"
+          target: "/tmp/ffv-seed/"
 
-      # ─── Smoke test: TODAS as páginas devem responder 200 ─────────────────
-      # Falha o deploy se qualquer página retornar erro. Previne incidentes
-      # onde arquivos sobem mas o servidor não consegue servi-los (ex: 403
-      # por trailingSlash inconsistente, FTP que pulou arquivos, cache stale).
-      #
-      # Roda em modo "sample" (200 rotas amostradas aleatoriamente) pra ser
-      # rápido — testar todas as 915 levaria minutos. Pra validação completa,
-      # rodar localmente: bash scripts/smoke-test-frontend.sh
-      - name: Smoke test (200 rotas amostradas)
-        working-directory: ${{ github.workspace }}
-        env:
-          BASE_URL: https://fernandofrancovalle.com
-          OUT_DIR: frontend/out
-          SAMPLE_SIZE: '200'
-          PARALLEL: '15'
-          TIMEOUT_SECONDS: '15'
-        run: bash scripts/smoke-test-frontend.sh
+      - name: Copiar binário para VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          source: "/tmp/seed-clf-questions"
+          target: "/tmp/"
+
+      - name: Instalar seed na VPS e executar
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          command_timeout: 5m
+          script: |
+            set -euo pipefail
+            mkdir -p /opt/ffv/bin
+            mv /tmp/seed-clf-questions /opt/ffv/bin/seed-clf-questions
+            chmod +x /opt/ffv/bin/seed-clf-questions
+            rm -rf /opt/ffv/question-bank
+            mv /tmp/ffv-seed/frontend/data/question-bank /opt/ffv/question-bank
+            rm -rf /tmp/ffv-seed
+
+            # Rodar seed usando DATABASE_URL do .env
+            DATABASE_URL=$(grep '^DATABASE_URL=' /opt/ffv/.env | cut -d= -f2-)
+            DATABASE_URL="$DATABASE_URL" /opt/ffv/bin/seed-clf-questions /opt/ffv/question-bank
+            echo "Seed concluído."
 
   # ─── Notificação pós-deploy (Discord/Slack) ───────────────────────────────
   # Roda mesmo se algum job anterior falhou — assim o usuário sabe se deu errado.
   # Se DEPLOY_NOTIFY_WEBHOOK_URL não estiver setada, só loga e termina OK.
   notify:
-    needs: [check, build-push, deploy-backend, smoke-test-backend, deploy-frontend]
+    needs: [check, build-push, build-push-frontend, deploy-backend, smoke-test-backend, seed-questions]
     if: always() && needs.check.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -325,11 +355,12 @@ jobs:
         id: status
         env:
           BUILD: ${{ needs.build-push.result }}
+          BUILD_FRONT: ${{ needs.build-push-frontend.result }}
           BACK: ${{ needs.deploy-backend.result }}
           SMOKE: ${{ needs.smoke-test-backend.result }}
-          FRONT: ${{ needs.deploy-frontend.result }}
+          SEED: ${{ needs.seed-questions.result }}
         run: |
-          if [[ "$BUILD" == "success" && "$BACK" == "success" && "$SMOKE" == "success" && "$FRONT" == "success" ]]; then
+          if [[ "$BUILD" == "success" && "$BUILD_FRONT" == "success" && "$BACK" == "success" && "$SMOKE" == "success" && "$SEED" == "success" ]]; then
             echo "status=success" >> "$GITHUB_OUTPUT"
             echo "emoji=:white_check_mark:" >> "$GITHUB_OUTPUT"
           else
@@ -365,12 +396,14 @@ jobs:
             echo ""
             echo "- Status: ${{ steps.status.outputs.status }}"
             echo "- Commit: \`${{ needs.check.outputs.commit_sha }}\`"
-            echo "- Image: \`${{ needs.build-push.outputs.image_tag }}\`"
+            echo "- Image backend: \`${{ needs.build-push.outputs.image_tag }}\`"
+            echo "- Image frontend: \`${{ needs.build-push-frontend.outputs.frontend_tag }}\`"
             echo ""
             echo "| Job | Resultado |"
             echo "|-----|-----------|"
             echo "| build-push | ${{ needs.build-push.result }} |"
+            echo "| build-push-frontend | ${{ needs.build-push-frontend.result }} |"
             echo "| deploy-backend | ${{ needs.deploy-backend.result }} |"
             echo "| smoke-test-backend | ${{ needs.smoke-test-backend.result }} |"
-            echo "| deploy-frontend | ${{ needs.deploy-frontend.result }} |"
+            echo "| seed-questions | ${{ needs.seed-questions.result }} |"
           } >> "$GITHUB_STEP_SUMMARY"

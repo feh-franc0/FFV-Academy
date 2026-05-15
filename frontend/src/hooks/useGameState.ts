@@ -17,6 +17,7 @@ import {
   toggleBookmark,
   rateModule,
   claimQuestReward,
+  claimQuestRewardV2,
   answerDailyQuestion as engineAnswerDailyQuestion,
   type GameState,
   type DailyQuestionResult,
@@ -287,6 +288,13 @@ export function useGameState() {
     if (next) debouncedSaveToIDB(next);
   }, [debouncedSaveToIDB]);
 
+  const claimQuestV2 = useCallback((questId: string, xpReward: number) => {
+    claimQuestRewardV2(questId, xpReward);
+    const next = loadState();
+    setState(next);
+    if (next) debouncedSaveToIDB(next);
+  }, [debouncedSaveToIDB]);
+
   const answerDaily = useCallback((input: Parameters<typeof engineAnswerDailyQuestion>[0]): DailyQuestionResult => {
     unlockAudio();
     const result = engineAnswerDailyQuestion(input);
@@ -403,6 +411,7 @@ export function useGameState() {
     bookmark,
     rate,
     claimQuest,
+    claimQuestV2,
     answerDaily,
   };
 }

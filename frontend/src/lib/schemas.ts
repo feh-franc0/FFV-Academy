@@ -90,6 +90,8 @@ export const GameStateSchema = z.object({
     daily: z.array(z.object({ id: z.string(), completedAt: z.string() })),
     weekly: z.array(z.object({ id: z.string(), completedAt: z.string() })),
   }).optional(),
+  /** Mapa de questId → ISO timestamp quando XP foi reivindicado (novo sistema). */
+  questsClaimedAt: z.record(z.string(), z.string()).optional(),
   /** Pergunta do Dia — estado do dia corrente. */
   dailyQuestion: z.object({
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
