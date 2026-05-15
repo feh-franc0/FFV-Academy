@@ -236,6 +236,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Post("/api/v1/simulados/{simuladoId}/attempts", cfg.Simulado.StartAttempt)
 		r.Get("/api/v1/simulados/{simuladoId}/attempts/active", cfg.Simulado.ResumeAttempt)
 
+		// Questões do simulado — requer JWT (não admin).
+		r.Get("/api/v1/simulados/{simuladoId}/questions", cfg.Simulado.ListSimuladoQuestions)
+
 		// Modo estudo livre — questões aleatórias sem timer (requer login).
 		if cfg.Study != nil {
 			r.Get("/api/v1/simulados/{simuladoId}/study/random", cfg.Study.GetRandomQuestions)
@@ -281,6 +284,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			r.Get("/api/v1/admin/stats", cfg.Admin.GetStats)
 			r.Get("/api/v1/admin/audit", cfg.Admin.GetAuditLog)
 			r.Get("/api/v1/admin/users", cfg.Admin.ListUsers)
+			r.Get("/api/v1/admin/growth", cfg.Admin.GetGrowth)
 
 			// Endpoints admin do currículo.
 			if cfg.Curriculum != nil {

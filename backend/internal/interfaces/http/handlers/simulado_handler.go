@@ -26,11 +26,18 @@ type SimuladoHandler struct {
 	listAttempts   *appsim.ListAttemptsUseCase
 	cancelAttempt  *appsim.CancelAttemptUseCase
 	reportQuestion *appsim.ReportQuestionUseCase
+	questionRepo   domsim.QuestionRepository
 }
 
 // WithCancelAttempt injeta o use case de cancelamento.
 func (h *SimuladoHandler) WithCancelAttempt(uc *appsim.CancelAttemptUseCase) *SimuladoHandler {
 	h.cancelAttempt = uc
+	return h
+}
+
+// WithQuestionRepo injeta o repositório de questões.
+func (h *SimuladoHandler) WithQuestionRepo(repo domsim.QuestionRepository) *SimuladoHandler {
+	h.questionRepo = repo
 	return h
 }
 
@@ -271,6 +278,59 @@ func (h *SimuladoHandler) CancelAttempt(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ListSimuladoQuestions retorna questões ativas de um simulado (paginadas).
+// GET /api/v1/simulados/{simuladoId}/questions?limit=100&offset=0
+//
+// Requer JWT (não admin). Permite ao cliente buscar questões do banco Postgres.
+func (h *SimuladoHandler) ListSimuladoQuestions(w http.ResponseWriter, r *http.Request) {
+	if h.questionRepo == nil {
+		WriteError(w, http.StatusNotImplemented, "question repo não configurado", "not-implemented")
+		return
+	}
+
+	simuladoID := chi.URLParam(r, "simuladoId")
+	if simuladoID == "" {
+		WriteError(w, http.StatusBadRequest, "simuladoId é obrigatório", "bad-request")
+		return
+	}
+
+	q := r.URL.Query()
+	limit := parseIntParam(q.Get("limit"), 100)
+	if limit > 500 {
+		limit = 500
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	offset := parseIntParam(q.Get("offset"), 0)
+	if offset < 0 {
+		offset = 0
+	}
+
+	filter := domsim.QuestionFilter{
+		SimuladoID: simuladoID,
+		Status:     "active",
+		Limit:      limit,
+		Offset:     offset,
+	}
+
+	questions, total, err := h.questionRepo.List(r.Context(), filter)
+	if err != nil {
+		HandleDomainError(w, err)
+		return
+	}
+
+	dtos := make([]DBQuestionDTO, len(questions))
+	for i, question := range questions {
+		dtos[i] = dbQuestionToDTO(question)
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"questions": dtos,
+		"total":     total,
+	})
 }
 
 // ReportQuestion registra um report sobre uma questão específica.

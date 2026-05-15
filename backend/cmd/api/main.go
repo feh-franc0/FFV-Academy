@@ -245,10 +245,12 @@ func run() error {
 		requestMagicLinkUC, verifyMagicLinkUC, refreshTokenUC,
 		logoutUC, logoutAllUC, getProfileUC, updateProfileUC, deleteAccountUC,
 	).WithExportData(exportDataUC).WithUserStats(userStatsUC)
+	questionRepo := postgresinfra.NewQuestionRepo(pool)
 	simuladoH := handlers.NewSimuladoHandler(
 		catalogProvider, startAttemptUC, answerQUC, toggleFlagUC,
 		finishAttemptUC, resumeAttemptUC, listAttemptsUC,
-	).WithCancelAttempt(cancelAttemptUC).WithReportQuestion(reportQuestionUC)
+	).WithCancelAttempt(cancelAttemptUC).WithReportQuestion(reportQuestionUC).
+		WithQuestionRepo(questionRepo)
 	progressH := handlers.NewProgressHandler(syncPushUC, syncPullUC)
 	certH := handlers.NewCertificateHandler(issueCertUC, verifyCertUC, listCertsUC, baseURL)
 	billingH := handlers.NewBillingHandler(createCheckoutUC, handleWebhookUC, stripeClient).
@@ -261,7 +263,8 @@ func run() error {
 	adminH := handlers.NewAdminHandler(userRepo, attemptRepo, eventUC).
 		WithAuditLog(auditLogRepo).
 		WithAdminStats(&pgxAdminStatsRepo{pool: pool}).
-		WithAdminUsers(&pgxAdminUsersRepo{pool: pool})
+		WithAdminUsers(&pgxAdminUsersRepo{pool: pool}).
+		WithAdminGrowth(&pgxAdminGrowthRepo{pool: pool})
 	curriculumH := handlers.NewCurriculumHandler(getArticleUC, listCurriculumUC, searchCurriculumUC, curriculumRepo)
 	moduleViewH := handlers.NewModuleViewHandler(&pgxModuleViewRepo{pool: pool})
 	commentsH := handlers.NewCommentsHandler(&pgxCommentsRepo{pool: pool})
@@ -270,7 +273,6 @@ func run() error {
 	newsH := handlers.NewNewsHandler(&pgxNewsRepo{pool: pool})
 	cheatH := handlers.NewCheatsheetsHandler(&pgxCheatsheetsRepo{pool: pool})
 	playH := handlers.NewPlaylistsHandler(&pgxPlaylistsRepo{pool: pool})
-	questionRepo := postgresinfra.NewQuestionRepo(pool)
 	studyH := handlers.NewStudyHandler(questionRepo)
 	adminQuestionsH := handlers.NewAdminQuestionsHandler(questionRepo)
 

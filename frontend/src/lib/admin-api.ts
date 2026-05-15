@@ -90,6 +90,27 @@ export async function fetchAdminUsers(params: {
   }
 }
 
+// ─── Growth time-series ────────────────────────────────────────────────────
+
+export interface GrowthPoint {
+  date: string;
+  count: number;
+}
+
+export interface AdminGrowthResponse {
+  days: number;
+  userSignups: GrowthPoint[];
+  simuladoAttempts: GrowthPoint[];
+}
+
+export async function fetchAdminGrowth(days = 30): Promise<AdminGrowthResponse | null> {
+  try {
+    return await apiFetch<AdminGrowthResponse>(`/api/v1/admin/growth?days=${days}`, {}, true);
+  } catch {
+    return null;
+  }
+}
+
 // ─── Audit log ────────────────────────────────────────────────────────────
 
 export interface AuditEntry {

@@ -8,8 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import { fetchAdminUsers, type AdminUsersResponse } from '@/lib/admin-api';
-
-const PAGE_SIZE = 50;
+import { AdminPagination } from '@/components/admin/AdminPagination';
 
 export default function AdminUsersPage() {
   const [data, setData] = useState<AdminUsersResponse | null>(null);
@@ -17,11 +16,12 @@ export default function AdminUsersPage() {
   const [search, setSearch] = useState('');
   const [role, setRole] = useState('');
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetchAdminUsers({ search, role, limit: PAGE_SIZE, offset: page * PAGE_SIZE })
+    fetchAdminUsers({ search, role, limit: pageSize, offset: page * pageSize })
       .then(res => {
         if (!cancelled) setData(res);
       })
@@ -29,7 +29,7 @@ export default function AdminUsersPage() {
     return () => {
       cancelled = true;
     };
-  }, [search, role, page]);
+  }, [search, role, page, pageSize]);
 
   return (
     <div className="flex flex-col gap-4 max-w-6xl">
@@ -125,28 +125,14 @@ export default function AdminUsersPage() {
         </table>
       </div>
 
-      {data && data.total > PAGE_SIZE && (
-        <div className="flex items-center gap-2 text-sm">
-          <button
-            onClick={() => setPage(p => Math.max(0, p - 1))}
-            disabled={page === 0}
-            className="px-3 py-1 rounded-md disabled:opacity-40"
-            style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}
-          >
-            ← Anterior
-          </button>
-          <span style={{ color: 'var(--ffv-muted)' }}>
-            Página {page + 1} de {Math.ceil(data.total / PAGE_SIZE)}
-          </span>
-          <button
-            onClick={() => setPage(p => p + 1)}
-            disabled={(page + 1) * PAGE_SIZE >= data.total}
-            className="px-3 py-1 rounded-md disabled:opacity-40"
-            style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}
-          >
-            Próxima →
-          </button>
-        </div>
+      {data && (
+        <AdminPagination
+          total={data.total}
+          page={page}
+          pageSize={pageSize}
+          onPage={setPage}
+          onPageSize={ps => { setPage(0); setPageSize(ps); }}
+        />
       )}
     </div>
   );

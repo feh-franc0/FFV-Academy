@@ -22,6 +22,7 @@ type AdminHandler struct {
 	auditLogRepo   postgresinfra.AdminAuditReader
 	adminStatsRepo AdminStatsRepository
 	usersRepo      AdminUsersRepository
+	growthRepo     AdminGrowthRepository
 }
 
 func NewAdminHandler(

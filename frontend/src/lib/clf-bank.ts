@@ -12,6 +12,7 @@
  */
 
 import type { SimuladoQuestion, OptionId } from './simulados';
+import { apiFetch } from '@/lib/api-client';
 
 export type ClfBankSource = 'piloto' | 'security' | 'cloud-concepts' | 'tech' | 'billing';
 
@@ -58,6 +59,7 @@ interface APIQuestionsResponse {
   questions: APIQuestion[];
   total: number;
 }
+
 
 // ─── Fallback JSON shape ──────────────────────────────────────────────────
 
@@ -111,27 +113,16 @@ function normalizeJsonQuestion(q: RawJsonQuestion): SimuladoQuestion {
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
 
 /**
- * Carrega questões CLF do backend. Retorna lista achata (não por source).
- * Faz paginação interna para buscar até 1000 questões.
+ * Carrega questões CLF do backend via endpoint autenticado.
+ * Busca até 500 questões em uma única chamada.
  */
-async function loadFromAPI(): Promise<SimuladoQuestion[]> {
-  const pageSize = 200;
-  const pages: APIQuestion[] = [];
-  let offset = 0;
-  let total = Infinity;
-
-  while (pages.length < total) {
-    const url = `${API_BASE}/api/v1/admin/questions?simulado_id=aws-clf&status=active&limit=${pageSize}&offset=${offset}`;
-    const res = await fetch(url, { next: { revalidate: 300 } });
-    if (!res.ok) throw new Error(`API error ${res.status}`);
-    const data: APIQuestionsResponse = await res.json();
-    total = data.total;
-    pages.push(...data.questions);
-    offset += pageSize;
-    if (data.questions.length < pageSize) break;
-  }
-
-  return pages.map(normalizeAPIQuestion);
+async function loadClfBankFromAPI(): Promise<SimuladoQuestion[]> {
+  const data = await apiFetch<APIQuestionsResponse>(
+    '/api/v1/simulados/aws-clf/questions?limit=500&offset=0',
+    {},
+    true,
+  );
+  return (data.questions ?? []).map(normalizeAPIQuestion);
 }
 
 /**
@@ -173,13 +164,13 @@ export async function loadClfBankFlat(): Promise<SimuladoQuestion[]> {
 
   if (API_BASE) {
     try {
-      const questions = await loadFromAPI();
+      const questions = await loadClfBankFromAPI();
       if (questions.length > 0) {
         _bankCache = questions;
         return questions;
       }
     } catch {
-      // API indisponível — usa fallback JSON
+      // API indisponível ou não autenticado — usa fallback JSON
     }
   }
 

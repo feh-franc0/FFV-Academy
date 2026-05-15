@@ -13,6 +13,7 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { apiFetch } from '@/lib/api-client';
+import { AdminPagination } from '@/components/admin/AdminPagination';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -50,8 +51,6 @@ interface QuestionsResponse {
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
-
-const PAGE_SIZE = 50;
 const SIMULADO_ID = 'aws-clf';
 
 const DOMAINS = [
@@ -483,6 +482,7 @@ export default function AdminQuestionsPage() {
   const [editTarget, setEditTarget] = useState<Question | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [pageSize, setPageSize] = useState(10);
   const [deleting, setDeleting] = useState<string | null>(null); // id being deleted
 
   const abortRef = useRef<AbortController | null>(null);
@@ -497,8 +497,8 @@ export default function AdminQuestionsPage() {
 
     const q = new URLSearchParams({
       simulado_id: SIMULADO_ID,
-      limit: String(PAGE_SIZE),
-      offset: String(page * PAGE_SIZE),
+      limit: String(pageSize),
+      offset: String(page * pageSize),
     });
     if (domain) q.set('domain', domain);
     if (difficulty) q.set('difficulty', difficulty);
@@ -518,7 +518,7 @@ export default function AdminQuestionsPage() {
     } finally {
       if (!ctrl.signal.aborted) setLoading(false);
     }
-  }, [domain, difficulty, search, page]);
+  }, [domain, difficulty, search, page, pageSize]);
 
   useEffect(() => {
     void load();
@@ -581,8 +581,6 @@ export default function AdminQuestionsPage() {
     setEditTarget(null);
     setSaveError(null);
   }
-
-  const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0;
 
   // ─── Form panel ─────────────────────────────────────────────────────────
   if (panel === 'create' || panel === 'edit') {
@@ -699,28 +697,14 @@ export default function AdminQuestionsPage() {
       )}
 
       {/* Pagination */}
-      {data && data.total > PAGE_SIZE && (
-        <div className="flex items-center gap-2 text-sm pt-2">
-          <button
-            onClick={() => setPage(p => Math.max(0, p - 1))}
-            disabled={page === 0 || loading}
-            className="px-3 py-1 rounded-md disabled:opacity-40"
-            style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}
-          >
-            ← Anterior
-          </button>
-          <span style={{ color: 'var(--ffv-muted)' }}>
-            Página {page + 1} de {totalPages}
-          </span>
-          <button
-            onClick={() => setPage(p => p + 1)}
-            disabled={(page + 1) * PAGE_SIZE >= data.total || loading}
-            className="px-3 py-1 rounded-md disabled:opacity-40"
-            style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}
-          >
-            Próxima →
-          </button>
-        </div>
+      {data && (
+        <AdminPagination
+          total={data.total}
+          page={page}
+          pageSize={pageSize}
+          onPage={setPage}
+          onPageSize={ps => { setPage(0); setPageSize(ps); }}
+        />
       )}
     </div>
   );

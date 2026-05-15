@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -238,4 +239,81 @@ func (r *pgxModuleViewRepo) Insert(ctx context.Context, v handlers.ModuleViewInp
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`, userID, anonID, v.Slug, hubID, trailID, ref, ua, v.ViewedAt)
 	return err
+}
+
+// ─── AdminGrowthRepository ─────────────────────────────────────────────────
+
+type pgxAdminGrowthRepo struct{ pool *pgxpool.Pool }
+
+var _ handlers.AdminGrowthRepository = (*pgxAdminGrowthRepo)(nil)
+
+// GetGrowth retorna time-series diário de cadastros e tentativas de simulado.
+func (r *pgxAdminGrowthRepo) GetGrowth(ctx context.Context, days int) (handlers.GrowthData, error) {
+	var data handlers.GrowthData
+
+	signups, err := r.queryDailySeries(ctx, days, `
+		WITH dates AS (
+		  SELECT generate_series(
+		    (NOW() - make_interval(days := $1 - 1))::date,
+		    NOW()::date,
+		    '1 day'::interval
+		  )::date AS d
+		)
+		SELECT d, COALESCE(COUNT(u.created_at), 0)
+		FROM dates
+		LEFT JOIN users u ON u.created_at::date = d AND u.deleted_at IS NULL
+		GROUP BY d ORDER BY d
+	`)
+	if err != nil {
+		return data, fmt.Errorf("admin growth: user signups: %w", err)
+	}
+	data.UserSignups = signups
+
+	attempts, err := r.queryDailySeries(ctx, days, `
+		WITH dates AS (
+		  SELECT generate_series(
+		    (NOW() - make_interval(days := $1 - 1))::date,
+		    NOW()::date,
+		    '1 day'::interval
+		  )::date AS d
+		)
+		SELECT d, COALESCE(COUNT(sa.started_at), 0)
+		FROM dates
+		LEFT JOIN simulado_attempts sa ON sa.started_at::date = d
+		GROUP BY d ORDER BY d
+	`)
+	if err != nil {
+		return data, fmt.Errorf("admin growth: simulado attempts: %w", err)
+	}
+	data.SimuladoAttempts = attempts
+
+	return data, nil
+}
+
+func (r *pgxAdminGrowthRepo) queryDailySeries(ctx context.Context, days int, query string) ([]handlers.DayCount, error) {
+	rows, err := r.pool.Query(ctx, query, days)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var series []handlers.DayCount
+	for rows.Next() {
+		var d time.Time
+		var count int64
+		if err := rows.Scan(&d, &count); err != nil {
+			return nil, err
+		}
+		series = append(series, handlers.DayCount{
+			Date:  d.Format("2006-01-02"),
+			Count: count,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if series == nil {
+		series = []handlers.DayCount{}
+	}
+	return series, nil
 }
