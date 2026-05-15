@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
-import { getSimulado } from '@/lib/simulados';
+import { getSimulado, getExplanationText } from '@/lib/simulados';
 import { isPaidFor, grantProduct } from '@/lib/auth';
 import { idFromSlug } from '@/components/SimuladoCard';
 import { useState } from 'react';
@@ -114,7 +114,7 @@ export function SimuladoDetailClient({ slug }: Props) {
         <details className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
           <summary className="cursor-pointer font-semibold" style={{ color: accent }}>Ver explicação do tutor</summary>
           <p className="mt-2">
-            <b>Resposta: {preview.correctId}</b>. {preview.explanation}
+            <b>Resposta: {preview.correctId}</b>. {getExplanationText(preview.explanation)}
           </p>
         </details>
       </section>

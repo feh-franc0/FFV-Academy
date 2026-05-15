@@ -17,7 +17,7 @@
 import type { GameState } from './engine';
 // NOTE: only type imports above to avoid runtime circular dep with engine.ts
 import { SIMULADOS_CATALOG } from './simulados-catalog';
-import { FREE_QUESTIONS_LIMIT } from './simulados';
+import { FREE_QUESTIONS_LIMIT, getExplanationText } from './simulados';
 import { CURRICULUM } from './curriculum';
 
 export type PoolSource = 'module' | 'simulado' | 'pool';
@@ -100,7 +100,7 @@ export function buildPool(reviewCards?: GameState['reviewCards']): PoolQuestion[
         stem: q.stem,
         options: q.options.map(o => ({ id: o.id, text: o.text })),
         correctId: q.correctId,
-        explanation: q.explanation,
+        explanation: getExplanationText(q.explanation),
         topic: q.topic,
         difficulty: q.difficulty,
         relatedSlug: q.relatedSlug,

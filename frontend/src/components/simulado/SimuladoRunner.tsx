@@ -10,6 +10,7 @@ import {
   saveAttempt,
   isQuestionAccessible,
   FREE_QUESTIONS_LIMIT,
+  getExplanationText,
 } from '@/lib/simulados';
 import { isPaidFor, grantProduct } from '@/lib/auth';
 import { useAuth } from '@/hooks/useAuth';
@@ -323,7 +324,7 @@ export function SimuladoRunner({ slug }: Props) {
                   <p className="text-xs font-bold mb-2" style={{ color: 'var(--ffv-blue)' }}>
                     💡 Explicação do tutor
                   </p>
-                  <p className="text-sm leading-relaxed">{currentQuestion.explanation}</p>
+                  <p className="text-sm leading-relaxed">{getExplanationText(currentQuestion.explanation)}</p>
                 </div>
               )}
             </>

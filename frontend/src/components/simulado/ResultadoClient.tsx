@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import { getSimulado, getAttempt, scoreAttempt, getWeakTopics, type SimuladoAttempt } from '@/lib/simulados';
+import { getSimulado, getAttempt, scoreAttempt, getWeakTopics, getExplanationText, type SimuladoAttempt } from '@/lib/simulados';
 import { idFromSlug } from '@/components/SimuladoCard';
 import { completeSimulado } from '@/lib/engine';
 import { useAuth } from '@/hooks/useAuth';
@@ -171,7 +171,7 @@ export function ResultadoClient({ slug }: Props) {
                     <p style={{ color: 'var(--ffv-muted)' }}>
                       Sua resposta: <b>{chosen ?? 'não respondida'}</b> · Correta: <b style={{ color: 'var(--ffv-green)' }}>{q.correctId}</b>
                     </p>
-                    <p className="mt-2">{q.explanation}</p>
+                    <p className="mt-2">{getExplanationText(q.explanation)}</p>
                   </div>
                 </details>
               );
