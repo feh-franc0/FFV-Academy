@@ -33,7 +33,16 @@ test-load:
 	@cd test/load && bash run-local.sh
 
 test-cover:
-	go test ./... -coverprofile=coverage.out -timeout 120s
+	# Mede cobertura só nos pacotes que TÊM testes (TestGoFiles/XTestGoFiles)
+	# e exclui cmd/ (entrypoints/CLIs integration-tested via shell, não unit).
+	# Sem essa filtragem:
+	#   1. adicionar uma ferramenta CLI sem testes dilui a métrica e quebra o
+	#      coverage gate (ratchet pattern no CI);
+	#   2. instrumentar pacotes sem testes dispara `covdata` que pode faltar
+	#      no toolchain em alguns ambientes.
+	# Padrão da indústria.
+	go test $$(go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./... | grep -v /cmd/) \
+		-coverprofile=coverage.out -timeout 120s
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"
 
