@@ -83,6 +83,43 @@ func (r *QuestionRepo) FindByID(ctx context.Context, id string) (*domsim.DBQuest
 	return question, nil
 }
 
+// FindByIDs retorna múltiplas questões filtrando por simulado_id e IDs.
+// Mantém a ordem dos IDs solicitados; IDs não encontrados são pulados silenciosamente.
+func (r *QuestionRepo) FindByIDs(ctx context.Context, simuladoID string, ids []string) ([]*domsim.DBQuestion, error) {
+	if len(ids) == 0 {
+		return []*domsim.DBQuestion{}, nil
+	}
+	const q = `
+		SELECT id, simulado_id, stem, options, correct_id, explanation, topic, domain,
+		       difficulty, scenario_type, tags, source, status, created_at, updated_at
+		FROM questions
+		WHERE simulado_id = $1 AND id = ANY($2)
+	`
+	rows, err := r.pool.Query(ctx, q, simuladoID, ids)
+	if err != nil {
+		return nil, fmt.Errorf("question repo: find by ids: %w", err)
+	}
+	defer rows.Close()
+
+	found, err := scanQuestions(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	// Preserva a ordem dos IDs solicitados.
+	byID := make(map[string]*domsim.DBQuestion, len(found))
+	for _, qn := range found {
+		byID[qn.ID] = qn
+	}
+	out := make([]*domsim.DBQuestion, 0, len(ids))
+	for _, id := range ids {
+		if qn, ok := byID[id]; ok {
+			out = append(out, qn)
+		}
+	}
+	return out, nil
+}
+
 // List retorna questões paginadas com filtros opcionais.
 func (r *QuestionRepo) List(ctx context.Context, filter domsim.QuestionFilter) ([]*domsim.DBQuestion, int, error) {
 	conditions := []string{}

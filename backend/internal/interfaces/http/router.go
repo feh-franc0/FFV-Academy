@@ -242,6 +242,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// Modo estudo livre — questões aleatórias sem timer (requer login).
 		if cfg.Study != nil {
 			r.Get("/api/v1/simulados/{simuladoId}/study/random", cfg.Study.GetRandomQuestions)
+			r.Get("/api/v1/simulados/{simuladoId}/questions/batch", cfg.Study.GetQuestionsByIDs)
 		}
 
 		// Tentativas.

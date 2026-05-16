@@ -1,6 +1,6 @@
 -- questions: banco de questões de simulados (CLF-C02, DVA-C02, etc.)
 -- Schema rico de explicação armazenado como JSONB.
--- Seed via cmd/seed-clf-questions.
+-- Seed via cmd/seed-questions.
 
 CREATE TABLE IF NOT EXISTS questions (
     id            TEXT        PRIMARY KEY,          -- ex: "clf-cc-001"

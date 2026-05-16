@@ -11,6 +11,10 @@ type QuestionRepository interface {
 	// FindByID retorna uma questão pelo ID. Retorna shared.ErrNotFound se não existe.
 	FindByID(ctx context.Context, id string) (*DBQuestion, error)
 
+	// FindByIDs retorna múltiplas questões por seus IDs, filtrando por simulado_id.
+	// Mantém a ordem dos IDs solicitados (IDs ausentes são pulados silenciosamente).
+	FindByIDs(ctx context.Context, simuladoID string, ids []string) ([]*DBQuestion, error)
+
 	// List retorna questões paginadas com filtros opcionais.
 	List(ctx context.Context, filter QuestionFilter) ([]*DBQuestion, int, error)
 
