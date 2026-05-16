@@ -8,8 +8,18 @@
 // Defaults:
 //
 //	bank-dir    = ../frontend/data/question-bank
-//	out-up-path = ./migrations/000041_seed_clf_questions.up.sql
-//	(o .down.sql correspondente é regenerado com DELETE limpo)
+//	out-up-path = ./migrations/000042_reseed_clf_questions_v2.up.sql
+//	(o .down.sql correspondente NÃO é regenerado — é no-op fixo)
+//
+// Por que 000042 em vez de 000041:
+//
+//	A 000041_seed_clf_questions já foi aplicada em prod (com 595 questões
+//	das versões antigas dos JSONs). golang-migrate marca como aplicada e
+//	NUNCA re-roda. Para fazer os novos 420 INSERTs + UPDATEs in-place
+//	chegarem em prod, gera-se uma migration NOVA (000042) que o cluster
+//	enxerga como "pendente". Esta 000042 é regenerada a cada edição de
+//	JSON — para evitar ter que criar 000043, 000044, ... a cada commit,
+//	o fluxo em dev/prod é `make reseed-clf` (down 1 + up) que re-aplica.
 //
 // Decisões:
 //   - Apenas arquivos `clf-c02-*.json` (ignora `.v1-backup.json` e outras certs).
@@ -71,7 +81,7 @@ type optionJSON struct {
 
 const (
 	defaultBankDir    = "../frontend/data/question-bank"
-	defaultUpPath     = "migrations/000041_seed_clf_questions.up.sql"
+	defaultUpPath     = "migrations/000042_reseed_clf_questions_v2.up.sql"
 	clfPrefix         = "clf-c02-"
 	backupSuffix      = ".v1-backup.json"
 	simuladoID        = "aws-clf"
@@ -87,7 +97,6 @@ func main() {
 	if len(os.Args) > 2 {
 		upPath = os.Args[2]
 	}
-	downPath := strings.TrimSuffix(upPath, ".up.sql") + ".down.sql"
 
 	if info, err := os.Stat(bankDir); err != nil || !info.IsDir() { //nolint:gosec // G703,G304: path vem do operador via CLI args, não de input externo
 		log.Fatalf("bank-dir não encontrado: %s", bankDir) //nolint:gosec // G706: log de path controlado pelo operador
@@ -116,13 +125,11 @@ func main() {
 		log.Fatalf("escrever up.sql: %v", err)
 	}
 
-	downSQL := buildDownSQL(len(questions))
-	if err := os.WriteFile(downPath, []byte(downSQL), 0o600); err != nil { //nolint:gosec // G304,G703: downPath derivado de upPath (CLI args), não de input externo
-		log.Fatalf("escrever down.sql: %v", err)
-	}
-
+	// Não regeneramos o .down.sql — ele é escrito a mão como no-op (ver
+	// 000042_reseed_clf_questions_v2.down.sql). A migration 000042 não
+	// APAGA dados, só atualiza via ON CONFLICT, então um DELETE genérico
+	// no down quebraria invariantes da 000041 (que tem o estado base).
 	fmt.Printf("✓ Gerado %s (%d questões de %d arquivos)\n", upPath, len(questions), len(files))
-	fmt.Printf("✓ Gerado %s\n", downPath)
 }
 
 func selectFiles(dir string) ([]string, error) {
@@ -265,12 +272,6 @@ func writeInsert(b *strings.Builder, q questionJSON) {
 	b.WriteString("  source        = EXCLUDED.source,\n")
 	b.WriteString("  status        = 'active',\n")
 	b.WriteString("  updated_at    = now();\n\n")
-}
-
-func buildDownSQL(total int) string {
-	return fmt.Sprintf("-- Down: remove todas as questões CLF-C02 inseridas pela seed (%d).\n"+
-		"-- Outras certificações (DVA, AIF, anthropic) permanecem.\n"+
-		"DELETE FROM questions WHERE simulado_id = '%s';\n", total, simuladoID)
 }
 
 // --- SQL helpers ---

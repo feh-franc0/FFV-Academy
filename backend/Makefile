@@ -46,15 +46,16 @@ lint-fix:
 
 # ─── Database Migrations ─────────────────────────────────────────────────────
 # Fluxo padrão: rode `make migrate` normalmente — aplica todas as migrations
-# commited (incluindo o seed CLF-C02 já gerado em 000041_seed_clf_questions).
+# commited (incluindo o seed CLF-C02 base em 000041_seed_clf_questions e o
+# overlay idempotente em 000042_reseed_clf_questions_v2).
 #
 # Fluxo para EDITAR uma questão CLF-C02:
 #   1. edita frontend/data/question-bank/clf-c02-*.json
-#   2. `make gen-seed-migration`   (regenera 000041_seed_clf_questions.up.sql)
+#   2. `make gen-seed-migration`  (regenera 000042_reseed_clf_questions_v2.up.sql)
 #   3. commita o .sql regenerado
-#   4. dev local → `make reseed-clf` (down + up, aplica edição)
-#   5. prod (deploy.sh) → aplica automatico no próximo deploy DESDE QUE 000041
-#      seja revertida primeiro (ver `make reseed-clf` e nota em prod abaixo)
+#   4. dev local → `make reseed-clf` (down 1 + up, re-aplica a 000042)
+#   5. prod (deploy.sh) → o down+up acontece no script de deploy quando o
+#      arquivo da 000042 muda. golang-migrate detecta a nova versão e aplica.
 migrate:
 	migrate -path migrations -database "$(DATABASE_URL)" up
 
