@@ -62,12 +62,27 @@ export function DailyQuestionCard() {
 
   return (
     <div
-      className="rounded-2xl overflow-hidden"
-      style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}
+      className="rounded-2xl overflow-hidden relative"
+      style={{
+        background: 'var(--ffv-bg2)',
+        border: '1px solid var(--ffv-border)',
+        boxShadow: '0 8px 32px -12px rgba(247,129,102,0.18), 0 0 0 1px rgba(247,129,102,0.08)',
+      }}
     >
+      {/* Glow gradient no topo do card — destaca a seção sem deixá-la "pesada". */}
+      <div
+        aria-hidden
+        className="absolute inset-x-0 top-0 h-px"
+        style={{
+          background: 'linear-gradient(90deg, transparent, rgba(247,129,102,0.5), transparent)',
+        }}
+      />
       <div
         className="px-5 py-4 flex items-center justify-between"
-        style={{ borderBottom: '1px solid var(--ffv-border)' }}
+        style={{
+          borderBottom: '1px solid var(--ffv-border)',
+          background: 'linear-gradient(180deg, rgba(247,129,102,0.06) 0%, transparent 100%)',
+        }}
       >
         <div className="flex items-center gap-2">
           <span style={{ fontSize: 20 }} aria-hidden>❓</span>

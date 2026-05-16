@@ -22,13 +22,17 @@
  */
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { CURRICULUM } from '@/lib/curriculum';
 import { useGameState } from '@/hooks/useGameState';
+import { useAuth } from '@/hooks/useAuth';
+import { usePreferences } from '@/hooks/usePreferences';
 import { ContinueCard } from '@/components/ContinueCard';
 import { DailyModuleCard } from '@/components/DailyModuleCard';
 import { TrilhaDoDia } from '@/components/TrilhaDoDia';
 import { QuestPanel } from '@/components/QuestPanel';
 import { DailyQuestionCard } from '@/components/daily/DailyQuestionCard';
+import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
 import { StreakRepairModal } from '@/components/streak/StreakRepairModal';
 import {
   detectStreakBreak,
@@ -55,6 +59,8 @@ const TOTAL_TRAILS = CURRICULUM.length;
 
 export function HomeClient() {
   const { state, refresh } = useGameState();
+  const { isLoggedIn } = useAuth();
+  const { preferences, status: prefStatus, refresh: refreshPrefs } = usePreferences();
   const hasProgress = state !== null && state.completedModules.length > 0;
 
   // Streak Repair — 1x por dia, se streak quebrou ontem e usuário pode pagar
@@ -84,13 +90,26 @@ export function HomeClient() {
     markRepairModalSeen();
     setRepairModal({ open: false, streak: 0 });
   }
-  // Card da Pergunta do Dia: aparece pra qualquer user que já interagiu
-  // (totalXP > 0) — evita mostrar pra visitante totalmente novo.
-  const showDailyQuestion = state !== null && state.xp > 0;
+  // Card da Pergunta do Dia: SÓ pra usuário LOGADO com PREFERÊNCIAS configuradas.
+  // Home pública (deslogado) é pura landing — sem gamificação no topo.
+  // Logado mas sem onboarding completo → mostra CTA "Configure preferências"
+  // (fallback discreto que não polui a home pra quem está sem o wizard ainda).
+  const showOnboardingWizard = isLoggedIn && prefStatus === 'ready' && preferences?.onboarded === false;
+  const showDailyQuestion = isLoggedIn && preferences?.onboarded === true && preferences?.dailyQuestionEnabled;
+  const showPreferencesCTA = isLoggedIn && prefStatus === 'ready' && preferences?.onboarded === false;
 
   return (
     <div style={{ background: 'var(--ffv-bg)', color: 'var(--foreground)' }}>
       <Hero totalArticles={TOTAL_ARTICLES} totalTrails={TOTAL_TRAILS} />
+
+      {showOnboardingWizard && (
+        <OnboardingWizard
+          onComplete={async () => {
+            await refreshPrefs();
+          }}
+        />
+      )}
+
       {showDailyQuestion && (
         <section
           className="px-6 pt-10"
@@ -99,6 +118,28 @@ export function HomeClient() {
           <div className="max-w-6xl mx-auto">
             <h2 id="daily-question-heading" className="sr-only">Pergunta do Dia</h2>
             <DailyQuestionCard />
+          </div>
+        </section>
+      )}
+
+      {showPreferencesCTA && !showOnboardingWizard && (
+        <section className="px-6 pt-8" aria-label="Configure suas preferências">
+          <div className="max-w-6xl mx-auto p-5 rounded-2xl flex items-center gap-4 flex-wrap"
+               style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}>
+            <div className="text-2xl">✨</div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold mb-0.5">Personalize sua experiência</p>
+              <p className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
+                Conte o que você quer estudar pra recomendarmos conteúdo certo
+              </p>
+            </div>
+            <Link
+              href="/preferencias-aprendizado/"
+              className="text-xs font-semibold px-4 py-2 rounded-xl"
+              style={{ background: '#f78166', color: '#0d1117' }}
+            >
+              Configurar →
+            </Link>
           </div>
         </section>
       )}
