@@ -138,7 +138,6 @@ func Test_IDOR_AnswerQuestion_UserB_CannotAnswer_UserA(t *testing.T) {
 		AttemptID:  "att-A",
 		QuestionID: "q1",
 		OptionID:   domsim.OptionA,
-		HasPaid:    true,
 	})
 	if !errors.Is(err, shared.ErrForbidden) {
 		t.Fatalf("expected ErrForbidden, got %v", err)

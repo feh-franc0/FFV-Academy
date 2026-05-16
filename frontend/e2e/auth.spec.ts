@@ -33,7 +33,7 @@ test('login mágico via HUD com token mock 000000', async ({ page }) => {
   const codeInput = dialog.locator('input[inputmode="numeric"]');
   await expect(codeInput).toBeVisible();
   await codeInput.fill('000000');
-  await dialog.getByRole('button', { name: /^Entrar$/ }).click();
+  await dialog.getByRole('button', { name: /Entrar na conta/i }).click();
 
   // Modal fecha e HUD passa a mostrar iniciais "TE".
   await expect(dialog).toBeHidden();
