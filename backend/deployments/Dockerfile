@@ -1,21 +1,37 @@
 # Stage 1: Build
+# Build context = raiz do monorepo (configurado em .github/workflows/deploy.yml:
+# context: .). Permite COPY tanto de backend/ quanto de scripts/seeds/ pra
+# bundling do curriculum no binário sem precisar de SCP/upload manual em prod.
 FROM golang:1.26-alpine AS builder
 
 WORKDIR /app
 
-# Cache dependencies first
-COPY go.mod go.sum ./
+# Cache de deps Go — copia primeiro só go.mod/go.sum, depois roda mod download.
+COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 
-# Copy source and build
-COPY . .
-# -s -w reduz tamanho do binário; CGO desabilitado para binário estático.
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /api ./cmd/api
+# Copia todo o backend (código fonte).
+COPY backend/ ./
+
+# -s -w reduz tamanho; CGO desabilitado pra binário estático em distroless.
+# Buildamos DOIS binários:
+#   1. /api          — entrypoint principal (servidor HTTP)
+#   2. /importer     — CLI one-shot rodado pelo deploy.sh para popular
+#                      hubs/trails/articles/blocks a partir dos seeds JSONs.
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /api      ./cmd/api && \
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /importer ./cmd/importer
 
 # Stage 2: Runtime (distroless, non-root, sem shell)
 FROM gcr.io/distroless/static-debian12:nonroot
 
-COPY --from=builder /api /api
+COPY --from=builder /api      /api
+COPY --from=builder /importer /importer
+
+# Seeds do curriculum (hubs/trails/article-mappings + 767 *.json com blocks).
+# Embarcados na imagem pra que o deploy.sh possa rodar:
+#   docker run --rm <image> --entrypoint /importer --seeds /seeds
+# sem precisar SCP manual ou volume mount externo.
+COPY scripts/seeds /seeds
 
 USER nonroot:nonroot
 

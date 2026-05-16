@@ -65,6 +65,28 @@ docker run --rm \
   up \
   || die "Migrations falharam. Deploy abortado."
 
+# ─── 5.5. Seed curriculum (hubs + trails + articles + blocks) ────────────────
+# Roda o /importer (segundo binário bundlado na imagem da API) que lê seeds
+# de /seeds (também bundlados — ver Dockerfile) e faz UPSERT em:
+#   - hubs (8)
+#   - trails (66+)
+#   - curriculum_articles (~770 slugs com metadata)
+#   - module_blocks (conteúdo serializado dos artigos)
+#
+# Idempotente: ON CONFLICT DO UPDATE garante que rodar várias vezes não
+# duplica. Pode rodar em todo deploy sem medo — custo: ~5-10s.
+#
+# IMAGE atualizada antes do migrate? Não — usamos a IMAGE_TAG nova (que já
+# foi pulled no passo 2). Importer binary está dentro dela.
+log "Seeding curriculum (hubs + trails + ~770 articles + blocks)..."
+docker run --rm \
+  --network "$NETWORK_NAME" \
+  --env DATABASE_URL="$DATABASE_URL_INTERNAL" \
+  --entrypoint /importer \
+  "$IMAGE" \
+  -seeds /seeds \
+  || log "::warning::Curriculum seed falhou — deploy continua mas /aprenda/* pode ter 404. Investigar logs."
+
 # ─── 6. Deploy da nova imagem da API (2 réplicas) ────────────────────────────
 # --scale api=2: sobe 2 réplicas. Nginx faz round-robin entre elas.
 # Se uma réplica travar, Nginx detecta via max_fails e roteia 100% para a outra.
