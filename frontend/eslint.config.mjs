@@ -29,6 +29,15 @@ const eslintConfig = defineConfig([
       // Banir console.log em produção — apenas warn/error/info/debug permitidos
       // (esses são úteis para debugging legítimo e Sentry).
       "no-console": ["warn", { allow: ["warn", "error", "info", "debug"] }],
+
+      // Honra prefixo `_` para args/vars intencionalmente não usados. Padrão da
+      // indústria: callbacks tipados pelo consumidor (ex: onSuccess(user)) cuja
+      // implementação atual não precisa do payload escrevem `_user` para
+      // documentar a forma do contrato sem disparar warning.
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrorsIgnorePattern: "^_" },
+      ],
     },
   },
 
@@ -39,7 +48,10 @@ const eslintConfig = defineConfig([
     files: ["src/tests/**/*.ts", "src/tests/**/*.tsx"],
     rules: {
       "@typescript-eslint/no-require-imports": "off",
-      "@typescript-eslint/no-unused-vars": "warn",
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrorsIgnorePattern: "^_" },
+      ],
     },
   },
 

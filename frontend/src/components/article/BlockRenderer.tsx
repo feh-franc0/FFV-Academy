@@ -440,6 +440,7 @@ const ADAPTERS: Record<string, AdapterEntry> = {
     allowsChildren: false,
     render: (data) => (
       <figure className="my-4">
+        {/* eslint-disable-next-line @next/next/no-img-element -- imagem do CMS sem width/height conhecidos em build-time; next/image exige dimensões fixas */}
         <img src={asText(data?.src)} alt={asText(data?.alt)} className="rounded-lg max-w-full" />
         {data?.caption ? <figcaption className="text-sm text-center mt-2" style={{ color: 'var(--ffv-muted)' }}>{asText(data.caption)}</figcaption> : null}
       </figure>

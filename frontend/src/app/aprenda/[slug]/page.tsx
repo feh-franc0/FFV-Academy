@@ -74,7 +74,7 @@ export async function generateStaticParams() {
       // Backend respondeu vazio — usa fallback pra não quebrar build.
       return fallbackSlugs();
     }
-    console.log(`[aprenda/generateStaticParams] ${all.length} slugs do backend`);
+    console.info(`[aprenda/generateStaticParams] ${all.length} slugs do backend`);
     return all.map(item => ({ slug: item.slug }));
   } catch (err) {
     console.warn('[aprenda/generateStaticParams] erro, usando fallback:', err);

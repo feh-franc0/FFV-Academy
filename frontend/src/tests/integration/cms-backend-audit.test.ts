@@ -155,16 +155,16 @@ describe.skipIf(!ENABLED)('CMS Backend — auditoria profunda', () => {
     const p50 = latencies.slice().sort((a, b) => a - b)[Math.floor(latencies.length / 2)] ?? 0;
     const p95 = latencies.slice().sort((a, b) => a - b)[Math.floor(latencies.length * 0.95)] ?? 0;
 
-    console.log('\n=== Auditoria CMS ===');
-    console.log(`Slugs auditados:     ${targets.length}`);
-    console.log(`Total de blocos:     ${totalBlocks}`);
-    console.log(`Schema inválido:     ${invalid.length}`);
-    console.log(`Sem blocos:          ${empty.length}`);
-    console.log(`Latência p50/p95:    ${p50.toFixed(1)}ms / ${p95.toFixed(1)}ms`);
-    console.log('Distribuição de tipos:');
+    console.info('\n=== Auditoria CMS ===');
+    console.info(`Slugs auditados:     ${targets.length}`);
+    console.info(`Total de blocos:     ${totalBlocks}`);
+    console.info(`Schema inválido:     ${invalid.length}`);
+    console.info(`Sem blocos:          ${empty.length}`);
+    console.info(`Latência p50/p95:    ${p50.toFixed(1)}ms / ${p95.toFixed(1)}ms`);
+    console.info('Distribuição de tipos:');
     [...typeCounter.entries()]
       .sort((a, b) => b[1] - a[1])
-      .forEach(([t, n]) => console.log(`  ${t.padEnd(20)} ${n}`));
+      .forEach(([t, n]) => console.info(`  ${t.padEnd(20)} ${n}`));
 
     if (invalid.length) {
       console.error('\nArtigos inválidos:');
@@ -186,7 +186,7 @@ describe.skipIf(!ENABLED)('CMS Backend — auditoria profunda', () => {
     // Sanity: pelo menos 80% dos tipos suportados aparecem em algum artigo
     const present = [...supportedTypes].filter(t => typeCounter.has(t));
     const coverage = present.length / supportedTypes.size;
-    console.log(`Cobertura de tipos:  ${(coverage * 100).toFixed(1)}% (${present.length}/${supportedTypes.size})`);
+    console.info(`Cobertura de tipos:  ${(coverage * 100).toFixed(1)}% (${present.length}/${supportedTypes.size})`);
     expect(coverage).toBeGreaterThanOrEqual(0.8);
   }, 120_000);
 

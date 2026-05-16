@@ -113,7 +113,6 @@ export default async function Page({ params }: PageProps) {
       </header>
       <div
         className="ffv-md-content prose-ffv text-sm leading-relaxed"
-        // eslint-disable-next-line react/no-danger
         dangerouslySetInnerHTML={{ __html: html }}
       />
     </article>
