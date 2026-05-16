@@ -144,8 +144,19 @@ Permite migrar arquivos por lotes (e revisar antes de promover) sem quebrar o fr
 |---------|--------|----------|--------|
 | `clf-c02-pilot-v1.json` | v2 | 15 | migrado |
 | `clf-c02-cloud-concepts-v1.json` | v2 | 80 | migrado |
+| `clf-c02-cloud-concepts-v2.json` | v2 (nativo) | 80 | criado já em v2 |
+| `clf-c02-cloud-concepts-v3.json` | v2 (nativo) | 80 | criado já em v2 — Global Infra deep / Lenses / Shared Resp por serviço / DR / CAF / 7Rs |
 | `clf-c02-security-v1.json` | v2 | 100 | migrado |
+| `clf-c02-security-v2.json` | v2 (nativo) | 60 | criado já em v2 |
+| `clf-c02-security-v3.json` | v2 (nativo) | 15 | piloto de pegadinhas avançadas |
+| `clf-c02-security-v4.json` | v2 (nativo) | 80 | criado já em v2 — IAM avançado / Identity Center / Cognito / KMS / Encryption |
+| `clf-c02-security-v5.json` | v2 (nativo) | 45 | criado já em v2 — GuardDuty / Security Hub / Macie / WAF / Shield / CloudTrail / Compliance |
 | `clf-c02-tech-v1.json` | v2 | 100 | migrado |
+| `clf-c02-tech-v2.json` | v2 (nativo) | 80 | criado já em v2 |
+| `clf-c02-tech-v3.json` | v2 (nativo) | 80 | criado já em v2 — EC2 / ASG / ELB / Serverless / S3 / EBS / RDS / DynamoDB |
+| `clf-c02-tech-v4.json` | v2 (nativo) | 80 | criado já em v2 — VPC / CDN / Containers / DevOps / CloudWatch / Analytics / ML |
 | `clf-c02-billing-v1.json` | v2 | 40 | migrado |
-| `clf-c02-security-v2.json` | v2 (nativo) | — | criado já em v2 |
+| `clf-c02-billing-v2.json` | v2 (nativo) | 40 | criado já em v2 |
+| `clf-c02-billing-v3.json` | v2 (nativo) | 40 | criado já em v2 — Support tiers / Free Tier / TCO / Billing Conductor / License Manager |
+| **Total CLF-C02** | | **1015** | distribuição por peso do exame (CC 240, Sec 300, Tech 340, Bill 120 + 15 pilot) |
 | `dva-c02-*-v1.json` | v1 (string) | — | migração pendente |
