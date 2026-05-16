@@ -22,6 +22,7 @@ import (
 	appcurriculum "github.com/fernandofv/api/internal/application/curriculum"
 	appevent "github.com/fernandofv/api/internal/application/event"
 	appidentity "github.com/fernandofv/api/internal/application/identity"
+	apppref "github.com/fernandofv/api/internal/application/preferences"
 	appprogress "github.com/fernandofv/api/internal/application/progress"
 	appsim "github.com/fernandofv/api/internal/application/simulado"
 	apptutor "github.com/fernandofv/api/internal/application/tutor"
@@ -121,6 +122,7 @@ func run() error {
 	refreshRepo := postgresinfra.NewRefreshTokenRepo(pool)
 	attemptRepo := postgresinfra.NewAttemptRepo(pool)
 	progressRepo := postgresinfra.NewProgressRepo(pool)
+	preferencesRepo := postgresinfra.NewPreferencesRepo(pool)
 	certRepo := postgresinfra.NewCertificateRepo(pool)
 	purchaseRepo := postgresinfra.NewPurchaseRepo(pool)
 	stripeEventRepo := postgresinfra.NewStripeEventRepo(pool)
@@ -214,6 +216,9 @@ func run() error {
 	syncPushUC := appprogress.NewSyncPushUseCase(progressRepo, clock)
 	syncPullUC := appprogress.NewSyncPullUseCase(progressRepo)
 
+	getPreferencesUC := apppref.NewGetPreferencesUseCase(preferencesRepo, clock)
+	updatePreferencesUC := apppref.NewUpdatePreferencesUseCase(preferencesRepo, clock)
+
 	issueCertUC := appcert.NewIssueCertificateUseCase(certRepo, attemptRepo, clock)
 	verifyCertUC := appcert.NewVerifyCertificateUseCase(certRepo)
 	listCertsUC := appcert.NewListUserCertificatesUseCase(certRepo)
@@ -252,6 +257,7 @@ func run() error {
 	).WithCancelAttempt(cancelAttemptUC).WithReportQuestion(reportQuestionUC).
 		WithQuestionRepo(questionRepo)
 	progressH := handlers.NewProgressHandler(syncPushUC, syncPullUC)
+	preferencesH := handlers.NewPreferencesHandler(getPreferencesUC, updatePreferencesUC)
 	certH := handlers.NewCertificateHandler(issueCertUC, verifyCertUC, listCertsUC, baseURL)
 	billingH := handlers.NewBillingHandler(createCheckoutUC, handleWebhookUC, stripeClient).
 		WithEnabled(cfg.Features.BillingEnabled)
@@ -295,6 +301,7 @@ func run() error {
 		Auth:             authH,
 		Simulado:         simuladoH,
 		Progress:         progressH,
+		Preferences:      preferencesH,
 		Certificate:      certH,
 		Billing:          billingH,
 		Tutor:            tutorH,

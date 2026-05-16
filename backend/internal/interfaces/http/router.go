@@ -53,6 +53,7 @@ type RouterConfig struct {
 	MetricsMW        func(http.Handler) http.Handler   // opcional — middleware de instrumentação
 	Study            *handlers.StudyHandler            // opcional — modo estudo livre (JWT)
 	AdminQuestions   *handlers.AdminQuestionsHandler   // opcional — CRUD admin de questões
+	Preferences      *handlers.PreferencesHandler      // opcional — preferências pedagógicas do user (JWT)
 }
 
 // NewRouter monta o chi.Router com todos os middlewares e rotas.
@@ -258,6 +259,13 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// Progression (GameState cloud sync).
 		r.Get("/api/v1/progress", cfg.Progress.Pull)
 		r.With(progressBodyLimit).Put("/api/v1/progress", cfg.Progress.Push)
+
+		// Preferências pedagógicas (onboarding + filtros de conteúdo).
+		// Tamanho do body é pequeno (~1KB típico), reaproveita profileBodyLimit (64KB).
+		if cfg.Preferences != nil {
+			r.Get("/api/v1/me/preferences", cfg.Preferences.Get)
+			r.With(profileBodyLimit).Put("/api/v1/me/preferences", cfg.Preferences.Update)
+		}
 
 		// Certificados — emissão.
 		r.Post("/api/v1/certificates", cfg.Certificate.IssueCertificate)
