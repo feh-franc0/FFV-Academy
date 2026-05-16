@@ -11,7 +11,7 @@
 - **Styling**: Tailwind v4 + CSS custom properties (`--ffv-*`)
 - **Package manager**: npm
 - **Tests**: Vitest + @testing-library/react — 62 arquivos, 562 testes
-- **Deploy**: static export (`output: "export"`) → Hostinger via `frontend/out/`
+- **Deploy**: **SSR Docker** (`output: "standalone"`) → imagem `ghcr.io/feh-franc0/ffv-frontend` rodando na VPS Hostinger KVM (Boston). Servido por Nginx reverse proxy junto com a API. **⚠️ Migração DNS+SSL pendente** — ver seção [Deploy e Infraestrutura](#-deploy-e-infraestrutura) e [README raiz](../README.md#migração-dnsssl-pendente).
 
 ---
 
@@ -159,25 +159,31 @@ npm run lint   # eslint src/ — zero warnings policy
 
 ## ⚠️ Gotchas críticos
 
-### Static export (`output: "export"`)
-- `headers()` no `next.config.ts` **NÃO funciona** — configurar CSP via Caddy/Hostinger
-- Não usar `dynamic = 'force-dynamic'` em route handlers
-- `runtime = 'edge'` só funciona se gerar imagem estática no build
-- Imagens externas precisam `images.unoptimized: true` (já configurado)
-- **`trailingSlash: true` é OBRIGATÓRIO** — Hostinger LiteSpeed redireciona automaticamente URLs sem `/` no final para a versão com barra; sem trailingSlash, gera `out/X.html` e cai em 301→403 (pasta não existe). Com trailingSlash, gera `out/X/index.html` (caminho que LiteSpeed espera).
+### SSR Docker (`output: "standalone"`)
+- O bundle final é uma imagem Docker (`ffv-frontend`) que roda **Node.js 24/7** na VPS.
+- `headers()` em `next.config.ts` **FUNCIONA** — CSP HTTP real é a fonte de verdade (ver bloco abaixo).
+- `dynamic = 'force-dynamic'` e Server Actions funcionam.
+- `generateStaticParams` continua sendo usado para pré-renderizar URLs estáticas no build (904 slugs de `/aprenda/[slug]`, simulados, etc.) — Next entrega HTML pronto no primeiro hit e troca pra dinâmico depois.
+- Imagens externas precisam `images.unoptimized: true` (já configurado) **OU** configurar `images.remotePatterns`. Mantido `unoptimized: true` para evitar dependência do otimizador `sharp` no container.
+- **`trailingSlash: true` ainda obrigatório** — alinha com URLs canônicas e mantém compatibilidade com bookmarks antigos do period FTP.
 
-### RSC payloads (`__next.*.txt`) **excluídos do deploy**
-- O build gera 6.287 arquivos `__next.*.txt` (153 MB) em `out/` — RSC payloads do React.
-- O workflow `.github/workflows/deploy.yml` os **exclui do upload FTP** porque a Hostinger Cloud Startup tem timeout fixo de 3600s e não aceita 8k+ arquivos.
-- Consequência: **soft navigation entre páginas degrada** (~80ms → ~400ms). SEO, conteúdo, gamificação e demais funcionalidades **NÃO são afetados**.
-- Decisão documentada em [`docs/adr/0002-exclude-rsc-payloads-from-ftp-deploy.md`](./docs/adr/0002-exclude-rsc-payloads-from-ftp-deploy.md).
-- Quando migrar para **SSR/ISR na VPS** (próximo step arquitetural), esse exclude perde sentido e pode ser removido — os payloads passam a ser gerados em runtime pelo Node.js.
+### RSC payloads em SSR
+- Em `output: "standalone"`, os RSC payloads (`__next.*.txt`) são **gerados em runtime pelo Node** a cada navegação. Soft navigation entre páginas: **~80ms**.
+- O ADR `docs/adr/0002-exclude-rsc-payloads-from-ftp-deploy.md` está marcado como **superseded** — só fazia sentido em static export FTP.
 
 ### CSP (Content Security Policy)
-- Em `app/layout.tsx` — só aplicado em prod (`process.env.NODE_ENV !== 'development'`)
-- `https://images.unsplash.com` e `https://*.googleusercontent.com` já na lista
-- Plausible já allowed em `script-src` e `connect-src`
-- Stripe já allowed em `script-src` e `frame-src`
+- **Fonte de verdade: HTTP header `Content-Security-Policy`** no `next.config.ts` (`async headers()`). Roda em todas as rotas em prod.
+- Permite: `'self'`, Plausible (analytics), Stripe (`js.stripe.com`), `images.unsplash.com`, `*.googleusercontent.com`, `NEXT_PUBLIC_API_BASE_URL`.
+- `frame-ancestors 'none'` (anti-clickjacking) — agora é efetivo via header HTTP (meta tag não suporta).
+
+### Healthcheck endpoint
+- `src/app/api/health/route.ts` expõe `GET /api/health` para o Docker `HEALTHCHECK CMD`.
+- Retorna `{ status: "ok" }` 200. Usado pelo `docker-compose.prod.yml` (frontend service) para `start_period`/`restart`.
+
+### Pre-renderização vs runtime
+- Rotas com `generateStaticParams` **e** dados que mudam pouco (artigos `/aprenda/<slug>`): HTML pré-gerado no build, refresh a cada deploy.
+- Rotas dinâmicas client-side (admin, simulados, ranking, news/cheatsheets/playlists/comments): shell vazio + `fetch` em runtime → SEMPRE atualizadas sem deploy.
+- Para artigos atualizarem sem deploy (próxima sprint): adicionar `export const revalidate = 60` em `aprenda/[slug]/page.tsx` (ISR) + webhook do admin que dispara `revalidatePath('/aprenda/<slug>')` quando edita.
 
 ### Zod + GameStateSchema (`.strict()`)
 - `GameStateSchema` usa `.strict()` — **qualquer campo não declarado causa rejeição**
@@ -216,12 +222,25 @@ npm run lint   # eslint src/ — zero warnings policy
 
 | Item | Detalhe |
 |------|---------|
-| **Provedor** | Hostinger — plano Business (hospedagem compartilhada) |
-| **Datacenter** | Brasil (latência ~10ms para usuários BR) |
-| **Domínio** | `fernandofrancovalle.com` |
-| **Tipo de deploy** | Static export (`next.config.ts` → `output: "export"`) → pasta `frontend/out/` |
-| **Upload** | FTP automático via GitHub Actions (`SamKirkland/FTP-Deploy-Action`) |
-| **Diretório no servidor** | `/public_html/` (configurado em `HOSTINGER_FTP_DIR`) |
+| **Provedor** | Hostinger — VPS KVM 2 (mesma máquina do backend) |
+| **IP** | `72.60.28.82` |
+| **Datacenter** | Estados Unidos — Boston (latência ~120ms BR; será mitigada por Cloudflare na próxima sprint) |
+| **Domínio principal** | `fernandofrancovalle.com` + `www.fernandofrancovalle.com` |
+| **Subdomínio API** | `api.fernandofrancovalle.com` (mesma VPS, rota Nginx host-based) |
+| **Tipo de deploy** | Docker SSR (`next.config.ts` → `output: "standalone"`) — imagem `ghcr.io/feh-franc0/ffv-frontend` |
+| **Servidor reverse proxy** | Nginx no docker-compose.prod.yml (TLS 1.2/1.3 + HSTS) |
+| **Container** | Node 20 alpine runner, expõe `:3000`, healthcheck via `GET /api/health` |
+| **Resource limits** | 512 MB RAM / 0.8 CPU |
+
+### ⚠️ Migração DNS+SSL pendente
+
+O domínio raiz ainda aponta pra Hostinger LiteSpeed antiga (build estático de 13/mai). Ver [README raiz — Migração DNS+SSL pendente](../README.md#migração-dnsssl-pendente) para o passo a passo completo. Resumo:
+
+1. **Painel Hostinger DNS** → trocar registros A de `@` e `www` de `89.116.115.228` → `72.60.28.82`
+2. **SSH na VPS** → `sudo certbot certonly --webroot -w /var/www/certbot -d fernandofrancovalle.com -d www.fernandofrancovalle.com`
+3. **Reload Nginx** → `docker compose -f /opt/ffv/docker-compose.prod.yml exec nginx nginx -s reload`
+
+Enquanto não for feito: o site público continua mostrando o build estático antigo da Hostinger, sem `/admin`, sem os refactors de simulado, sem as 1015 questões CLF-C02 conectadas via banco.
 
 ### Como o deploy funciona (automático)
 
@@ -229,21 +248,34 @@ npm run lint   # eslint src/ — zero warnings policy
 git push main
   → CI passa (.github/workflows/ci.yml)
   → .github/workflows/deploy.yml dispara
-      └── deploy-frontend:
-            1. npm ci
-            2. npm run build  (usa NEXT_PUBLIC_API_BASE_URL do secret)
-            3. FTP sync incremental: frontend/out/ → /public_html/
-               (só envia arquivos que mudaram — compara hash)
+      ├── build-push: Docker → ghcr.io/feh-franc0/ffv-api:sha-<hash>
+      ├── build-push-frontend: Docker → ghcr.io/feh-franc0/ffv-frontend:sha-<hash>
+      │     (NEXT_PUBLIC_API_BASE_URL injetado como build arg)
+      └── deploy-backend (também deploya frontend):
+            1. SCP: docker-compose.prod.yml + nginx conf + migrations → VPS /tmp/
+            2. SSH: executa /opt/ffv/bin/deploy.sh na VPS
+                a. docker pull das duas imagens novas
+                b. migrate up (postgres) — inclui seed CLF idempotente
+                c. docker compose up -d --scale api=2 api frontend
+                d. health check ambos (até 120s)
+                e. atualiza nginx
+                f. rollback automático se health check falhar
 ```
 
-**Não há downtime**: o FTP sync é incremental. Arquivos novos sobem sem derrubar os existentes.
+**Não há downtime de backend** (réplicas com max_fails detectam queda e rotam). **Frontend tem ~5s de blip durante o swap** (container antigo para, novo sobe) — Cloudflare na frente (próxima sprint) elimina isso.
 
 ### Deploy manual (emergência)
 
 ```bash
+# Compilar imagem frontend localmente e push pro GHCR
 cd frontend
-NEXT_PUBLIC_API_BASE_URL=https://api.fernandofrancovalle.com npm run build
-# Faz upload manual da pasta out/ via FTP ou painel da Hostinger
+docker build -t ghcr.io/feh-franc0/ffv-frontend:emergency \
+  --build-arg NEXT_PUBLIC_API_BASE_URL=https://api.fernandofrancovalle.com .
+docker push ghcr.io/feh-franc0/ffv-frontend:emergency
+
+# Na VPS, force pull + recreate
+ssh deploy@72.60.28.82
+FRONTEND_TAG=emergency docker compose -f /opt/ffv/docker-compose.prod.yml up -d --no-deps frontend
 ```
 
 ### GitHub Secrets necessários (Settings → Secrets → Actions)
@@ -251,20 +283,17 @@ NEXT_PUBLIC_API_BASE_URL=https://api.fernandofrancovalle.com npm run build
 | Secret | Valor |
 |--------|-------|
 | `NEXT_PUBLIC_API_BASE_URL` | `https://api.fernandofrancovalle.com` |
-| `HOSTINGER_FTP_SERVER` | servidor FTP da Hostinger (ex: `ftp.fernandofrancovalle.com`) |
-| `HOSTINGER_FTP_USERNAME` | usuário FTP do painel Hostinger |
-| `HOSTINGER_FTP_PASSWORD` | senha FTP do painel Hostinger |
-| `HOSTINGER_FTP_DIR` | `/public_html/` |
+| `VPS_HOST` | `72.60.28.82` |
+| `VPS_USER` | `deploy` |
+| `VPS_SSH_KEY` | chave privada ed25519 do usuário `deploy` |
+| `VPS_PORT` | `22` |
+
+> Secrets antigos do FTP (`HOSTINGER_FTP_SERVER`, etc.) **podem ser removidos** — não são mais usados desde o commit `845eddb`.
 
 ### Ativar deploy automático
 
 Por padrão o deploy está **desativado** até a infra estar configurada.
 Para ativar: GitHub → Settings → Variables → Actions → `DEPLOY_ENABLED` = `true`
-
-### Onde encontrar o FTP da Hostinger
-
-Painel Hostinger → Sites → `fernandofrancovalle.com` → Painel de controle → FTP Accounts.
-Cria um usuário FTP dedicado para o CI (não usa o principal).
 
 ---
 

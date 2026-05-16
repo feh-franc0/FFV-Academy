@@ -365,21 +365,24 @@ make test-cover                # gera coverage.html
 git push main
   → .github/workflows/ci.yml (testes + lint + build)
   → .github/workflows/deploy.yml (se CI passou)
-      ├── build-push: Docker → ghcr.io/feh-franc0/ffv-api:sha-<hash>
-      ├── deploy-backend: SCP files → SSH VPS → /opt/ffv/bin/deploy.sh
-      └── deploy-frontend: npm build → FTP Hostinger
+      ├── build-push:           Docker backend  → ghcr.io/feh-franc0/ffv-api:sha-<hash>
+      ├── build-push-frontend:  Docker frontend → ghcr.io/feh-franc0/ffv-frontend:sha-<hash>
+      └── deploy-backend (também deploya frontend): SCP files → SSH VPS → /opt/ffv/bin/deploy.sh
 ```
+
+> Desde `845eddb` (15/mai), o frontend deixou de ser static export via FTP Hostinger e passou a ser SSR Docker rodando na mesma VPS do backend. Ver [`../frontend/CLAUDE.md`](../frontend/CLAUDE.md) e [README raiz](../README.md#migração-dnsssl-pendente).
 
 ### deploy.sh (roda na VPS)
 
 1. Login no GHCR com `GHCR_TOKEN`
-2. `docker pull ghcr.io/feh-franc0/ffv-api:$IMAGE_TAG`
+2. `docker pull ghcr.io/feh-franc0/ffv-api:$IMAGE_TAG` + (se `FRONTEND_TAG` setado) `docker pull ghcr.io/feh-franc0/ffv-frontend:$FRONTEND_TAG`
 3. Salva tag atual em `/opt/ffv/.current_tag` (para rollback)
 4. Sobe postgres + redis se não estiverem rodando
 5. Roda migrations: `migrate -path /opt/ffv/migrations -database $DATABASE_URL up`
    - `DATABASE_URL` tem `@postgres:` trocado por `@localhost:` (loopback do host)
-6. `docker compose up -d --no-deps api` (pull never — usa imagem já baixada)
-7. Health check: aguarda `docker inspect --health.Status == healthy` (máx 120s)
+   - Inclui `000041_seed_clf_questions` e `000042_reseed_clf_questions_v2` (1015 questões CLF idempotentes via ON CONFLICT DO UPDATE)
+6. `docker compose up -d --no-deps --pull never --scale api=2 api` + `up -d --no-deps frontend` (se `FRONTEND_TAG` setado)
+7. Health check: aguarda `docker inspect --health.Status == healthy` para api e frontend (máx 120s cada)
 8. Sucesso: atualiza nginx + prune de imagens antigas
 9. Falha: rollback automático para tag anterior
 
@@ -519,8 +522,11 @@ Rank do usuário em todos os 4 períodos:
 | **OS** | Ubuntu 24.04 LTS |
 | **Hostname** | `srv1660277` |
 | **Recursos** | 2 vCPU / 8 GB RAM / 100 GB NVMe / 8 TB banda |
-| **Domínio da API** | `api.fernandofrancovalle.com` |
+| **Domínio API** | `api.fernandofrancovalle.com` (DNS já apontado ✅) |
+| **Domínio frontend (depois da migração DNS)** | `fernandofrancovalle.com` + `www.fernandofrancovalle.com` (mesma VPS, host-routing no Nginx) |
 | **SSH** | `ssh deploy@72.60.28.82` (usuário `deploy`, chave ed25519) |
+
+> **⚠️ Frontend Docker roda na MESMA VPS** desde `845eddb`. Nginx faz host-based routing: `api.*` → API Go; `www`/root → frontend Next standalone. **Migração DNS+SSL pendente** para o domínio raiz e www — ver [README raiz](../README.md#migração-dnsssl-pendente).
 
 ### Arquitetura Docker no VPS
 
@@ -528,13 +534,20 @@ Rank do usuário em todos os 4 períodos:
 Internet :443/:80
     │
   Nginx (container) — TLS Let's Encrypt, rate limiting, HSTS
-    │  upstream api_backend (round-robin, max_fails=3, proxy_next_upstream)
-    ├── api_1:8080  ← réplica 1 (healthcheck /healthz a cada 15s)
-    └── api_2:8080  ← réplica 2 (healthcheck /healthz a cada 15s)
-         │
-    (rede data — internal: true, sem acesso externo)
-         ├── postgres:5432  (exposto em 127.0.0.1:5432 pro migrate CLI)
-         └── redis:6379
+    │
+    ├── server_name api.fernandofrancovalle.com
+    │     upstream api_backend (round-robin, max_fails=3, proxy_next_upstream)
+    │     ├── api_1:8080  ← réplica 1 (healthcheck /healthz a cada 15s)
+    │     └── api_2:8080  ← réplica 2 (healthcheck /healthz a cada 15s)
+    │
+    └── server_name fernandofrancovalle.com www.fernandofrancovalle.com
+          upstream frontend_backend
+          └── frontend:3000  ← Next.js standalone (healthcheck /api/health)
+                              cache de /_next/static/ pelo Nginx
+
+(rede data — internal: true, sem acesso externo)
+    ├── postgres:5432  (exposto em 127.0.0.1:5432 pro migrate CLI)
+    └── redis:6379
 
 Volumes persistentes: postgres_data, redis_data, certbot_webroot
 ```
@@ -618,10 +631,8 @@ migrate -path /opt/ffv/migrations -database "$DATABASE_URL" up
 | `VPS_SSH_KEY` | chave privada ed25519 do usuário deploy |
 | `VPS_PORT` | `22` |
 | `NEXT_PUBLIC_API_BASE_URL` | `https://api.fernandofrancovalle.com` |
-| `HOSTINGER_FTP_SERVER` | servidor FTP Hostinger |
-| `HOSTINGER_FTP_USERNAME` | usuário FTP Hostinger |
-| `HOSTINGER_FTP_PASSWORD` | senha FTP Hostinger |
-| `HOSTINGER_FTP_DIR` | `/public_html/` |
+
+> Secrets antigos do FTP (`HOSTINGER_FTP_SERVER`, `HOSTINGER_FTP_USERNAME`, `HOSTINGER_FTP_PASSWORD`, `HOSTINGER_FTP_DIR`) foram aposentados em `845eddb` e podem ser deletados do repo. O frontend agora é Docker SSR na VPS.
 
 ### Ativar deploy automático
 
@@ -656,4 +667,5 @@ Necessário porque a imagem distroless não tem curl/wget/shell.
 - [`../CLAUDE.md`](../CLAUDE.md) — visão monorepo
 - [`../CHANGELOG_PLATFORM_2026-05.md`](../CHANGELOG_PLATFORM_2026-05.md) — todas as mudanças de maio/2026 (frontend + backend)
 - [`PLAN.md`](./PLAN.md) — plano detalhado de iteração da API
-- [`../frontend/CLAUDE.md`](../frontend/CLAUDE.md) — deploy e infra do frontend (Hostinger shared hosting)
+- [`../frontend/CLAUDE.md`](../frontend/CLAUDE.md) — deploy e infra do frontend (SSR Docker na mesma VPS)
+- [`../README.md#migração-dnsssl-pendente`](../README.md#migração-dnsssl-pendente) — passo a passo da migração DNS+SSL pendente

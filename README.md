@@ -27,6 +27,7 @@ Monorepo full-stack com frontend estático (Next.js 16), API em Go 1.25, pipelin
 - [Sobre o projeto](#sobre-o-projeto)
 - [Destaques](#destaques)
 - [Arquitetura](#arquitetura)
+  - [⚠️ Migração DNS+SSL pendente](#migração-dnsssl-pendente)
 - [Stack tecnológica](#stack-tecnológica)
 - [Estrutura do monorepo](#estrutura-do-monorepo)
 - [Quick start](#quick-start)
@@ -83,53 +84,145 @@ A plataforma combina um **blog técnico denso e pedagógico** com uma camada de 
 
 ## Arquitetura
 
+> **⚠️ Migração de DNS+SSL pendente.** O frontend Docker SSR já está rodando na VPS, mas o DNS de `fernandofrancovalle.com` ainda aponta pra Hostinger LiteSpeed antiga (build estático de 13/mai). Ver seção [Migração DNS+SSL pendente](#migração-dnsssl-pendente) abaixo.
+
 ```
-                          ┌─────────────────────────────┐
-                          │       fernandofrancovalle.com │
-                          │     (Hostinger — estático)   │
-                          └──────────────┬──────────────┘
-                                         │ HTTPS
-                                         ▼
-                ┌──────────────────────────────────────────────┐
-                │  Frontend — Next.js 16 (output: "export")     │
-                │  • 96 rotas pré-renderizadas                  │
-                │  • Gamificação client-side (engine.ts)        │
-                │  • localStorage + IndexedDB fallback (lz)     │
-                │  • Sentry, base-ui, Tailwind 4                │
-                └──────────────┬───────────────────────────────┘
-                               │ NEXT_PUBLIC_API_BASE_URL
-                               ▼
-        ┌────────────────────────────────────────────────────────┐
-        │  Backend — Go 1.25 + Chi (DDD: domain → app → infra)    │
-        │                                                         │
-        │   HTTP layer ──► Application ──► Domain (puro)          │
-        │       │              │              │                   │
-        │       │              ▼              ▼                   │
-        │       │         Infrastructure (adapters)               │
-        │       │              │                                  │
-        │       └──── middleware: JWT, rate-limit (Redis),        │
-        │             logger (slog), metrics (Prometheus),        │
-        │             OTel tracing (OTLP gRPC)                    │
-        └──────┬─────────────┬────────────┬─────────────┬─────────┘
-               │             │            │             │
-          ┌────▼────┐   ┌────▼────┐  ┌────▼────┐  ┌─────▼─────┐
-          │Postgres │   │  Redis  │  │ Stripe  │  │  Claude    │
-          │   16    │   │    7    │  │ Webhook │  │ (Anthropic)│
-          └─────────┘   └─────────┘  └─────────┘  └────────────┘
-                                          │
-                                     ┌────▼────┐  ┌──────────┐
-                                     │ Resend  │  │  Twilio   │
-                                     │ (email) │  │   (SMS)   │
-                                     └─────────┘  └──────────┘
+                  fernandofrancovalle.com / www.* / api.*
+                                  │
+                                  ▼
+                ┌─────────────────────────────────────┐
+                │    VPS Hostinger KVM 2 (72.60.28.82) │
+                │    Ubuntu 24.04 — Boston (US)        │
+                │                                      │
+                │    Nginx (TLS 1.2/1.3 + HSTS)        │
+                │      ├─► api.* → backend (×2)        │
+                │      └─► www/root → frontend         │
+                └──┬───────────────────────────────────┘
+                   │
+       ┌───────────┴───────────────┐
+       ▼                           ▼
+┌──────────────────────┐   ┌──────────────────────────────┐
+│  Frontend Docker     │   │  Backend — Go 1.25 + Chi      │
+│  Next.js 16 SSR      │   │  (DDD: domain → app → infra)  │
+│  output: "standalone"│   │                               │
+│  • SSR per-request   │   │   HTTP ──► App ──► Domain     │
+│  • Server Components │   │     │       │       │         │
+│  • generateStaticParams│   │     │       ▼       ▼         │
+│  • CSP HTTP real      │   │     │  Infrastructure         │
+│  • RSC streaming      │   │     │       │                 │
+│  • Healthcheck nativo │   │     └── middleware: JWT,     │
+└──────┬───────────────┘   │         rate-limit (Redis),   │
+       │                   │         slog, OTel, Prom      │
+       │ NEXT_PUBLIC_      └──┬─────┬────────┬─────────────┘
+       │ API_BASE_URL         │     │        │
+       └─────────────────► ┌──▼─┐ ┌─▼─┐  ┌───▼────┐  ┌─────────┐
+                           │PG16│ │R7 │  │ Stripe │  │ Claude  │
+                           └────┘ └───┘  └────────┘  └─────────┘
+                                              │
+                                       ┌──────┴──────┐
+                                       │             │
+                                   ┌───▼───┐    ┌───▼───┐
+                                   │Resend │    │Twilio │
+                                   └───────┘    └───────┘
 ```
 
 **Princípios:**
 
-- **Frontend estático** (`output: "export"`) — zero servidor Node em produção, deploy por FTP no Hostinger.
+- **Frontend SSR Docker** (`output: "standalone"`) — Node.js servidor 24/7 na VPS, com SSR per-request, RSC streaming, `/api/*` routes nativas e CSP via HTTP headers reais.
 - **Backend hexagonal/DDD** — `domain/` é puro, `application/` orquestra ports, `infrastructure/` traz adapters concretos.
 - **Server-authoritative** — scoring de simulado, emissão de certificado e XP final calculados no servidor.
 - **LWW conflict resolution** em `progress_snapshots` (`updated_at`).
 - **Idempotência** em webhooks Stripe (tabela `stripe_events`) e em `awardBadge()` no cliente.
+- **Single VPS, dois serviços** — Nginx faz host-based routing: `api.*` → API Go (×2 réplicas); `www`/root → frontend Next.js.
+
+### Migração DNS+SSL pendente
+
+Estado atual em produção (verificado em 16/mai/2026):
+
+| Host | DNS atual | Esperado | Status |
+|---|---|---|---|
+| `api.fernandofrancovalle.com` | `72.60.28.82` ✅ | `72.60.28.82` | OK — VPS |
+| `www.fernandofrancovalle.com` | `89.116.115.228` ❌ | `72.60.28.82` | **Apontando pra Hostinger antiga** |
+| `fernandofrancovalle.com` | `89.116.115.228` ❌ | `72.60.28.82` | **Apontando pra Hostinger antiga** |
+
+**Por que isso aconteceu**: o commit `845eddb` (15/mai) migrou frontend de static export (FTP Hostinger) para SSR Docker (VPS), e `bb9d0bd` documentou explicitamente como TODO:
+
+> *"após este deploy, o DNS de fernandofrancovalle.com precisa apontar para o IP da VPS (72.60.28.82) em vez da Hostinger. Para obter o certificado SSL do domínio principal na VPS: certbot certonly --webroot..."*
+
+**Consequência hoje**: a maior parte das mudanças recentes (admin, simulados gratuitos, refator CLF, 1015 questões no banco) está em `main` no GitHub e na VPS, mas usuários acessando `https://www.fernandofrancovalle.com/` recebem o build estático antigo da Hostinger e não veem essas features.
+
+#### Plano de migração (executado pelo maintainer)
+
+**Janela**: ~30-40 min total, com ~5-15 min de downtime parcial. Recomendado fim de noite/fim de semana.
+
+**Fase 1 — DNS na Hostinger** (~5 min ação + 5-30 min propagação)
+
+1. Painel Hostinger → **Domains** → `fernandofrancovalle.com` → **DNS / Nameservers** → aba **DNS Records**.
+2. Editar 2 registros:
+
+   | Tipo | Nome | Valor atual | Trocar para | TTL |
+   |---|---|---|---|---|
+   | A | `@` | `89.116.115.228` | **`72.60.28.82`** | 3600 |
+   | A | `www` | `89.116.115.228` | **`72.60.28.82`** | 3600 |
+
+   ⚠️ NÃO tocar no registro `A api → 72.60.28.82` (já está correto).
+
+3. Aguardar propagação:
+   ```bash
+   dig +short www.fernandofrancovalle.com   # deve retornar 72.60.28.82
+   ```
+
+**Fase 2 — Emitir SSL na VPS** (~5 min)
+
+```bash
+ssh deploy@72.60.28.82
+sudo certbot certonly --webroot \
+  -w /var/www/certbot \
+  -d fernandofrancovalle.com \
+  -d www.fernandofrancovalle.com \
+  --email fernandofv1110@gmail.com \
+  --agree-tos --no-eff-email --non-interactive
+```
+
+Saída esperada:
+```
+Successfully received certificate.
+Certificate is saved at: /etc/letsencrypt/live/fernandofrancovalle.com/fullchain.pem
+```
+
+**Fase 3 — Reload Nginx** (instantâneo)
+
+```bash
+docker compose -f /opt/ffv/docker-compose.prod.yml exec nginx nginx -s reload
+```
+
+**Fase 4 — Verificar**
+
+```bash
+curl -I https://www.fernandofrancovalle.com/admin/
+# Esperado: HTTP/2 200, server: nginx (não LiteSpeed)
+```
+
+Browser → `https://www.fernandofrancovalle.com/admin/` com **hard refresh** (Cmd+Shift+R) pra invalidar cache PWA.
+
+#### Rollback se algo der errado
+
+Voltar DNS na Hostinger: `@` e `www` → `89.116.115.228` → aguardar propagação → site volta como estava. Sem perda de dados (Postgres na VPS é separado da camada de frontend).
+
+#### Comparativo SSR Docker × Static FTP (decisão de manter SSR)
+
+| Característica | SSR Docker (VPS) atual | Static FTP (alternativa) |
+|---|---|---|
+| Latência 1ª request BR | ~120ms (VPS Boston) | ~10ms (Hostinger BR) |
+| Soft navigation | **~80ms** (RSC completo) | ~400ms (RSC excluídos pelo ADR 0002) |
+| CSP | **HTTP header real** | Meta tag (90% efetivo) |
+| Editar artigo no admin | Hoje precisa deploy; com ISR (próxima sprint) atualiza sem deploy | Sempre precisa deploy |
+| Server Actions, `/api/*` routes, streaming, edge middleware | ✅ | ❌ |
+| Manutenção | ~30 min/mês | Zero |
+| Custo | $0 (VPS já paga) | $0 |
+| Setup inicial | DNS+SSL one-time (pendente) | Já configurado |
+
+**Decisão (16/mai/2026):** manter SSR Docker. A latência BR será mitigada na próxima sprint com Cloudflare grátis na frente (cache no edge BR).
 
 ---
 
@@ -471,13 +564,15 @@ Roda em todo `push main` e `pull_request → main` com **concurrency cancel-in-p
 - **Frontend:** Node 20 → `npm ci` → ESLint → `tsc` → Vitest → `npm run build` → upload `out/` (7d).
 - **Backend:** Go 1.25 + Postgres 16 + Redis 7 (services) → `go build` → `golangci-lint` → migrations → `make test-unit` → `make test-contract` → coverage → upload HTML (14d).
 
-### `deploy.yml` — Backend (VPS) + Frontend (Hostinger)
+### `deploy.yml` — Backend + Frontend (ambos VPS via Docker)
 
 Disparado quando o CI passa em `main`. Gated por `vars.DEPLOY_ENABLED=true`.
 
-- **Build & Push:** Docker multi-stage (`golang:1.25` → `distroless/static:nonroot`) → `ghcr.io/feh-franc0/ffv-api:sha-<hash>`.
-- **Deploy backend:** SCP + SSH para VPS → `/opt/ffv/bin/deploy.sh` aplica migrations, faz health-check e **rollback automático** em caso de falha.
-- **Deploy frontend:** `npm run build` (com `NEXT_PUBLIC_API_BASE_URL` injetado) → upload incremental via FTP no Hostinger.
+- **Build & Push backend:** Docker multi-stage (`golang:1.25` → `distroless/static:nonroot`) → `ghcr.io/feh-franc0/ffv-api:sha-<hash>`.
+- **Build & Push frontend:** Docker multi-stage (`node:20-alpine` deps → builder → runner) → `ghcr.io/feh-franc0/ffv-frontend:sha-<hash>`. `NEXT_PUBLIC_API_BASE_URL` injetado como build arg.
+- **Deploy:** SCP + SSH para VPS → `/opt/ffv/bin/deploy.sh` baixa ambas as imagens, aplica migrations Postgres, sobe API (×2 réplicas) + frontend (Next standalone), executa health-check e **rollback automático** em caso de falha.
+
+> O caminho FTP Hostinger anterior foi removido em `845eddb`. O DNS ainda precisa ser apontado (ver [Migração DNS+SSL pendente](#migração-dnsssl-pendente)).
 
 ### `security.yml` — varredura semanal + por PR
 
