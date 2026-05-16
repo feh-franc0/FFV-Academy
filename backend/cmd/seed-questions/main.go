@@ -1,11 +1,19 @@
-// Command seed-clf-questions: lê arquivos JSON do question-bank e faz upsert no banco.
+// Command seed-questions: lê arquivos JSON do question-bank e faz upsert no banco.
 //
 // Uso:
 //
-//	DATABASE_URL=postgres://... ./seed-clf-questions [path-to-question-bank]
+//	DATABASE_URL=postgres://... ./seed-questions [path-to-question-bank]
 //
 // O path padrão é ../../frontend/data/question-bank (relativo ao binário).
-// Processa apenas arquivos clf-c02-*.json, pulando *.v1-backup.json.
+//
+// Mapeamento de filename → simulado_id:
+//
+//	clf-c02-*.json      → aws-clf
+//	dva-c02-*.json      → aws-dva
+//	aif-c01-*.json      → aws-aif
+//	anthropic-ai-*.json → anthropic-ai
+//
+// Arquivos *.v1-backup.json são ignorados.
 package main
 
 import (
@@ -15,6 +23,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -58,6 +67,29 @@ type explanationJSON struct {
 	TutorSeeds       []string          `json:"tutorSeeds,omitempty"`
 }
 
+// certPrefixes mapeia o prefixo do filename para o simulado_id correspondente.
+// Mantido como slice para preservar ordem estável de detecção.
+var certPrefixes = []struct {
+	Prefix     string
+	SimuladoID string
+}{
+	{Prefix: "clf-c02-", SimuladoID: "aws-clf"},
+	{Prefix: "dva-c02-", SimuladoID: "aws-dva"},
+	{Prefix: "aif-c01-", SimuladoID: "aws-aif"},
+	{Prefix: "anthropic-ai-", SimuladoID: "anthropic-ai"},
+}
+
+// detectSimuladoID retorna o simulado_id para um filename, ou "" se nenhum
+// prefixo conhecido bater.
+func detectSimuladoID(filename string) string {
+	for _, c := range certPrefixes {
+		if strings.HasPrefix(filename, c.Prefix) {
+			return c.SimuladoID
+		}
+	}
+	return ""
+}
+
 func main() {
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
@@ -89,7 +121,14 @@ func main() {
 		log.Fatalf("read dir: %v", err)
 	}
 
-	var clfFiles []string
+	type fileTarget struct {
+		Path       string
+		Name       string
+		SimuladoID string
+	}
+
+	var targets []fileTarget
+	var skipped []string
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() {
@@ -101,40 +140,70 @@ func main() {
 		if strings.HasSuffix(name, ".v1-backup.json") {
 			continue
 		}
-		if !strings.HasPrefix(name, "clf-c02-") {
+		simuladoID := detectSimuladoID(name)
+		if simuladoID == "" {
+			skipped = append(skipped, name)
 			continue
 		}
-		clfFiles = append(clfFiles, filepath.Join(bankPath, name))
+		targets = append(targets, fileTarget{
+			Path:       filepath.Join(bankPath, name),
+			Name:       name,
+			SimuladoID: simuladoID,
+		})
 	}
 
-	if len(clfFiles) == 0 {
-		log.Fatal("nenhum arquivo clf-c02-*.json encontrado")
+	// Ordena para output determinístico.
+	sort.Slice(targets, func(i, j int) bool {
+		return targets[i].Name < targets[j].Name
+	})
+
+	for _, name := range skipped {
+		log.Printf("AVISO: arquivo ignorado (prefixo desconhecido): %s", name) //nolint:gosec // G706: filename é do question-bank do repositório
 	}
 
-	fmt.Printf("Encontrados %d arquivos CLF\n", len(clfFiles))
+	if len(targets) == 0 {
+		log.Fatal("nenhum arquivo de question-bank reconhecido encontrado")
+	}
+
+	fmt.Printf("Encontrados %d arquivos de question-bank\n", len(targets))
 
 	start := time.Now()
-	var totalUpserted int
+	totalUpserted := 0
+	bySimulado := make(map[string]int)
+	filesBySimulado := make(map[string]int)
 
-	for _, path := range clfFiles {
-		count, err := processFile(ctx, pool, path)
+	for _, t := range targets {
+		count, err := processFile(ctx, pool, t.Path, t.SimuladoID)
 		if err != nil {
-			log.Printf("ERRO %s: %v", filepath.Base(path), err) //nolint:gosec // G706: filename é do question-bank do repositório
+			log.Printf("ERRO %s: %v", t.Name, err) //nolint:gosec // G706: filename é do question-bank do repositório
 			continue
 		}
-		fmt.Printf("  %s: %d questoes\n", filepath.Base(path), count)
+		fmt.Printf("  [%s] %s: %d questoes\n", t.SimuladoID, t.Name, count)
 		totalUpserted += count
+		bySimulado[t.SimuladoID] += count
+		filesBySimulado[t.SimuladoID]++
 	}
 
 	elapsed := time.Since(start)
 	fmt.Printf("\n=================================================\n")
-	fmt.Printf("  Seed CLF concluido\n")
+	fmt.Printf("  Seed questions concluido\n")
 	fmt.Printf("=================================================\n")
 	fmt.Printf("Tempo:     %s\n", elapsed.Round(time.Millisecond))
-	fmt.Printf("Questoes:  %d\n", totalUpserted)
+	fmt.Printf("Questoes:  %d (total)\n", totalUpserted)
+	fmt.Printf("\nPor simulado_id:\n")
+
+	// Ordena os simuladoIDs para output determinístico.
+	keys := make([]string, 0, len(bySimulado))
+	for k := range bySimulado {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Printf("  %-14s %4d questoes  (%d arquivos)\n", k, bySimulado[k], filesBySimulado[k])
+	}
 }
 
-func processFile(ctx context.Context, pool *pgxpool.Pool, path string) (int, error) {
+func processFile(ctx context.Context, pool *pgxpool.Pool, path string, simuladoID string) (int, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // G304,G703: path vem do operador via CLI args
 	if err != nil {
 		return 0, fmt.Errorf("read file: %w", err)
@@ -148,8 +217,6 @@ func processFile(ctx context.Context, pool *pgxpool.Pool, path string) (int, err
 	if len(file.Questions) == 0 {
 		return 0, nil
 	}
-
-	const simuladoID = "aws-clf"
 
 	count := 0
 	for _, q := range file.Questions {
