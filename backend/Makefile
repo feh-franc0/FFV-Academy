@@ -1,4 +1,4 @@
-.PHONY: build run test test-unit test-integration test-contract test-e2e test-security test-load test-cover lint migrate migrate-down generate clean docker-up docker-down
+.PHONY: build run test test-unit test-integration test-contract test-e2e test-security test-load test-cover lint migrate migrate-down generate clean docker-up docker-down seed-questions gen-seed-migration
 
 # ─── Build & Run ─────────────────────────────────────────────────────────────
 build:
@@ -45,6 +45,16 @@ lint-fix:
 	golangci-lint run --fix ./...
 
 # ─── Database Migrations ─────────────────────────────────────────────────────
+# Fluxo padrão: rode `make migrate` normalmente — aplica todas as migrations
+# commited (incluindo o seed CLF-C02 já gerado em 000041_seed_clf_questions).
+#
+# Fluxo para EDITAR uma questão CLF-C02:
+#   1. edita frontend/data/question-bank/clf-c02-*.json
+#   2. `make gen-seed-migration`   (regenera 000041_seed_clf_questions.up.sql)
+#   3. commita o .sql regenerado
+#   4. dev local → `make reseed-clf` (down + up, aplica edição)
+#   5. prod (deploy.sh) → aplica automatico no próximo deploy DESDE QUE 000041
+#      seja revertida primeiro (ver `make reseed-clf` e nota em prod abaixo)
 migrate:
 	migrate -path migrations -database "$(DATABASE_URL)" up
 
@@ -57,6 +67,20 @@ migrate-reset:
 
 migrate-status:
 	migrate -path migrations -database "$(DATABASE_URL)" version
+
+# Regenera migrations/000041_seed_clf_questions.{up,down}.sql lendo os JSONs em
+# frontend/data/question-bank. Idempotente — pode rodar sempre.
+# Em CI: roda automaticamente para verificar drift entre JSONs e SQL commited.
+gen-seed-migration:
+	@go run ./cmd/gen-seed-migration
+
+# Re-aplica o seed (down + up + regen) — útil em dev quando você edita uma
+# questão no JSON e quer aplicar a edição num banco já populado.
+# Equivale a: reverter a migration 000041 → regerar o SQL → re-aplicar.
+reseed-clf:
+	migrate -path migrations -database "$(DATABASE_URL)" down 1
+	$(MAKE) gen-seed-migration
+	migrate -path migrations -database "$(DATABASE_URL)" up
 
 # ─── Code Generation ─────────────────────────────────────────────────────────
 generate:
@@ -82,6 +106,13 @@ docker-logs:
 # ─── Catalog ─────────────────────────────────────────────────────────────────
 gen-catalog:
 	bash scripts/gen-catalog.sh
+
+# ─── Seed Questions ──────────────────────────────────────────────────────────
+# DEPRECATED: o seed agora é feito pela migration 000041_seed_clf_questions
+# (regenerada via `make gen-seed-migration`). Este target permanece apenas
+# para popular bancos sem rodar migrations — uso raro.
+seed-questions:
+	go run ./cmd/seed-questions
 
 # ─── Clean ───────────────────────────────────────────────────────────────────
 clean:
