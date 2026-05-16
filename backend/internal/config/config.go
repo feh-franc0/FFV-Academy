@@ -113,7 +113,12 @@ type AnthropicConfig struct {
 }
 
 type CORSConfig struct {
-	AllowedOrigins []string `envconfig:"CORS_ALLOWED_ORIGINS" default:"https://fernandofrancovalle.com"`
+	// Default cobre tanto o origin canônico (sem www) quanto o www — embora
+	// o Nginx faça 301 www → sem-www no nível do server, o browser pode
+	// emitir CORS preflight do origin original do bookmark. Manter ambos
+	// evita falhas. Em prod, sobrescreva via CORS_ALLOWED_ORIGINS
+	// (envconfig separa por vírgula).
+	AllowedOrigins []string `envconfig:"CORS_ALLOWED_ORIGINS" default:"https://fernandofrancovalle.com,https://www.fernandofrancovalle.com"`
 }
 
 // TelemetryConfig contém as configurações do OpenTelemetry.
