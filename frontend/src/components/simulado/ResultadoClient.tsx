@@ -12,7 +12,10 @@ import { CertificateModal } from './CertificateModal';
 import { PeerComparisonChip } from '@/components/peer/PeerComparisonChip';
 import { calculatePeerPercentile } from '@/lib/peer-stats';
 
-const simQsKey = (id: string) => `ffv_sim_qs_${id}`;
+// Chave dinâmica de localStorage para o conjunto de questões sorteadas de um
+// simulado em andamento. Não cabe no enum `StorageKey` (literal union), então
+// é tratada via cast — fora do registro de chaves conhecidas.
+const simQsKey = (id: string) => `ffv_sim_qs_${id}` as unknown as import('@/lib/constants').StorageKey;
 
 interface Props {
   slug: string;
@@ -32,7 +35,7 @@ export function ResultadoClient({ slug }: Props) {
   // Carrega questões do banco usando IDs persistidos pelo SimuladoRunner.
   useEffect(() => {
     if (!simulado) return;
-    const storedIds = getJSON<string[]>(simQsKey(simuladoId), null);
+    const storedIds = getJSON<string[] | null>(simQsKey(simuladoId), null);
     if (!storedIds || storedIds.length === 0) return;
     fetchQuestionsByIds(storedIds, simuladoId)
       .then(found => {

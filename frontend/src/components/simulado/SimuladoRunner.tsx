@@ -27,7 +27,10 @@ interface Props {
 
 type Mode = 'prova' | 'estudo';
 
-const simQsKey = (id: string) => `ffv_sim_qs_${id}`;
+// Chave dinâmica de localStorage para o conjunto de questões sorteadas de um
+// simulado em andamento. Não cabe no enum `StorageKey` (literal union), então
+// é tratada via cast — fora do registro de chaves conhecidas.
+const simQsKey = (id: string) => `ffv_sim_qs_${id}` as unknown as import('@/lib/constants').StorageKey;
 
 export function SimuladoRunner({ slug }: Props) {
   const router = useRouter();
@@ -92,7 +95,7 @@ export function SimuladoRunner({ slug }: Props) {
     if (!simulado || !isLoggedIn) return;
 
     async function load() {
-      const storedIds = getJSON<string[]>(simQsKey(simuladoId), null);
+      const storedIds = getJSON<string[] | null>(simQsKey(simuladoId), null);
       try {
         if (storedIds && storedIds.length > 0) {
           // Retoma attempt em andamento: busca exatamente os IDs já sorteados.

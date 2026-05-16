@@ -370,4 +370,3 @@ func (h *SimuladoHandler) ReportQuestion(w http.ResponseWriter, r *http.Request)
 	}
 	WriteJSON(w, http.StatusCreated, map[string]string{"reportId": res.ReportID})
 }
-
