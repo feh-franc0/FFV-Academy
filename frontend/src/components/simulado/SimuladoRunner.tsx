@@ -12,7 +12,7 @@ import {
   getExplanationText,
   scoreAttempt,
 } from '@/lib/simulados';
-import { loadClfBankFlat, pickRandomBatch } from '@/lib/clf-bank';
+import { fetchRandomQuestions } from '@/lib/clf-bank';
 import { useAuth } from '@/hooks/useAuth';
 import { idFromSlug } from '@/components/SimuladoCard';
 import { TutorChat } from './TutorChat';
@@ -36,7 +36,7 @@ export function SimuladoRunner({ slug }: Props) {
   const simulado = getSimulado(simuladoId);
 
   const [attempt, setAttempt] = useState<SimuladoAttempt | null>(null);
-  const [questions, setQuestions] = useState<SimuladoQuestion[]>(simulado?.questions ?? []);
+  const [questions, setQuestions] = useState<SimuladoQuestion[]>([]);
   const [questionsReady, setQuestionsReady] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [mode, setMode] = useState<Mode>('estudo');
@@ -87,37 +87,42 @@ export function SimuladoRunner({ slug }: Props) {
     setHydrated(true);
   }, [simulado, simuladoId, isLoggedIn]);
 
-  // Carrega questões do banco Postgres (ou estáticas como fallback)
+  // Carrega questões do banco Postgres — server sorteia N e devolve.
   useEffect(() => {
     if (!simulado || !isLoggedIn) return;
-    loadClfBankFlat()
-      .then(bank => {
-        if (bank.length === 0) throw new Error('banco vazio');
-        const storedIds = getJSON<string[]>(simQsKey(simuladoId), null);
-        let qs: SimuladoQuestion[];
-        if (storedIds && storedIds.length > 0) {
-          // Retoma attempt existente: usa mesmo conjunto de questões
-          const byId = new Map(bank.map(q => [q.id, q]));
-          const found = storedIds.map(id => byId.get(id)).filter((q): q is SimuladoQuestion => !!q);
-          qs = found.length > 0 ? found : pickNew(bank);
-        } else {
-          qs = pickNew(bank);
-        }
-        setQuestions(qs);
-      })
-      .catch(() => {
-        setQuestions(simulado.questions); // fallback estático
-      })
-      .finally(() => setQuestionsReady(true));
 
-    function pickNew(bank: SimuladoQuestion[]): SimuladoQuestion[] {
-      const n = simulado!.questionCount;
-      const picked = bank.length >= n
-        ? pickRandomBatch(bank, n, { weightedByDomain: true })
-        : bank;
-      setJSON(simQsKey(simuladoId), picked.map(q => q.id));
-      return picked;
+    async function load() {
+      const storedIds = getJSON<string[]>(simQsKey(simuladoId), null);
+      try {
+        if (storedIds && storedIds.length > 0) {
+          // Retoma attempt em andamento: busca exatamente os IDs já sorteados.
+          const { fetchQuestionsByIds } = await import('@/lib/clf-bank');
+          const fetched = await fetchQuestionsByIds(storedIds, simuladoId);
+          if (fetched.length > 0) {
+            setQuestions(fetched);
+            return;
+          }
+        }
+        // Nova attempt: backend sorteia N questões via ORDER BY RANDOM().
+        const fresh = await fetchRandomQuestions({
+          simuladoId,
+          count: simulado!.questionCount,
+        });
+        if (fresh.length === 0) {
+          throw new Error('banco vazio — rode o seed-questions no backend');
+        }
+        setJSON(simQsKey(simuladoId), fresh.map(q => q.id));
+        setQuestions(fresh);
+      } catch (err) {
+        console.error('SimuladoRunner: falha ao carregar questões do backend', err);
+        // Sem fallback estático — questões são autoridade do banco.
+        setQuestions([]);
+      } finally {
+        setQuestionsReady(true);
+      }
     }
+
+    load();
   }, [simulado, simuladoId, isLoggedIn]);
 
   // Tick do timer — wall-clock based

@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { verifyToken, MOCK_TOKEN } from '../../lib/auth';
 import {
   getSimulado, saveAttempt, scoreAttempt, getAttempt,
-  isQuestionAccessible,
+  isQuestionAccessible, type Simulado, type SimuladoQuestion,
 } from '../../lib/simulados';
 import { issueCertificate, getCertificateLocal } from '../../lib/certificates';
 import { completeSimulado, loadState } from '../../lib/engine';
@@ -27,10 +27,20 @@ async function login() {
   });
 }
 
+// CLF agora pega questões do backend, então o test usa um conjunto fake in-memory.
+const FAKE_QUESTIONS: SimuladoQuestion[] = [
+  { id: 'q1', stem: 's1', options: [{ id: 'A', text: 'A' }, { id: 'B', text: 'B' }], correctId: 'A', explanation: '', topic: 'Cloud Concepts', difficulty: 'easy' },
+  { id: 'q2', stem: 's2', options: [{ id: 'A', text: 'A' }, { id: 'B', text: 'B' }], correctId: 'B', explanation: '', topic: 'Security & Compliance', difficulty: 'medium' },
+];
+
+function simWithFakeQuestions(): Simulado {
+  return { ...getSimulado(SIM_ID)!, questions: FAKE_QUESTIONS };
+}
+
 describe('Fluxo completo de simulado', () => {
   it('user loga → todas as questões acessíveis → finaliza', async () => {
     await login();
-    const sim = getSimulado(SIM_ID)!;
+    const sim = simWithFakeQuestions();
 
     // Todas as questões acessíveis — sem paywall
     expect(isQuestionAccessible()).toBe(true);

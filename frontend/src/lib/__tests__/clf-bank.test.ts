@@ -1,15 +1,24 @@
-import { describe, it, expect } from 'vitest';
-import {
-  flattenBank,
-  pickRandomBatch,
-  CLF_DOMAIN_WEIGHTS,
-  type ClfBankEntry,
-} from '../clf-bank';
-import type { SimuladoQuestion } from '../simulados';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-function makeQuestion(id: string, domain: string, difficulty: SimuladoQuestion['difficulty'] = 'medium'): SimuladoQuestion {
+const { apiFetchMock } = vi.hoisted(() => ({ apiFetchMock: vi.fn() }));
+
+vi.mock('@/lib/api-client', () => ({
+  apiFetch: apiFetchMock,
+}));
+
+import {
+  CLF_DOMAIN_WEIGHTS,
+  CLF_SIMULADO_ID,
+  fetchOneRandomQuestion,
+  fetchQuestionCount,
+  fetchQuestionsByIds,
+  fetchRandomQuestions,
+} from '../clf-bank';
+
+function makeAPIQuestion(id: string, overrides: Partial<{ topic: string; difficulty: string }> = {}) {
   return {
     id,
+    simuladoId: CLF_SIMULADO_ID,
     stem: `Stem ${id}`,
     options: [
       { id: 'A', text: 'A' },
@@ -18,101 +27,110 @@ function makeQuestion(id: string, domain: string, difficulty: SimuladoQuestion['
       { id: 'D', text: 'D' },
     ],
     correctId: 'A',
-    explanation: 'exp',
-    topic: domain,
-    difficulty,
+    explanation: 'plain',
+    topic: overrides.topic ?? 'Cloud Concepts',
+    domain: overrides.topic ?? 'Cloud Concepts',
+    difficulty: overrides.difficulty ?? 'medium',
+    status: 'active',
   };
 }
 
-/** RNG determinístico simples (Mulberry32). */
-function seededRng(seed: number): () => number {
-  let t = seed;
-  return () => {
-    t = (t + 0x6d2b79f5) | 0;
-    let r = Math.imul(t ^ (t >>> 15), 1 | t);
-    r = (r + Math.imul(r ^ (r >>> 7), 61 | r)) ^ r;
-    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-describe('flattenBank', () => {
-  it('agrega todos os JSONs em uma única lista', () => {
-    const entries: ClfBankEntry[] = [
-      { source: 'piloto', questions: [makeQuestion('a', 'Cloud Concepts')] },
-      { source: 'security', questions: [makeQuestion('b', 'Security & Compliance')] },
-    ];
-    const flat = flattenBank(entries);
-    expect(flat).toHaveLength(2);
-    expect(flat.map(q => q.id).sort()).toEqual(['a', 'b']);
-  });
-
-  it('deduplica por id', () => {
-    const entries: ClfBankEntry[] = [
-      { source: 'piloto', questions: [makeQuestion('x', 'Cloud Concepts')] },
-      { source: 'security', questions: [makeQuestion('x', 'Security & Compliance')] },
-    ];
-    expect(flattenBank(entries)).toHaveLength(1);
+describe('CLF_DOMAIN_WEIGHTS', () => {
+  it('reflete o blueprint oficial AWS CLF-C02 (24/30/34/12 = 100)', () => {
+    const total = Object.values(CLF_DOMAIN_WEIGHTS).reduce((a, b) => a + b, 0);
+    expect(total).toBe(100);
   });
 });
 
-describe('pickRandomBatch', () => {
-  // Pool grande o suficiente para não esgotar nenhum domínio em sample de 2000
-  const pool = [
-    ...Array.from({ length: 500 }, (_, i) => makeQuestion(`cc-${i}`, 'Cloud Concepts')),
-    ...Array.from({ length: 500 }, (_, i) => makeQuestion(`sec-${i}`, 'Security & Compliance')),
-    ...Array.from({ length: 500 }, (_, i) => makeQuestion(`tech-${i}`, 'Cloud Technology & Services')),
-    ...Array.from({ length: 500 }, (_, i) => makeQuestion(`bil-${i}`, 'Billing, Pricing & Support')),
-  ];
+describe('fetchRandomQuestions', () => {
+  beforeEach(() => apiFetchMock.mockReset());
 
-  it('retorna lista vazia se count <= 0', () => {
-    expect(pickRandomBatch(pool, 0)).toEqual([]);
+  it('chama /study/random com count default = 1 e simulado padrão aws-clf', async () => {
+    apiFetchMock.mockResolvedValue({ questions: [makeAPIQuestion('q1')], total: 1 });
+    const out = await fetchRandomQuestions();
+    expect(out).toHaveLength(1);
+    expect(out[0].id).toBe('q1');
+    expect(apiFetchMock).toHaveBeenCalledTimes(1);
+    const [url] = apiFetchMock.mock.calls[0];
+    expect(url).toContain('/api/v1/simulados/aws-clf/study/random');
+    expect(url).toContain('count=1');
   });
 
-  it('respeita o tamanho do pool quando count > pool', () => {
-    const tiny = [makeQuestion('only', 'Cloud Concepts')];
-    expect(pickRandomBatch(tiny, 5)).toHaveLength(1);
+  it('passa domain, difficulty e excludeIds como query params', async () => {
+    apiFetchMock.mockResolvedValue({ questions: [], total: 0 });
+    await fetchRandomQuestions({
+      count: 5,
+      domain: 'Security & Compliance',
+      difficulty: 'hard',
+      excludeIds: ['a', 'b', 'c'],
+    });
+    const [url] = apiFetchMock.mock.calls[0];
+    expect(url).toContain('count=5');
+    expect(url).toContain('domain=Security+%26+Compliance');
+    expect(url).toContain('difficulty=hard');
+    expect(url).toContain('excludeIds=a%2Cb%2Cc');
   });
 
-  it('filtra por domínio', () => {
-    const picks = pickRandomBatch(pool, 10, { domain: 'Cloud Concepts' });
-    expect(picks.every(q => q.topic === 'Cloud Concepts')).toBe(true);
+  it('clampa count para [1, 100]', async () => {
+    apiFetchMock.mockResolvedValue({ questions: [], total: 0 });
+    await fetchRandomQuestions({ count: 500 });
+    expect(apiFetchMock.mock.calls[0][0]).toContain('count=100');
+
+    apiFetchMock.mockReset();
+    apiFetchMock.mockResolvedValue({ questions: [], total: 0 });
+    await fetchRandomQuestions({ count: 0 });
+    expect(apiFetchMock.mock.calls[0][0]).toContain('count=1');
+  });
+});
+
+describe('fetchOneRandomQuestion', () => {
+  beforeEach(() => apiFetchMock.mockReset());
+
+  it('retorna a primeira questão da resposta', async () => {
+    apiFetchMock.mockResolvedValue({ questions: [makeAPIQuestion('q1')], total: 1 });
+    const q = await fetchOneRandomQuestion();
+    expect(q?.id).toBe('q1');
   });
 
-  it('filtra por difficulty', () => {
-    const mixed = [
-      makeQuestion('e1', 'Cloud Concepts', 'easy'),
-      makeQuestion('m1', 'Cloud Concepts', 'medium'),
-      makeQuestion('h1', 'Cloud Concepts', 'hard'),
-    ];
-    expect(pickRandomBatch(mixed, 5, { difficulty: 'easy' })).toEqual([mixed[0]]);
+  it('retorna null quando o backend devolve lista vazia', async () => {
+    apiFetchMock.mockResolvedValue({ questions: [], total: 0 });
+    const q = await fetchOneRandomQuestion();
+    expect(q).toBeNull();
+  });
+});
+
+describe('fetchQuestionsByIds', () => {
+  beforeEach(() => apiFetchMock.mockReset());
+
+  it('chama /questions/batch com ids CSV', async () => {
+    apiFetchMock.mockResolvedValue({
+      questions: [makeAPIQuestion('a'), makeAPIQuestion('b')],
+      total: 2,
+    });
+    const out = await fetchQuestionsByIds(['a', 'b']);
+    expect(out).toHaveLength(2);
+    const [url] = apiFetchMock.mock.calls[0];
+    expect(url).toContain('/api/v1/simulados/aws-clf/questions/batch');
+    expect(url).toContain('ids=a%2Cb');
   });
 
-  it('é determinístico com rng seedado', () => {
-    const a = pickRandomBatch(pool, 5, { rng: seededRng(42) });
-    const b = pickRandomBatch(pool, 5, { rng: seededRng(42) });
-    expect(a.map(q => q.id)).toEqual(b.map(q => q.id));
+  it('curto-circuita sem chamar API quando ids vazio', async () => {
+    const out = await fetchQuestionsByIds([]);
+    expect(out).toEqual([]);
+    expect(apiFetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('fetchQuestionCount', () => {
+  beforeEach(() => apiFetchMock.mockReset());
+
+  it('retorna count da API', async () => {
+    apiFetchMock.mockResolvedValue({ simuladoId: 'aws-clf', count: 1015 });
+    expect(await fetchQuestionCount()).toBe(1015);
   });
 
-  it('respeita excludeIds', () => {
-    const excluded = new Set(pool.slice(0, 80).map(q => q.id));
-    const picks = pickRandomBatch(pool, 5, { excludeIds: excluded });
-    expect(picks.every(q => !excluded.has(q.id))).toBe(true);
-  });
-
-  it('weightedByDomain aproxima distribuição do blueprint num lote grande', () => {
-    const N = 1000;
-    const rng = seededRng(7);
-    const picks = pickRandomBatch(pool, N, { weightedByDomain: true, rng });
-    const counts: Record<string, number> = {};
-    for (const p of picks) counts[p.topic] = (counts[p.topic] ?? 0) + 1;
-
-    // Tolerância ±10% (sample noise). Verifica que pelo menos a ordem dos pesos
-    // se reflete e que cada domínio tem participação razoável.
-    const total = picks.length;
-    for (const [domain, weight] of Object.entries(CLF_DOMAIN_WEIGHTS)) {
-      const expected = weight / 100;
-      const actual = (counts[domain] ?? 0) / total;
-      expect(Math.abs(actual - expected)).toBeLessThan(0.1);
-    }
+  it('retorna 0 quando API falha (gate-friendly)', async () => {
+    apiFetchMock.mockImplementationOnce(() => Promise.reject(new Error('offline')));
+    expect(await fetchQuestionCount()).toBe(0);
   });
 });

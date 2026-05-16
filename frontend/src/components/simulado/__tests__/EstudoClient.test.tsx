@@ -3,8 +3,8 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { SimuladoQuestion } from '@/lib/simulados';
 
-vi.mock('@/lib/clf-bank', () => {
-  const richQuestion: SimuladoQuestion = {
+const { richQuestion } = vi.hoisted(() => {
+  const q: SimuladoQuestion = {
     id: 'mock-q1',
     stem: 'Qual serviço AWS é object storage com 11 noves de durabilidade?',
     options: [
@@ -30,45 +30,38 @@ vi.mock('@/lib/clf-bank', () => {
     topic: 'Cloud Technology & Services',
     difficulty: 'easy',
   };
-  return {
-    loadClfBank: vi.fn().mockResolvedValue([{ source: 'tech', questions: [richQuestion] }]),
-    flattenBank: (entries: { questions: SimuladoQuestion[] }[]) => entries.flatMap(e => e.questions),
-    pickRandomBatch: (bank: SimuladoQuestion[]) => bank.slice(0, 1),
-  };
+  return { richQuestion: q };
 });
 
-const richQuestion: SimuladoQuestion = {
-  id: 'mock-q1',
-  stem: 'Qual serviço AWS é object storage com 11 noves de durabilidade?',
-  options: [
-    { id: 'A', text: 'EBS' },
-    { id: 'B', text: 'S3' },
-    { id: 'C', text: 'EFS' },
-    { id: 'D', text: 'FSx' },
-  ],
-  correctId: 'B',
-  explanation: {
-    summary: 'S3 é object storage com durabilidade 11x9.',
-    whyCorrect: 'S3 replica em múltiplas AZs por padrão.',
-    whyWrong: {
-      A: 'EBS é block storage de uma única AZ.',
-      C: 'EFS é file system NFS, não object.',
-      D: 'FSx é file system gerenciado.',
-    },
-    keyConcept: 'Object vs Block vs File',
-    compareWith: ['Glacier', 'EBS Snapshots'],
-    commonMistakes: ['Confundir 11 noves de durabilidade com 11 noves de disponibilidade.'],
-    tutorSeeds: ['Diferença entre durabilidade e disponibilidade?'],
-    // schema rico vai como objeto — cast pra satisfazer o tipo `string`
-  } as unknown as string,
-  topic: 'Cloud Technology & Services',
-  difficulty: 'easy',
-};
+vi.mock('@/lib/clf-bank', () => ({
+  fetchOneRandomQuestion: vi.fn().mockResolvedValue(richQuestion),
+  fetchRandomQuestions: vi.fn().mockResolvedValue([richQuestion]),
+  fetchQuestionsByIds: vi.fn().mockResolvedValue([richQuestion]),
+  CLF_SIMULADO_ID: 'aws-clf',
+  CLF_DOMAIN_WEIGHTS: {
+    'Cloud Concepts': 24,
+    'Security & Compliance': 30,
+    'Cloud Technology & Services': 34,
+    'Billing, Pricing & Support': 12,
+  },
+}));
+
+vi.mock('@/hooks/useAuth', () => ({
+  useAuth: () => ({
+    isLoggedIn: true,
+    requireLogin: vi.fn().mockResolvedValue(undefined),
+    user: { id: 'u1', email: 'u@example.com' },
+  }),
+}));
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
 
 import { EstudoClient } from '../EstudoClient';
 
 describe('EstudoClient', () => {
-  it('carrega banco e renderiza stem + opções', async () => {
+  it('carrega questão da API e renderiza stem + opções', async () => {
     render(<EstudoClient />);
     await waitFor(() => expect(screen.getByText(/object storage com 11 noves/i)).toBeInTheDocument());
     expect(screen.getByText('EBS')).toBeInTheDocument();
@@ -81,7 +74,6 @@ describe('EstudoClient', () => {
     render(<EstudoClient />);
     await waitFor(() => expect(screen.getByText(/object storage com 11 noves/i)).toBeInTheDocument());
 
-    // Seleciona opção B (correta)
     await user.click(screen.getByRole('radio', { name: /S3/ }));
     await user.click(screen.getByRole('button', { name: /Confirmar resposta/i }));
 
@@ -102,22 +94,5 @@ describe('EstudoClient', () => {
     await user.click(screen.getByRole('button', { name: /Confirmar resposta/i }));
 
     expect(screen.getByText(/A correta era B/i)).toBeInTheDocument();
-  });
-
-  it('renderiza explicação plain quando explanation é string (fallback)', async () => {
-    vi.resetModules();
-    const plainQuestion: SimuladoQuestion = { ...richQuestion, id: 'plain-q', explanation: 'Texto plain único.' };
-    vi.doMock('@/lib/clf-bank', () => ({
-      loadClfBank: vi.fn().mockResolvedValue([{ source: 'piloto', questions: [plainQuestion] }]),
-      flattenBank: (entries: { questions: SimuladoQuestion[] }[]) => entries.flatMap(e => e.questions),
-      pickRandomBatch: (bank: SimuladoQuestion[]) => bank.slice(0, 1),
-    }));
-    const { EstudoClient: Reloaded } = await import('../EstudoClient');
-    const user = userEvent.setup();
-    render(<Reloaded />);
-    await waitFor(() => expect(screen.getByText(/object storage com 11 noves/i)).toBeInTheDocument());
-    await user.click(screen.getByRole('radio', { name: /S3/ }));
-    await user.click(screen.getByRole('button', { name: /Confirmar resposta/i }));
-    expect(screen.getByText('Texto plain único.')).toBeInTheDocument();
   });
 });

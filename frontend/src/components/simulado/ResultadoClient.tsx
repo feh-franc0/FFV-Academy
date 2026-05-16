@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { getSimulado, getAttempt, scoreAttempt, getWeakTopics, getExplanationText, type SimuladoAttempt, type SimuladoQuestion } from '@/lib/simulados';
-import { loadClfBankFlat } from '@/lib/clf-bank';
+import { fetchQuestionsByIds } from '@/lib/clf-bank';
 import { getJSON } from '@/lib/storage';
 import { idFromSlug } from '@/components/SimuladoCard';
 import { completeSimulado } from '@/lib/engine';
@@ -24,23 +24,23 @@ export function ResultadoClient({ slug }: Props) {
   const simulado = getSimulado(simuladoId);
 
   const [attempt, setAttempt] = useState<SimuladoAttempt | null>(null);
-  const [questions, setQuestions] = useState<SimuladoQuestion[]>(simulado?.questions ?? []);
+  const [questions, setQuestions] = useState<SimuladoQuestion[]>([]);
   const [xpGained, setXpGained] = useState<number | null>(null);
   const [awardedBadges, setAwardedBadges] = useState<string[]>([]);
   const [showCert, setShowCert] = useState(false);
 
-  // Carrega questões do banco usando IDs persistidos pelo SimuladoRunner
+  // Carrega questões do banco usando IDs persistidos pelo SimuladoRunner.
   useEffect(() => {
     if (!simulado) return;
     const storedIds = getJSON<string[]>(simQsKey(simuladoId), null);
     if (!storedIds || storedIds.length === 0) return;
-    loadClfBankFlat()
-      .then(bank => {
-        const byId = new Map(bank.map(q => [q.id, q]));
-        const found = storedIds.map(id => byId.get(id)).filter((q): q is SimuladoQuestion => !!q);
+    fetchQuestionsByIds(storedIds, simuladoId)
+      .then(found => {
         if (found.length > 0) setQuestions(found);
       })
-      .catch(() => {}); // mantém fallback estático
+      .catch(err => {
+        console.error('ResultadoClient: falha ao buscar questões do attempt', err);
+      });
   }, [simulado, simuladoId]);
 
   useEffect(() => {

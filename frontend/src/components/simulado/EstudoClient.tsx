@@ -12,11 +12,13 @@
  * não polui localStorage e nem afeta o XP/streak do game state.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import type { SimuladoQuestion, OptionId } from '@/lib/simulados';
-import { loadClfBank, flattenBank, pickRandomBatch } from '@/lib/clf-bank';
+import { fetchOneRandomQuestion } from '@/lib/clf-bank';
 import { FEATURES } from '@/lib/features';
+import { useAuth } from '@/hooks/useAuth';
+import { useRouter } from 'next/navigation';
 import { TutorAsk } from './TutorAsk';
 
 const TUTOR_AVAILABLE = FEATURES.tutorAI;
@@ -45,45 +47,65 @@ function getRich(question: SimuladoQuestion): RichExplanation | null {
 }
 
 export function EstudoClient() {
-  const [bank, setBank] = useState<SimuladoQuestion[] | null>(null);
+  const router = useRouter();
+  const { isLoggedIn, requireLogin } = useAuth();
   const [loadError, setLoadError] = useState<string | null>(null);
   const [current, setCurrent] = useState<SimuladoQuestion | null>(null);
+  const [loading, setLoading] = useState(true);
   const [phase, setPhase] = useState<Phase>('selecting');
   const [selected, setSelected] = useState<OptionId | null>(null);
   const [session, setSession] = useState<SessionEntry[]>([]);
   const [tutorOpen, setTutorOpen] = useState(false);
+  // IDs vistos na sessão — passados ao backend como excludeIds para evitar repetição.
+  const seenIdsRef = useRef<string[]>([]);
 
-  // Carrega o banco no mount
+  // Gate de login (endpoint requer JWT).
   useEffect(() => {
-    let cancelled = false;
-    loadClfBank()
-      .then(entries => {
-        if (cancelled) return;
-        const flat = flattenBank(entries);
-        setBank(flat);
-        const [first] = pickRandomBatch(flat, 1, { weightedByDomain: true });
-        if (first) setCurrent(first);
-      })
-      .catch(() => { if (!cancelled) setLoadError('Não consegui carregar o banco de questões. Tente recarregar a página.'); });
-    return () => { cancelled = true; };
+    if (!isLoggedIn) {
+      requireLogin('estudar livremente').catch(() => router.push('/simulados'));
+    }
+  }, [isLoggedIn, requireLogin, router]);
+
+  const fetchNext = useCallback(async (exclude: string[]) => {
+    setLoading(true);
+    try {
+      let picked = await fetchOneRandomQuestion({ excludeIds: exclude });
+      // Se o backend devolver vazio, esgotou o banco com aqueles filtros:
+      // reabre o pool zerando o exclude.
+      if (!picked && exclude.length > 0) {
+        seenIdsRef.current = [];
+        picked = await fetchOneRandomQuestion({});
+      }
+      if (!picked) {
+        setLoadError('Não há questões disponíveis no banco. Verifique se o seed foi rodado.');
+        return;
+      }
+      setCurrent(picked);
+      setSelected(null);
+      setPhase('selecting');
+      setTutorOpen(false);
+    } catch {
+      setLoadError('Não consegui carregar a próxima questão. Tente recarregar a página.');
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
+  // Primeira questão ao logar.
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    fetchNext([]);
+  }, [isLoggedIn, fetchNext]);
+
   const next = useCallback(() => {
-    if (!bank) return;
-    const seen = new Set(session.map(s => s.questionId));
-    const [picked] = pickRandomBatch(bank, 1, { weightedByDomain: true, excludeIds: seen });
-    // Se já viu tudo, reabre o pool
-    const chosen = picked ?? pickRandomBatch(bank, 1, { weightedByDomain: true })[0];
-    if (!chosen) return;
-    setCurrent(chosen);
-    setSelected(null);
-    setPhase('selecting');
-    setTutorOpen(false);
-  }, [bank, session]);
+    fetchNext(seenIdsRef.current);
+  }, [fetchNext]);
 
   const confirm = useCallback(() => {
     if (!current || !selected) return;
     setPhase('answered');
+    // Adiciona à lista de IDs vistos — usado como excludeIds na próxima busca.
+    seenIdsRef.current = [...seenIdsRef.current, current.id].slice(-100);
     setSession(prev => {
       const entry: SessionEntry = {
         questionId: current.id,
@@ -115,10 +137,10 @@ export function EstudoClient() {
     return <div className="max-w-3xl mx-auto px-6 py-12 text-sm" role="alert">{loadError}</div>;
   }
 
-  if (!bank || !current) {
+  if (loading || !current) {
     return (
       <div className="max-w-3xl mx-auto px-6 py-12 text-sm" style={{ color: 'var(--ffv-muted)' }} aria-live="polite">
-        Carregando banco de questões CLF...
+        Carregando questão...
       </div>
     );
   }

@@ -17,7 +17,7 @@ const AWS_PRACTITIONER: Simulado = {
   certification: 'AWS Certified Cloud Practitioner (CLF-C02)',
   title: 'Simulado AWS Cloud Practitioner',
   description:
-    'Avalie seu preparo para a prova oficial AWS CLF-C02 com 65 questões aleatórias nos domínios do exame real: Cloud Concepts, Security & Compliance, Cloud Technology & Services e Billing. Banco com 500+ questões — cada tentativa é única.',
+    'Avalie seu preparo para a prova oficial AWS CLF-C02 com 65 questões aleatórias nos domínios do exame real: Cloud Concepts, Security & Compliance, Cloud Technology & Services e Billing. Banco com 1000+ questões — cada tentativa é única.',
   price: 47,
   questionCount: 65,
   timeLimitMin: 90,
@@ -33,317 +33,9 @@ const AWS_PRACTITIONER: Simulado = {
     'Databases',
     'Networking',
   ],
-  questions: [
-    {
-      id: 'clf-q1',
-      stem: 'No modelo de responsabilidade compartilhada da AWS, quem é responsável por patch de sistema operacional em instâncias EC2?',
-      options: [
-        { id: 'A', text: 'AWS, em todos os casos' },
-        { id: 'B', text: 'O cliente' },
-        { id: 'C', text: 'AWS, exceto em instâncias Windows' },
-        { id: 'D', text: 'Terceiros via Marketplace' },
-      ],
-      correctId: 'B',
-      topic: 'Shared Responsibility',
-      difficulty: 'easy',
-      explanation:
-        'EC2 é IaaS: a AWS é responsável pelo hypervisor, hardware e rede física ("security OF the cloud"); o cliente é responsável pelo SO, patches, runtime, aplicação e dados ("security IN the cloud"). Se fosse ECS Fargate ou Lambda, o runtime seria AWS. A distinção crítica é IaaS vs. managed services. (A) errado pois cliente gerencia o OS; (C) não há distinção entre Windows/Linux; (D) Marketplace fornece AMIs mas patches continuam com o cliente.',
-      relatedSlug: 'modelo-responsabilidade-compartilhada',
-    },
-    {
-      id: 'clf-q2',
-      stem: 'Qual serviço AWS fornece armazenamento de objetos durável com 99,999999999% (11 noves) de durabilidade?',
-      options: [
-        { id: 'A', text: 'EBS' },
-        { id: 'B', text: 'EFS' },
-        { id: 'C', text: 'S3' },
-        { id: 'D', text: 'FSx' },
-      ],
-      correctId: 'C',
-      topic: 'Storage (S3/EBS)',
-      difficulty: 'easy',
-      explanation:
-        'S3 é object storage com durabilidade de 11 noves (objetos são replicados em múltiplas AZs automaticamente). EBS é block storage (volume montado em uma única AZ, precisa snapshot pra cross-AZ). EFS é NFS compartilhado (11 noves também mas não é "objeto"). FSx é file system gerenciado pra Windows/Lustre.',
-      relatedSlug: 'block-file-storage',
-    },
-    {
-      id: 'clf-q3',
-      stem: 'Uma empresa precisa executar cargas batch no menor custo possível e tolera interrupção. Qual modelo de compra EC2 é ideal?',
-      options: [
-        { id: 'A', text: 'On-Demand' },
-        { id: 'B', text: 'Reserved Instance de 3 anos All Upfront' },
-        { id: 'C', text: 'Spot Instances' },
-        { id: 'D', text: 'Dedicated Host' },
-      ],
-      correctId: 'C',
-      topic: 'Compute (EC2)',
-      difficulty: 'easy',
-      explanation:
-        'Spot oferece até 90% de desconto mas pode ser reclaimed com 2 minutos de aviso — perfeito pra batch/fault-tolerant. On-Demand é caro. RI 3y All Upfront é mais barato que On-Demand mas não bate Spot em preço. Dedicated Host é sobre compliance (traga sua licença), não desconto.',
-    },
-    {
-      id: 'clf-q4',
-      stem: 'Qual ferramenta AWS ajuda a estimar custos de uma arquitetura ANTES de criá-la?',
-      options: [
-        { id: 'A', text: 'AWS Cost Explorer' },
-        { id: 'B', text: 'AWS Pricing Calculator' },
-        { id: 'C', text: 'AWS Budgets' },
-        { id: 'D', text: 'Trusted Advisor' },
-      ],
-      correctId: 'B',
-      topic: 'Billing & Pricing',
-      difficulty: 'easy',
-      explanation:
-        'Pricing Calculator é pré-uso — você descreve a arquitetura (tipos de instância, tráfego, storage) e recebe uma estimativa. Cost Explorer e Budgets analisam gastos reais já ocorridos. Trusted Advisor dá recomendações de otimização, não estimativa prévia.',
-    },
-    {
-      id: 'clf-q5',
-      stem: 'Quantas Availability Zones (AZs) existem, no mínimo, em cada AWS Region?',
-      options: [
-        { id: 'A', text: '1' },
-        { id: 'B', text: '2' },
-        { id: 'C', text: '3' },
-        { id: 'D', text: '4' },
-      ],
-      correctId: 'C',
-      topic: 'Global Infrastructure',
-      difficulty: 'medium',
-      explanation:
-        'Cada Region tem no mínimo 3 AZs (historicamente eram 2, mas desde 2018 todas novas têm 3+). AZs são datacenters isoladas mas interconectadas por fibra de baixa latência. Essa redundância é o que torna multi-AZ o padrão de alta disponibilidade.',
-      relatedSlug: 'aws-global-infra',
-    },
-    {
-      id: 'clf-q6',
-      stem: 'Qual prática segue o princípio de menor privilégio em IAM?',
-      options: [
-        { id: 'A', text: 'Dar policy AdministratorAccess a todos os devs' },
-        { id: 'B', text: 'Criar role específica por função com apenas as permissões necessárias' },
-        { id: 'C', text: 'Usar a conta root para operações diárias' },
-        { id: 'D', text: 'Compartilhar access keys entre times' },
-      ],
-      correctId: 'B',
-      topic: 'IAM & Segurança',
-      difficulty: 'easy',
-      explanation:
-        'Princípio de menor privilégio = dar apenas permissões estritamente necessárias. Role específica por função é a implementação clássica. (A) AdministratorAccess universal viola frontalmente; (C) root deve ser usada apenas para billing + MFA setup, nunca rotina; (D) access keys jamais compartilhadas — cada pessoa/serviço com identidade própria.',
-      relatedSlug: 'iam-fundamentos',
-    },
-    {
-      id: 'clf-q7',
-      stem: 'Qual serviço permite rodar código sem provisionar ou gerenciar servidores?',
-      options: [
-        { id: 'A', text: 'EC2' },
-        { id: 'B', text: 'ECS' },
-        { id: 'C', text: 'Lambda' },
-        { id: 'D', text: 'Lightsail' },
-      ],
-      correctId: 'C',
-      topic: 'Compute (EC2)',
-      difficulty: 'easy',
-      explanation:
-        'Lambda é serverless clássico: você dá código (função) e a AWS gerencia 100% da infra. EC2 é IaaS (você gerencia OS). ECS é orquestração de containers (você escolhe EC2 launch type ou Fargate). Lightsail é um "VPS simplificado" — ainda é gerenciamento de VM.',
-    },
-    {
-      id: 'clf-q8',
-      stem: 'Uma organização tem gastos inesperados e quer receber alertas quando ultrapassar um limite mensal. Qual serviço usar?',
-      options: [
-        { id: 'A', text: 'CloudWatch' },
-        { id: 'B', text: 'AWS Budgets' },
-        { id: 'C', text: 'Cost Explorer' },
-        { id: 'D', text: 'Savings Plans' },
-      ],
-      correctId: 'B',
-      topic: 'Billing & Pricing',
-      difficulty: 'easy',
-      explanation:
-        'AWS Budgets foi desenhado exatamente pra isso: define um orçamento (custo/uso/RI coverage) e dispara alerta via SNS quando atinge % do target. CloudWatch é métricas operacionais (CPU, rede). Cost Explorer é visualização histórica. Savings Plans é um modelo de compra, não alerta.',
-    },
-    {
-      id: 'clf-q9',
-      stem: 'Qual das opções NÃO é benefício da nuvem AWS segundo o framework AWS Well-Architected?',
-      options: [
-        { id: 'A', text: 'Elasticidade (scale up/down conforme demanda)' },
-        { id: 'B', text: 'Economia por trocar CAPEX por OPEX' },
-        { id: 'C', text: 'Eliminação completa de riscos de segurança' },
-        { id: 'D', text: 'Alcance global em minutos' },
-      ],
-      correctId: 'C',
-      topic: 'Global Infrastructure',
-      difficulty: 'medium',
-      explanation:
-        'Segurança é responsabilidade compartilhada — AWS protege a infraestrutura, mas o cliente continua responsável por configurar IAM, criptografia, redes. Nenhum provedor "elimina" risco, só oferece ferramentas pra mitigá-lo. Os outros três são benefícios genuínos reconhecidos.',
-      relatedSlug: 'well-architected-framework',
-    },
-    {
-      id: 'clf-q10',
-      stem: 'Qual banco gerenciado da AWS é NoSQL, serverless e com latência single-digit milissegundos?',
-      options: [
-        { id: 'A', text: 'RDS' },
-        { id: 'B', text: 'Aurora' },
-        { id: 'C', text: 'DynamoDB' },
-        { id: 'D', text: 'Redshift' },
-      ],
-      correctId: 'C',
-      topic: 'Databases',
-      difficulty: 'easy',
-      explanation:
-        'DynamoDB = NoSQL key-value/document, serverless, <10ms de latência em escala massiva. RDS é relacional gerenciado (MySQL/Postgres/etc). Aurora é RDS-compatible MySQL/Postgres mais rápido. Redshift é data warehouse (analítico, colunar).',
-      relatedSlug: 'rds-aurora-dynamodb',
-    },
-    {
-      id: 'clf-q11',
-      stem: 'Qual serviço fornece CDN (content delivery) distribuída globalmente?',
-      options: [
-        { id: 'A', text: 'Route 53' },
-        { id: 'B', text: 'CloudFront' },
-        { id: 'C', text: 'Global Accelerator' },
-        { id: 'D', text: 'API Gateway' },
-      ],
-      correctId: 'B',
-      topic: 'Global Infrastructure',
-      difficulty: 'easy',
-      explanation:
-        'CloudFront é o CDN da AWS — cacheia conteúdo em 450+ edge locations. Route 53 é DNS. Global Accelerator roteia tráfego pela rede AWS (não cacheia conteúdo, acelera TCP/UDP). API Gateway gerencia APIs REST/WebSocket.',
-      relatedSlug: 'dns-cdn-edge',
-    },
-    {
-      id: 'clf-q12',
-      stem: 'Qual dessas é uma responsabilidade da AWS no modelo de responsabilidade compartilhada?',
-      options: [
-        { id: 'A', text: 'Configurar Security Groups em EC2' },
-        { id: 'B', text: 'Patch do SO em instâncias EC2' },
-        { id: 'C', text: 'Segurança física dos datacenters' },
-        { id: 'D', text: 'Criptografia de dados em S3' },
-      ],
-      correctId: 'C',
-      topic: 'Shared Responsibility',
-      difficulty: 'medium',
-      explanation:
-        'Segurança física (controle de acesso ao datacenter, biometria, guardas) é sempre AWS. Security Groups e patches de EC2 são responsabilidade do cliente. Criptografia em S3 é opção do cliente (SSE-S3/KMS/cliente gerencia chave).',
-    },
-    {
-      id: 'clf-q13',
-      stem: 'Qual é a forma mais segura de dar acesso programático da sua aplicação em EC2 a um bucket S3?',
-      options: [
-        { id: 'A', text: 'Hardcodar access keys no código' },
-        { id: 'B', text: 'Usar variáveis de ambiente com secret keys' },
-        { id: 'C', text: 'Attachar uma IAM Role na instância EC2' },
-        { id: 'D', text: 'Deixar o bucket público' },
-      ],
-      correctId: 'C',
-      topic: 'IAM & Segurança',
-      difficulty: 'easy',
-      explanation:
-        'IAM Role em EC2 → credenciais temporárias rotacionadas automaticamente pela AWS, nunca tocam código nem env. (A) hardcode = vazamento em git/logs é garantido. (B) env var está melhor que hardcode mas chaves longas não rotacionadas. (D) bucket público é desastre de segurança se tem dados sensíveis.',
-      relatedSlug: 'iam-fundamentos',
-    },
-    {
-      id: 'clf-q14',
-      stem: 'Qual opção NÃO é uma edge location ou ponto de presença da AWS?',
-      options: [
-        { id: 'A', text: 'Availability Zone' },
-        { id: 'B', text: 'Edge Location (CloudFront)' },
-        { id: 'C', text: 'Regional Edge Cache' },
-        { id: 'D', text: 'Local Zone' },
-      ],
-      correctId: 'A',
-      topic: 'Global Infrastructure',
-      difficulty: 'hard',
-      explanation:
-        'Availability Zone é um datacenter DENTRO de uma Region — não é ponto de edge. Edge Location é onde CloudFront cacheia conteúdo. Regional Edge Cache é um nível intermediário entre origem e edge. Local Zone é uma extensão regional próxima a centros urbanos (baixa latência para gaming/video).',
-    },
-    {
-      id: 'clf-q15',
-      stem: 'Um cliente quer reservar capacidade de EC2 por 3 anos para ter o maior desconto e pagar tudo adiantado. Qual modelo?',
-      options: [
-        { id: 'A', text: 'On-Demand' },
-        { id: 'B', text: 'Spot' },
-        { id: 'C', text: 'Reserved Instance 3 anos All Upfront' },
-        { id: 'D', text: 'Savings Plans 1 ano No Upfront' },
-      ],
-      correctId: 'C',
-      topic: 'Billing & Pricing',
-      difficulty: 'medium',
-      explanation:
-        'RI 3 anos All Upfront tem o maior desconto (até 72%) em troca de pagamento antecipado total. Savings Plans 1 ano No Upfront dá desconto menor. On-Demand e Spot não envolvem reserva por termo.',
-    },
-    {
-      id: 'clf-q16',
-      stem: 'Qual serviço permite isolar logicamente uma rede virtual dentro da AWS?',
-      options: [
-        { id: 'A', text: 'VPC' },
-        { id: 'B', text: 'Direct Connect' },
-        { id: 'C', text: 'Route 53' },
-        { id: 'D', text: 'CloudFront' },
-      ],
-      correctId: 'A',
-      topic: 'Networking',
-      difficulty: 'easy',
-      explanation:
-        'VPC (Virtual Private Cloud) é a rede virtual isolada onde você define subnets, route tables, security groups. Direct Connect é link dedicado físico entre on-prem e AWS. Route 53 é DNS. CloudFront é CDN.',
-    },
-    {
-      id: 'clf-q17',
-      stem: 'Qual serviço AWS ajuda a identificar recursos subutilizados e oportunidades de otimização de custo?',
-      options: [
-        { id: 'A', text: 'AWS Config' },
-        { id: 'B', text: 'Trusted Advisor' },
-        { id: 'C', text: 'CloudTrail' },
-        { id: 'D', text: 'Systems Manager' },
-      ],
-      correctId: 'B',
-      topic: 'Billing & Pricing',
-      difficulty: 'medium',
-      explanation:
-        'Trusted Advisor analisa sua conta e dá recomendações em 5 pilares: custo, performance, segurança, fault tolerance, service limits. AWS Config monitora compliance de configuração. CloudTrail é log de API calls. Systems Manager é gestão operacional (patch, SSM, Parameter Store).',
-    },
-    {
-      id: 'clf-q18',
-      stem: 'Um cliente precisa armazenar dados raramente acessados por menor custo possível, mas ainda precisa acesso rápido quando solicitado. Qual classe S3?',
-      options: [
-        { id: 'A', text: 'S3 Standard' },
-        { id: 'B', text: 'S3 Standard-IA (Infrequent Access)' },
-        { id: 'C', text: 'S3 Glacier Deep Archive' },
-        { id: 'D', text: 'S3 One Zone-IA' },
-      ],
-      correctId: 'B',
-      topic: 'Storage (S3/EBS)',
-      difficulty: 'medium',
-      explanation:
-        'Standard-IA: preço de storage menor que Standard, retrieval instantâneo (millisecond), ideal pra dados raramente acessados mas que quando precisa quer rápido. Glacier Deep Archive tem retrieval de horas. One Zone-IA é IA mas em 1 AZ só (menos durável, mais barato). Standard é pra frequente.',
-    },
-    {
-      id: 'clf-q19',
-      stem: 'Qual é uma vantagem de usar AWS Organizations?',
-      options: [
-        { id: 'A', text: 'Centralizar billing de múltiplas contas' },
-        { id: 'B', text: 'Aumentar limites de serviço automaticamente' },
-        { id: 'C', text: 'Substituir a necessidade de IAM' },
-        { id: 'D', text: 'Acesso ilimitado a todos os serviços sem cobrança' },
-      ],
-      correctId: 'A',
-      topic: 'IAM & Segurança',
-      difficulty: 'medium',
-      explanation:
-        'Organizations permite: consolidated billing (uma fatura para N contas, com descontos por volume agregado), SCPs (Service Control Policies = guardrails em toda a organização), provisionamento automatizado de contas. Não substitui IAM, não altera limites, não dá acesso grátis.',
-    },
-    {
-      id: 'clf-q20',
-      stem: 'Qual dos pilares do AWS Well-Architected Framework foca em proteção de informações e controle de acesso?',
-      options: [
-        { id: 'A', text: 'Operational Excellence' },
-        { id: 'B', text: 'Security' },
-        { id: 'C', text: 'Reliability' },
-        { id: 'D', text: 'Cost Optimization' },
-      ],
-      correctId: 'B',
-      topic: 'IAM & Segurança',
-      difficulty: 'easy',
-      explanation:
-        'São 6 pilares: Operational Excellence (automação, runbooks), Security (proteção + IAM + encryption), Reliability (tolerância a falhas), Performance Efficiency, Cost Optimization, Sustainability. Segurança é especificamente sobre proteção de dados, acesso, incident response.',
-      relatedSlug: 'well-architected-framework',
-    },
-  ],
+  // Questões servidas pelo backend Postgres via /api/v1/simulados/aws-clf/study/random.
+  // Hardcoded array removido — fonte de verdade é o banco (rodar `make seed-questions` no backend).
+  questions: [],
 };
 
 const AWS_SAA_PLACEHOLDER: Simulado = {
@@ -791,10 +483,296 @@ const AZURE_FUND: Simulado = {
   ],
 };
 
+const AWS_AI_PRACTITIONER: Simulado = {
+  id: 'simulado-aws-aif',
+  certification: 'AWS Certified AI Practitioner (AIF-C01)',
+  title: 'Simulado AWS AI Practitioner',
+  description:
+    'Prova oficial AWS AI Practitioner AIF-C01. 65 questões aleatórias nos 5 domínios: AI/ML Fundamentals (20%), Generative AI Fundamentals (24%), Applications of Foundation Models (28%), Responsible AI (14%), Security & Governance (14%). Banco com 1000+ questões em PT-BR com explicações ricas.',
+  price: 47,
+  questionCount: 65,
+  timeLimitMin: 90,
+  passingScore: 70,
+  studyModeUrl: '/simulados/aws-ai-practitioner/estudo',
+  topics: [
+    'AI/ML Fundamentals',
+    'Generative AI',
+    'Foundation Models',
+    'Amazon Bedrock',
+    'SageMaker',
+    'Responsible AI',
+    'Bedrock Guardrails',
+    'AI Security',
+    'Compliance',
+  ],
+  questions: [
+    {
+      id: 'aif-q1',
+      stem: 'Qual é a principal diferença entre Machine Learning supervisionado e não-supervisionado?',
+      options: [
+        { id: 'A', text: 'Supervisionado é mais rápido; não-supervisionado é mais lento' },
+        { id: 'B', text: 'Supervisionado treina com dados rotulados (input + output esperado); não-supervisionado encontra padrões sem rótulos (ex: clustering)' },
+        { id: 'C', text: 'Supervisionado só funciona em texto; não-supervisionado só em imagens' },
+        { id: 'D', text: 'Supervisionado requer GPU; não-supervisionado roda em CPU' },
+      ],
+      correctId: 'B',
+      topic: 'AI/ML Fundamentals',
+      difficulty: 'easy',
+      explanation:
+        'Supervisionado: dataset tem (X, y) — modelo aprende mapear X→y (classificação, regressão). Não-supervisionado: só X — modelo descobre estrutura (clusters via K-means, redução de dimensionalidade via PCA). Há ainda reforço (agente aprende por recompensa) e self-supervised (LLMs pré-treinam predizendo próximo token). Velocidade e modalidade dependem do problema, não do paradigma.',
+    },
+    {
+      id: 'aif-q2',
+      stem: 'Qual serviço AWS permite construir aplicações com foundation models (Claude, Llama, Titan) via API gerenciada, sem provisionar infraestrutura?',
+      options: [
+        { id: 'A', text: 'SageMaker Studio' },
+        { id: 'B', text: 'Amazon Bedrock' },
+        { id: 'C', text: 'Amazon Comprehend' },
+        { id: 'D', text: 'AWS DeepRacer' },
+      ],
+      correctId: 'B',
+      topic: 'Amazon Bedrock',
+      difficulty: 'easy',
+      explanation:
+        'Bedrock é o "serverless para foundation models" da AWS — você invoca modelos (Anthropic Claude, Meta Llama, Amazon Titan, Cohere, Mistral, AI21) via API única, sem gerenciar GPUs. SageMaker é para treinar/deployar modelos custom (mais baixo nível). Comprehend é NLP pronto (sentiment, entities). DeepRacer é jogo educacional de reinforcement learning.',
+      relatedSlug: 'amazon-bedrock',
+    },
+    {
+      id: 'aif-q3',
+      stem: 'O que é "hallucination" em LLMs e como mitigar em produção?',
+      options: [
+        { id: 'A', text: 'É quando o modelo trava; reinicia o servidor' },
+        { id: 'B', text: 'O modelo gera conteúdo plausível mas factualmente incorreto. Mitigações: RAG (grounding em fontes), prompts com instrução "diga não sei se não tiver certeza", citation requirements, validação posterior' },
+        { id: 'C', text: 'É um bug exclusivo do GPT; outros modelos não têm' },
+        { id: 'D', text: 'É o modelo recusar responder; resolve aumentando temperature' },
+      ],
+      correctId: 'B',
+      topic: 'Generative AI',
+      difficulty: 'medium',
+      explanation:
+        'Hallucination é fenômeno intrínseco a LLMs: o modelo é treinado para predizer próximo token estatisticamente provável, não para verificar verdade. Mitigações em produção: (1) RAG — recuperar documentos relevantes e ancorar resposta neles; (2) prompts defensivos pedindo citação ou "I don\'t know"; (3) validação downstream (regex, schema, fact-checker); (4) lower temperature em tarefas factuais. Aumentar temperature PIORA hallucination.',
+    },
+    {
+      id: 'aif-q4',
+      stem: 'Em RAG (Retrieval-Augmented Generation), qual o papel do vector store?',
+      options: [
+        { id: 'A', text: 'Treinar o LLM do zero' },
+        { id: 'B', text: 'Armazenar embeddings dos documentos para busca semântica por similaridade (cosine/dot product) e retornar os top-K mais relevantes à query do usuário' },
+        { id: 'C', text: 'Substituir o LLM completamente' },
+        { id: 'D', text: 'Apenas cachear respostas' },
+      ],
+      correctId: 'B',
+      topic: 'Foundation Models',
+      difficulty: 'medium',
+      explanation:
+        'Vector store (OpenSearch, Pinecone, pgvector, Bedrock Knowledge Bases) é o coração do retrieval em RAG. Pipeline: docs → chunk → embedding model (Titan Embeddings, Cohere) → vetores indexados. Em query time: query → mesmo embedding model → top-K nearest neighbors → contexto para LLM. Não substitui LLM (ainda precisa gerar resposta), não treina nada (read-only ao prompt).',
+      relatedSlug: 'rag-arquitetura',
+    },
+    {
+      id: 'aif-q5',
+      stem: 'Bedrock Guardrails permite o quê?',
+      options: [
+        { id: 'A', text: 'Acelerar inferência dos modelos' },
+        { id: 'B', text: 'Aplicar políticas de conteúdo (denied topics, PII redaction, palavras bloqueadas, contextual grounding) sobre input do usuário E output do modelo de forma consistente entre FMs' },
+        { id: 'C', text: 'Reduzir custos de billing' },
+        { id: 'D', text: 'Trocar o modelo automaticamente' },
+      ],
+      correctId: 'B',
+      topic: 'Responsible AI',
+      difficulty: 'medium',
+      explanation:
+        'Guardrails é a camada de safety nativa do Bedrock. Configurações: denied topics (lista temas proibidos), content filters (hate/violence/sexual em níveis low/med/high), word filters, PII detection com redact/block/anonymize, contextual grounding checks (anti-hallucination contra fonte). Independe do modelo escolhido (Claude, Titan, Llama). Não afeta latência/preço de inferência diretamente.',
+    },
+    {
+      id: 'aif-q6',
+      stem: 'Qual é a diferença entre fine-tuning e prompt engineering?',
+      options: [
+        { id: 'A', text: 'São sinônimos' },
+        { id: 'B', text: 'Fine-tuning ajusta pesos do modelo com dados custom (caro, requer dataset rotulado, dura permanente); prompt engineering muda só o input em tempo de inferência (barato, iterativo, sem retraining)' },
+        { id: 'C', text: 'Fine-tuning é grátis; prompt engineering é pago' },
+        { id: 'D', text: 'Fine-tuning é só para imagens; prompt engineering só para texto' },
+      ],
+      correctId: 'B',
+      topic: 'Foundation Models',
+      difficulty: 'medium',
+      explanation:
+        'Trade-off prático: comece sempre com prompt engineering (zero-shot, few-shot, chain-of-thought) — barato e rápido. Se prompts longos ficarem caros/lentos ou comportamento ainda inconsistente, considere fine-tuning (LoRA, full FT). Bedrock suporta custom model fine-tuning em Titan/Cohere/Llama. RAG é alternativa ortogonal para grounding em conhecimento específico sem retreinar.',
+    },
+    {
+      id: 'aif-q7',
+      stem: 'O que significa "bias" em modelos de ML e por que importa para Responsible AI?',
+      options: [
+        { id: 'A', text: 'É só um termo estatístico; não afeta o mundo real' },
+        { id: 'B', text: 'Viés sistemático nos dados de treinamento ou no algoritmo que produz outputs injustos para certos grupos (gênero, raça, idade). Importa porque modelos em produção amplificam discriminação se não auditados' },
+        { id: 'C', text: 'É a inclinação da curva de loss' },
+        { id: 'D', text: 'É o termo livre numa regressão linear apenas' },
+      ],
+      correctId: 'B',
+      topic: 'Responsible AI',
+      difficulty: 'medium',
+      explanation:
+        'Bias em ML = qualquer fonte de unfairness sistêmico. Origens: dados desbalanceados (sub-representação), labels viesados (annotator bias), proxy variables (CEP como proxy de raça). Ferramentas AWS: SageMaker Clarify (detecção de bias pré e pós treinamento, métricas como DPL, KL divergence, treatment equality). Bias técnico (intercepto) é coisa diferente — pergunta é sobre fairness ético.',
+    },
+  ],
+};
+
+const ANTHROPIC_AI: Simulado = {
+  id: 'simulado-anthropic-ai',
+  certification: 'Anthropic Claude AI Practitioner (FFV Edition)',
+  title: 'Simulado Anthropic AI Practitioner',
+  description:
+    'Certificação custom FFV+Anthropic. 60 questões aleatórias nos 6 domínios: Claude Fundamentals (20%), Prompt Engineering (20%), Tool Use & Function Calling (15%), Context Engineering & Long Context (15%), Claude Code & Agent SDK (15%), Safety/Evals/Responsible Deployment (15%). Banco com 1000+ questões cobrindo a API, Claude Code, MCP e produção de agents.',
+  price: 47,
+  questionCount: 60,
+  timeLimitMin: 90,
+  passingScore: 70,
+  studyModeUrl: '/simulados/anthropic-ai/estudo',
+  topics: [
+    'Messages API',
+    'Prompt Engineering',
+    'Tool Use',
+    'MCP',
+    'Prompt Caching',
+    'Claude Code',
+    'Agent SDK',
+    'Safety',
+    'Evals',
+  ],
+  questions: [
+    {
+      id: 'anth-q1',
+      stem: 'Na Messages API da Anthropic, qual é a forma correta de instruir o modelo sobre seu papel e regras gerais?',
+      options: [
+        { id: 'A', text: 'Adicionar como uma mensagem com role: "user" no início' },
+        { id: 'B', text: 'Usar o parâmetro top-level `system` (string ou array de blocos de texto), separado da lista `messages`' },
+        { id: 'C', text: 'Concatenar tudo num único campo `prompt`' },
+        { id: 'D', text: 'Enviar via header HTTP custom' },
+      ],
+      correctId: 'B',
+      topic: 'Messages API',
+      difficulty: 'easy',
+      explanation:
+        'A Messages API tem `system` como parâmetro top-level (não vai dentro de `messages`). Pode ser string ou array de blocos `{type: "text", text: "..."}` — útil para prompt caching parcial. `messages` alterna `user`/`assistant`. Não existe campo `prompt` (esse era o legado da Text Completions API antes de 2023).',
+      relatedSlug: 'anthropic-messages-api',
+    },
+    {
+      id: 'anth-q2',
+      stem: 'Qual técnica de prompt engineering é mais eficaz para tarefas que requerem raciocínio multi-step (matemática, lógica, planejamento)?',
+      options: [
+        { id: 'A', text: 'Pedir resposta em uma única palavra' },
+        { id: 'B', text: 'Chain-of-Thought (CoT): instruir o modelo a "pensar passo a passo" antes de responder, ou usar extended thinking quando disponível' },
+        { id: 'C', text: 'Usar temperature = 2.0' },
+        { id: 'D', text: 'Repetir a pergunta 3 vezes' },
+      ],
+      correctId: 'B',
+      topic: 'Prompt Engineering',
+      difficulty: 'easy',
+      explanation:
+        'CoT é a técnica fundamental para raciocínio: expor tokens intermediários melhora drasticamente accuracy em GSM8K, MATH, planning. Em Claude, você pode pedir explicitamente ("Pense passo a passo antes de responder") ou usar `<thinking>` tags como scratchpad. Claude 4+ tem `thinking` parameter nativo (extended thinking) que aloca budget de tokens de raciocínio invisíveis ao usuário final.',
+    },
+    {
+      id: 'anth-q3',
+      stem: 'Como o tool use (function calling) funciona com Claude?',
+      options: [
+        { id: 'A', text: 'Claude executa funções diretamente no servidor da Anthropic' },
+        { id: 'B', text: 'Você define `tools` (nome + descrição + JSON schema dos inputs). Claude decide quando chamar, retorna `tool_use` block. Seu código executa, devolve `tool_result`. Loop até `stop_reason: end_turn`' },
+        { id: 'C', text: 'Tool use só funciona com modelos OpenAI' },
+        { id: 'D', text: 'Claude precisa de acesso SSH para chamar funções' },
+      ],
+      correctId: 'B',
+      topic: 'Tool Use',
+      difficulty: 'medium',
+      explanation:
+        'Tool use é orquestração cliente-side: a Anthropic NUNCA executa código por você (security boundary). Fluxo: (1) request com `tools` schema; (2) Claude responde com `tool_use` block contendo `id`, `name`, `input`; (3) você executa localmente; (4) devolve `tool_result` com mesmo `tool_use_id`; (5) Claude continua. Suporta parallel tool use e tool_choice forçado. Base de agents.',
+      relatedSlug: 'claude-tool-use',
+    },
+    {
+      id: 'anth-q4',
+      stem: 'O que é MCP (Model Context Protocol)?',
+      options: [
+        { id: 'A', text: 'Uma versão paga do Claude' },
+        { id: 'B', text: 'Protocolo aberto da Anthropic que padroniza como aplicações expõem contexto (tools, resources, prompts) a LLMs. Roda via stdio/HTTP entre client (Claude Desktop, Claude Code) e server (seu app)' },
+        { id: 'C', text: 'Substituto do REST API' },
+        { id: 'D', text: 'Linguagem de programação' },
+      ],
+      correctId: 'B',
+      topic: 'MCP',
+      difficulty: 'medium',
+      explanation:
+        'MCP (lançado nov/2024) é o "USB-C dos LLMs": uma vez que seu app expõe um MCP server, qualquer cliente compatível (Claude Desktop, Claude Code, Cursor, etc.) ganha as ferramentas. Capabilities: tools (funções executáveis), resources (dados read-only com URI), prompts (templates). Spec é aberta — implementações em TS, Python, Go, Rust. Não substitui REST; é uma camada acima para LLMs.',
+      relatedSlug: 'model-context-protocol',
+    },
+    {
+      id: 'anth-q5',
+      stem: 'Prompt caching na Messages API reduz custo/latência. Como ativar?',
+      options: [
+        { id: 'A', text: 'Header HTTP `X-Cache: true`' },
+        { id: 'B', text: 'Adicionar `cache_control: {type: "ephemeral"}` em blocos do system prompt, tools ou messages. Cache hit dá ~90% desconto e <100ms TTFT em prefixos repetidos' },
+        { id: 'C', text: 'É automático, sem nada a fazer' },
+        { id: 'D', text: 'Só funciona em batch API' },
+      ],
+      correctId: 'B',
+      topic: 'Prompt Caching',
+      difficulty: 'medium',
+      explanation:
+        'Prompt caching é explícito: você marca o ponto de corte com `cache_control: {type: "ephemeral"}` (TTL ~5 min) ou `{type: "ephemeral", ttl: "1h"}` (1h, mais caro). Cache write custa 25% mais; cache read custa 10% do normal. Excelente para system prompts longos, tool definitions repetidas, RAG context grande. Min ~1024 tokens para cachear. Não é automático — você decide onde "cortar".',
+      relatedSlug: 'anthropic-prompt-caching',
+    },
+    {
+      id: 'anth-q6',
+      stem: 'Claude Code é melhor descrito como?',
+      options: [
+        { id: 'A', text: 'Um plugin de IDE' },
+        { id: 'B', text: 'CLI agente (terminal-first) da Anthropic que opera num diretório com tools nativos (Read, Edit, Bash, Grep, Write) e suporta extensões via MCP, skills e subagents' },
+        { id: 'C', text: 'Versão web do Claude' },
+        { id: 'D', text: 'Modelo de embeddings' },
+      ],
+      correctId: 'B',
+      topic: 'Claude Code',
+      difficulty: 'easy',
+      explanation:
+        'Claude Code é o agente oficial da Anthropic para desenvolvedores: roda no terminal, lê/edita seu repo via tools embarcados, executa Bash, faz commits Git. Diferencial: integra MCP servers (extensibilidade), skills (capabilities ativadas sob demanda), subagents (delegação para contextos isolados), hooks (automação de eventos). Não é IDE plugin — é processo standalone que conversa com seu workflow.',
+    },
+    {
+      id: 'anth-q7',
+      stem: 'Quando você precisa rodar um agent autônomo em produção (não interativo), qual SDK da Anthropic é apropriado?',
+      options: [
+        { id: 'A', text: 'A Messages API crua, escrevendo loop manual' },
+        { id: 'B', text: 'Claude Agent SDK (TypeScript/Python) — abstrai o loop tool-use, gerencia compaction de contexto, suporta MCP e skills, é o mesmo motor do Claude Code' },
+        { id: 'C', text: 'Bedrock Agents' },
+        { id: 'D', text: 'OpenAI Assistants API' },
+      ],
+      correctId: 'B',
+      topic: 'Agent SDK',
+      difficulty: 'medium',
+      explanation:
+        'Agent SDK (lançado 2025) é a forma idiomática de construir agents Claude em produção: gerencia o loop `request → tool_use → execute → tool_result → repeat`, faz auto-compaction quando context window enche, expõe hooks de observabilidade, integra MCP e skills nativamente. Você ainda pode usar Messages API direto, mas reescreverá muito do que o SDK dá grátis. Bedrock Agents é a alternativa AWS-managed.',
+    },
+    {
+      id: 'anth-q8',
+      stem: 'Em context engineering, qual prática é mais eficaz para janelas de contexto longas (>100k tokens)?',
+      options: [
+        { id: 'A', text: 'Despejar todo dump de dados disponível no prompt' },
+        { id: 'B', text: 'Curadoria seletiva (só relevante via RAG/retrieval), estruturação clara (XML tags, headings), instruções no início E no fim, exemplos few-shot estrategicamente posicionados, evals para medir degradação por posição' },
+        { id: 'C', text: 'Repetir a query 5 vezes no final' },
+        { id: 'D', text: 'Comprimir com base64' },
+      ],
+      correctId: 'B',
+      topic: 'Prompt Engineering',
+      difficulty: 'hard',
+      explanation:
+        'Context >100k não é desculpa para encher de lixo — modelos sofrem "lost in the middle" (atenção degrada em posições centrais). Boas práticas: (1) recupere só o relevante; (2) use estrutura (XML, markdown headers) para ajudar o modelo a navegar; (3) repita a tarefa principal no fim ("Now, focusing on the question above..."); (4) avalie com evals dedicadas que variam posição da informação chave. Claude 4+ lida melhor mas não é mágico.',
+      relatedSlug: 'context-engineering',
+    },
+  ],
+};
+
 export const SIMULADOS_CATALOG: readonly Simulado[] = [
   AWS_PRACTITIONER,
   AWS_DEVELOPER,
   AWS_SAA_PLACEHOLDER,
+  AWS_AI_PRACTITIONER,
+  ANTHROPIC_AI,
   CKA,
   TERRAFORM,
   SECURITY_PLUS,

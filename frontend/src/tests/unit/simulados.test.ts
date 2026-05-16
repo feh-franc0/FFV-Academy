@@ -7,18 +7,36 @@ import {
   getSimulado, scoreAttempt, getWeakTopics,
   isQuestionAccessible,
   saveAttempt, getAttempt, listAttempts, clearAttempt,
-  type SimuladoAttempt,
+  type SimuladoAttempt, type Simulado, type SimuladoQuestion,
 } from '../../lib/simulados';
 
 beforeEach(() => localStorage.clear());
 
 const SIM_ID = 'simulado-aws-practitioner';
 
+// O catálogo do CLF agora vem do backend Postgres (ver clf-bank.ts). Para isolar
+// testes de scoring/weakTopics da rede, mockamos um simulado in-line com 4 questões
+// cobrindo 2 tópicos diferentes.
+const MOCK_QUESTIONS: SimuladoQuestion[] = [
+  { id: 'q1', stem: 's1', options: [{ id: 'A', text: 'A' }, { id: 'B', text: 'B' }], correctId: 'A', explanation: '', topic: 'Cloud Concepts', difficulty: 'easy' },
+  { id: 'q2', stem: 's2', options: [{ id: 'A', text: 'A' }, { id: 'B', text: 'B' }], correctId: 'B', explanation: '', topic: 'Cloud Concepts', difficulty: 'easy' },
+  { id: 'q3', stem: 's3', options: [{ id: 'A', text: 'A' }, { id: 'B', text: 'B' }], correctId: 'A', explanation: '', topic: 'Security & Compliance', difficulty: 'medium' },
+  { id: 'q4', stem: 's4', options: [{ id: 'A', text: 'A' }, { id: 'B', text: 'B' }], correctId: 'B', explanation: '', topic: 'Security & Compliance', difficulty: 'medium' },
+];
+
+function mockSim(): Simulado {
+  const base = getSimulado(SIM_ID)!;
+  return { ...base, questions: MOCK_QUESTIONS };
+}
+
 describe('getSimulado', () => {
   it('retorna catálogo para id conhecido', () => {
     const s = getSimulado(SIM_ID);
     expect(s).not.toBeUndefined();
-    expect(s?.questions.length).toBeGreaterThan(0);
+    // Para CLF, questions é [] no catálogo (servido pelo backend). Para os
+    // demais simulados ainda há array hardcoded — esse teste valida só o metadata.
+    expect(s?.id).toBe(SIM_ID);
+    expect(s?.questionCount).toBeGreaterThan(0);
   });
 
   it('retorna undefined para id desconhecido', () => {
@@ -27,25 +45,24 @@ describe('getSimulado', () => {
 });
 
 describe('scoreAttempt', () => {
-  const sim = getSimulado(SIM_ID)!;
-
   it('100% quando todas respostas corretas', () => {
+    const sim = mockSim();
     const answers: Record<string, string> = {};
     for (const q of sim.questions) answers[q.id] = q.correctId;
-    const scored = scoreAttempt(sim, {
-      simuladoId: SIM_ID, startedAt: '', answers,
-    });
+    const scored = scoreAttempt(sim, { simuladoId: SIM_ID, startedAt: '', answers });
     expect(scored.score).toBe(100);
     expect(scored.passed).toBe(true);
   });
 
   it('0% quando nenhuma resposta', () => {
+    const sim = mockSim();
     const scored = scoreAttempt(sim, { simuladoId: SIM_ID, startedAt: '', answers: {} });
     expect(scored.score).toBe(0);
     expect(scored.passed).toBe(false);
   });
 
   it('byTopic agrega corretamente', () => {
+    const sim = mockSim();
     const answers: Record<string, string> = {};
     const firstQ = sim.questions[0];
     answers[firstQ.id] = firstQ.correctId;
@@ -55,19 +72,18 @@ describe('scoreAttempt', () => {
 });
 
 describe('getWeakTopics', () => {
-  const sim = getSimulado(SIM_ID)!;
-
   it('retorna tópicos com < 70% acerto', () => {
-    // Responde só metade das primeiras N questões corretamente
+    const sim = mockSim();
     const answers: Record<string, string> = {};
     sim.questions.forEach((q, i) => {
-      answers[q.id] = i % 2 === 0 ? q.correctId : 'A'; // alterna acerta/erra
+      answers[q.id] = i % 2 === 0 ? q.correctId : 'A';
     });
     const weak = getWeakTopics({ simuladoId: SIM_ID, startedAt: '', answers }, sim);
     expect(Array.isArray(weak)).toBe(true);
   });
 
   it('retorna vazio quando tudo 100%', () => {
+    const sim = mockSim();
     const answers: Record<string, string> = {};
     for (const q of sim.questions) answers[q.id] = q.correctId;
     const weak = getWeakTopics({ simuladoId: SIM_ID, startedAt: '', answers }, sim);
