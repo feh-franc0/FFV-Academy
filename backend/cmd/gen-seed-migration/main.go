@@ -112,12 +112,12 @@ func main() {
 	})
 
 	upSQL := buildUpSQL(questions, byFile)
-	if err := os.WriteFile(upPath, []byte(upSQL), 0o600); err != nil {
+	if err := os.WriteFile(upPath, []byte(upSQL), 0o600); err != nil { //nolint:gosec // G304,G703: upPath vem de CLI args do operador, não de input externo
 		log.Fatalf("escrever up.sql: %v", err)
 	}
 
 	downSQL := buildDownSQL(len(questions))
-	if err := os.WriteFile(downPath, []byte(downSQL), 0o600); err != nil {
+	if err := os.WriteFile(downPath, []byte(downSQL), 0o600); err != nil { //nolint:gosec // G304,G703: downPath derivado de upPath (CLI args), não de input externo
 		log.Fatalf("escrever down.sql: %v", err)
 	}
 
