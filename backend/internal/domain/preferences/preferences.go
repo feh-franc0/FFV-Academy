@@ -124,14 +124,15 @@ func Reconstitute(
 }
 
 // --- Getters (read-only fora do aggregate) ---
+//
+// Defensive copy + slice não-nil: o DTO da API promete `"hubIds": []`
+// (nunca `null`). Slice vazio preservado via copySlice helper.
 
-func (p *Preferences) UserID() shared.UserID { return p.userID }
-func (p *Preferences) HubIDs() []string      { return append([]string(nil), p.hubIDs...) }
-func (p *Preferences) TrailIDs() []string    { return append([]string(nil), p.trailIDs...) }
-func (p *Preferences) CertificationIDs() []string {
-	return append([]string(nil), p.certificationIDs...)
-}
-func (p *Preferences) Objectives() []string       { return append([]string(nil), p.objectives...) }
+func (p *Preferences) UserID() shared.UserID      { return p.userID }
+func (p *Preferences) HubIDs() []string           { return copySlice(p.hubIDs) }
+func (p *Preferences) TrailIDs() []string         { return copySlice(p.trailIDs) }
+func (p *Preferences) CertificationIDs() []string { return copySlice(p.certificationIDs) }
+func (p *Preferences) Objectives() []string       { return copySlice(p.objectives) }
 func (p *Preferences) SkillLevel() SkillLevel     { return p.skillLevel }
 func (p *Preferences) DailyQuestionEnabled() bool { return p.dailyQuestionEnabled }
 func (p *Preferences) OnboardedAt() *time.Time    { return p.onboardedAt }
@@ -282,6 +283,17 @@ func nilToEmpty(s []string) []string {
 		return []string{}
 	}
 	return s
+}
+
+// copySlice retorna uma cópia defensiva, **sempre não-nil** (preserva
+// vazio como []string{} ao invés de nil). Crítico para o contrato JSON.
+func copySlice(s []string) []string {
+	if len(s) == 0 {
+		return []string{}
+	}
+	out := make([]string, len(s))
+	copy(out, s)
+	return out
 }
 
 // --- Repository port ---
