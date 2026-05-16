@@ -81,23 +81,40 @@ export function SimuladoDetailClient({ slug }: Props) {
         </div>
       </section>
 
-      <section className="mb-10 p-5 rounded-xl" style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}>
-        <h2 className="text-lg font-bold mb-3">👇 Questão de preview</h2>
-        <p className="text-sm font-semibold mb-3">{preview.stem}</p>
-        <div className="flex flex-col gap-2 mb-4">
-          {preview.options.map(o => (
-            <div key={o.id} className="px-3 py-2 rounded-lg text-xs" style={{ background: 'var(--ffv-bg)', border: '1px solid var(--ffv-border)' }}>
-              <b style={{ color: accent }}>{o.id}.</b> {o.text}
-            </div>
-          ))}
-        </div>
-        <details className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
-          <summary className="cursor-pointer font-semibold" style={{ color: accent }}>Ver explicação do tutor</summary>
-          <p className="mt-2">
-            <b>Resposta: {preview.correctId}</b>. {getExplanationText(preview.explanation)}
-          </p>
-        </details>
-      </section>
+      {preview ? (
+        <section className="mb-10 p-5 rounded-xl" style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}>
+          <h2 className="text-lg font-bold mb-3">👇 Questão de preview</h2>
+          <p className="text-sm font-semibold mb-3">{preview.stem}</p>
+          <div className="flex flex-col gap-2 mb-4">
+            {preview.options.map(o => (
+              <div key={o.id} className="px-3 py-2 rounded-lg text-xs" style={{ background: 'var(--ffv-bg)', border: '1px solid var(--ffv-border)' }}>
+                <b style={{ color: accent }}>{o.id}.</b> {o.text}
+              </div>
+            ))}
+          </div>
+          <details className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
+            <summary className="cursor-pointer font-semibold" style={{ color: accent }}>Ver explicação do tutor</summary>
+            <p className="mt-2">
+              <b>Resposta: {preview.correctId}</b>. {getExplanationText(preview.explanation)}
+            </p>
+          </details>
+        </section>
+      ) : (
+        // CLF e simulados migrados pro backend não trazem questions no catálogo
+        // (banco vive no Postgres, acessado via /api/v1/simulados/{id}/study/random).
+        // Em vez de preview de 1 questão hardcoded, convida o usuário pro modo estudo.
+        simulado.studyModeUrl && (
+          <section className="mb-10 p-5 rounded-xl text-center" style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}>
+            <h2 className="text-lg font-bold mb-2">Banco completo no servidor</h2>
+            <p className="text-sm mb-4" style={{ color: 'var(--ffv-muted)' }}>
+              Questões sorteadas em tempo real — cada simulado é único. Quer testar antes? Use o modo estudo livre, sem timer.
+            </p>
+            <Link href={simulado.studyModeUrl} className="inline-block px-5 py-2.5 rounded-xl text-sm font-bold" style={{ background: accent, color: '#0d1117' }}>
+              📘 Estudar livremente
+            </Link>
+          </section>
+        )
+      )}
 
       <section className="flex flex-col gap-3">
         {simulado.comingSoon ? (
