@@ -43,16 +43,22 @@ for (const slug of CRITICAL_SLUGS) {
       `slug ${slug} retornou HTTP ${response!.status()} — espera 200`,
     ).toBe(200);
 
+    // Em build E2E (sem backend), a página renderiza placeholder com
+    // metadata do CURRICULUM.ts (title real do módulo). É comportamento
+    // válido — não é 404. O teste só precisa garantir que:
+    //   1. HTTP 200 (acima)
+    //   2. H1 renderiza com texto real do módulo (abaixo)
+    //
+    // O 404 real do Next se manifesta como H1 com texto "404". Qualquer
+    // outro H1 com conteúdo significa "página existe e renderizou".
     const h1 = page.locator('h1').first();
     await expect(h1, `${slug}: sem <h1>`).toBeVisible({ timeout: 10_000 });
 
     const h1Text = (await h1.textContent())?.trim() ?? '';
     expect(h1Text.length, `${slug}: <h1> vazio`).toBeGreaterThan(0);
-
-    const bodyText = (await page.locator('body').textContent()) ?? '';
     expect(
-      bodyText,
-      `${slug}: pagina renderizou como 404 (Next 'This page could not be found')`,
-    ).not.toContain('This page could not be found');
+      h1Text,
+      `${slug}: H1 é "404" — Next disparou notFound() porque slug não foi pré-gerado nem renderizado em runtime`,
+    ).not.toBe('404');
   });
 }
