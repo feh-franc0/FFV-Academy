@@ -79,13 +79,19 @@ docker run --rm \
 # IMAGE atualizada antes do migrate? Não — usamos a IMAGE_TAG nova (que já
 # foi pulled no passo 2). Importer binary está dentro dela.
 log "Seeding curriculum (hubs + trails + ~770 articles + blocks)..."
+# -seeds aponta pra /seeds/articles porque o importer internamente faz
+# `seedsRoot := filepath.Dir(*seedsDir)` para achar hubs.json/trails.json
+# um nível acima — passar /seeds quebra a resolução do seedsRoot.
+# Falhas aqui SÃO fatais (die): smoke-test-backend depois bate o endpoint
+# /api/v1/curriculum e rejeita o deploy se < 700 articles, mas falhar
+# silenciosamente aqui só mascara o erro real.
 docker run --rm \
   --network "$NETWORK_NAME" \
   --env DATABASE_URL="$DATABASE_URL_INTERNAL" \
   --entrypoint /importer \
   "$IMAGE" \
-  -seeds /seeds \
-  || log "::warning::Curriculum seed falhou — deploy continua mas /aprenda/* pode ter 404. Investigar logs."
+  -seeds /seeds/articles \
+  || die "Curriculum seed falhou. /aprenda/* daria 404. Deploy abortado."
 
 # ─── 6. Deploy da nova imagem da API (2 réplicas) ────────────────────────────
 # --scale api=2: sobe 2 réplicas. Nginx faz round-robin entre elas.
