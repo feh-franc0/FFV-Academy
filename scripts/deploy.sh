@@ -120,6 +120,19 @@ for i in $(seq 1 12); do
   if [[ "$HEALTHY" -ge 1 ]]; then
     log "$HEALTHY réplica(s) saudável(is). Atualizando nginx..."
     IMAGE_TAG="$IMAGE_TAG" docker compose -f "$COMPOSE_FILE" up -d --no-deps nginx
+
+    # `up -d` só recria container se imagem/env mudou — mudanças nos arquivos
+    # montados via volume (nginx.conf, conf.d/*.conf) NÃO disparam recreate.
+    # Solução: testar config e forçar reload (zero-downtime, SIGHUP).
+    log "Validando e recarregando config do nginx..."
+    if docker compose -f "$COMPOSE_FILE" exec -T nginx nginx -t 2>&1; then
+      docker compose -f "$COMPOSE_FILE" exec -T nginx nginx -s reload \
+        && log "Nginx recarregado com sucesso." \
+        || log "::warning::nginx -s reload falhou, mas config é válida."
+    else
+      log "::warning::Config do nginx inválida! Não recarreguei. Investigar."
+    fi
+
     docker image prune -f --filter "until=24h" > /dev/null 2>&1 || true
 
     # Health check do frontend (se foi deployado nesta execução)
