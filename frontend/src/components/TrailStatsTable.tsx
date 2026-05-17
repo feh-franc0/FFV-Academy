@@ -71,7 +71,10 @@ export function TrailStatsTable() {
         quizCount,
         xpEstimated: xp,
         status,
-        href: getTrailHref(trail.id) ?? `/trilha/${trail.id}`,
+        // getTrailHref já retorna '/' como fallback seguro; o ?? '/trilha/<id>'
+        // antigo nunca disparava (string nunca é nullish) e teria dado 404 se
+        // disparasse — não existe rota /trilha/ no app router.
+        href: getTrailHref(trail.id),
       };
     }).sort((a, b) => {
       // Ordena: em progresso primeiro (descrescente por percent), depois concluídas, depois não iniciadas.

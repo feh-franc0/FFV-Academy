@@ -82,8 +82,14 @@ export async function generateStaticParams() {
   }
 }
 
-// Estritamente sem fallback dinâmico em build estático.
-export const dynamicParams = false;
+// SSR Docker: slugs novos no banco que ainda não estavam no build do frontend
+// são renderizados em runtime (SSR on-demand). Sem isso, qualquer artigo criado
+// no admin após o último deploy do frontend daria 404 imediato — o que é o oposto
+// do que faz sentido em CMS-driven com SSR.
+//
+// Em build estático (output: export) o valor deveria ser `false`, mas migramos
+// pra `output: "standalone"` em 845eddb (15/mai/2026).
+export const dynamicParams = true;
 
 // Metadata para SEO — também do banco.
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
