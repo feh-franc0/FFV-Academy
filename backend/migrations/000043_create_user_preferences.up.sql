@@ -10,7 +10,8 @@
 -- e operadores de array (@>, &&) são mais simples que jsonb_array.
 
 CREATE TABLE user_preferences (
-    user_id            UUID         PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    -- users.id é TEXT (não UUID) — convenção do projeto.
+    user_id            TEXT         PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
 
     -- IDs dos hubs em que o user tem interesse (ex: ['hub-ia', 'hub-aws']).
     -- Vazio = aceita tudo (sem filtro). Validação dos IDs feita na app layer.
