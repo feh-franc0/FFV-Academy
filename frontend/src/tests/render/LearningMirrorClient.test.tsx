@@ -49,7 +49,7 @@ describe('<LearningMirrorClient> — Espelho de Aprendizado', () => {
     expect(screen.getByText(/Sem espelho ainda/i)).toBeInTheDocument();
     // Microcopy de combate menciona ChatGPT/NotebookLM
     expect(screen.getByText(/ChatGPT e NotebookLM não fazem/i)).toBeInTheDocument();
-    expect(screen.getByText(/Explorar a base de Tecnologia/i)).toBeInTheDocument();
+    expect(screen.getByText(/Ver bases disponíveis/i)).toBeInTheDocument();
   });
 
   it('renderiza hero personalizado quando tem progresso (módulos consolidados)', () => {
@@ -87,9 +87,10 @@ describe('<LearningMirrorClient> — Espelho de Aprendizado', () => {
       perfectQuizStreak: 2,
     };
     render(<LearningMirrorClient />);
-    // 4 KPI cards — labels
+    // 4 KPI cards — labels. "Memória de longo prazo" aparece também no shareable
+    // card depois da Onda 1D (reposicionamento SM-2 → memória de longo prazo).
     expect(screen.getByText(/Esta semana/i)).toBeInTheDocument();
-    expect(screen.getByText(/Memória de longo prazo/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Memória de longo prazo/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/Streak atual/i)).toBeInTheDocument();
     expect(screen.getByText(/Pra revisar hoje/i)).toBeInTheDocument();
     // Valores: 2 módulos esta semana, 7 cards maduros, streak 12

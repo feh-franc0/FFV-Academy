@@ -636,7 +636,7 @@ const PILLARS = [
   { ic: '🧱', t: 'Trilhas ordenadas',             d: 'Do básico ao avançado. Cada módulo constrói no anterior.' },
   { ic: '📖', t: 'Conteúdo explicado',             d: 'Não é texto solto. Explicações pensadas pra ensinar.' },
   { ic: '✏️', t: 'Exercícios integrados',          d: 'Você testa o aprendizado na hora. Feedback imediato.' },
-  { ic: '🧠', t: 'Revisão espaçada',               d: 'Algoritmo científico (SM-2) que traz de volta no tempo certo.' },
+  { ic: '🧠', t: 'Revisão espaçada',               d: 'SRS calibrado pelo seu material — traz de volta no tempo certo, com base no que você acertou e errou.' },
   { ic: '🏆', t: 'Gamificação inteligente',        d: 'XP, badges, streak, ranking. Ritmo, não força de vontade.' },
   { ic: '🌐', t: 'PT-BR · qualquer dispositivo',   d: 'Acessa do desktop, tablet, celular. Estuda quando dá.' },
 ];
@@ -806,6 +806,9 @@ function ProvaViva() {
             <Stat n="24h" l="entrega" />
           </div>
 
+          {/* Intencional: /tecnologia é a base FLAGSHIP atual mostrada como
+              prova viva. Quando outra base assumir esse papel, ajustar aqui
+              ou ler de uma constant `FLAGSHIP_BASE` no registry. */}
           <Link
             href="/tecnologia"
             className="inline-flex items-center gap-2 px-6 py-3 text-sm font-semibold transition-colors"
@@ -932,7 +935,7 @@ const FAQ_ITEMS = [
   },
   {
     q: 'Como é diferente do ChatGPT, NotebookLM e Anki?',
-    a: 'ChatGPT te responde; ele esquece amanhã. NotebookLM te dá um resumo do PDF em 30 segundos. Anki te faz memorizar cards soltos. A FFV junta tudo num sistema: trilha sequencial → quiz → SRS científico → ranking. Você entende, testa e revisa no tempo certo — não fica refém de perguntar de novo.',
+    a: 'ChatGPT te responde; ele esquece amanhã. NotebookLM te dá um resumo do PDF em 30 segundos. Anki tem SRS sofisticado (hoje FSRS-6), mas exige que você crie cada card sozinho. A FFV junta tudo num sistema: trilha sequencial → quiz → SRS calibrado pelo seu próprio material → ranking. Você entende, testa e revisa no tempo certo — não monta nada.',
   },
   {
     q: 'Posso mandar PDF da faculdade, da pós, do concurso?',

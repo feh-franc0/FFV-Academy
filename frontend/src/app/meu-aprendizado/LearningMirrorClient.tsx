@@ -152,7 +152,7 @@ export function LearningMirrorClient() {
             label="Memória de longo prazo"
             value={String(stats.longTermCards)}
             unit="cards maduros"
-            caption="Já consolidados pelo SRS (SM-2)"
+            caption="SRS científico aplicado ao seu material"
             tone="sage"
           />
           <MirrorKpi
@@ -285,7 +285,7 @@ export function LearningMirrorClient() {
             </li>
             <li className="flex items-start gap-3">
               <span aria-hidden style={{ color: '#fbbf24', fontSize: 18, fontWeight: 700 }}>✦</span>
-              <span>{stats.longTermCards} cards consolidados no SRS (SM-2)</span>
+              <span>{stats.longTermCards} cards consolidados na memória de longo prazo</span>
             </li>
             <li className="flex items-start gap-3">
               <span aria-hidden style={{ color: '#fbbf24', fontSize: 18, fontWeight: 700 }}>✦</span>
@@ -439,7 +439,7 @@ function EmptyState() {
           <strong>Algo que ChatGPT e NotebookLM não fazem.</strong>
         </p>
         <Link
-          href="/tecnologia"
+          href="/bases"
           className="inline-flex items-center gap-2 px-6 py-3 text-sm font-semibold transition-colors"
           style={{
             background: 'var(--ffv-ink)',
@@ -448,7 +448,7 @@ function EmptyState() {
             textDecoration: 'none',
           }}
         >
-          Explorar a base de Tecnologia →
+          Ver bases disponíveis →
         </Link>
       </div>
     </div>

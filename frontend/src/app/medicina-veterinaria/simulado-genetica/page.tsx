@@ -15,6 +15,8 @@ export default function SimuladoGeneticaPage() {
       slug="medvet-genetica-100"
       questions={SIMULADO_GENETICA}
       meta={SIMULADO_META}
+      basePath="/medicina-veterinaria"
+      baseName="Medicina Veterinária"
     />
   );
 }

@@ -43,6 +43,14 @@ interface Props {
   slug: string;
   questions: SimuladoQuestion[];
   meta: SimuladoMeta;
+  /**
+   * Path da base à qual o simulado pertence (ex.: '/medicina-veterinaria').
+   * Usado pelo link "← Voltar para X" — fica base-agnostic.
+   * Default mantém o comportamento legado do medvet.
+   */
+  basePath?: string;
+  /** Nome da base usado no texto do link. Default: 'Medicina Veterinária'. */
+  baseName?: string;
 }
 
 interface SimState {
@@ -77,7 +85,13 @@ function saveState(slug: string, state: SimState) {
   }
 }
 
-export function SimuladoRunner({ slug, questions, meta }: Props) {
+export function SimuladoRunner({
+  slug,
+  questions,
+  meta,
+  basePath = '/medicina-veterinaria',
+  baseName = 'Medicina Veterinária',
+}: Props) {
   const [state, setState] = useState<SimState>(() => ({
     answers: {},
     hintsRevealed: [],
@@ -160,11 +174,11 @@ export function SimuladoRunner({ slug, questions, meta }: Props) {
     >
       <div className="max-w-4xl mx-auto">
         <Link
-          href="/medicina-veterinaria"
+          href={basePath}
           className="inline-flex items-center gap-1.5 text-xs font-mono mb-6"
           style={{ color: 'var(--ffv-muted)', letterSpacing: '0.08em', textDecoration: 'none' }}
         >
-          ← VOLTAR PARA MEDICINA VETERINÁRIA
+          ← VOLTAR PARA {baseName.toUpperCase()}
         </Link>
 
         <header className="mb-10">
