@@ -6,6 +6,7 @@ import {
   STUDY_REQUEST_LIMITS,
   StudyRequestError,
   submitStudyRequest,
+  type StudyRequestResult,
 } from '@/lib/study-request-api';
 
 // StudyRequestForm — formulário público de captação para o pivot 2026-05.
@@ -36,7 +37,7 @@ const STUDY_AREAS = [
 type FormState =
   | { kind: 'idle' }
   | { kind: 'submitting' }
-  | { kind: 'success'; message: string }
+  | { kind: 'success'; message: string; result: StudyRequestResult; email: string }
   | { kind: 'error'; message: string };
 
 export function StudyRequestForm() {
@@ -101,7 +102,7 @@ export function StudyRequestForm() {
         marketingConsent,
         attachments: files,
       });
-      setState({ kind: 'success', message: result.message });
+      setState({ kind: 'success', message: result.message, result, email });
     } catch (err) {
       const detail = err instanceof StudyRequestError
         ? err.detail
@@ -112,8 +113,11 @@ export function StudyRequestForm() {
     }
   }
 
-  // Tela de sucesso (substitui o form inteiro pra dar foco à confirmação)
+  // Tela de sucesso — SLA tracker visível em 3 etapas + ID + email + ETA.
+  // Diferencial competitivo vs NotebookLM: transforma a espera de 24h em
+  // prova de qualidade (curadoria humana) em vez de gargalo.
   if (state.kind === 'success') {
+    const shortId = state.result.id.slice(0, 8).toUpperCase();
     return (
       <div
         className="rounded-2xl p-7"
@@ -121,28 +125,117 @@ export function StudyRequestForm() {
           background: 'var(--ffv-bg2)',
           border: '1px solid color-mix(in srgb, var(--ffv-green) 35%, var(--ffv-border))',
           boxShadow: 'var(--ffv-shadow-soft)',
+          color: 'var(--foreground)',
         }}
         role="status"
         aria-live="polite"
       >
-        <div className="text-4xl mb-4">✅</div>
-        <h3
+        <div className="flex items-start gap-3 mb-5">
+          <div
+            className="flex items-center justify-center rounded-full shrink-0"
+            style={{
+              width: 44,
+              height: 44,
+              background: 'color-mix(in srgb, var(--ffv-green) 16%, transparent)',
+              border: '1px solid color-mix(in srgb, var(--ffv-green) 40%, transparent)',
+              color: 'var(--ffv-green)',
+              fontSize: 22,
+              fontWeight: 800,
+            }}
+            aria-hidden
+          >
+            ✓
+          </div>
+          <div>
+            <h3
+              style={{
+                fontSize: 'clamp(1.2rem, 2vw, 1.5rem)',
+                fontWeight: 800,
+                letterSpacing: '-0.02em',
+                lineHeight: 1.15,
+                marginBottom: 4,
+                color: 'var(--foreground)',
+              }}
+            >
+              Solicitação recebida.
+            </h3>
+            <p className="text-sm" style={{ color: 'var(--ffv-muted)', lineHeight: 1.5 }}>
+              {state.message}
+            </p>
+          </div>
+        </div>
+
+        {/* SLA tracker — 3 etapas visíveis pra desarmar ansiedade da espera */}
+        <div
+          className="rounded-xl p-4 mb-5"
           style={{
-            fontSize: 'clamp(1.2rem, 2vw, 1.5rem)',
-            fontWeight: 800,
-            letterSpacing: '-0.02em',
-            lineHeight: 1.2,
-            marginBottom: 8,
+            background: 'var(--ffv-bg)',
+            border: '1px solid var(--ffv-border)',
           }}
         >
-          Solicitação recebida!
-        </h3>
-        <p className="text-sm" style={{ color: 'var(--ffv-muted)', lineHeight: 1.6 }}>
-          {state.message}
+          <p
+            className="font-mono uppercase text-[10px] mb-3"
+            style={{ color: 'var(--ffv-muted)', letterSpacing: '0.12em', fontWeight: 700 }}
+          >
+            Status da sua base
+          </p>
+          <ol className="flex flex-col gap-3 list-none p-0 m-0" aria-label="Etapas da geração da base">
+            <StatusStep
+              n="01"
+              title="Recebida"
+              desc="Análise inicial em fila"
+              state="done"
+            />
+            <StatusStep
+              n="02"
+              title="Curadoria humana"
+              desc="Engenheiro revisa material + monta trilha · em média 8-12h"
+              state="active"
+            />
+            <StatusStep
+              n="03"
+              title="Trilha pronta"
+              desc="Você recebe e-mail e WhatsApp com link · até 24h"
+              state="pending"
+            />
+          </ol>
+        </div>
+
+        {/* Identidade da solicitação — dá sensação de "isso é real" */}
+        <dl
+          className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1.5 text-xs mb-5"
+          style={{ color: 'var(--ffv-muted)' }}
+        >
+          <dt className="font-semibold">ID:</dt>
+          <dd className="font-mono" style={{ color: 'var(--foreground)' }}>
+            #{shortId}
+          </dd>
+          <dt className="font-semibold">Confirmação por e-mail:</dt>
+          <dd style={{ color: 'var(--foreground)' }} className="truncate">{state.email}</dd>
+          {state.result.attachmentCount > 0 && (
+            <>
+              <dt className="font-semibold">Anexos recebidos:</dt>
+              <dd style={{ color: 'var(--foreground)' }}>
+                {state.result.attachmentCount} arquivo{state.result.attachmentCount === 1 ? '' : 's'}
+              </dd>
+            </>
+          )}
+        </dl>
+
+        {/* Garantia honesta — fecha a venda emocionalmente */}
+        <p
+          className="text-xs px-3 py-2.5 rounded-lg mb-4"
+          style={{
+            background: 'color-mix(in srgb, var(--ffv-blue) 8%, transparent)',
+            border: '1px solid color-mix(in srgb, var(--ffv-blue) 22%, transparent)',
+            color: 'var(--foreground)',
+            lineHeight: 1.55,
+          }}
+        >
+          <strong style={{ color: 'var(--ffv-blue)' }}>Garantia honesta:</strong>{' '}
+          se a trilha não te servir, responde o e-mail que a gente refaz. Não usamos seu material pra treinar IA.
         </p>
-        <p className="text-xs mt-4" style={{ color: 'var(--ffv-muted)' }}>
-          Você pode fechar essa janela ou enviar outra solicitação se quiser.
-        </p>
+
         <button
           type="button"
           onClick={() => {
@@ -157,7 +250,7 @@ export function StudyRequestForm() {
             setFiles([]);
             setState({ kind: 'idle' });
           }}
-          className="mt-5 w-full py-3 rounded-xl text-sm font-semibold"
+          className="w-full py-3 rounded-xl text-sm font-semibold"
           style={{
             background: 'var(--ffv-bg)',
             border: '1px solid var(--ffv-border)',
@@ -471,6 +564,94 @@ const inputStyle: React.CSSProperties = {
   color: 'var(--foreground)',
   outline: 'none',
 };
+
+// StatusStep — etapa visual do SLA tracker. Cada estado tem semântica única:
+//  - done: bolinha preenchida verde, número/check, texto normal
+//  - active: bolinha pulsando azul, número, texto bold
+//  - pending: bolinha vazia cinza, número fade, texto fade
+function StatusStep({
+  n,
+  title,
+  desc,
+  state,
+}: {
+  n: string;
+  title: string;
+  desc: string;
+  state: 'done' | 'active' | 'pending';
+}) {
+  const isActive = state === 'active';
+  const isDone = state === 'done';
+  const dotBg = isDone
+    ? 'var(--ffv-green)'
+    : isActive
+      ? 'var(--ffv-blue)'
+      : 'transparent';
+  const dotColor = isDone || isActive ? '#fff' : 'var(--ffv-muted)';
+  const dotBorder = isDone || isActive
+    ? `1px solid ${dotBg}`
+    : '1px dashed var(--ffv-border)';
+  const titleColor = state === 'pending' ? 'var(--ffv-muted)' : 'var(--foreground)';
+  const titleWeight = isActive ? 700 : 600;
+
+  return (
+    <li className="flex items-start gap-3">
+      <span
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 26,
+          height: 26,
+          minWidth: 26,
+          borderRadius: '50%',
+          background: dotBg,
+          border: dotBorder,
+          color: dotColor,
+          fontSize: 10,
+          fontWeight: 700,
+          fontFamily: 'var(--font-inter)',
+          letterSpacing: '0.04em',
+          marginTop: 1,
+          // pulse sutil quando ativo — atende a expectativa de "andando agora"
+          boxShadow: isActive
+            ? '0 0 0 4px color-mix(in srgb, var(--ffv-blue) 16%, transparent)'
+            : 'none',
+          animation: isActive ? 'ffv-sla-pulse 2s ease-in-out infinite' : 'none',
+        }}
+        aria-hidden
+      >
+        {isDone ? '✓' : n}
+      </span>
+      <div className="flex flex-col">
+        <span
+          className="text-sm"
+          style={{
+            fontWeight: titleWeight,
+            color: titleColor,
+            letterSpacing: '-0.005em',
+          }}
+        >
+          {title}
+          {isActive && (
+            <span
+              className="ml-2 text-[10px] font-mono uppercase"
+              style={{
+                color: 'var(--ffv-blue)',
+                letterSpacing: '0.1em',
+              }}
+            >
+              · em andamento
+            </span>
+          )}
+        </span>
+        <span className="text-xs" style={{ color: 'var(--ffv-muted)', lineHeight: 1.4 }}>
+          {desc}
+        </span>
+      </div>
+    </li>
+  );
+}
 
 function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
   return (

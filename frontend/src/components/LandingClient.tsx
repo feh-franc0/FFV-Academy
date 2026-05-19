@@ -215,6 +215,23 @@ function Hero() {
             <span>✓ Curadoria humana revisa cada trilha</span>
             <span>✓ Sem cartão · sem trial</span>
           </div>
+
+          {/* Honestidade radical: link discreto pras métricas públicas.
+              Ação #1 do EXECUTIVE_PLAN_2026-05.md (Open Admin radical). */}
+          <Link
+            href="/stats-publicas"
+            className="inline-flex items-center gap-1.5 mt-4 text-[11px] font-mono uppercase transition-opacity"
+            style={{
+              color: 'var(--ffv-amber)',
+              letterSpacing: '0.08em',
+              textDecoration: 'underline',
+              textUnderlineOffset: 4,
+              textDecorationColor: 'color-mix(in srgb, var(--ffv-amber) 40%, transparent)',
+            }}
+          >
+            <span aria-hidden>📊</span>
+            Ver nossas métricas públicas →
+          </Link>
         </div>
 
         <HeroMockup />

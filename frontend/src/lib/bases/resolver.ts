@@ -26,6 +26,7 @@ const MARKETING_PATHS = new Set([
   '/comunidade',
   '/newsletter',
   '/bases',
+  '/stats-publicas',
 ]);
 
 /** Rotas que pertencem ao chrome de app mas não a uma base específica. */
