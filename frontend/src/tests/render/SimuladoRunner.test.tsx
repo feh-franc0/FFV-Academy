@@ -232,4 +232,43 @@ describe('<SimuladoRunner>', () => {
     // 1 hint + 4 alternativas = 5 buttons mínimo
     expect(buttons.length).toBeGreaterThanOrEqual(5);
   });
+
+  // ── basePath/baseName props (Onda 1A modular fix) ────────────────────────
+  describe('base-agnostic props', () => {
+    it('default: back link aponta pra /medicina-veterinaria (compat legacy)', () => {
+      render(<SimuladoRunner slug="legacy" questions={QUESTIONS} meta={META} />);
+      const back = screen.getByRole('link', { name: /VOLTAR PARA/i });
+      expect(back).toHaveAttribute('href', '/medicina-veterinaria');
+      expect(back.textContent).toMatch(/MEDICINA VETERINÁRIA/);
+    });
+
+    it('com basePath/baseName customizados: back link respeita', () => {
+      render(
+        <SimuladoRunner
+          slug="custom"
+          questions={QUESTIONS}
+          meta={META}
+          basePath="/direito"
+          baseName="Direito"
+        />,
+      );
+      const back = screen.getByRole('link', { name: /VOLTAR PARA/i });
+      expect(back).toHaveAttribute('href', '/direito');
+      expect(back.textContent).toMatch(/VOLTAR PARA DIREITO/);
+    });
+
+    it('aplica uppercase no baseName com múltiplas palavras', () => {
+      render(
+        <SimuladoRunner
+          slug="multi"
+          questions={QUESTIONS}
+          meta={META}
+          basePath="/medicina"
+          baseName="Medicina Humana"
+        />,
+      );
+      const back = screen.getByRole('link', { name: /VOLTAR PARA/i });
+      expect(back.textContent).toMatch(/VOLTAR PARA MEDICINA HUMANA/);
+    });
+  });
 });
