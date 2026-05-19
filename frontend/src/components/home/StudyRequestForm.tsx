@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import {
   STUDY_REQUEST_LIMITS,
@@ -8,6 +8,14 @@ import {
   submitStudyRequest,
   type StudyRequestResult,
 } from '@/lib/study-request-api';
+import { maskBrazilianPhone, unmaskPhone, suggestEmailDomain } from '@/lib/form-helpers';
+import {
+  clearActiveRequest,
+  deriveSlaStep,
+  humanizeElapsed,
+  loadActiveRequest,
+  saveActiveRequest,
+} from '@/lib/study-request-tracking';
 
 // StudyRequestForm — formulário público de captação para o pivot 2026-05.
 //
@@ -37,12 +45,20 @@ const STUDY_AREAS = [
 type FormState =
   | { kind: 'idle' }
   | { kind: 'submitting' }
-  | { kind: 'success'; message: string; result: StudyRequestResult; email: string }
+  | {
+      kind: 'success';
+      message: string;
+      result: StudyRequestResult;
+      email: string;
+      /** ISO timestamp do submit — usado pra calcular etapa atual do SLA tracker. */
+      submittedAt: string;
+    }
   | { kind: 'error'; message: string };
 
 export function StudyRequestForm() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [emailSuggestion, setEmailSuggestion] = useState<string | null>(null);
   const [phone, setPhone] = useState('');
   const [studyArea, setStudyArea] = useState('');
   const [institution, setInstitution] = useState('');
@@ -54,6 +70,37 @@ export function StudyRequestForm() {
   const [fileError, setFileError] = useState<string | null>(null);
   const [state, setState] = useState<FormState>({ kind: 'idle' });
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Hidratar solicitação ativa (mesmo device, sessão anterior).
+  // Se o usuário voltar 4h depois, vê o SLA tracker no estado correto
+  // em vez do form vazio. SLA tracker re-renderiza a cada minuto pra
+  // refletir tempo decorrido.
+  useEffect(() => {
+    const active = loadActiveRequest();
+    if (active) {
+      setState({
+        kind: 'success',
+        message: 'Solicitação em andamento — acompanhe o status abaixo.',
+        result: {
+          id: active.id,
+          status: active.status ?? 'received',
+          attachmentCount: active.attachmentCount,
+          message: '',
+        },
+        email: active.email,
+        submittedAt: active.submittedAt,
+      });
+    }
+  }, []);
+
+  // Tick a cada 60s pra atualizar "há X horas" e re-derivar etapa do SLA.
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (state.kind !== 'success') return;
+    const interval = setInterval(() => setTick(t => t + 1), 60_000);
+    return () => clearInterval(interval);
+  }, [state.kind]);
+  void tick; // forçar re-render — deriveSlaStep usa Date.now()
 
   function handleFiles(list: FileList | null) {
     setFileError(null);
@@ -88,12 +135,18 @@ export function StudyRequestForm() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    // Idempotência client-side: se já está submitting, ignora segundo click
+    // (defesa em profundidade — disabled do botão já bloqueia, mas evita
+    // re-entrancy se alguém disparar via Enter).
+    if (state.kind === 'submitting') return;
+
     setState({ kind: 'submitting' });
     try {
       const result = await submitStudyRequest({
         name,
         email,
-        phone: phone || undefined,
+        // Envia número limpo (só dígitos) — backend processa, frontend formata.
+        phone: phone ? unmaskPhone(phone) : undefined,
         studyArea,
         institution: institution || undefined,
         subject,
@@ -102,7 +155,15 @@ export function StudyRequestForm() {
         marketingConsent,
         attachments: files,
       });
-      setState({ kind: 'success', message: result.message, result, email });
+      const submittedAt = new Date().toISOString();
+      // Persiste localmente pra usuário ver SLA tracker se voltar.
+      saveActiveRequest({
+        id: result.id,
+        email,
+        attachmentCount: result.attachmentCount,
+        submittedAt,
+      });
+      setState({ kind: 'success', message: result.message, result, email, submittedAt });
     } catch (err) {
       const detail = err instanceof StudyRequestError
         ? err.detail
@@ -113,11 +174,19 @@ export function StudyRequestForm() {
     }
   }
 
-  // Tela de sucesso — SLA tracker visível em 3 etapas + ID + email + ETA.
+  // Tela de sucesso — SLA tracker DINÂMICO baseado em tempo decorrido + ID + email.
   // Diferencial competitivo vs NotebookLM: transforma a espera de 24h em
-  // prova de qualidade (curadoria humana) em vez de gargalo.
+  // prova de qualidade (curadoria humana) em vez de gargalo. Re-renderiza
+  // a cada 60s pra atualizar etapa atual e timestamp humanizado.
   if (state.kind === 'success') {
     const shortId = state.result.id.slice(0, 8).toUpperCase();
+    const sla = deriveSlaStep({
+      id: state.result.id,
+      email: state.email,
+      attachmentCount: state.result.attachmentCount,
+      submittedAt: state.submittedAt,
+    });
+    const elapsed = humanizeElapsed(state.submittedAt);
     return (
       <div
         className="rounded-2xl p-7"
@@ -183,20 +252,30 @@ export function StudyRequestForm() {
             <StatusStep
               n="01"
               title="Recebida"
-              desc="Análise inicial em fila"
-              state="done"
+              desc={`Análise inicial em fila · ${elapsed}`}
+              state={sla === 'received' ? 'active' : 'done'}
             />
             <StatusStep
               n="02"
               title="Curadoria humana"
               desc="Engenheiro revisa material + monta trilha · em média 8-12h"
-              state="active"
+              state={
+                sla === 'curating'
+                  ? 'active'
+                  : sla === 'delivered'
+                    ? 'done'
+                    : 'pending'
+              }
             />
             <StatusStep
               n="03"
               title="Trilha pronta"
-              desc="Você recebe e-mail e WhatsApp com link · até 24h"
-              state="pending"
+              desc={
+                sla === 'delivered'
+                  ? 'Confira seu e-mail e WhatsApp — link de acesso enviado'
+                  : 'Você recebe e-mail e WhatsApp com link · até 24h'
+              }
+              state={sla === 'delivered' ? 'active' : 'pending'}
             />
           </ol>
         </div>
@@ -239,6 +318,7 @@ export function StudyRequestForm() {
         <button
           type="button"
           onClick={() => {
+            clearActiveRequest();
             setName('');
             setEmail('');
             setPhone('');
@@ -328,20 +408,48 @@ export function StudyRequestForm() {
               required
               autoComplete="email"
               value={email}
-              onChange={e => setEmail(e.target.value)}
+              onChange={e => {
+                setEmail(e.target.value);
+                // Limpa sugestão enquanto digita pra não atrapalhar.
+                if (emailSuggestion) setEmailSuggestion(null);
+              }}
+              onBlur={() => setEmailSuggestion(suggestEmailDomain(email))}
               placeholder="voce@email.com"
               className={inputClass}
               style={inputStyle}
               disabled={submitting}
+              aria-describedby={emailSuggestion ? 'email-suggestion' : undefined}
             />
+            {emailSuggestion && (
+              <p
+                id="email-suggestion"
+                className="text-[11px] mt-1.5"
+                style={{ color: 'var(--ffv-blue)', lineHeight: 1.4 }}
+              >
+                Você quis dizer{' '}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEmail(emailSuggestion);
+                    setEmailSuggestion(null);
+                  }}
+                  className="underline font-semibold"
+                  style={{ color: 'var(--ffv-blue)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                >
+                  {emailSuggestion}
+                </button>?
+              </p>
+            )}
           </Field>
           <Field label="WhatsApp">
             <input
               type="tel"
               autoComplete="tel"
+              inputMode="numeric"
               value={phone}
-              onChange={e => setPhone(e.target.value)}
-              placeholder="(opcional)"
+              onChange={e => setPhone(maskBrazilianPhone(e.target.value))}
+              placeholder="(11) 98765-4321"
+              maxLength={15}
               className={inputClass}
               style={inputStyle}
               disabled={submitting}
