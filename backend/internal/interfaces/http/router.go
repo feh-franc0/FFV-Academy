@@ -54,6 +54,9 @@ type RouterConfig struct {
 	Study            *handlers.StudyHandler            // opcional — modo estudo livre (JWT)
 	AdminQuestions   *handlers.AdminQuestionsHandler   // opcional — CRUD admin de questões
 	Preferences      *handlers.PreferencesHandler      // opcional — preferências pedagógicas do user (JWT)
+	StudyRequest     *handlers.StudyRequestHandler     // opcional — solicitações de estudo personalizado (público, multipart)
+	StudyRequestAdmin *handlers.StudyRequestAdminHandler // opcional — admin CRUD das solicitações
+	Bases            *handlers.BasesHandler            // opcional — lista pública de bases de conhecimento
 }
 
 // NewRouter monta o chi.Router com todos os middlewares e rotas.
@@ -114,6 +117,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// Stats agregados públicos para a home (social proof).
 	if cfg.Stats != nil {
 		r.Get("/api/v1/stats", cfg.Stats.GetPublic)
+	}
+
+	// Lista pública de bases de conhecimento — frontend usa em /bases.
+	if cfg.Bases != nil {
+		r.Get("/api/v1/bases", cfg.Bases.List)
 	}
 
 	// Top-10 do ranking semanal — público, anonimizado para visitantes.
@@ -202,6 +210,16 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	// Verificação pública de certificado com rate-limit — previne enumeração de hashes.
 	r.With(certLimit.Middleware()).Get("/api/v1/certificates/{hash}", cfg.Certificate.VerifyCertificate)
+
+	// Solicitações de experiência de estudo personalizada — captura de lead público.
+	// Aceita multipart/form-data com até 10 anexos. Rate-limit por IP para conter abuso
+	// (formulário público é vetor clássico de spam). Body limit definido no próprio handler
+	// via http.MaxBytesReader (multipart precisa de leitor capado, não BodyLimit middleware).
+	if cfg.StudyRequest != nil {
+		studyRequestLimit := middleware.NewRateLimiter(cfg.Redis, 10, time.Minute, "rl:study-request")
+		r.With(studyRequestLimit.Middleware()).
+			Post("/api/v1/study-requests", cfg.StudyRequest.Create)
+	}
 
 	// Auth — rotas públicas com rate-limit agressivo e body limit pequeno.
 	r.Route("/api/v1/auth", func(r chi.Router) {
@@ -333,6 +351,14 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				r.With(middleware.BodyLimit(64*1024)).Post("/api/v1/admin/questions", cfg.AdminQuestions.CreateQuestion)
 				r.With(middleware.BodyLimit(64*1024)).Put("/api/v1/admin/questions/{questionId}", cfg.AdminQuestions.UpdateQuestion)
 				r.Delete("/api/v1/admin/questions/{questionId}", cfg.AdminQuestions.DeleteQuestion)
+			}
+
+			// CRUD admin: solicitações de estudo personalizado.
+			if cfg.StudyRequestAdmin != nil {
+				r.Get("/api/v1/admin/study-requests", cfg.StudyRequestAdmin.List)
+				r.Get("/api/v1/admin/study-requests/{id}", cfg.StudyRequestAdmin.Get)
+				r.With(middleware.BodyLimit(32*1024)).Patch("/api/v1/admin/study-requests/{id}", cfg.StudyRequestAdmin.Update)
+				r.Get("/api/v1/admin/study-requests/{id}/attachments/{attachmentId}", cfg.StudyRequestAdmin.DownloadAttachment)
 			}
 		})
 	})

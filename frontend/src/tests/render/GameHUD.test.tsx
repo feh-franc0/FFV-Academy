@@ -40,10 +40,25 @@ vi.mock('@/lib/sounds', () => ({
 
 import { GameHUD } from '@/components/GameHUD';
 import { useGameState } from '@/hooks/useGameState';
+import { BaseNavProvider } from '@/components/base/BaseNavContext';
+import { TECH_NAV_ITEMS } from '@/lib/bases/tecnologia/nav';
+
+function renderGameHUD(opts: { hubNavItems?: typeof TECH_NAV_ITEMS; hideGlobalContentNav?: boolean } = {}) {
+  return render(
+    <BaseNavProvider
+      value={{
+        hubNavItems: opts.hubNavItems ?? TECH_NAV_ITEMS,
+        hideGlobalContentNav: opts.hideGlobalContentNav,
+      }}
+    >
+      <GameHUD />
+    </BaseNavProvider>,
+  );
+}
 
 describe('<GameHUD> render', () => {
   it('renderiza logo FFV Academy e navegação primária', () => {
-    render(<GameHUD />);
+    renderGameHUD();
     expect(screen.getByText('FFV')).toBeInTheDocument();
     expect(screen.getByText('Academy')).toBeInTheDocument();
     // hubs primários aparecem como links
@@ -52,7 +67,7 @@ describe('<GameHUD> render', () => {
   });
 
   it('renderiza links dos 4 hubs principais', () => {
-    render(<GameHUD />);
+    renderGameHUD();
     expect(screen.getAllByRole('link').some(l => l.getAttribute('href') === '/ia')).toBe(true);
     expect(screen.getAllByRole('link').some(l => l.getAttribute('href') === '/aws')).toBe(true);
     expect(screen.getAllByRole('link').some(l => l.getAttribute('href') === '/engenharia')).toBe(true);
@@ -60,9 +75,30 @@ describe('<GameHUD> render', () => {
 
   it('clique no logo não joga erro', async () => {
     const user = userEvent.setup();
-    render(<GameHUD />);
+    renderGameHUD();
     const logo = screen.getByText('Academy').closest('a')!;
     await user.click(logo);
+  });
+
+  it('hideGlobalContentNav=true esconde link global /simulados', () => {
+    renderGameHUD({ hubNavItems: [], hideGlobalContentNav: true });
+    expect(
+      screen.queryAllByRole('link').some(l => l.getAttribute('href') === '/simulados'),
+    ).toBe(false);
+  });
+
+  it('hideGlobalContentNav=false (default) mostra link global /simulados', () => {
+    renderGameHUD();
+    expect(
+      screen.getAllByRole('link').some(l => l.getAttribute('href') === '/simulados'),
+    ).toBe(true);
+  });
+
+  it('Progresso aparece SEMPRE — independente da base ou flag', () => {
+    renderGameHUD({ hubNavItems: [], hideGlobalContentNav: true });
+    expect(
+      screen.getAllByRole('link').some(l => l.getAttribute('href') === '/progresso'),
+    ).toBe(true);
   });
 });
 
@@ -104,22 +140,22 @@ describe('<GameHUD> com state preenchido', () => {
   });
 
   it('mostra streak quando state.streak > 0', async () => {
-    render(<GameHUD />);
+    renderGameHUD();
     expect(await screen.findByText(/12d/)).toBeInTheDocument();
   });
 
   it('mostra pill de cards pendentes quando dueCards > 0', async () => {
-    render(<GameHUD />);
+    renderGameHUD();
     expect(await screen.findByLabelText(/1 cards? pendentes?/i)).toBeInTheDocument();
   });
 
   it('mostra pill de meta diária', async () => {
-    render(<GameHUD />);
+    renderGameHUD();
     expect(await screen.findByText(/🎯 1\/3/)).toBeInTheDocument();
   });
 
   it('mostra nível e XP', async () => {
-    render(<GameHUD />);
+    renderGameHUD();
     expect(await screen.findByText(/750 XP/)).toBeInTheDocument();
     expect(await screen.findByText(/Nv\.5/)).toBeInTheDocument();
   });

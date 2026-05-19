@@ -1,12 +1,52 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { FfvButton } from '@/components/ui/ffv-button';
 import { LoginModal } from '@/components/auth/LoginModal';
 import { useAuth } from '@/hooks/useAuth';
 import type { UserProfile } from '@/lib/auth';
 
-export function FinalCta() {
+interface Props {
+  kicker?: string;
+  /** Título principal — string ou JSX. */
+  title?: React.ReactNode;
+  description?: string;
+  /** Se passado, renderiza um link/CTA estático em vez do form de email. */
+  ctaHref?: string;
+  ctaLabel?: string;
+  /** Texto monospace abaixo do form/CTA. */
+  footnote?: string;
+}
+
+const DEFAULT_TITLE = (
+  <>
+    O dev que você quer ser
+    <br />
+    <span
+      style={{
+        background: 'linear-gradient(90deg, var(--ffv-blue), var(--ffv-purple))',
+        WebkitBackgroundClip: 'text',
+        WebkitTextFillColor: 'transparent',
+        backgroundClip: 'text',
+      }}
+    >
+      começa a estudar hoje.
+    </span>
+  </>
+);
+
+const DEFAULT_DESCRIPTION =
+  'Cada dia que passa, outros devs estão ganhando XP, completando trilhas e entendendo os internals que você ainda não aprendeu. O ranking não espera.';
+
+export function FinalCta({
+  kicker = 'Não deixe para amanhã',
+  title = DEFAULT_TITLE,
+  description = DEFAULT_DESCRIPTION,
+  ctaHref,
+  ctaLabel = 'Começar agora →',
+  footnote,
+}: Props) {
   const { isLoggedIn, refresh } = useAuth();
   const [email, setEmail] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
@@ -21,6 +61,8 @@ export function FinalCta() {
     setModalOpen(false);
     await refresh();
   }
+
+  const defaultFootnote = isLoggedIn ? 'CONTINUE DE ONDE PAROU' : '100% GRATUITO · LGPD · SEM SPAM';
 
   return (
     <>
@@ -40,7 +82,7 @@ export function FinalCta() {
             className="font-mono uppercase tracking-widest text-xs mb-4"
             style={{ color: 'var(--ffv-muted)', letterSpacing: '0.12em' }}
           >
-            Não deixe para amanhã
+            {kicker}
           </p>
 
           <h2
@@ -52,18 +94,7 @@ export function FinalCta() {
               lineHeight: 1.15,
             }}
           >
-            O dev que você quer ser
-            <br />
-            <span
-              style={{
-                background: 'linear-gradient(90deg, var(--ffv-blue), var(--ffv-purple))',
-                WebkitBackgroundClip: 'text',
-                WebkitTextFillColor: 'transparent',
-                backgroundClip: 'text',
-              }}
-            >
-              começa a estudar hoje.
-            </span>
+            {title}
           </h2>
 
           <p
@@ -75,19 +106,28 @@ export function FinalCta() {
               lineHeight: 1.75,
             }}
           >
-            Cada dia que passa, outros devs estão ganhando XP, completando trilhas e entendendo os
-            internals que você ainda não aprendeu. O ranking não espera.
+            {description}
           </p>
 
-          {isLoggedIn ? (
+          {ctaHref ? (
+            <Link
+              href={ctaHref}
+              className="inline-flex items-center gap-2 px-7 py-4 text-sm font-bold rounded-xl transition-all hover:scale-[1.02]"
+              style={{
+                background: 'linear-gradient(90deg, var(--ffv-blue), var(--ffv-purple))',
+                color: '#fff',
+                boxShadow: '0 8px 24px -6px color-mix(in srgb, var(--ffv-blue) 45%, transparent)',
+                textDecoration: 'none',
+              }}
+            >
+              {ctaLabel}
+            </Link>
+          ) : isLoggedIn ? (
             <FfvButton href="/mapa" variant="primary" size="xl">
               Ver meu progresso →
             </FfvButton>
           ) : (
-            <form
-              onSubmit={handleSubmit}
-              className="flex flex-col sm:flex-row gap-3 max-w-md mx-auto"
-            >
+            <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-3 max-w-md mx-auto">
               <input
                 type="email"
                 required
@@ -124,7 +164,7 @@ export function FinalCta() {
             className="font-mono mt-4 text-[11px]"
             style={{ color: 'var(--ffv-muted)', letterSpacing: '0.06em' }}
           >
-            {isLoggedIn ? 'CONTINUE DE ONDE PAROU' : '100% GRATUITO · LGPD · SEM SPAM'}
+            {footnote ?? defaultFootnote}
           </p>
         </div>
       </section>

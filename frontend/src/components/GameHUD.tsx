@@ -3,38 +3,52 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { BrainCircuit, Cloud, Wrench, Bot, ChartBarIncreasing, Target, Newspaper } from 'lucide-react';
+import { BrainCircuit, Cloud, Wrench, Bot, ChartBarIncreasing, Target, BookOpen } from 'lucide-react';
+import { FfvLogo } from '@/components/ui/ffv-logo';
 import { useGameState } from '@/hooks/useGameState';
 import { Progress } from '@/components/ui/progress';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { HUBS, LEVELS } from '@/lib/curriculum';
+import { LEVELS } from '@/lib/curriculum';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { AuthBadge } from '@/components/auth/AuthBadge';
 import { CommandPaletteTrigger } from '@/components/CommandPalette';
 import { unlockAudio } from '@/lib/sounds';
 import { toast } from '@/lib/toast';
+import { useBaseNav, type BaseNavItem } from '@/components/base/BaseNavContext';
 import type { ComponentType, SVGProps } from 'react';
 
 type LucideIcon = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
 
-const HUB_ICONS: Record<string, LucideIcon> = {
-  '/ia': BrainCircuit,
-  '/aws': Cloud,
-  '/engenharia': Wrench,
-  '/claude-anthropic': Bot,
+// Mapa de ícones por nome — bases podem usar `iconName` em vez de href
+// hardcoded. Adicione ícones aqui ao precisar.
+const ICON_MAP: Record<string, LucideIcon> = {
+  brain: BrainCircuit,
+  cloud: Cloud,
+  wrench: Wrench,
+  bot: Bot,
+  book: BookOpen,
+  target: Target,
+  chart: ChartBarIncreasing,
 };
 
-type NavItem = { href: string; label: string; color?: string; isNew?: boolean };
+// Itens globais — aparecem em TODAS as bases (a menos que a base esconda).
+const PROGRESSO: BaseNavItem = {
+  href: '/progresso',
+  label: 'Progresso',
+  color: 'var(--ffv-green)',
+  iconName: 'chart',
+};
+const SIMULADOS: BaseNavItem = {
+  href: '/simulados',
+  label: 'Simulados',
+  color: '#f78166',
+  iconName: 'target',
+  isNew: true,
+};
 
-const PROGRESSO: NavItem = { href: '/progresso', label: 'Progresso', color: 'var(--ffv-green)' };
-const SIMULADOS: NavItem = { href: '/simulados', label: 'Simulados', color: '#f78166', isNew: true };
-const NEWS: NavItem = { href: '/news', label: 'News', color: '#ff5a36', isNew: true };
-
-function NavIcon({ href, size }: { href: string; size: number }) {
-  if (href === '/progresso') return <ChartBarIncreasing size={size} strokeWidth={1.8} />;
-  if (href === '/simulados') return <Target size={size} strokeWidth={1.8} />;
-  if (href === '/news') return <Newspaper size={size} strokeWidth={1.8} />;
-  const Icon = HUB_ICONS[href];
+function NavIcon({ item, size }: { item: BaseNavItem; size: number }) {
+  if (!item.iconName) return null;
+  const Icon = ICON_MAP[item.iconName];
   if (!Icon) return null;
   return <Icon size={size} strokeWidth={1.8} />;
 }
@@ -70,16 +84,20 @@ export function GameHUD() {
     }
   }, [state]);
 
-  // Apenas 4 hubs primários + Progresso no header desktop — resto fica em Cmd+K e MobileNav.
-  const PRIMARY_HUB_SLUGS = new Set(['ia', 'aws', 'engenharia', 'claude-anthropic']);
-  const primaryHubs: NavItem[] = HUBS
-    .filter(h => PRIMARY_HUB_SLUGS.has(h.slug))
-    .map(h => ({ href: h.href, label: h.shortName, color: h.color }));
+  // Nav items vêm do BaseNavContext (cada base define seus próprios hubs).
+  // Default = vazio. /tecnologia layout injeta IA/AWS/Engenharia/Claude.
+  const { hubNavItems, hideGlobalContentNav = false } = useBaseNav();
 
-  // News aparece apenas em lg+ (≥1024px), Simulados em xl+ (≥1280px) — header fica limpo em notebook.
-  const navItems: NavItem[] = [...primaryHubs, PROGRESSO];
-  const lgOnlyItems: NavItem[] = [NEWS];
-  const xlOnlyItems: NavItem[] = [SIMULADOS];
+  // Itens "do meio" — hubs da base atual + Progresso (sempre).
+  const navItems: BaseNavItem[] = [
+    ...hubNavItems.filter(i => !i.lgOnly && !i.xlOnly),
+    PROGRESSO,
+  ];
+  const lgOnlyItems: BaseNavItem[] = hubNavItems.filter(i => i.lgOnly && !i.xlOnly);
+  const xlOnlyItems: BaseNavItem[] = [
+    ...hubNavItems.filter(i => i.xlOnly),
+    ...(hideGlobalContentNav ? [] : [SIMULADOS]),
+  ];
 
   return (
     <header
@@ -95,14 +113,8 @@ export function GameHUD() {
       }}
     >
       {/* Logo */}
-      <Link
-        href="/"
-        className="flex items-center gap-2 font-bold text-sm tracking-tight"
-        style={{ color: 'var(--foreground)' }}
-      >
-        <BrainCircuit size={20} strokeWidth={1.8} style={{ color: 'var(--ffv-blue)' }} />
-        <span>FFV</span>
-        <span style={{ color: 'var(--ffv-blue)', fontWeight: 400 }}>Academy</span>
+      <Link href="/" aria-label="FFV Academy — voltar para a home">
+        <FfvLogo size="sm" />
       </Link>
 
       {/* Nav links — hubs primários + progresso (News/Simulados progressivos em lg/xl) */}
@@ -179,7 +191,7 @@ export function GameHUD() {
   );
 }
 
-function NavLink({ item, active }: { item: NavItem; active: boolean }) {
+function NavLink({ item, active }: { item: BaseNavItem; active: boolean }) {
   const accent = item.color ?? 'var(--ffv-blue)';
   return (
     <Link
@@ -191,7 +203,7 @@ function NavLink({ item, active }: { item: NavItem; active: boolean }) {
         border: `1px solid ${active ? `color-mix(in srgb, ${accent} 32%, transparent)` : 'transparent'}`,
       }}
     >
-      <NavIcon href={item.href} size={14} />
+      <NavIcon item={item} size={14} />
       <span>{item.label}</span>
       {item.isNew && (
         <span

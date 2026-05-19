@@ -1,15 +1,8 @@
 import type { Metadata, Viewport } from 'next';
-import { Inter, Poppins, Roboto_Mono } from 'next/font/google';
+import { Inter, Poppins, Roboto_Mono, Source_Serif_4 } from 'next/font/google';
 import './globals.css';
-import { GameHUD } from '@/components/GameHUD';
-import { CommandPalette } from '@/components/CommandPalette';
-import { MobileNav } from '@/components/MobileNav';
-import { SiteFooter } from '@/components/SiteFooter';
-import { OnboardingModal } from '@/components/OnboardingModal';
-import { SyncBanner } from '@/components/SyncBanner';
-import { PWAInstallBanner } from '@/components/PWAInstallBanner';
-import { KeyboardShortcuts } from '@/components/KeyboardShortcuts';
 import { WebVitalsInit } from '@/components/WebVitalsInit';
+import { AppChrome } from '@/components/AppChrome';
 import { Toaster } from 'sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { ReferralCapture } from '@/components/ReferralCapture';
@@ -38,37 +31,47 @@ const robotoMono = Roboto_Mono({
   weight: ['400', '500'],
 });
 
+// Source Serif 4 — headlines editoriais da landing pública.
+// Dá tom acadêmico/premium, confiável para estudantes de qualquer área
+// (medicina, direito, engenharia, etc) — não parece "tech SaaS".
+const sourceSerif = Source_Serif_4({
+  variable: '--font-serif',
+  subsets: ['latin'],
+  weight: ['400', '600', '700', '800'],
+  style: ['normal', 'italic'],
+});
+
 export const metadata: Metadata = {
   metadataBase: new URL('https://fernandofrancovalle.com'),
   title: {
-    default: 'FFV Academy — Escola de Engenharia para a Era da IA',
+    default: 'FFV Academy — Sua base de estudo personalizada em 24h',
     template: '%s — FFV Academy',
   },
   description:
-    'Aprenda IA, engenharia de software, AWS e sistemas distribuídos como engenheiro — não como consumidor de hype. Trilhas gamificadas com XP, quiz e revisão espaçada. 100% gratuito, sem cadastro.',
+    'Envie o que precisa estudar — matéria, prova, edital, conteúdo da faculdade — e em até 24 horas nossa IA + curadoria criam uma base completa: trilhas, módulos, questões e revisão espaçada. Para qualquer área: Medicina, Veterinária, Engenharia, Direito, Tecnologia, concursos e mais.',
   keywords: [
-    'escola engenharia software',
-    'aprender inteligencia artificial',
-    'trilha IA',
-    'engenharia era ia',
-    'LLM aprender',
-    'RAG embeddings',
-    'machine learning devs',
-    'aws cloud practitioner',
-    'sistemas distribuidos',
-    'context engineering',
-    'agentes LLM',
-    'fine-tuning',
-    'engenharia de software brasil',
+    'base de estudo personalizada com IA',
+    'plataforma que gera base de estudo',
+    'estudo personalizado em 24 horas',
+    'criar trilha de estudo a partir do material',
+    'IA que organiza conteúdo de faculdade',
+    'medicina veterinaria estudos',
+    'engenharia estudos',
+    'direito estudos',
+    'concursos personalizados',
+    'faculdade aprender',
+    'curso livre online',
+    'aprender qualquer matéria',
+    'educação personalizada brasil',
   ],
   authors: [{ name: 'Fernando Franco Valle', url: 'https://fernandofrancovalle.com' }],
   creator: 'Fernando Franco Valle',
   publisher: 'FFV Academy',
   category: 'education',
   openGraph: {
-    title: 'FFV Academy — Escola de Engenharia para a Era da IA',
+    title: 'FFV Academy — Sua base de estudo personalizada em 24h',
     description:
-      'IA, AWS, DevOps e Engenharia de Software explicados por dentro. Zero hype, arquitetura real. 17 trilhas gamificadas, 100% gratuito.',
+      'Envie o que precisa estudar e em até 24h sua base completa fica no ar: trilhas, módulos, questões e revisão espaçada. Para qualquer área. Não é chatbot — é experiência real de aprendizado.',
     type: 'website',
     url: 'https://fernandofrancovalle.com',
     siteName: 'FFV Academy',
@@ -78,15 +81,15 @@ export const metadata: Metadata = {
         url: '/opengraph-image',
         width: 1200,
         height: 630,
-        alt: 'FFV Academy — Escola de Engenharia para a Era da IA',
+        alt: 'FFV Academy — Sua base de estudo personalizada em 24h',
       },
     ],
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'FFV Academy — Escola de Engenharia para a Era da IA',
+    title: 'FFV Academy — Sua base de estudo personalizada em 24h',
     description:
-      'IA, AWS, DevOps e Engenharia de Software explicados por dentro. Zero hype, arquitetura real. 17 trilhas, 100% gratuito.',
+      'Envie sua matéria, em 24h sua base de aprendizado fica no ar. Trilhas, módulos e revisão para qualquer área.',
     images: ['/opengraph-image'],
     creator: '@fernandofv',
     site: '@ffvacademy',
@@ -125,7 +128,7 @@ export const metadata: Metadata = {
       { url: '/icons/apple-icon-180.png', sizes: '180x180', type: 'image/png' },
     ],
     other: [
-      { rel: 'mask-icon', url: '/icon.svg', color: '#38bdf8' },
+      { rel: 'mask-icon', url: '/icon.svg', color: '#4f46e5' },
     ],
   },
   robots: {
@@ -145,28 +148,34 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: '#0d1117',
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#ffffff' },
+    { media: '(prefers-color-scheme: dark)', color: '#0a0a0f' },
+  ],
   width: 'device-width',
   initialScale: 1,
 };
 
+// Default = light SEMPRE (pivot 2026-05).
+// Não respeitamos prefers-color-scheme — a landing precisa ser clara, amigável
+// e acolhedora para qualquer estudante, mesmo em macOS dark. Dark fica
+// disponível só se o usuário tocar no toggle explicitamente (salvo em
+// localStorage). Esta é uma decisão de produto, não acidente.
 const themeInitScript = `
 (function() {
   try {
     var stored = localStorage.getItem('ffv_theme');
-    var theme = stored === 'light' || stored === 'dark'
-      ? stored
-      : (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+    var theme = stored === 'light' || stored === 'dark' ? stored : 'light';
     document.documentElement.setAttribute('data-theme', theme);
   } catch (e) {
-    document.documentElement.setAttribute('data-theme', 'dark');
+    document.documentElement.setAttribute('data-theme', 'light');
   }
 })();
 `;
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="pt-BR" className={`${inter.variable} ${poppins.variable} ${robotoMono.variable}`} suppressHydrationWarning>
+    <html lang="pt-BR" className={`${inter.variable} ${poppins.variable} ${robotoMono.variable} ${sourceSerif.variable}`} suppressHydrationWarning>
       <head>
         {/* Em dev o next.config.ts injeta o header CSP com unsafe-eval (necessário para React HMR/Turbopack).
             Em prod (export estático na Hostinger) não há headers HTTP, então o <meta> é a única forma. */}
@@ -199,26 +208,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <ErrorBoundary>
           <AuthProvider>
             <TooltipProvider>
-              <GameHUD />
-              <CommandPalette />
-              <KeyboardShortcuts />
               <WebVitalsInit />
-              <OnboardingModal />
-              <SyncBanner />
-              <main
-                id="main-content"
-                className="flex-1"
-                style={{ paddingTop: 'calc(56px + env(safe-area-inset-top, 0px))' }}
-              >
-                {children}
-              </main>
-              <SiteFooter />
-              <div aria-hidden className="md:hidden" style={{ height: 72 }} />
-              <MobileNav />
-              <PWAInstallBanner />
+              <AppChrome>{children}</AppChrome>
               <Toaster
                 position="top-center"
-                theme="dark"
+                theme="system"
                 richColors
                 closeButton
                 toastOptions={{

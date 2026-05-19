@@ -16,10 +16,12 @@ describe('FfvButton', () => {
     expect(el.tagName).toBe('BUTTON');
   });
 
-  it('aplica variant primary por default (gradient azul-roxo)', () => {
+  it('aplica variant primary por default (indigo sólido — pivot 2026-05)', () => {
     render(<FfvButton href="/x">Default</FfvButton>);
     const el = screen.getByText('Default');
-    expect(el.getAttribute('style')).toContain('linear-gradient');
+    const style = el.getAttribute('style') ?? '';
+    expect(style).toContain('var(--ffv-blue)');
+    expect(style).not.toContain('linear-gradient');
   });
 
   it('aplica variant gold com gradient diferente', () => {

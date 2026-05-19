@@ -2,7 +2,16 @@
 
 import Link from 'next/link';
 
-const PATHS = [
+export interface ComecarPath {
+  icon: string;
+  title: string;
+  desc: string;
+  href: string;
+  cta: string;
+  color: string;
+}
+
+const TECH_PATHS: ComecarPath[] = [
   {
     icon: '🌱',
     title: 'Nunca estudei IA',
@@ -53,10 +62,28 @@ const PATHS = [
   },
 ];
 
-export function ComecarAqui({ hidden = false }: { hidden?: boolean }) {
+interface Props {
+  hidden?: boolean;
+  paths?: ComecarPath[];
+  heading?: string;
+  subheading?: string;
+}
+
+export function ComecarAqui({ hidden = false, paths, heading, subheading }: Props) {
   if (hidden) return null;
+
+  const finalPaths = paths ?? TECH_PATHS;
+  const finalHeading = heading ?? 'Escolha o caminho que faz sentido pra você';
+  const finalSubheading =
+    subheading ??
+    'Cada caminho leva a um conjunto diferente de habilidades. Você pode trocar a qualquer momento — todo o conteúdo fica disponível.';
+
   return (
-    <section className="px-6 py-20" style={{ borderTop: '1px solid var(--ffv-border)' }}>
+    <section
+      id="comecar-aqui"
+      className="px-6 py-20"
+      style={{ borderTop: '1px solid var(--ffv-border)' }}
+    >
       <div className="max-w-6xl mx-auto">
         <p
           className="font-mono uppercase tracking-widest text-xs mb-3"
@@ -73,7 +100,7 @@ export function ComecarAqui({ hidden = false }: { hidden?: boolean }) {
             lineHeight: 1.15,
           }}
         >
-          Escolha o caminho que faz sentido pra você
+          {finalHeading}
         </h2>
         <p
           style={{
@@ -84,17 +111,16 @@ export function ComecarAqui({ hidden = false }: { hidden?: boolean }) {
             marginBottom: 40,
           }}
         >
-          Cada caminho leva a um conjunto diferente de habilidades. Você pode trocar a qualquer
-          momento — todo o conteúdo fica disponível.
+          {finalSubheading}
         </p>
 
         <div
           className="grid gap-4"
           style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}
         >
-          {PATHS.map(p => (
+          {finalPaths.map(p => (
             <Link
-              key={p.href}
+              key={p.href + p.title}
               href={p.href}
               className="group p-5 rounded-2xl flex flex-col gap-2 transition-all"
               style={{

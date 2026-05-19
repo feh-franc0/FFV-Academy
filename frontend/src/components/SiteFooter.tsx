@@ -1,6 +1,32 @@
 import Link from 'next/link';
-import { BrainCircuit, Mail, ExternalLink } from 'lucide-react';
+import { Mail, ExternalLink } from 'lucide-react';
 import { HUBS } from '@/lib/curriculum';
+import { FfvLogo } from '@/components/ui/ffv-logo';
+
+export interface FooterLinkItem {
+  label: string;
+  href: string;
+  external?: boolean;
+}
+
+interface SiteFooterProps {
+  /** Substitui a coluna "Hubs". Default: HUBS de tecnologia. */
+  hubLinks?: FooterLinkItem[];
+  /** Substitui a coluna "Conteúdo". Default: News/Simulados/Progresso/etc (tech). */
+  contentLinks?: FooterLinkItem[];
+  /** Override do título da coluna de hubs (medvet usa "Hubs temáticos", etc). */
+  hubColumnTitle?: string;
+}
+
+const DEFAULT_CONTENT_LINKS: FooterLinkItem[] = [
+  { label: 'News', href: '/news' },
+  { label: 'Simulados', href: '/simulados' },
+  { label: 'Progresso', href: '/progresso' },
+  { label: 'Revisar (SRS)', href: '/revisar' },
+  { label: 'Glossário', href: '/glossario' },
+  { label: 'Playlists', href: '/playlists' },
+  { label: 'Roadmaps', href: '/roadmaps' },
+];
 
 function GithubIcon({ size = 16 }: { size?: number }) {
   return (
@@ -26,7 +52,11 @@ const CONTACT_MAIL = 'mailto:fernandofv1110@gmail.com';
 
 const CURRENT_YEAR = new Date().getFullYear();
 
-export function SiteFooter() {
+export function SiteFooter({ hubLinks, contentLinks, hubColumnTitle = 'Hubs' }: SiteFooterProps = {}) {
+  const finalHubLinks: FooterLinkItem[] =
+    hubLinks ?? HUBS.map(h => ({ label: h.name, href: h.href }));
+  const finalContentLinks: FooterLinkItem[] = contentLinks ?? DEFAULT_CONTENT_LINKS;
+
   return (
     <footer
       className="mt-16"
@@ -40,14 +70,8 @@ export function SiteFooter() {
         {/* Brand + description */}
         <div className="grid gap-8 md:grid-cols-[1.2fr_1fr_1fr_1fr] md:gap-10">
           <div>
-            <Link
-              href="/"
-              className="inline-flex items-center gap-2 font-bold mb-3"
-              style={{ color: 'var(--foreground)', fontSize: 16 }}
-            >
-              <BrainCircuit size={20} strokeWidth={1.8} style={{ color: 'var(--ffv-blue)' }} />
-              <span>FFV</span>
-              <span style={{ color: 'var(--ffv-blue)', fontWeight: 400 }}>Academy</span>
+            <Link href="/" className="inline-flex mb-3" aria-label="FFV Academy">
+              <FfvLogo size="md" />
             </Link>
             <p className="text-sm leading-relaxed max-w-xs" style={{ color: 'var(--ffv-muted)' }}>
               Escola de engenharia para a era da IA. Zero hype, arquitetura real, sem cadastro.
@@ -59,20 +83,20 @@ export function SiteFooter() {
             </div>
           </div>
 
-          <FooterColumn title="Hubs">
-            {HUBS.map(h => (
-              <FooterLink key={h.href} href={h.href}>{h.name}</FooterLink>
+          <FooterColumn title={hubColumnTitle}>
+            {finalHubLinks.map(h => (
+              <FooterLink key={h.href} href={h.href} external={h.external}>
+                {h.label}
+              </FooterLink>
             ))}
           </FooterColumn>
 
           <FooterColumn title="Conteúdo">
-            <FooterLink href="/news">News</FooterLink>
-            <FooterLink href="/simulados">Simulados</FooterLink>
-            <FooterLink href="/progresso">Progresso</FooterLink>
-            <FooterLink href="/revisar">Revisar (SRS)</FooterLink>
-            <FooterLink href="/glossario">Glossário</FooterLink>
-            <FooterLink href="/playlists">Playlists</FooterLink>
-            <FooterLink href="/roadmaps">Roadmaps</FooterLink>
+            {finalContentLinks.map(c => (
+              <FooterLink key={c.href} href={c.href} external={c.external}>
+                {c.label}
+              </FooterLink>
+            ))}
           </FooterColumn>
 
           <FooterColumn title="Sobre">

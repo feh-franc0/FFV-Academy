@@ -46,7 +46,6 @@ import { playXPCoin } from '@/lib/sounds';
 import { Hero } from '@/components/home/Hero';
 import { SocialProofBar } from '@/components/home/SocialProofBar';
 import { HowItWorks } from '@/components/home/HowItWorks';
-import { LeadCaptureSection } from '@/components/home/LeadCaptureSection';
 import { ComecarAqui } from '@/components/home/ComecarAqui';
 import { Explorar } from '@/components/home/Explorar';
 import { Trending } from '@/components/home/Trending';
@@ -145,7 +144,6 @@ export function HomeClient() {
       )}
       <SocialProofBar />
       <HowItWorks />
-      <LeadCaptureSection />
 
       {hasProgress && (
         <section

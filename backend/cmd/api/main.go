@@ -25,6 +25,7 @@ import (
 	apppref "github.com/fernandofv/api/internal/application/preferences"
 	appprogress "github.com/fernandofv/api/internal/application/progress"
 	appsim "github.com/fernandofv/api/internal/application/simulado"
+	appstudyreq "github.com/fernandofv/api/internal/application/studyrequest"
 	apptutor "github.com/fernandofv/api/internal/application/tutor"
 	"github.com/fernandofv/api/internal/config"
 	domleaderboard "github.com/fernandofv/api/internal/domain/leaderboard"
@@ -37,6 +38,7 @@ import (
 	"github.com/fernandofv/api/internal/infrastructure/payment"
 	postgresinfra "github.com/fernandofv/api/internal/infrastructure/persistence/postgres"
 	redisinfra "github.com/fernandofv/api/internal/infrastructure/persistence/redis"
+	storageinfra "github.com/fernandofv/api/internal/infrastructure/storage"
 	httpserver "github.com/fernandofv/api/internal/interfaces/http"
 	"github.com/fernandofv/api/internal/interfaces/http/handlers"
 	"github.com/fernandofv/api/internal/interfaces/http/middleware"
@@ -131,6 +133,7 @@ func run() error {
 	questionReportRepo := postgresinfra.NewQuestionReportRepo(pool)
 	progressExportAdapter := postgresinfra.NewProgressExportAdapter(pool)
 	purchaseExportAdapter := postgresinfra.NewPurchaseExportAdapter(pool)
+	studyRequestRepo := postgresinfra.NewStudyRequestRepo(pool)
 
 	// Repositório de audit log HTTP (TASK-18).
 	auditLogRepo := postgresinfra.NewAuditLogRepo(pool)
@@ -160,6 +163,20 @@ func run() error {
 	}
 	stripeClient := payment.NewStripeClient(cfg.Stripe)
 	claudeClient := ai.NewClaudeClient(cfg.Anthropic, tutorCache)
+
+	// ─── Infra: Storage (uploads de StudyRequest) ───────────────────────────────
+	// V1: filesystem local em UPLOAD_DIR (default /tmp/ffv-uploads em dev,
+	// /opt/ffv/uploads em prod — montado como volume Docker).
+	// V2 planejada: S3FileStorage via aws-sdk-go-v2 (interface FileStorage já
+	// abstrai a troca sem mudar use case nem handler).
+	uploadDir := os.Getenv("UPLOAD_DIR")
+	if uploadDir == "" {
+		uploadDir = "/tmp/ffv-uploads"
+	}
+	fileStorage, err := storageinfra.NewLocalDiskStorage(uploadDir)
+	if err != nil {
+		return fmt.Errorf("file storage: %w", err)
+	}
 
 	// ─── Infra: Catálogo ────────────────────────────────────────────────────────
 	catalogProvider, err := catalog.NewStaticCatalogProvider()
@@ -236,6 +253,42 @@ func run() error {
 
 	eventUC := appevent.NewIngestEventUseCase(eventRepo, clock)
 
+	// ─── Notifier de StudyRequest ───────────────────────────────────────────────
+	// Reaproveita o transport HTTP/SMTP do emailClient via duck-typing (SendHTML).
+	// Em dev: MailHog. Em prod: Resend.
+	adminEmail := os.Getenv("ADMIN_NOTIFICATION_EMAIL")
+	if adminEmail == "" {
+		// Default conservador: fica vazio em dev, alerta admin não é enviado.
+		adminEmail = ""
+	}
+	frontendURL := os.Getenv("FRONTEND_URL")
+	if frontendURL == "" {
+		if cfg.App.Env == "production" {
+			frontendURL = "https://fernandofrancovalle.com"
+		} else {
+			frontendURL = "http://localhost:3000"
+		}
+	}
+
+	type htmlMailer interface {
+		SendHTML(ctx context.Context, to []string, subject, htmlBody string) error
+	}
+	var sendHTMLFn email.SendHTMLFunc
+	if hm, ok := emailClient.(htmlMailer); ok {
+		sendHTMLFn = hm.SendHTML
+	}
+	studyRequestNotifier := email.NewStudyRequestNotifier(sendHTMLFn, adminEmail, frontendURL)
+
+	createStudyRequestUC := appstudyreq.NewCreateUseCase(studyRequestRepo, fileStorage, clock).
+		WithUserLookup(studyRequestRepo).
+		WithNotifier(studyRequestNotifier, adminEmail).
+		WithLogger(log)
+	listStudyRequestsUC := appstudyreq.NewListUseCase(studyRequestRepo)
+	getStudyRequestUC := appstudyreq.NewGetUseCase(studyRequestRepo)
+	updateStudyRequestUC := appstudyreq.NewUpdateUseCase(studyRequestRepo, clock).
+		WithNotifier(studyRequestNotifier).
+		WithLogger(log)
+
 	// Use cases do currículo (TASK-20).
 	getArticleUC := appcurriculum.NewGetArticleUseCase(curriculumRepo)
 	listCurriculumUC := appcurriculum.NewListCurriculumUseCase(curriculumRepo)
@@ -281,6 +334,10 @@ func run() error {
 	playH := handlers.NewPlaylistsHandler(&pgxPlaylistsRepo{pool: pool})
 	studyH := handlers.NewStudyHandler(questionRepo)
 	adminQuestionsH := handlers.NewAdminQuestionsHandler(questionRepo)
+	studyRequestH := handlers.NewStudyRequestHandler(createStudyRequestUC)
+	studyRequestAdminH := handlers.NewStudyRequestAdminHandler(
+		listStudyRequestsUC, getStudyRequestUC, updateStudyRequestUC,
+	).WithStorage(fileStorage)
 
 	// ─── Observabilidade: Prometheus ────────────────────────────────────────────
 	metricsReg := middleware.NewMetricsRegistry()
@@ -321,6 +378,9 @@ func run() error {
 		MetricsMW:        metricsReg.Middleware(),
 		Study:            studyH,
 		AdminQuestions:   adminQuestionsH,
+		StudyRequest:     studyRequestH,
+		StudyRequestAdmin: studyRequestAdminH,
+		Bases:            handlers.NewBasesHandler(studyRequestRepo),
 	}
 	router := httpserver.NewRouter(routerCfg)
 
