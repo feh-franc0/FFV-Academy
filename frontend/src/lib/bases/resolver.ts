@@ -36,6 +36,7 @@ const APP_GLOBAL_PREFIXES = [
   '/revisar',
   '/preferencias',
   '/perfil',
+  '/meu-aprendizado',
   '/news',
   '/search',
   '/explorar',
