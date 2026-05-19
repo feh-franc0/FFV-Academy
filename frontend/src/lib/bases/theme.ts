@@ -31,6 +31,20 @@ export interface BaseTheme {
 
   /** Gradientes opcionais do hero (composição CSS) */
   heroGradient?: string;
+
+  /**
+   * Cores "extras" da paleta FFV (--ffv-amber, --ffv-orange, --ffv-pink,
+   * --ffv-yellow). Aparecem em gradientes da home, callouts e quests. Quando
+   * uma base define estas, o BaseThemeProvider as injeta como CSS vars,
+   * fechando o vazamento de paleta entre bases (ex.: medvet não herdar o
+   * amber da tech). Se omitido, fica com o default global do light mode.
+   */
+  extras?: {
+    amber?: string;
+    orange?: string;
+    pink?: string;
+    yellow?: string;
+  };
 }
 
 /**

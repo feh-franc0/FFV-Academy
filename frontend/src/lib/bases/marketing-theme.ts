@@ -16,4 +16,12 @@ export const MARKETING_THEME: BaseTheme = {
   accentLight: '#b45309',  // amber editorial (usado em "pronta amanhã")
   success:     '#15803d',  // sage forest
   hubColors:   ['#1e3a8a', '#0e7490', '#15803d', '#b45309'],
+  // Cores editoriais — mesmas do light mode, garantidas pra todas as rotas
+  // marketing mesmo se o usuário tiver dark mode global ativo.
+  extras: {
+    amber:  '#b45309',
+    orange: '#ea580c',
+    pink:   '#db2777',
+    yellow: '#eab308',
+  },
 };

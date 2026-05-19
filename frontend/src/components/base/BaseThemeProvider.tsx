@@ -68,6 +68,13 @@ function themeToCssVars(theme: BaseTheme): Record<string, string> {
 
     // Hero glow puxado do accent — fica coerente com o resto da paleta
     '--ffv-hero-glow': `color-mix(in srgb, ${theme.accent} 10%, transparent)`,
+
+    // FFV palette — extras (opcionais). Cada base que quiser uma paleta
+    // 100% coerente seta esses; quem omite herda os defaults globais.
+    ...(theme.extras?.amber  ? { '--ffv-amber':  theme.extras.amber }  : {}),
+    ...(theme.extras?.orange ? { '--ffv-orange': theme.extras.orange } : {}),
+    ...(theme.extras?.pink   ? { '--ffv-pink':   theme.extras.pink }   : {}),
+    ...(theme.extras?.yellow ? { '--ffv-yellow': theme.extras.yellow } : {}),
   };
 }
 

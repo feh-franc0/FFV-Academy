@@ -27,4 +27,13 @@ export const MEDVET_THEME: BaseTheme = {
   success:     '#6b9080',  // forest sage — sucesso/badges
   // 4 cores dos hubs — todas harmonizando: sage, terracota, mauve poeirento, mel
   hubColors:   ['#8a9b7e', '#b08968', '#a07775', '#c19a78'],
+  // Reescreve os "extras" da paleta global pra harmonizar com sage/terracota.
+  // Sem isso, callouts/quests/gradientes que usam --ffv-amber/orange/pink/yellow
+  // vazam o navy+amber editorial da tech pra dentro da medvet.
+  extras: {
+    amber:  '#c19a78',  // mel suave
+    orange: '#b08968',  // terracota
+    pink:   '#a07775',  // mauve poeirento
+    yellow: '#d4a574',  // honey gold
+  },
 };

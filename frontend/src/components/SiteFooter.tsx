@@ -1,5 +1,8 @@
+'use client';
+
+import { useState } from 'react';
 import Link from 'next/link';
-import { Mail, ExternalLink } from 'lucide-react';
+import { Mail, ExternalLink, ChevronDown } from 'lucide-react';
 import { HUBS } from '@/lib/curriculum';
 import { FfvLogo } from '@/components/ui/ffv-logo';
 
@@ -16,6 +19,12 @@ interface SiteFooterProps {
   contentLinks?: FooterLinkItem[];
   /** Override do título da coluna de hubs (medvet usa "Hubs temáticos", etc). */
   hubColumnTitle?: string;
+  /**
+   * 3-4 links primários pra versão MOBILE compacta do footer.
+   * Em telas <md o footer colapsa para mostrar só esses + "ver mais" que
+   * expande o resto. Default: tech (Trilhas / News / Simulados / Ranking).
+   */
+  mobilePrimary?: FooterLinkItem[];
 }
 
 const DEFAULT_CONTENT_LINKS: FooterLinkItem[] = [
@@ -27,6 +36,10 @@ const DEFAULT_CONTENT_LINKS: FooterLinkItem[] = [
   { label: 'Playlists', href: '/playlists' },
   { label: 'Roadmaps', href: '/roadmaps' },
 ];
+
+// Sem fallback default — se a base não passou mobilePrimary, o footer
+// mobile compacto não renderiza (cai direto pro layout completo). Isso evita
+// vazar links de tech (ex.: /simulados) num footer medvet.
 
 function GithubIcon({ size = 16 }: { size?: number }) {
   return (
@@ -52,10 +65,21 @@ const CONTACT_MAIL = 'mailto:fernandofv1110@gmail.com';
 
 const CURRENT_YEAR = new Date().getFullYear();
 
-export function SiteFooter({ hubLinks, contentLinks, hubColumnTitle = 'Hubs' }: SiteFooterProps = {}) {
+export function SiteFooter({
+  hubLinks,
+  contentLinks,
+  hubColumnTitle = 'Hubs',
+  mobilePrimary,
+}: SiteFooterProps = {}) {
   const finalHubLinks: FooterLinkItem[] =
     hubLinks ?? HUBS.map(h => ({ label: h.name, href: h.href }));
   const finalContentLinks: FooterLinkItem[] = contentLinks ?? DEFAULT_CONTENT_LINKS;
+  const finalMobilePrimary: FooterLinkItem[] | null = mobilePrimary ?? null;
+
+  // Mobile: começa colapsado mostrando só os links primários da base. "Ver
+  // mais" expande pro layout completo. Em desktop (md+) o estado é ignorado.
+  const [mobileExpanded, setMobileExpanded] = useState(false);
+  const showMobileCompact = !mobileExpanded && finalMobilePrimary !== null;
 
   return (
     <footer
@@ -66,6 +90,63 @@ export function SiteFooter({ hubLinks, contentLinks, hubColumnTitle = 'Hubs' }: 
       }}
       aria-label="Rodapé do site"
     >
+      {/* ── Mobile compact (md:hidden quando colapsado) ────────────────── */}
+      {showMobileCompact && finalMobilePrimary && (
+        <div className="md:hidden px-5 py-6">
+          <div className="flex items-center justify-between mb-4">
+            <Link href="/" aria-label="FFV Academy" className="inline-flex">
+              <FfvLogo size="sm" />
+            </Link>
+            <div className="flex items-center gap-2">
+              <FooterIconLink href={GITHUB_URL} label="GitHub" icon={<GithubIcon size={14} />} external />
+              <FooterIconLink href={LINKEDIN_URL} label="LinkedIn" icon={<LinkedinIcon size={14} />} external />
+              <FooterIconLink href={CONTACT_MAIL} label="Email" icon={<Mail size={14} />} />
+            </div>
+          </div>
+
+          <ul className="grid grid-cols-2 gap-2 mb-4">
+            {finalMobilePrimary.map(item => (
+              <li key={item.href}>
+                <Link
+                  href={item.href}
+                  className="block text-sm py-2 px-3 rounded-md transition-colors"
+                  style={{
+                    color: 'var(--foreground)',
+                    background: 'var(--ffv-bg)',
+                    border: '1px solid var(--ffv-border)',
+                    textDecoration: 'none',
+                    fontWeight: 500,
+                  }}
+                >
+                  {item.label}
+                </Link>
+              </li>
+            ))}
+          </ul>
+
+          <button
+            type="button"
+            onClick={() => setMobileExpanded(true)}
+            className="inline-flex items-center gap-1 text-xs font-mono uppercase"
+            style={{
+              color: 'var(--ffv-muted)',
+              letterSpacing: '0.08em',
+              border: 'none',
+              background: 'none',
+              cursor: 'pointer',
+              padding: 0,
+            }}
+            aria-expanded={mobileExpanded}
+            data-testid="footer-mobile-expand"
+          >
+            Ver mais <ChevronDown size={12} strokeWidth={2.2} />
+          </button>
+        </div>
+      )}
+
+      {/* ── Layout completo (sempre em md+; em mobile aparece quando o usuário
+              clica "Ver mais" OU quando a base não definiu mobilePrimary). ── */}
+      <div className={showMobileCompact ? 'hidden md:block' : 'block'}>
       <div className="max-w-6xl mx-auto px-5 md:px-8 py-10 md:py-12">
         {/* Brand + description */}
         <div className="grid gap-8 md:grid-cols-[1.2fr_1fr_1fr_1fr] md:gap-10">
@@ -126,6 +207,7 @@ export function SiteFooter({ hubLinks, contentLinks, hubColumnTitle = 'Hubs' }: 
             <span>Dados 100% no seu dispositivo · LGPD-ok</span>
           </p>
         </div>
+      </div>
       </div>
     </footer>
   );

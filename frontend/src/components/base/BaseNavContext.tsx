@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, useContext } from 'react';
+import type { BaseNavItem } from '@/lib/bases/types';
 
 /**
  * BaseNavContext — controla quais itens de navegação aparecem na top bar
@@ -11,24 +12,12 @@ import { createContext, useContext } from 'react';
  * do header — tech mostra IA/AWS/Engenharia/Claude; medvet mostra (nada por
  * padrão, ou o que a base configurar).
  *
- * Setado por cada base via `app/<base>/layout.tsx`. Default = tech.
+ * Alimentado pelo `BaseProvider` (que resolve a `BaseConfig` da rota atual).
+ * Pra retrocompat, ainda aceita `value` direto.
  */
 
-export interface BaseNavItem {
-  href: string;
-  /** Texto curto exibido no header (ex.: "IA"). */
-  label: string;
-  /** Cor de destaque do item ativo. */
-  color?: string;
-  /** Ícone (string emoji ou nome do lucide icon — implementado em GameHUD). */
-  iconName?: string;
-  /** Mostrar somente em viewport ≥1024px. */
-  lgOnly?: boolean;
-  /** Mostrar somente em viewport ≥1280px. */
-  xlOnly?: boolean;
-  /** Marca como "NOVO" no badge. */
-  isNew?: boolean;
-}
+// Re-export pra manter imports antigos funcionando (nav.ts dos bases importam daqui).
+export type { BaseNavItem };
 
 interface BaseNavContextValue {
   hubNavItems: BaseNavItem[];
