@@ -57,7 +57,10 @@ func (s *LocalDiskStorage) Upload(ctx context.Context, in domsr.UploadInput) (st
 	// do request. Stream copy é direto.
 	_ = ctx
 
-	out, err := os.OpenFile(fullPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o640)
+	// #nosec G304 — fullPath é montado a partir de IDs internos (study request +
+	// attachment), não de input cru do usuário. O safeExtension limita a string
+	// final a chars alfanuméricos.
+	out, err := os.OpenFile(fullPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return "", fmt.Errorf("local disk storage: open file: %w", err)
 	}
@@ -95,6 +98,7 @@ func (s *LocalDiskStorage) Open(_ context.Context, storageURL string) (io.ReadCl
 		return nil, fmt.Errorf("local disk storage: path fora do baseDir")
 	}
 
+	// #nosec G304 — absPath validado acima contra baseDir (path traversal defense).
 	f, err := os.Open(absPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -114,7 +118,7 @@ func safeExtension(fileName string) string {
 		return ""
 	}
 	for _, r := range ext[1:] {
-		if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')) {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') {
 			return ""
 		}
 	}

@@ -13,13 +13,13 @@ import (
 // ─── Mocks inline (sem framework) ─────────────────────────────────
 
 type mockRepo struct {
-	stored   map[domsr.ID]*domsr.StudyRequest
-	listRes  []*domsr.StudyRequest
-	listErr  error
-	saveErr  error
-	updErr   error
-	findErr  error
-	saveCount int
+	stored      map[domsr.ID]*domsr.StudyRequest
+	listRes     []*domsr.StudyRequest
+	listErr     error
+	saveErr     error
+	updErr      error
+	findErr     error
+	saveCount   int
 	updateCount int
 }
 

@@ -463,6 +463,18 @@ function SectionView({ section, theme }: { section: Section; theme: BaseTheme })
         <p style={{ ...SANS, fontSize: '1.02rem', color: '#44403c', lineHeight: 1.7 }}>
           {section.body}
         </p>
+        {section.metadata && (
+          <p
+            className="mt-3 text-xs font-mono px-3 py-2 rounded"
+            style={{
+              background: theme.cream,
+              color: theme.ink,
+              borderLeft: `2px solid ${theme.accent}`,
+            }}
+          >
+            {section.metadata}
+          </p>
+        )}
       </div>
     );
   }

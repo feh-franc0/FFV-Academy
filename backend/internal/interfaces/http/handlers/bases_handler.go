@@ -71,19 +71,19 @@ type BaseThemeDTO struct {
 //     pra cada base; este endpoint serve como single source of truth quando
 //     bases novas forem criadas dinamicamente (sem deploy).
 type BaseDTO struct {
-	Slug        string            `json:"slug"`
-	Name        string            `json:"name"`
-	AreaLabel   string            `json:"areaLabel"`
-	Description string            `json:"description"`
-	Icon        string            `json:"icon"`
-	Status      string            `json:"status"`
-	URL         string            `json:"url,omitempty"`
-	Modules     int               `json:"modules,omitempty"`
-	Trails      int               `json:"trails,omitempty"`
-	Hubs        int               `json:"hubs,omitempty"`
-	DemandCount int               `json:"demandCount"`
-	NavItems    []BaseNavItemDTO  `json:"navItems,omitempty"`
-	Theme       *BaseThemeDTO     `json:"theme,omitempty"`
+	Slug        string           `json:"slug"`
+	Name        string           `json:"name"`
+	AreaLabel   string           `json:"areaLabel"`
+	Description string           `json:"description"`
+	Icon        string           `json:"icon"`
+	Status      string           `json:"status"`
+	URL         string           `json:"url,omitempty"`
+	Modules     int              `json:"modules,omitempty"`
+	Trails      int              `json:"trails,omitempty"`
+	Hubs        int              `json:"hubs,omitempty"`
+	DemandCount int              `json:"demandCount"`
+	NavItems    []BaseNavItemDTO `json:"navItems,omitempty"`
+	Theme       *BaseThemeDTO    `json:"theme,omitempty"`
 	// HideGlobalContentNav esconde os itens GLOBAIS de conteúdo (News, /simulados
 	// de tech) no header dessa base. Útil quando a base tem seus próprios links
 	// e não faz sentido vazar pro tech.
@@ -113,9 +113,10 @@ func (h *BasesHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	resp := BasesResponse{Bases: bases}
 	for _, b := range bases {
-		if b.Status == "live" {
+		switch b.Status {
+		case "live":
 			resp.TotalLive++
-		} else if b.Status == "queued" {
+		case "queued":
 			resp.TotalQueued++
 		}
 	}

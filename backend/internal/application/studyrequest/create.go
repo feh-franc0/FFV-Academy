@@ -47,11 +47,11 @@ type CreateResult struct {
 }
 
 // CreateUseCase encapsula a criação completa de uma solicitação:
-//   1. Valida e cria o agregado.
-//   2. Resolve lead → user existente por email (associação automática).
-//   3. Para cada arquivo, faz upload via FileStorage e anexa ao agregado.
-//   4. Persiste o agregado (com seus attachments) no Repository.
-//   5. Envia confirmação ao estudante + notificação ao admin (assíncrono).
+//  1. Valida e cria o agregado.
+//  2. Resolve lead → user existente por email (associação automática).
+//  3. Para cada arquivo, faz upload via FileStorage e anexa ao agregado.
+//  4. Persiste o agregado (com seus attachments) no Repository.
+//  5. Envia confirmação ao estudante + notificação ao admin (assíncrono).
 //
 // Falhas de upload abortam a request inteira (sem persistir nada).
 // Falhas no envio de email NÃO abortam — são logadas e seguimos em frente:

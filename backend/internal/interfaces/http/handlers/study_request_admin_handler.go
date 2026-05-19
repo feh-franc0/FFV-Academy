@@ -71,9 +71,9 @@ type studyRequestSummaryDTO struct {
 
 type studyRequestDetailDTO struct {
 	studyRequestSummaryDTO
-	Description    string                   `json:"description"`
-	InternalNotes  string                   `json:"internalNotes,omitempty"`
-	Attachments    []studyRequestAttachDTO `json:"attachments"`
+	Description   string                  `json:"description"`
+	InternalNotes string                  `json:"internalNotes,omitempty"`
+	Attachments   []studyRequestAttachDTO `json:"attachments"`
 }
 
 type studyRequestAttachDTO struct {

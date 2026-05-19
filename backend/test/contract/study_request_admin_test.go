@@ -247,7 +247,7 @@ func Test_AdminDownload_ServesFile(t *testing.T) {
 
 	stored := makeRequest(t, repo, clk)
 	att, _ := domsr.NewAttachment("notas.pdf", "application/pdf", 1024, "file:///fake/test.pdf", clk.Now())
-	stored.AttachFile(att) //nolint:errcheck
+	stored.AttachFile(att)                    //nolint:errcheck
 	repo.Update(context.Background(), stored) //nolint:errcheck
 
 	r := chi.NewRouter()

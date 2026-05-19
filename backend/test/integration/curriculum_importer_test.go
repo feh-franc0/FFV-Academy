@@ -12,11 +12,11 @@
 //   - idempotência: rodar 2x não duplica nada
 //
 // O que esse teste previne:
-//   1. O importer ser quebrado e o /aprenda/<slug> dar 404 silenciosamente.
-//   2. Drift entre scripts/seeds/ e curriculum_articles (ex: schema novo
-//      sem migration de import).
-//   3. Bugs no SQL UPSERT (ex: ON CONFLICT mal formado que duplica rows).
-//   4. Regressão no Dockerfile que não bundle os seeds corretamente.
+//  1. O importer ser quebrado e o /aprenda/<slug> dar 404 silenciosamente.
+//  2. Drift entre scripts/seeds/ e curriculum_articles (ex: schema novo
+//     sem migration de import).
+//  3. Bugs no SQL UPSERT (ex: ON CONFLICT mal formado que duplica rows).
+//  4. Regressão no Dockerfile que não bundle os seeds corretamente.
 //
 // Execução: `make test-integration` (precisa Docker no host).
 package integration

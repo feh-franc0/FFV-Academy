@@ -3,7 +3,7 @@
 
 export type Section =
   | { kind: 'intro';    body: string }
-  | { kind: 'concept';  title: string; body: string }
+  | { kind: 'concept';  title: string; body: string; metadata?: string }
   | { kind: 'example';  title: string; body: string; metadata?: string }
   | { kind: 'formula';  title: string; formula: string; explanation: string }
   | { kind: 'table';    caption?: string; headers: string[]; rows: string[][] }

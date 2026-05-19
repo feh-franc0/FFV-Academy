@@ -338,19 +338,19 @@ func (r *StudyRequest) AssignToUser(userID shared.UserID, now time.Time) {
 }
 
 // Getters (Object Calisthenics: no public state).
-func (r *StudyRequest) ID() ID                     { return r.id }
-func (r *StudyRequest) UserID() shared.UserID      { return r.userID }
-func (r *StudyRequest) Name() string               { return r.name }
-func (r *StudyRequest) Email() string              { return r.email }
-func (r *StudyRequest) Phone() string              { return r.phone }
-func (r *StudyRequest) StudyArea() string          { return r.studyArea }
-func (r *StudyRequest) Institution() string        { return r.institution }
-func (r *StudyRequest) Subject() string            { return r.subject }
-func (r *StudyRequest) Goal() string               { return r.goal }
-func (r *StudyRequest) Description() string        { return r.description }
-func (r *StudyRequest) Status() Status             { return r.status }
-func (r *StudyRequest) InternalNotes() string      { return r.internalNotes }
-func (r *StudyRequest) MarketingConsent() bool     { return r.marketingConsent }
-func (r *StudyRequest) Attachments() []Attachment  { return r.attachments }
-func (r *StudyRequest) CreatedAt() time.Time       { return r.createdAt }
-func (r *StudyRequest) UpdatedAt() time.Time       { return r.updatedAt }
+func (r *StudyRequest) ID() ID                    { return r.id }
+func (r *StudyRequest) UserID() shared.UserID     { return r.userID }
+func (r *StudyRequest) Name() string              { return r.name }
+func (r *StudyRequest) Email() string             { return r.email }
+func (r *StudyRequest) Phone() string             { return r.phone }
+func (r *StudyRequest) StudyArea() string         { return r.studyArea }
+func (r *StudyRequest) Institution() string       { return r.institution }
+func (r *StudyRequest) Subject() string           { return r.subject }
+func (r *StudyRequest) Goal() string              { return r.goal }
+func (r *StudyRequest) Description() string       { return r.description }
+func (r *StudyRequest) Status() Status            { return r.status }
+func (r *StudyRequest) InternalNotes() string     { return r.internalNotes }
+func (r *StudyRequest) MarketingConsent() bool    { return r.marketingConsent }
+func (r *StudyRequest) Attachments() []Attachment { return r.attachments }
+func (r *StudyRequest) CreatedAt() time.Time      { return r.createdAt }
+func (r *StudyRequest) UpdatedAt() time.Time      { return r.updatedAt }

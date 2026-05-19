@@ -30,33 +30,33 @@ type RouterConfig struct {
 	// AuditLog é o repositório de audit log. Opcional — se nil, o middleware é omitido.
 	AuditLog middleware.AuditLogger
 
-	Health           *handlers.HealthHandler
-	Auth             *handlers.AuthHandler
-	Simulado         *handlers.SimuladoHandler
-	Progress         *handlers.ProgressHandler
-	Certificate      *handlers.CertificateHandler
-	Billing          *handlers.BillingHandler
-	Tutor            *handlers.TutorHandler
-	Leaderboard      *handlers.LeaderboardHandler
-	Stats            *handlers.StatsHandler
-	Admin            *handlers.AdminHandler
-	ModuleView       *handlers.ModuleViewHandler       // opcional — registra views de módulos (public)
-	Comments         *handlers.CommentsHandler         // opcional — comentários por artigo/trilha/bloco
-	Trending         *handlers.TrendingHandler         // opcional — top módulos por views recentes
-	TrailLeaderboard *handlers.TrailLeaderboardHandler // opcional — top users por trilha
-	News             *handlers.NewsHandler             // opcional — notícias curadas
-	Cheatsheets      *handlers.CheatsheetsHandler      // opcional — referências rápidas em markdown
-	Playlists        *handlers.PlaylistsHandler        // opcional — agrupamentos curados de módulos
-	Curriculum       *handlers.CurriculumHandler       // opcional — nil desabilita rotas de currículo
-	Features         *handlers.FeaturesHandler         // opcional — expõe estado das feature flags
-	Metrics          *handlers.MetricsHandler          // opcional — se nil, /metrics não é registrado
-	MetricsMW        func(http.Handler) http.Handler   // opcional — middleware de instrumentação
-	Study            *handlers.StudyHandler            // opcional — modo estudo livre (JWT)
-	AdminQuestions   *handlers.AdminQuestionsHandler   // opcional — CRUD admin de questões
-	Preferences      *handlers.PreferencesHandler      // opcional — preferências pedagógicas do user (JWT)
-	StudyRequest     *handlers.StudyRequestHandler     // opcional — solicitações de estudo personalizado (público, multipart)
+	Health            *handlers.HealthHandler
+	Auth              *handlers.AuthHandler
+	Simulado          *handlers.SimuladoHandler
+	Progress          *handlers.ProgressHandler
+	Certificate       *handlers.CertificateHandler
+	Billing           *handlers.BillingHandler
+	Tutor             *handlers.TutorHandler
+	Leaderboard       *handlers.LeaderboardHandler
+	Stats             *handlers.StatsHandler
+	Admin             *handlers.AdminHandler
+	ModuleView        *handlers.ModuleViewHandler        // opcional — registra views de módulos (public)
+	Comments          *handlers.CommentsHandler          // opcional — comentários por artigo/trilha/bloco
+	Trending          *handlers.TrendingHandler          // opcional — top módulos por views recentes
+	TrailLeaderboard  *handlers.TrailLeaderboardHandler  // opcional — top users por trilha
+	News              *handlers.NewsHandler              // opcional — notícias curadas
+	Cheatsheets       *handlers.CheatsheetsHandler       // opcional — referências rápidas em markdown
+	Playlists         *handlers.PlaylistsHandler         // opcional — agrupamentos curados de módulos
+	Curriculum        *handlers.CurriculumHandler        // opcional — nil desabilita rotas de currículo
+	Features          *handlers.FeaturesHandler          // opcional — expõe estado das feature flags
+	Metrics           *handlers.MetricsHandler           // opcional — se nil, /metrics não é registrado
+	MetricsMW         func(http.Handler) http.Handler    // opcional — middleware de instrumentação
+	Study             *handlers.StudyHandler             // opcional — modo estudo livre (JWT)
+	AdminQuestions    *handlers.AdminQuestionsHandler    // opcional — CRUD admin de questões
+	Preferences       *handlers.PreferencesHandler       // opcional — preferências pedagógicas do user (JWT)
+	StudyRequest      *handlers.StudyRequestHandler      // opcional — solicitações de estudo personalizado (público, multipart)
 	StudyRequestAdmin *handlers.StudyRequestAdminHandler // opcional — admin CRUD das solicitações
-	Bases            *handlers.BasesHandler            // opcional — lista pública de bases de conhecimento
+	Bases             *handlers.BasesHandler             // opcional — lista pública de bases de conhecimento
 }
 
 // NewRouter monta o chi.Router com todos os middlewares e rotas.

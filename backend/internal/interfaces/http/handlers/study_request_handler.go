@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -31,8 +30,8 @@ func NewStudyRequestHandler(create *appsr.CreateUseCase) *StudyRequestHandler {
 // das solicitações virá com 1-3 arquivos pequenos).
 const maxMultipartBytes = 200 * 1024 * 1024
 
-// errFileTooLarge é retornado quando o middleware/limite detecta excesso.
-var errFileTooLarge = errors.New("arquivo excede tamanho máximo")
+// Memória usada pelo ParseMultipartForm antes de spilllar pro disco temporário.
+const multipartMemoryBytes = 32 * 1024 * 1024
 
 // Create — POST /api/v1/study-requests
 func (h *StudyRequestHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -46,8 +45,12 @@ func (h *StudyRequestHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 32 MiB em memória; o resto vai pro disco temporário do sistema.
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
+	// Body já limitado por MaxBytesReader acima — ParseMultipartForm não vai
+	// alocar mais que isso. multipartMemoryBytes controla só o spill em RAM
+	// antes de cair pro disco temporário.
+	// #nosec G120 — body total limitado em maxMultipartBytes (200 MiB) via
+	// MaxBytesReader na linha anterior.
+	if err := r.ParseMultipartForm(multipartMemoryBytes); err != nil {
 		WriteError(w, http.StatusBadRequest,
 			"falha ao processar formulário: "+err.Error(), "parse-error")
 		return
