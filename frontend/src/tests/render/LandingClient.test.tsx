@@ -17,11 +17,28 @@ beforeAll(() => {
   };
 });
 
-// Mocks pra evitar dependências reais (form HTTP + auth, next/link).
+// Mocks pra evitar dependências reais (form HTTP + auth, next/link, next/navigation).
 vi.mock('next/link', () => ({
   default: ({ children, href, ...rest }: React.PropsWithChildren<{ href: string }>) => (
     <a href={href} {...rest}>{children}</a>
   ),
+}));
+
+// HomeBaseRedirect usa useRouter/usePathname/useSearchParams. Mockamos pra
+// que o LandingClient renderize sem precisar do app router real.
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
+  usePathname: () => '/',
+  useSearchParams: () => new URLSearchParams(),
+}));
+
+// preferences-api precisa estar mockado pra useUserPreferences (usado pelo
+// HomeBaseRedirect) não tentar fetch real.
+vi.mock('@/lib/preferences-api', () => ({
+  fetchPreferences: () => Promise.reject(new Error('not authenticated')),
+  updatePreferences: () => Promise.reject(new Error('not authenticated')),
+  serverToUserPreferences: (x: unknown) => x,
+  userPreferencesToUpdateInput: (x: unknown) => x,
 }));
 
 vi.mock('@/lib/study-request-api', () => ({

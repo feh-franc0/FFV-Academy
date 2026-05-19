@@ -16,6 +16,7 @@
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { StudyRequestForm } from '@/components/home/StudyRequestForm';
+import { HomeBaseRedirect } from '@/components/HomeBaseRedirect';
 
 // ─── Design tokens locais ────────────────────────────────────────────────────
 
@@ -79,6 +80,12 @@ function useReveal() {
 export function LandingClient() {
   return (
     <div style={{ background: 'var(--ffv-paper)', color: 'var(--ffv-ink)' }}>
+      {/* Regra de personalização P0 — usuário com homeBase setado é
+          redirecionado pra base preferida. Renderiza null, mas usa hook
+          de pathname/preferences pra disparar router.replace.
+          Escape: ?nohome=1 na URL. */}
+      <HomeBaseRedirect />
+
       <Hero />
       <ChatGPTBattle />
       <PadraoFFV />
