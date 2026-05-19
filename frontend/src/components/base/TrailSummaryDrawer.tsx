@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { X, Check } from 'lucide-react';
 import { useTrail } from './TrailContext';
 
@@ -33,14 +33,62 @@ export function TrailSummaryDrawer() {
     closeDrawer,
   } = useTrail();
 
-  // ESC fecha
+  const drawerRef = useRef<HTMLElement | null>(null);
+  const previousActiveRef = useRef<HTMLElement | null>(null);
+
+  // ESC fecha + foco programático + focus trap (Tab/Shift+Tab circular).
   useEffect(() => {
     if (!drawerOpen) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') closeDrawer();
+
+    // Guarda quem tinha foco antes de abrir
+    previousActiveRef.current = document.activeElement as HTMLElement | null;
+
+    // Move foco pro botão de fechar (primeiro elemento focável)
+    const root = drawerRef.current;
+    if (root) {
+      const closeBtn = root.querySelector<HTMLButtonElement>('button[aria-label="Fechar sumário"]');
+      closeBtn?.focus();
     }
+
+    function getFocusable(): HTMLElement[] {
+      if (!root) return [];
+      return Array.from(
+        root.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+    }
+
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeDrawer();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+
+      // Focus trap — circula Tab dentro do drawer
+      const focusable = getFocusable();
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+
+      if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      // Devolve foco pra quem tinha antes (FAB normalmente)
+      previousActiveRef.current?.focus?.();
+    };
   }, [drawerOpen, closeDrawer]);
 
   // Bloqueia scroll do body enquanto aberto
@@ -71,6 +119,7 @@ export function TrailSummaryDrawer() {
 
       {/* Drawer */}
       <aside
+        ref={drawerRef}
         role="dialog"
         aria-modal="true"
         aria-label={`Sumário da trilha ${trail.title}`}

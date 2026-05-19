@@ -9,6 +9,7 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
+import { Check } from 'lucide-react';
 import type { Base, Module, Trail, Section } from '@/lib/bases/types';
 import type { BaseTheme } from '@/lib/bases/theme';
 import { useGameState } from '@/hooks/useGameState';
@@ -114,15 +115,17 @@ function BaseModuleInner({ base, trail, module: m, theme, basePath }: BaseModule
           >
             {trail.modules.map((mod, idx) => {
               const isCurrent = mod.slug === m.slug;
+              const isCompleted = state?.completedModules?.includes(mod.slug) ?? false;
               const isPast = idx < currentIdx;
               return (
                 <li key={mod.slug}>
                   <Link
                     href={`${basePath}/${mod.slug}`}
+                    aria-current={isCurrent ? 'page' : undefined}
                     className="flex items-start gap-2 px-2.5 py-1.5 rounded transition-colors"
                     style={{
                       textDecoration: 'none',
-                      color: isCurrent ? theme.ink : isPast ? theme.muted : '#44403c',
+                      color: isCurrent ? theme.ink : isCompleted ? theme.muted : isPast ? theme.muted : '#44403c',
                       background: isCurrent ? theme.cream : 'transparent',
                       fontWeight: isCurrent ? 600 : 400,
                       borderLeft: isCurrent ? `3px solid ${theme.accent}` : '3px solid transparent',
@@ -140,12 +143,19 @@ function BaseModuleInner({ base, trail, module: m, theme, basePath }: BaseModule
                         ...SANS,
                         fontSize: 11,
                         fontWeight: 600,
-                        color: isCurrent ? theme.accent : theme.muted,
+                        color: isCompleted ? theme.success : isCurrent ? theme.accent : theme.muted,
                         minWidth: 22,
                         marginTop: 2,
+                        display: 'inline-flex',
+                        alignItems: 'center',
                       }}
+                      aria-label={isCompleted ? 'Módulo concluído' : undefined}
                     >
-                      {String(idx + 1).padStart(2, '0')}
+                      {isCompleted ? (
+                        <Check size={14} strokeWidth={2.5} aria-hidden />
+                      ) : (
+                        String(idx + 1).padStart(2, '0')
+                      )}
                     </span>
                     <span style={{ ...SANS, fontSize: 13, lineHeight: 1.4 }}>{mod.title}</span>
                   </Link>
@@ -835,6 +845,50 @@ function QuizItem({
   onReveal: () => void;
 }) {
   const [hintOpen, setHintOpen] = useState(false);
+  const questionId = `quiz-q-${num}`;
+  const hintId = `quiz-q-${num}-hint`;
+
+  /**
+   * Navegação por teclado dentro do radiogroup:
+   *  - ↑/← move pra opção anterior, ↓/→ pra próxima (wrap)
+   *  - 1-4 ou A-D seleciona diretamente a opção
+   * Acessibilidade: WCAG 2.1.1 + design pattern radiogroup.
+   */
+  function handleKeyNav(e: React.KeyboardEvent<HTMLUListElement>) {
+    if (revealed) return;
+    const n = q.options.length;
+    const k = e.key;
+    if (k === 'ArrowDown' || k === 'ArrowRight') {
+      e.preventDefault();
+      const next = selected === null ? 0 : (selected + 1) % n;
+      onSelect(next);
+      return;
+    }
+    if (k === 'ArrowUp' || k === 'ArrowLeft') {
+      e.preventDefault();
+      const prev = selected === null ? n - 1 : (selected - 1 + n) % n;
+      onSelect(prev);
+      return;
+    }
+    // 1-4 dígito
+    if (/^[1-9]$/.test(k)) {
+      const idx = Number(k) - 1;
+      if (idx < n) {
+        e.preventDefault();
+        onSelect(idx);
+      }
+      return;
+    }
+    // A-D letra (case-insensitive)
+    const upper = k.toUpperCase();
+    if (upper.length === 1 && upper >= 'A' && upper <= 'Z') {
+      const idx = upper.charCodeAt(0) - 65;
+      if (idx < n) {
+        e.preventDefault();
+        onSelect(idx);
+      }
+    }
+  }
 
   return (
     <li
@@ -848,6 +902,7 @@ function QuizItem({
         Questão {String(num).padStart(2, '0')}
       </p>
       <h3
+        id={questionId}
         style={{
           ...SERIF,
           fontSize: '1.1rem',
@@ -867,13 +922,16 @@ function QuizItem({
             <button
               type="button"
               onClick={() => setHintOpen(true)}
-              className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 transition-colors"
+              aria-expanded={false}
+              aria-controls={hintId}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-2 transition-colors"
               style={{
                 background: 'transparent',
                 border: `1px dashed ${theme.border}`,
                 color: theme.muted,
                 borderRadius: 6,
                 cursor: 'pointer',
+                minHeight: 32,
               }}
               onMouseOver={e => {
                 e.currentTarget.style.borderColor = theme.accent;
@@ -888,6 +946,9 @@ function QuizItem({
             </button>
           ) : (
             <div
+              id={hintId}
+              role="region"
+              aria-label="Dica da questão"
               className="p-3 text-sm"
               style={{
                 background: `color-mix(in srgb, ${theme.accent} 6%, transparent)`,
@@ -909,7 +970,12 @@ function QuizItem({
         </div>
       )}
 
-      <ul className="flex flex-col gap-2 mb-4">
+      <ul
+        role="radiogroup"
+        aria-labelledby={questionId}
+        onKeyDown={handleKeyNav}
+        className="flex flex-col gap-2 mb-4 focus:outline-none"
+      >
         {q.options.map((opt, idx) => {
           const isSelected = selected === idx;
           const isCorrect = revealed && idx === q.correct;
@@ -918,6 +984,9 @@ function QuizItem({
             <li key={idx}>
               <button
                 type="button"
+                role="radio"
+                aria-checked={isSelected}
+                tabIndex={isSelected || (selected === null && idx === 0) ? 0 : -1}
                 onClick={() => {
                   if (revealed) return;
                   onSelect(idx);
@@ -941,6 +1010,7 @@ function QuizItem({
                         : theme.border,
                   borderRadius: 8,
                   cursor: revealed ? 'default' : 'pointer',
+                  minHeight: 44,
                 }}
               >
                 <span
