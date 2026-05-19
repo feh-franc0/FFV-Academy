@@ -20,6 +20,23 @@ type UpdatePreferencesCommand struct {
 	Objectives           *[]string
 	SkillLevel           *string
 	DailyQuestionEnabled *bool
+
+	// Fase 3 (PERSONALIZATION_PLAN_2026-05.md).
+	InterestedBases    *[]string
+	HomeBase           *string
+	LearningGoals      *string
+	TopicTags          *[]string
+	Frequency          *FrequencyInput
+	PreferredMaterials *[]string
+}
+
+// FrequencyInput é a representação app-layer de Frequency — usa tipos
+// primitivos pra desacoplar handler do domain. Convertido pra domain.Frequency
+// dentro do use case via NewFrequency().
+type FrequencyInput struct {
+	Kind        string
+	DaysPerWeek int
+	Weekdays    []int
 }
 
 // UpdatePreferencesUseCase aplica mutações ao Preferences. Comportamento:
@@ -55,10 +72,32 @@ func (uc *UpdatePreferencesUseCase) Execute(ctx context.Context, cmd UpdatePrefe
 		CertificationIDs:     cmd.CertificationIDs,
 		Objectives:           cmd.Objectives,
 		DailyQuestionEnabled: cmd.DailyQuestionEnabled,
+		InterestedBases:      cmd.InterestedBases,
+		HomeBase:             cmd.HomeBase,
+		LearningGoals:        cmd.LearningGoals,
+		TopicTags:            cmd.TopicTags,
 	}
 	if cmd.SkillLevel != nil {
 		sl := dompref.SkillLevel(*cmd.SkillLevel)
 		domainCmd.SkillLevel = &sl
+	}
+	if cmd.Frequency != nil {
+		freq, ferr := dompref.NewFrequency(
+			dompref.FrequencyKind(cmd.Frequency.Kind),
+			cmd.Frequency.DaysPerWeek,
+			cmd.Frequency.Weekdays,
+		)
+		if ferr != nil {
+			return nil, ferr
+		}
+		domainCmd.Frequency = &freq
+	}
+	if cmd.PreferredMaterials != nil {
+		mats := make([]dompref.MaterialKind, 0, len(*cmd.PreferredMaterials))
+		for _, m := range *cmd.PreferredMaterials {
+			mats = append(mats, dompref.MaterialKind(m))
+		}
+		domainCmd.PreferredMaterials = &mats
 	}
 
 	if err := prefs.Update(domainCmd, uc.clock.Now()); err != nil {
