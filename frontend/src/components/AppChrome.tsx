@@ -4,7 +4,7 @@ import { usePathname } from 'next/navigation';
 import { GameHUD } from '@/components/GameHUD';
 import { CommandPalette } from '@/components/CommandPalette';
 import { MobileNav } from '@/components/MobileNav';
-import { OnboardingModal } from '@/components/OnboardingModal';
+import { OnboardingV3Modal } from '@/components/OnboardingV3Modal';
 import { SyncBanner } from '@/components/SyncBanner';
 import { PWAInstallBanner } from '@/components/PWAInstallBanner';
 import { KeyboardShortcuts } from '@/components/KeyboardShortcuts';
@@ -72,7 +72,7 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
       <GameHUD />
       <CommandPalette />
       <KeyboardShortcuts />
-      <OnboardingModal />
+      <OnboardingV3Modal />
       <SyncBanner />
       <main
         id="main-content"
