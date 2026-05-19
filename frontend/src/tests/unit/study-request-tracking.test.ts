@@ -1,10 +1,12 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   saveActiveRequest,
   loadActiveRequest,
   clearActiveRequest,
   deriveSlaStep,
   humanizeElapsed,
+  fetchStudyRequestStatus,
+  StatusNotFoundError,
 } from '@/lib/study-request-tracking';
 
 describe('study-request-tracking', () => {
@@ -94,6 +96,76 @@ describe('study-request-tracking', () => {
     it('dias', () => {
       expect(fix('2026-05-18T10:00:00Z', '2026-05-19T10:00:00Z')).toBe('há 1 dia');
       expect(fix('2026-05-17T10:00:00Z', '2026-05-19T10:00:00Z')).toBe('há 2 dias');
+    });
+  });
+
+  // ─── Backend integration ────────────────────────────────────────────────
+  describe('fetchStudyRequestStatus', () => {
+    const fetchMock = vi.fn();
+    beforeEach(() => {
+      fetchMock.mockReset();
+      global.fetch = fetchMock as unknown as typeof fetch;
+    });
+    afterEach(() => {
+      // @ts-expect-error reset
+      global.fetch = undefined;
+    });
+
+    it('retorna shape parseado em 200', async () => {
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'abc',
+          status: 'curating',
+          submittedAt: '2026-05-19T10:00:00Z',
+          updatedAt: '2026-05-19T12:00:00Z',
+          etaHoursMax: 24,
+          etaHoursAvg: 12,
+        }),
+      });
+      const res = await fetchStudyRequestStatus('abc');
+      expect(res.status).toBe('curating');
+      expect(res.etaHoursAvg).toBe(12);
+    });
+
+    it('lança StatusNotFoundError em 404', async () => {
+      fetchMock.mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({}) });
+      await expect(fetchStudyRequestStatus('inexistente')).rejects.toBeInstanceOf(StatusNotFoundError);
+    });
+
+    it('lança Error genérico em outro status', async () => {
+      fetchMock.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) });
+      await expect(fetchStudyRequestStatus('abc')).rejects.toThrow(/HTTP 500/);
+    });
+
+    it('lança em shape inválido', async () => {
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ foo: 'bar' }),
+      });
+      await expect(fetchStudyRequestStatus('abc')).rejects.toThrow();
+    });
+
+    it('encoda ID na URL', async () => {
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'abc/123',
+          status: 'received',
+          submittedAt: '2026-05-19T10:00:00Z',
+          updatedAt: '2026-05-19T10:00:00Z',
+          etaHoursMax: 24,
+          etaHoursAvg: 12,
+        }),
+      });
+      await fetchStudyRequestStatus('abc/123');
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('abc%2F123'),
+        expect.any(Object),
+      );
     });
   });
 });

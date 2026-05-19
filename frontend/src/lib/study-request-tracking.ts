@@ -23,7 +23,8 @@ export interface TrackedStudyRequest {
   email: string;
   attachmentCount: number;
   submittedAt: string; // ISO
-  status?: 'received' | 'curating' | 'delivered'; // override do backend (futuro)
+  /** Override do backend — quando setado, deriveSlaStep ignora cálculo por tempo. */
+  status?: 'received' | 'curating' | 'delivered' | 'rejected';
 }
 
 const STORAGE_KEY = 'ffv_active_study_request_v1';
@@ -33,7 +34,7 @@ const Schema = z.object({
   email: z.string(),
   attachmentCount: z.number().int().nonnegative(),
   submittedAt: z.string(),
-  status: z.enum(['received', 'curating', 'delivered']).optional(),
+  status: z.enum(['received', 'curating', 'delivered', 'rejected']).optional(),
 });
 
 export function saveActiveRequest(req: TrackedStudyRequest): void {
@@ -63,11 +64,11 @@ export function clearActiveRequest(): void {
 }
 
 /** Etapas do SLA tracker visíveis pro usuário. */
-export type SlaStep = 'received' | 'curating' | 'delivered';
+export type SlaStep = 'received' | 'curating' | 'delivered' | 'rejected';
 
 /**
  * Deriva a etapa atual a partir do tempo decorrido desde o submit.
- * Override pelo `status` se backend fornecer.
+ * Override pelo `status` se backend fornecer (status canônico do servidor).
  */
 export function deriveSlaStep(req: TrackedStudyRequest, now: Date = new Date()): SlaStep {
   if (req.status) return req.status;
@@ -78,6 +79,54 @@ export function deriveSlaStep(req: TrackedStudyRequest, now: Date = new Date()):
   if (elapsedMin < 30) return 'received';
   if (elapsedMin < 24 * 60) return 'curating';
   return 'delivered';
+}
+
+// ─── Backend integration (GET /api/v1/study-requests/{id}/status) ────────
+
+const StatusResponseSchema = z.object({
+  id: z.string(),
+  status: z.enum(['received', 'curating', 'delivered', 'rejected']),
+  submittedAt: z.string(),
+  updatedAt: z.string(),
+  etaHoursMax: z.number().int().positive(),
+  etaHoursAvg: z.number().int().positive(),
+});
+
+export type StatusResponse = z.infer<typeof StatusResponseSchema>;
+
+function getApiBase(): string {
+  return (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_API_BASE_URL) || '';
+}
+
+/**
+ * Busca o status canônico do servidor (endpoint público — sem auth).
+ *
+ * Lança em erro de rede ou shape. Caller decide se cai pra fallback baseado
+ * em tempo (deriveSlaStep com apenas submittedAt).
+ *
+ * 404 → throw específico pra caller diferenciar "id inválido" de "rede caiu".
+ */
+export class StatusNotFoundError extends Error {
+  constructor() {
+    super('study request não encontrada');
+    this.name = 'StatusNotFoundError';
+  }
+}
+
+export async function fetchStudyRequestStatus(
+  id: string,
+  signal?: AbortSignal,
+): Promise<StatusResponse> {
+  const base = getApiBase();
+  const res = await fetch(`${base}/api/v1/study-requests/${encodeURIComponent(id)}/status`, {
+    method: 'GET',
+    signal,
+    credentials: 'omit',
+  });
+  if (res.status === 404) throw new StatusNotFoundError();
+  if (!res.ok) throw new Error(`HTTP ${res.status} ao buscar status`);
+  const json = await res.json();
+  return StatusResponseSchema.parse(json);
 }
 
 /** Texto humanizado de "tempo decorrido" — "2h 14min atrás", "agora mesmo". */

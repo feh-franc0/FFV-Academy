@@ -12,9 +12,12 @@ import { maskBrazilianPhone, unmaskPhone, suggestEmailDomain } from '@/lib/form-
 import {
   clearActiveRequest,
   deriveSlaStep,
+  fetchStudyRequestStatus,
   humanizeElapsed,
   loadActiveRequest,
   saveActiveRequest,
+  StatusNotFoundError,
+  type SlaStep,
 } from '@/lib/study-request-tracking';
 
 // StudyRequestForm — formulário público de captação para o pivot 2026-05.
@@ -52,6 +55,8 @@ type FormState =
       email: string;
       /** ISO timestamp do submit — usado pra calcular etapa atual do SLA tracker. */
       submittedAt: string;
+      /** Status canônico vindo do backend (override do cálculo por tempo). */
+      serverStatus?: SlaStep;
     }
   | { kind: 'error'; message: string };
 
@@ -101,6 +106,42 @@ export function StudyRequestForm() {
     return () => clearInterval(interval);
   }, [state.kind]);
   void tick; // forçar re-render — deriveSlaStep usa Date.now()
+
+  // Poll backend a cada 5min pra status canônico. Substitui derivação por
+  // tempo quando o servidor responder. Se 404 (id inválido) ou rede off,
+  // mantém o fallback gracioso (deriveSlaStep só com tempo).
+  const activeRequestId = state.kind === 'success' ? state.result.id : null;
+  useEffect(() => {
+    if (!activeRequestId) return;
+
+    let cancelled = false;
+
+    async function pollStatus() {
+      try {
+        const status = await fetchStudyRequestStatus(activeRequestId!);
+        if (cancelled) return;
+        setState(curr => {
+          if (curr.kind !== 'success') return curr;
+          return { ...curr, serverStatus: status.status };
+        });
+      } catch (err) {
+        if (err instanceof StatusNotFoundError) {
+          // ID inválido — provavelmente localStorage stale. Limpa.
+          clearActiveRequest();
+          return;
+        }
+        // Rede off ou outro erro — fica em fallback de tempo. Silencioso.
+      }
+    }
+
+    // Primeira chamada imediata, depois a cada 5min.
+    pollStatus();
+    const interval = setInterval(pollStatus, 5 * 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [activeRequestId]);
 
   function handleFiles(list: FileList | null) {
     setFileError(null);
@@ -185,6 +226,9 @@ export function StudyRequestForm() {
       email: state.email,
       attachmentCount: state.result.attachmentCount,
       submittedAt: state.submittedAt,
+      // Status canônico do servidor (quando disponível) — override do
+      // cálculo por tempo. Polling de 5min no useEffect acima atualiza.
+      status: state.serverStatus,
     });
     const elapsed = humanizeElapsed(state.submittedAt);
     return (

@@ -18,6 +18,20 @@ export type SkillLevel = (typeof SKILL_LEVELS)[number] | '';
 export const OBJECTIVES = ['certifications', 'career_growth', 'hobby', 'career_switch'] as const;
 export type Objective = (typeof OBJECTIVES)[number];
 
+// ─── Fase 3 (PERSONALIZATION_PLAN_2026-05.md) ────────────────────────────
+// Campos novos pra modelar a plataforma ao perfil de aprendizado.
+// Convivem com os campos legados (hub/cert/objective) — frontend escolhe.
+
+export type FrequencyKindServer = 'daily' | 'weekly' | 'specific_days';
+
+export interface FrequencyDTOServer {
+  kind: FrequencyKindServer;
+  daysPerWeek?: number;
+  weekdays?: number[];
+}
+
+export type MaterialKindServer = 'video' | 'text' | 'quiz' | 'srs' | 'cheatsheet';
+
 export interface Preferences {
   hubIds: string[];
   trailIds: string[];
@@ -28,6 +42,13 @@ export interface Preferences {
   onboarded: boolean;
   onboardedAt?: string;
   updatedAt: string;
+  // Fase 3 — campos novos. Opcionais pra compat com backend antigo.
+  interestedBases?: string[];
+  homeBase?: string;
+  learningGoals?: string;
+  topicTags?: string[];
+  frequency?: FrequencyDTOServer;
+  preferredMaterials?: MaterialKindServer[];
 }
 
 export interface UpdatePreferencesInput {
@@ -37,6 +58,13 @@ export interface UpdatePreferencesInput {
   objectives?: Objective[];
   skillLevel?: SkillLevel;
   dailyQuestionEnabled?: boolean;
+  // Fase 3
+  interestedBases?: string[];
+  homeBase?: string;
+  learningGoals?: string;
+  topicTags?: string[];
+  frequency?: FrequencyDTOServer;
+  preferredMaterials?: MaterialKindServer[];
 }
 
 /** Lê as preferências do user logado. Backend retorna default vazio se ainda não persistido. */
@@ -55,6 +83,54 @@ export async function updatePreferences(input: UpdatePreferencesInput): Promise<
     },
     true,
   );
+}
+
+// ─── Mappers UserPreferences (Fase 3) ↔ Preferences (server) ────────────
+// useUserPreferences hook usa esses pra hidratar do server e enviar updates.
+
+import type { UserPreferences, StudyFrequency, MaterialKind } from './user-preferences';
+
+/**
+ * Converte Preferences (server DTO) pra UserPreferences (shape do client).
+ * Defaults seguros pra campos ausentes (backend antigo sem Fase 3).
+ */
+export function serverToUserPreferences(p: Preferences): UserPreferences {
+  const freq: StudyFrequency = p.frequency
+    ? p.frequency.kind === 'daily'
+      ? { kind: 'daily' }
+      : p.frequency.kind === 'weekly'
+        ? { kind: 'weekly', daysPerWeek: p.frequency.daysPerWeek ?? 3 }
+        : { kind: 'specific_days', weekdays: p.frequency.weekdays ?? [] }
+    : { kind: 'weekly', daysPerWeek: 3 };
+
+  return {
+    interestedBases: p.interestedBases ?? [],
+    homeBase: p.homeBase || null,
+    learningGoals: p.learningGoals ?? '',
+    topicTags: p.topicTags ?? [],
+    frequency: freq,
+    preferredMaterials: (p.preferredMaterials ?? []) as MaterialKind[],
+    updatedAt: p.updatedAt,
+  };
+}
+
+/** Converte UserPreferences (client) pra UpdatePreferencesInput (server PUT body). */
+export function userPreferencesToUpdateInput(p: UserPreferences): UpdatePreferencesInput {
+  const freq: FrequencyDTOServer =
+    p.frequency.kind === 'daily'
+      ? { kind: 'daily' }
+      : p.frequency.kind === 'weekly'
+        ? { kind: 'weekly', daysPerWeek: p.frequency.daysPerWeek }
+        : { kind: 'specific_days', weekdays: p.frequency.weekdays };
+
+  return {
+    interestedBases: p.interestedBases,
+    homeBase: p.homeBase ?? '',
+    learningGoals: p.learningGoals,
+    topicTags: p.topicTags,
+    frequency: freq,
+    preferredMaterials: p.preferredMaterials as MaterialKindServer[],
+  };
 }
 
 // ─── Catálogos UI ─────────────────────────────────────────────────────────
