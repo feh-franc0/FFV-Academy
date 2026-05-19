@@ -13,6 +13,9 @@ import type { Base, Module, Trail, Section } from '@/lib/bases/types';
 import type { BaseTheme } from '@/lib/bases/theme';
 import { useGameState } from '@/hooks/useGameState';
 import { saveQuizScore } from '@/lib/engine';
+import { TrailProvider } from './TrailContext';
+import { TrailSummaryDrawer } from './TrailSummaryDrawer';
+import { FloatingTrailMenuButton } from './FloatingTrailMenuButton';
 
 const SERIF: React.CSSProperties = { fontFamily: 'var(--font-serif)' };
 const SANS: React.CSSProperties = { fontFamily: 'var(--font-inter)' };
@@ -26,7 +29,7 @@ interface BaseModuleProps {
   basePath: string;
 }
 
-export function BaseModule({ base, trail, module: m, theme, basePath }: BaseModuleProps) {
+function BaseModuleInner({ base, trail, module: m, theme, basePath }: BaseModuleProps) {
   const currentIdx = trail.modules.findIndex(x => x.slug === m.slug);
   const prev = currentIdx > 0 ? trail.modules[currentIdx - 1] : null;
   const next = currentIdx < trail.modules.length - 1 ? trail.modules[currentIdx + 1] : null;
@@ -70,11 +73,14 @@ export function BaseModule({ base, trail, module: m, theme, basePath }: BaseModu
   return (
     <div style={{ background: theme.paper, color: theme.ink }}>
       <div
-        className="medvet-module-grid max-w-7xl mx-auto px-6 lg:px-10"
+        className="base-module-grid max-w-7xl mx-auto px-6 lg:px-10"
         style={{ paddingTop: 'clamp(96px, 12vw, 144px)', paddingBottom: 'clamp(72px, 10vw, 128px)' }}
       >
-        {/* ── Sidebar — trilha index ───────────────────────────────── */}
-        <aside className="lg:sticky lg:top-24 lg:self-start">
+        {/* ── Sidebar — trilha index (desktop only) ─────────────────
+            Em mobile, a sidebar fica acessível via FloatingTrailMenuButton
+            → TrailSummaryDrawer (drawer da direita).
+        */}
+        <aside className="hidden lg:block lg:sticky lg:top-24 lg:self-start">
           <Link
             href={basePath}
             className="inline-flex items-center gap-1.5 text-xs font-mono mb-5"
@@ -420,6 +426,32 @@ export function BaseModule({ base, trail, module: m, theme, basePath }: BaseModu
         </article>
       </div>
     </div>
+  );
+}
+
+// ─── Export wrapper — envolve com TrailProvider e monta drawer + FAB ─────────
+//
+// O TrailProvider precisa estar acima de qualquer consumidor (sidebar desktop,
+// drawer mobile, FAB). Como BaseModule é o orquestrador da página de módulo,
+// ele é o lugar natural pra plantar o provider.
+
+export function BaseModule(props: BaseModuleProps) {
+  const { state } = useGameState();
+  const completed = state?.completedModules ?? [];
+
+  return (
+    <TrailProvider
+      trail={props.trail}
+      currentModule={props.module}
+      basePath={props.basePath}
+      baseName={props.base.name}
+      theme={props.theme}
+      completedSlugs={completed}
+    >
+      <BaseModuleInner {...props} />
+      <TrailSummaryDrawer />
+      <FloatingTrailMenuButton />
+    </TrailProvider>
   );
 }
 

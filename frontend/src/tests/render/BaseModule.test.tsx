@@ -188,9 +188,14 @@ describe('<BaseModule>', () => {
     );
   });
 
-  it('link "VOLTAR PARA" aponta para a base', () => {
+  it('link "VOLTAR PARA" aponta para a base (sidebar desktop + drawer mobile)', () => {
     renderModule();
-    const back = screen.getByRole('link', { name: /VOLTAR PARA/i });
-    expect(back.getAttribute('href')).toBe('/base-test');
+    // Após adicionar TrailSummaryDrawer, há 2 links de voltar — um na sidebar
+    // desktop e outro no header do drawer mobile. Ambos apontam pra mesma rota.
+    const backs = screen.getAllByRole('link', { name: /VOLTAR PARA/i });
+    expect(backs.length).toBeGreaterThanOrEqual(1);
+    for (const b of backs) {
+      expect(b.getAttribute('href')).toBe('/base-test');
+    }
   });
 });
