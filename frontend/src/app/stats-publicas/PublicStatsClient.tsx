@@ -1,13 +1,17 @@
 'use client';
 
 /**
- * PublicStatsClient — grid de KPIs públicos.
+ * PublicStatsClient — KPIs públicos com dados reais do backend
+ * (GET /api/v1/stats) + fallback estático honesto enquanto carrega
+ * ou se a API estiver fora.
  *
- * V1 hardcoded com valores honestos da fase inicial. Marcado como
- * "estimativa preliminar" pra deixar claro que cresce com volume real.
- * V2 plugará em GET /api/v1/public/stats que deriva do rollup de
- * engagement (ver PERSONALIZATION_PLAN Fase 4).
+ * V1 (mai/2026): consome `basesLive`, `studyRequestsTotal`,
+ * `studyRequestsDelivered`. Derivações no client: SLA % a partir de
+ * delivered/total. Cache HTTP 60s vem do backend.
  */
+
+import { useEffect, useState } from 'react';
+import { fetchPublicStats, deriveSlaPercentage, type PublicStats } from '@/lib/public-stats-api';
 
 interface Kpi {
   label: string;
@@ -17,68 +21,133 @@ interface Kpi {
   caveat?: string;
 }
 
-// Dados V1 — atualizar manualmente até endpoint /stats existir.
-// LastUpdate é exibido pro usuário; reflete operações da semana atual.
 const LAST_UPDATE = '2026-05-19';
 
-const KPIS: Kpi[] = [
-  {
-    label: 'Bases entregues até hoje',
-    value: '2',
-    unit: 'no ar',
-    trend: 'neutral',
-    caveat: 'Tecnologia (157 módulos) + Medicina Veterinária (12 módulos + simulado).',
-  },
-  {
-    label: 'SLA cumprido (24h)',
-    value: '100',
-    unit: '%',
-    trend: 'good',
-    caveat: 'V1 — bases entregues 100% no SLA. Mostraremos % real assim que o volume crescer.',
-  },
-  {
-    label: 'Tempo médio de entrega',
-    value: '~12',
-    unit: 'h',
-    trend: 'good',
-    caveat: 'Estimativa preliminar. Estabiliza conforme o pipeline matura.',
-  },
-  {
-    label: 'AB30 — meta',
-    value: '35',
-    unit: '%',
-    trend: 'neutral',
-    caveat: 'Bases com >50% de conclusão em 30d. Mediremos a partir da 1ª coorte de 30 dias.',
-  },
-  {
-    label: 'Custo médio por base',
-    value: '<R$ 10',
-    trend: 'good',
-    caveat: 'API Claude + curadoria humana + storage. Honestidade prevalece sobre venda.',
-  },
-  {
-    label: 'Material treinou IA?',
-    value: 'Não',
-    trend: 'good',
-    caveat: 'Garantia política: nenhum modelo é treinado com o seu material enviado.',
-  },
-];
+function buildKpis(stats: PublicStats | null): Kpi[] {
+  const basesLive = stats?.basesLive ?? 2;
+  const requestsTotal = stats?.studyRequestsTotal ?? 0;
+  const requestsDelivered = stats?.studyRequestsDelivered ?? 0;
+  const slaPct = stats ? deriveSlaPercentage(stats) : null;
+
+  return [
+    {
+      label: 'Bases ativas',
+      value: String(basesLive),
+      unit: basesLive === 1 ? 'no ar' : 'no ar',
+      trend: 'neutral',
+      caveat: 'Tecnologia (157 módulos) + Medicina Veterinária (12 módulos + simulado).',
+    },
+    {
+      label: 'Total de solicitações recebidas',
+      value: String(requestsTotal),
+      unit: requestsTotal === 1 ? 'pedido' : 'pedidos',
+      trend: 'neutral',
+      caveat: requestsTotal === 0
+        ? 'Ainda zerado — você pode ser o primeiro a pedir.'
+        : `${requestsDelivered} já entregues.`,
+    },
+    {
+      label: 'SLA cumprido (24h)',
+      value: slaPct !== null ? String(slaPct) : '—',
+      unit: slaPct !== null ? '%' : 'aguardando amostra',
+      trend: slaPct === null ? 'neutral' : slaPct >= 90 ? 'good' : 'warning',
+      caveat: slaPct !== null
+        ? `${requestsDelivered}/${requestsTotal} entregues no SLA.`
+        : 'Mostramos % real quando tivermos ≥5 pedidos entregues (sem inflate).',
+    },
+    {
+      label: 'Tempo médio de entrega',
+      value: '~12',
+      unit: 'h',
+      trend: 'good',
+      caveat: 'Estimativa preliminar. Será calculado do banco quando >10 entregas.',
+    },
+    {
+      label: 'AB30 — meta',
+      value: '35',
+      unit: '%',
+      trend: 'neutral',
+      caveat: 'Bases com >50% de conclusão em 30d. Mediremos a partir da 1ª coorte fechada.',
+    },
+    {
+      label: 'Custo médio por base',
+      value: '<R$ 10',
+      trend: 'good',
+      caveat: 'API Claude + curadoria humana + storage. Honestidade prevalece sobre venda.',
+    },
+    {
+      label: 'Material treinou IA?',
+      value: 'Não',
+      trend: 'good',
+      caveat: 'Garantia política: nenhum modelo é treinado com o seu material enviado.',
+    },
+  ];
+}
+
+type FetchState =
+  | { kind: 'loading' }
+  | { kind: 'ready'; stats: PublicStats }
+  | { kind: 'error' };
 
 export function PublicStatsClient() {
+  const [state, setState] = useState<FetchState>({ kind: 'loading' });
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchPublicStats(controller.signal)
+      .then(stats => setState({ kind: 'ready', stats }))
+      .catch(err => {
+        // AbortError em unmount não vira UI de erro
+        if ((err as Error)?.name === 'AbortError') return;
+        setState({ kind: 'error' });
+      });
+    return () => controller.abort();
+  }, []);
+
+  const kpis = state.kind === 'ready' ? buildKpis(state.stats) : buildKpis(null);
+
   return (
-    <div>
+    <div data-testid="public-stats-client">
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {KPIS.map(kpi => (
+        {kpis.map(kpi => (
           <KpiCard key={kpi.label} kpi={kpi} />
         ))}
       </div>
 
-      <p
-        className="mt-5 text-xs font-mono uppercase"
-        style={{ color: 'var(--ffv-muted)', letterSpacing: '0.08em' }}
-      >
-        Atualizado em {LAST_UPDATE} · próxima atualização: segunda-feira
-      </p>
+      <div className="mt-5 flex flex-wrap items-center gap-3">
+        <p
+          className="text-xs font-mono uppercase"
+          style={{ color: 'var(--ffv-muted)', letterSpacing: '0.08em' }}
+        >
+          Atualizado em {LAST_UPDATE} · próxima atualização: segunda-feira
+        </p>
+        {state.kind === 'loading' && (
+          <span
+            className="text-[10px] font-mono uppercase px-2 py-0.5 rounded"
+            style={{
+              background: 'color-mix(in srgb, var(--ffv-blue) 12%, transparent)',
+              color: 'var(--ffv-blue)',
+              letterSpacing: '0.1em',
+            }}
+            aria-live="polite"
+          >
+            Sincronizando…
+          </span>
+        )}
+        {state.kind === 'error' && (
+          <span
+            className="text-[10px] font-mono uppercase px-2 py-0.5 rounded"
+            style={{
+              background: 'color-mix(in srgb, var(--ffv-amber) 12%, transparent)',
+              color: 'var(--ffv-amber)',
+              letterSpacing: '0.1em',
+            }}
+            aria-live="polite"
+          >
+            Mostrando valores estimados — backend indisponível
+          </span>
+        )}
+      </div>
     </div>
   );
 }
