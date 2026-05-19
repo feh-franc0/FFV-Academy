@@ -194,7 +194,7 @@ export function StudyRequestForm() {
         }}
       >
         <span>✨</span>
-        <span>IA + curadoria · sua base no ar em até 24h</span>
+        <span>SLA 24h · revisão humana · gratuita na V1</span>
       </div>
 
       <h3
@@ -210,7 +210,7 @@ export function StudyRequestForm() {
         Solicitar minha base de estudo
       </h3>
       <p className="text-sm mb-6" style={{ color: 'var(--ffv-muted)', lineHeight: 1.6 }}>
-        Diga o que você precisa estudar. Quanto mais detalhes e materiais, mais aderente fica sua base.
+        Diga o que você precisa estudar. Quanto mais detalhes e materiais você enviar, mais aderente fica sua base — e mais rápido a curadoria entrega.
       </p>
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-4" aria-busy={submitting}>

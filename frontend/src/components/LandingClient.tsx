@@ -207,12 +207,13 @@ function Hero() {
           </div>
 
           <div
-            className="flex items-center gap-5 text-[12px]"
+            className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[12px]"
             style={{ color: 'var(--ffv-muted)' }}
           >
-            <span>✓ Qualquer área</span>
-            <span>✓ Sem cartão</span>
-            <span>✓ Seus PDFs</span>
+            <span>✓ <strong style={{ color: 'var(--ffv-ink)' }}>157</strong> módulos de tech no ar</span>
+            <span>✓ <strong style={{ color: 'var(--ffv-ink)' }}>12</strong> de Medicina Veterinária</span>
+            <span>✓ Curadoria humana revisa cada trilha</span>
+            <span>✓ Sem cartão · sem trial</span>
           </div>
         </div>
 
@@ -463,18 +464,13 @@ function ChatGPTBattle() {
               marginBottom: 14,
             }}
           >
-            ChatGPT é{' '}
-            <em style={{ ...SERIF, fontStyle: 'italic', color: 'var(--ffv-muted)', fontWeight: 600 }}>
-              incrível
-            </em>{' '}
-            pra responder.{' '}
+            Resumo não é estudo.{' '}
             <em style={{ ...SERIF, fontStyle: 'italic', color: 'var(--ffv-amber)', fontWeight: 600 }}>
-              Péssimo
-            </em>{' '}
-            pra te ensinar.
+              Chat não é trilha.
+            </em>
           </h2>
           <p style={{ ...LEAD, fontSize: 16 }}>
-            A diferença não está no modelo. Está no que entregamos a partir dele.
+            ChatGPT, NotebookLM e Quizlet Magic Notes são ferramentas — não escolas. A FFV é o sistema completo: trilha + SRS + curadoria.
           </p>
         </div>
 
@@ -512,6 +508,7 @@ function ChatGPTBattle() {
             </div>
           </div>
 
+          {/* Tabela detalhada FFV vs ChatGPT (6 linhas comparativas) */}
           {rows.map((row, i) => (
             <div
               key={i}
@@ -574,6 +571,41 @@ function ChatGPTBattle() {
                 <span style={{ color: '#faf7f2' }}>{row.f}</span>
               </div>
             </div>
+          ))}
+        </div>
+
+        {/* 3 punchlines diretas nomeando cada concorrente — desarmam dúvida na hora. */}
+        <div className="grid md:grid-cols-3 gap-5 mt-10">
+          {[
+            { rival: 'NotebookLM', eles: 'te dá um resumo do PDF.', nos: 'te dá uma escola.' },
+            { rival: 'ChatGPT', eles: 'te responde uma vez.', nos: 'te treina toda semana.' },
+            { rival: 'Anki', eles: 'te memoriza um card.', nos: 'te ensina antes.' },
+          ].map(p => (
+            <article
+              key={p.rival}
+              className="p-5 rounded-xl"
+              style={{
+                background: '#ffffff',
+                border: '1px solid var(--ffv-border)',
+                boxShadow: '0 4px 12px -6px rgba(28,25,23,0.06)',
+              }}
+            >
+              <p
+                className="text-[10px] font-mono uppercase mb-2"
+                style={{ color: 'var(--ffv-muted)', letterSpacing: '0.14em', fontWeight: 700 }}
+              >
+                {p.rival}
+              </p>
+              <p style={{ ...SANS, fontSize: 14, color: '#78716c', lineHeight: 1.5 }}>
+                {p.rival} {p.eles}
+              </p>
+              <p
+                className="mt-2"
+                style={{ ...SANS, fontSize: 15, color: 'var(--ffv-ink)', lineHeight: 1.45, fontWeight: 600 }}
+              >
+                A FFV {p.nos}
+              </p>
+            </article>
           ))}
         </div>
       </div>
@@ -874,28 +906,36 @@ function Stat({ n, l }: { n: string; l: string }) {
 
 const FAQ_ITEMS = [
   {
-    q: 'Como é diferente do ChatGPT?',
-    a: 'Eles te dão respostas; nós te damos uma jornada. ChatGPT é ótimo pra perguntar; péssimo pra te fazer aprender. A FFV entrega trilhas ordenadas, conteúdo estruturado, exercícios e revisão espaçada — feita do seu material, não de currículo genérico.',
+    q: 'É gratuito mesmo? Até quando?',
+    a: 'Sim. Na V1 (que é onde estamos agora, 2026), a montagem da base é 100% gratuita — sem cartão, sem plano, sem teste de 7 dias. Quando começarmos a cobrar por novos pedidos, quem já tem base aberta continua com ela. Nada de paywall retroativo.',
   },
   {
-    q: 'Em 24 horas mesmo?',
-    a: 'Sim. Você envia hoje, amanhã a jornada está no ar. Avisamos por e-mail e WhatsApp. Casos com muito material anexado podem precisar de um pouco mais — te avisamos antes se isso acontecer.',
+    q: 'Quanto tempo demora pra minha base ficar pronta?',
+    a: 'Em média 12h. Limite de SLA é 24h. Se o material for muito grande (acima de 50 PDFs ou 300 páginas), pode levar um pouco mais — avisamos por email antes de começar.',
   },
   {
-    q: 'Funciona pra qualquer área?',
-    a: 'Sim. Programação, arquitetura, design, marketing, direito, medicina, veterinária, engenharia, concursos, MBA, faculdade ou curso livre. Não temos catálogo fechado.',
+    q: 'Como é diferente do ChatGPT, NotebookLM e Anki?',
+    a: 'ChatGPT te responde; ele esquece amanhã. NotebookLM te dá um resumo do PDF em 30 segundos. Anki te faz memorizar cards soltos. A FFV junta tudo num sistema: trilha sequencial → quiz → SRS científico → ranking. Você entende, testa e revisa no tempo certo — não fica refém de perguntar de novo.',
   },
   {
-    q: 'A qualidade é mesma se eu não for de tech?',
-    a: 'Sim. A base de Tecnologia é a vitrine do nosso padrão. Cada nova jornada nasce com exatamente os mesmos seis pilares — trilhas, conteúdo, exercícios, revisão, gamificação, multi-dispositivo. O conteúdo muda; o padrão de qualidade não.',
+    q: 'Posso mandar PDF da faculdade, da pós, do concurso?',
+    a: 'Pode. Slides, anotações fotografadas, link público de Google Drive, gravação de aula em MP3 — qualquer coisa que represente o conteúdo. Quanto mais limpo o material, melhor a trilha que devolvemos.',
   },
   {
-    q: 'Quanto custa?',
-    a: 'Nada na V1. Cada solicitação ajuda a refinar a plataforma. No futuro teremos planos pagos para casos avançados, mas o conteúdo base sempre será gratuito.',
+    q: 'Meu material é seguro? Vocês usam meus PDFs pra treinar IA?',
+    a: 'Não. Não treinamos modelo nenhum com seu conteúdo. Os arquivos ficam armazenados pra gerar a sua base e pra você baixar depois. Acesso restrito à curadoria. Você pode pedir exclusão a qualquer momento (LGPD art. 18) em /preferencias.',
   },
   {
-    q: 'O que acontece com meus arquivos?',
-    a: 'Ficam em armazenamento seguro, com acesso restrito à curadoria. Você pode pedir exclusão a qualquer momento por e-mail.',
+    q: 'Vou ter atendimento humano se algo der errado?',
+    a: 'Sim. Toda base passa por revisão de um engenheiro humano antes de ir ao ar. Se você achar que algo ficou errado, manda um email pra fernandofv1110@gmail.com — quem responde é o engenheiro que montou. Sem chatbot, sem ticket.',
+  },
+  {
+    q: 'E se eu já souber a matéria? Vou perder tempo com módulo básico?',
+    a: 'A gente pergunta seu nível no formulário e calibra a trilha. Se você marcar "já sei o básico", a base começa direto no avançado. Você também pode pular módulos no app sem perder o XP da trilha.',
+  },
+  {
+    q: 'Funciona pra qualquer área? Medicina, direito, design?',
+    a: 'A V1 já tem tecnologia (157 módulos) e medicina veterinária (12 módulos + simulado) prontas. Outras áreas — medicina humana, direito, design, concurso, pós — abrem por demanda: você manda o pedido, a gente avalia e monta. Maio/2026 já tem fila ativa de medicina e OAB.',
   },
 ];
 
@@ -1029,10 +1069,10 @@ function FormSection() {
 
           <ul className="flex flex-col gap-4 mb-8">
             {[
-              { t: 'Pronta em 24h', d: 'Avisamos por e-mail e WhatsApp.' },
-              { t: 'Uma jornada, não um texto', d: 'Trilhas, conteúdo, exercícios, revisão.' },
-              { t: 'Do seu material', d: 'PDFs, slides, apostilas, edital.' },
-              { t: 'Qualquer área', d: 'Sem catálogo fechado. Sua área cabe.' },
+              { t: 'Pronta em até 24h · média de 12h', d: 'Avisamos por e-mail e WhatsApp. SLA visível.' },
+              { t: 'Uma jornada, não um texto', d: 'Trilhas, módulos, quizzes, SRS científico — não chatbot.' },
+              { t: 'Revisada por engenheiro humano', d: 'Cada base passa por revisão antes de ir ao ar.' },
+              { t: 'Do seu material, qualquer área', d: 'PDFs, slides, apostilas, edital. Tech, vet, direito, design.' },
             ].map((p, i) => (
               <li key={i} className="flex items-start gap-3">
                 <span
@@ -1067,8 +1107,8 @@ function FormSection() {
               lineHeight: 1.65,
             }}
           >
-            <strong style={{ color: '#fbbf24' }}>Sem pegadinha.</strong>{' '}
-            V1 gratuita — sem cartão, sem assinatura. Se a jornada não te servir, basta não usar.
+            <strong style={{ color: '#fbbf24' }}>Garantia honesta.</strong>{' '}
+            V1 gratuita — sem cartão, sem assinatura, sem treinar IA com seu material. Se a trilha não te servir, avisa que a gente refaz. Sem ressentimento.
           </p>
         </div>
 
