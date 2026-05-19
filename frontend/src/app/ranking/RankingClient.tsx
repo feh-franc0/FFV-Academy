@@ -633,6 +633,6 @@ function formatPeriodLabel(period: RankPeriod, start?: string, end?: string): st
     case 'yearly':
       return start ? `ANO ${new Date(start).getFullYear()}` : '';
     case 'all-time':
-      return 'TODO O HISTÓRICO DA PLATAFORMA';
+      return 'TODO O HISTÓRICO';
   }
 }

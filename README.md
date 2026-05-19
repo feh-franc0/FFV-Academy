@@ -73,7 +73,7 @@ Toda base nova nasce com **o mesmo conjunto de componentes compartilhados** (`Ba
 ### Diferenciais reais vs concorrência (NotebookLM, ChatGPT, Stoodi, Anki)
 
 - **Trilha estruturada gerada do material do aluno** — NotebookLM/Studyfetch geram chat/resumo solto; Khan/Brilliant não aceitam material do aluno. Aqui você ganha módulos sequenciais com ordem pedagógica.
-- **SRS real (SM-2 idêntico ao Anki)** ligado ao quiz da trilha — Quizlet espaça de forma frágil; Anki tem SM-2 mas exige você criar tudo.
+- **SRS científico calibrado pelo SEU material** ligado ao quiz da trilha — Quizlet espaça de forma frágil; Anki tem SRS sofisticado (FSRS-6 em 2026) mas exige que você crie cada card sozinho.
 - **Gamificação completa e coerente** — XP, 128+ badges, streak com freeze, ranking 4 períodos, sons via Web Audio. Só Duolingo chega perto, e é idiomas.
 - **Profundidade técnica real e PT-BR** — Brilliant é EN e $20/mês. A FFV é grátis na V1 e cobre internals (MVCC, transformers, sistemas distribuídos).
 - **Multi-área profissional num produto só** — medicina, direito, design, concursos. Concorrentes brasileiros são verticais estreitos (Stoodi/vestibular, Aprova/concurso).
