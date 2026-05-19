@@ -334,7 +334,8 @@ func run() error {
 	playH := handlers.NewPlaylistsHandler(&pgxPlaylistsRepo{pool: pool})
 	studyH := handlers.NewStudyHandler(questionRepo)
 	adminQuestionsH := handlers.NewAdminQuestionsHandler(questionRepo)
-	studyRequestH := handlers.NewStudyRequestHandler(createStudyRequestUC)
+	studyRequestH := handlers.NewStudyRequestHandler(createStudyRequestUC).
+		WithStatusReader(studyRequestRepo)
 	studyRequestAdminH := handlers.NewStudyRequestAdminHandler(
 		listStudyRequestsUC, getStudyRequestUC, updateStudyRequestUC,
 	).WithStorage(fileStorage)

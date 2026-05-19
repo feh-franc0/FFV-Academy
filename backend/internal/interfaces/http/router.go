@@ -219,6 +219,12 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		studyRequestLimit := middleware.NewRateLimiter(cfg.Redis, 10, time.Minute, "rl:study-request")
 		r.With(studyRequestLimit.Middleware()).
 			Post("/api/v1/study-requests", cfg.StudyRequest.Create)
+
+		// Status público (sem auth) — rate-limit mais permissivo (60/min)
+		// porque é polling esperado do SLA tracker no frontend.
+		statusLimit := middleware.NewRateLimiter(cfg.Redis, 60, time.Minute, "rl:study-request-status")
+		r.With(statusLimit.Middleware()).
+			Get("/api/v1/study-requests/{id}/status", cfg.StudyRequest.GetStatus)
 	}
 
 	// Auth — rotas públicas com rate-limit agressivo e body limit pequeno.

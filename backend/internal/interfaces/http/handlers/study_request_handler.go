@@ -1,28 +1,50 @@
 package handlers
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/go-chi/chi/v5"
 
 	appsr "github.com/fernandofv/api/internal/application/studyrequest"
+	"github.com/fernandofv/api/internal/domain/shared"
 	domsr "github.com/fernandofv/api/internal/domain/studyrequest"
 	"github.com/fernandofv/api/internal/interfaces/http/middleware"
 )
 
+// StatusReader é o port mínimo pra ler status de uma study_request — usado
+// pelo endpoint público GET /api/v1/study-requests/{id}/status. Subset de
+// domsr.Repository: só FindByID. Evita acoplar handler ao repo completo.
+type StatusReader interface {
+	FindByID(ctx context.Context, id domsr.ID) (*domsr.StudyRequest, error)
+}
+
 // StudyRequestHandler recebe solicitações de experiência de estudo
 // personalizada (formulário público da landing).
 //
-// Endpoint: POST /api/v1/study-requests (sem auth).
-// Content-Type: multipart/form-data (suporta arquivos opcionais).
+// Endpoints:
+//   - POST /api/v1/study-requests       — cria nova (multipart, sem auth)
+//   - GET  /api/v1/study-requests/{id}/status — consulta status (sem auth)
 type StudyRequestHandler struct {
 	create *appsr.CreateUseCase
+	reader StatusReader // opcional — pode ser nil em ambientes que não expõem /status
 }
 
 func NewStudyRequestHandler(create *appsr.CreateUseCase) *StudyRequestHandler {
 	return &StudyRequestHandler{create: create}
+}
+
+// WithStatusReader anexa a capacidade de ler status. Padrão builder pra evitar
+// quebrar o construtor existente e seus callers em test/integration.
+func (h *StudyRequestHandler) WithStatusReader(r StatusReader) *StudyRequestHandler {
+	h.reader = r
+	return h
 }
 
 // Limite total do request multipart: 200 MiB
@@ -146,6 +168,90 @@ func (h *StudyRequestHandler) Create(w http.ResponseWriter, r *http.Request) {
 		"attachmentCount": result.AttachmentCount,
 		"message":         "Solicitação recebida! Em até 24h sua base de estudo estará pronta — avisaremos por e-mail e WhatsApp.",
 	})
+}
+
+// statusDTO é o payload retornado pelo endpoint público de status.
+// Não inclui PII (email/nome/descrição). Só ID, status traduzido,
+// timestamp e ETA estimada.
+type statusDTO struct {
+	ID          string    `json:"id"`
+	Status      string    `json:"status"` // received | curating | delivered | rejected
+	SubmittedAt time.Time `json:"submittedAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+	EtaHoursMax int       `json:"etaHoursMax"` // 24 sempre — SLA visível
+	EtaHoursAvg int       `json:"etaHoursAvg"` // ~12 (média operacional)
+}
+
+// mapDomainStatus traduz o status interno (5 valores) pros 3 estados que o
+// usuário enxerga (received/curating/delivered) — mais "rejected" como caso
+// terminal especial. Esse é o contrato com o frontend (study-request-tracking).
+//
+//   - pending, in_review → received  (etapa 1)
+//   - in_production      → curating  (etapa 2)
+//   - ready              → delivered (etapa 3)
+//   - rejected           → rejected  (terminal especial)
+func mapDomainStatus(s domsr.Status) string {
+	switch s {
+	case domsr.StatusPending, domsr.StatusInReview:
+		return "received"
+	case domsr.StatusInProduction:
+		return "curating"
+	case domsr.StatusReady:
+		return "delivered"
+	case domsr.StatusRejected:
+		return "rejected"
+	default:
+		return "received"
+	}
+}
+
+// GetStatus — GET /api/v1/study-requests/{id}/status (público, sem auth).
+//
+// Privacidade: retorna SOMENTE id + status traduzido + timestamps. Não expõe
+// email/nome/descrição. ID é gerado server-side com entropia suficiente
+// (formato UUID-like — domsr.ID), inviabilizando enumeração por força bruta.
+//
+// Rate-limit recomendado no router (rl:study-request-status).
+func (h *StudyRequestHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
+	if h.reader == nil {
+		WriteError(w, http.StatusServiceUnavailable, "leitor de status indisponível", "service-unavailable")
+		return
+	}
+
+	idStr := chi.URLParam(r, "id")
+	if idStr == "" {
+		WriteError(w, http.StatusBadRequest, "id obrigatório", "validation-error")
+		return
+	}
+	id := domsr.ID(idStr)
+
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+
+	req, err := h.reader.FindByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, shared.ErrNotFound) {
+			// Não confirmar/negar existência via 404 vs 200 — sempre 404 padrão.
+			WriteError(w, http.StatusNotFound, "solicitação não encontrada", "not-found")
+			return
+		}
+		HandleDomainError(w, err)
+		return
+	}
+
+	dto := statusDTO{
+		ID:          string(req.ID()),
+		Status:      mapDomainStatus(req.Status()),
+		SubmittedAt: req.CreatedAt(),
+		UpdatedAt:   req.UpdatedAt(),
+		EtaHoursMax: 24,
+		EtaHoursAvg: 12,
+	}
+
+	// Cache curto — status muda no máximo a cada poucas horas (curadoria
+	// é manual). 30s reduz pressão no Postgres se usuário fica polling.
+	w.Header().Set("Cache-Control", "public, max-age=30")
+	WriteJSON(w, http.StatusOK, dto)
 }
 
 func parseFormBool(s string) bool {
