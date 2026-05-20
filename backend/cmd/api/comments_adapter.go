@@ -159,6 +159,26 @@ func (r *pgxCommentsRepo) UnVote(ctx context.Context, commentID, userID string) 
 	return nil
 }
 
+// GetForParentCheck — busca info mínima pra validar parent. Retorna
+// ErrNotFound se commentID não existir; HasParent indica que o próprio
+// parent é um reply (usado pra enforçar profundidade ≤1).
+func (r *pgxCommentsRepo) GetForParentCheck(ctx context.Context, commentID string) (handlers.ParentInfo, error) {
+	var info handlers.ParentInfo
+	var parentID *string
+	err := r.pool.QueryRow(ctx, `
+		SELECT target_type, target_id, parent_id::text
+		FROM comments WHERE id = $1 AND status != 'deleted'
+	`, commentID).Scan(&info.TargetType, &info.TargetID, &parentID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return info, errNotFoundComment
+	}
+	if err != nil {
+		return info, fmt.Errorf("get parent: %w", err)
+	}
+	info.HasParent = parentID != nil && *parentID != ""
+	return info, nil
+}
+
 // ListByStatus — usado por admin pra moderação. Filtra por status sem
 // restringir target. Inclui autor + score + report_count pra contexto.
 func (r *pgxCommentsRepo) ListByStatus(ctx context.Context, status string, limit, offset int) ([]handlers.Comment, int64, error) {

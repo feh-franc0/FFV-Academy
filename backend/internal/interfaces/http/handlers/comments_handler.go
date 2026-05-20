@@ -35,6 +35,17 @@ type CommentsRepository interface {
 	Report(ctx context.Context, commentID, reporterID, reason string) error
 	// ListByStatus: usado por admin pra listar flagged/hidden pra moderação.
 	ListByStatus(ctx context.Context, status string, limit, offset int) ([]Comment, int64, error)
+	// GetForParentCheck: busca info mínima pra validar parent (target + parent_id próprio).
+	// Retorna ErrNotFound se commentID não existe.
+	GetForParentCheck(ctx context.Context, commentID string) (ParentInfo, error)
+}
+
+// ParentInfo — info mínima pra validar que o parent existe, é do mesmo target,
+// e não é um reply (enforça profundidade ≤1).
+type ParentInfo struct {
+	TargetType string
+	TargetID   string
+	HasParent  bool // true se o próprio parent já tem parent_id (reply de reply)
 }
 
 // Comment é a projeção pública de um comentário.
@@ -118,11 +129,35 @@ func (h *CommentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 
+	parentID := strings.TrimSpace(req.ParentID)
+	// Threading invariants — audit de business logic identificou que o
+	// comment_handler.go documenta "profundidade limitada a 2 níveis na app
+	// layer" mas NÃO valida. Sem isso:
+	//   - parent_id de OUTRO target (article X vê reply de article Y) →
+	//     árvore inconsistente
+	//   - reply de reply de reply (profundidade infinita) →
+	//     UX quebrada, performance ruim
+	if parentID != "" {
+		info, err := h.repo.GetForParentCheck(ctx, parentID)
+		if err != nil {
+			HandleDomainError(w, err)
+			return
+		}
+		if info.TargetType != req.TargetType || info.TargetID != req.TargetID {
+			WriteError(w, http.StatusBadRequest, "parent comment pertence a outro target", "validation")
+			return
+		}
+		if info.HasParent {
+			WriteError(w, http.StatusBadRequest, "reply de reply não permitido (profundidade máxima: 1)", "validation")
+			return
+		}
+	}
+
 	c, err := h.repo.Create(ctx, CommentCreateInput{
 		UserID:     userID,
 		TargetType: req.TargetType,
 		TargetID:   req.TargetID,
-		ParentID:   strings.TrimSpace(req.ParentID),
+		ParentID:   parentID,
 		Content:    content,
 	})
 	if err != nil {

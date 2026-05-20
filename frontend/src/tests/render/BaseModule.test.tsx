@@ -31,6 +31,13 @@ vi.mock('@/lib/engine', () => ({
   saveQuizScore: vi.fn(),
 }));
 
+// ArticleDiscussion (recém plugado no fim do BaseModule) usa useAuth, fetch
+// e localStorage — mocks os componentes pesados pra esses testes continuarem
+// focados no comportamento do MÓDULO (quiz, key terms, sumário).
+vi.mock('@/components/ArticleDiscussion', () => ({
+  ArticleDiscussion: () => null,
+}));
+
 import { BaseModule } from '@/components/base/BaseModule';
 import type { Base, Trail, Module as ModuleData } from '@/lib/bases/types';
 import { MEDVET_THEME } from '@/lib/bases/medvet/theme';

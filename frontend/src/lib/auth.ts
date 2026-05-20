@@ -235,7 +235,16 @@ export function getCurrentUser(): UserProfile | null {
 
 // ─── logout ────────────────────────────────────────────────────────────────
 
-/** Logout — invalida refresh token no servidor e limpa estado local. */
+/** Logout — invalida refresh token no servidor e limpa TODO o estado local.
+ *
+ * Importante: device compartilhado (faculdade, kiosk) — usuário B não pode
+ * ver progresso/XP/streak/SRS do usuário A. Audit de integridade identificou
+ * que `clearAccessToken + clearUser` ANTIGO deixava `ffv_academy` (GameState),
+ * bookmarks, daily, base counters, comment-tags etc. intactos.
+ *
+ * Agora limpa TODAS as chaves `ffv_*` do localStorage (exceto `ffv_theme`,
+ * que é UX setting do device, não do user).
+ */
 export async function logout(): Promise<void> {
   if (hasBackend()) {
     try {
@@ -244,6 +253,28 @@ export async function logout(): Promise<void> {
   }
   clearAccessToken();
   clearUser();
+  clearAllUserStorage();
+}
+
+/** Limpa localStorage de chaves do usuário. Preserva `ffv_theme` (preferência
+ *  de UX do device) e `ffv_migration_done` (flag de migração one-time). */
+function clearAllUserStorage(): void {
+  if (typeof window === 'undefined') return;
+  const PRESERVE = new Set(['ffv_theme', 'ffv_migration_done']);
+  try {
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('ffv_') && !PRESERVE.has(k)) {
+        keys.push(k);
+      }
+    }
+    for (const k of keys) localStorage.removeItem(k);
+    // IndexedDB onde o GameState migra — limpa também.
+    import('./game-state-storage').then(m => m.clearGameStorage?.()).catch(() => { /* ok */ });
+  } catch {
+    /* storage bloqueado / privacy mode — ignorar */
+  }
 }
 
 // ─── isPaidFor / grantProduct ───────────────────────────────────────────────

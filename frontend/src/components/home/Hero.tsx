@@ -4,6 +4,8 @@ import { GameDemo } from './GameDemo';
 import { FfvButton } from '@/components/ui/ffv-button';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { useGameState } from '@/hooks/useGameState';
+import { useActiveBase } from '@/components/base/ActiveBaseContext';
+import { selectLastArticleForBase, selectCompletedForBase } from '@/lib/bases/state-selectors';
 
 /**
  * Hero — header da página índice de uma base de conhecimento.
@@ -62,8 +64,12 @@ export function Hero({
   totalTrails,
 }: HeroProps) {
   const { state } = useGameState();
-  const lastArticle = state?.lastArticle;
-  const isReturning = !!lastArticle && (state?.completedModules?.length ?? 0) > 0;
+  // Filtra lastArticle e completedModules pela base ativa pra não vazar
+  // "continuar Postgres MVCC" pra usuário em medvet (e vice-versa).
+  const { base: activeBase } = useActiveBase();
+  const lastArticle = selectLastArticleForBase(state?.lastArticle, activeBase.slug);
+  const completedInBase = selectCompletedForBase(state?.completedModules ?? [], activeBase.slug);
+  const isReturning = !!lastArticle && completedInBase.length > 0;
 
   // Default title/description/ctas/stats de tecnologia
   const finalTitle = title ?? (

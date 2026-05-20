@@ -22,6 +22,12 @@ vi.mock('@/hooks/useGameState', () => ({
 
 vi.mock('@/lib/engine', () => ({ saveQuizScore: vi.fn() }));
 
+// ArticleDiscussion plugado em BaseModule precisa de AuthProvider — mock pra
+// não interferir nestes testes de quiz/teclado.
+vi.mock('@/components/ArticleDiscussion', () => ({
+  ArticleDiscussion: () => null,
+}));
+
 import { BaseModule } from '@/components/base/BaseModule';
 import type { Base, Trail, Module as ModuleData } from '@/lib/bases/types';
 import { MEDVET_THEME } from '@/lib/bases/medvet/theme';

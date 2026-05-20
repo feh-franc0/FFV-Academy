@@ -18,6 +18,7 @@ import { emit as emitEngagement } from '@/lib/personalization/engagement-store';
 import { TrailProvider } from './TrailContext';
 import { TrailSummaryDrawer } from './TrailSummaryDrawer';
 import { FloatingTrailMenuButton } from './FloatingTrailMenuButton';
+import { ArticleDiscussion } from '@/components/ArticleDiscussion';
 
 const SERIF: React.CSSProperties = { fontFamily: 'var(--font-serif)' };
 const SANS: React.CSSProperties = { fontFamily: 'var(--font-inter)' };
@@ -442,6 +443,11 @@ function BaseModuleInner({ base, trail, module: m, theme, basePath }: BaseModule
               </div>
             )}
           </nav>
+
+          {/* Discussão cross-user pelo módulo — mesmo backend de comments
+              que /aprenda usa. targetType="article" porque slug é único
+              entre bases (validado em route-isolation tests). */}
+          <ArticleDiscussion slug={m.slug} title={m.title} accentColor={theme.accent} />
         </article>
       </div>
     </div>

@@ -15,7 +15,7 @@ import { notFound } from 'next/navigation';
 import { fetchArticleWithBlocks } from '@/lib/curriculum-api';
 import { BlockTree } from '@/components/article/BlockRenderer';
 import { ViewTracker } from '@/components/article/ViewTracker';
-import { CommentSection } from '@/components/comments/CommentSection';
+import { ArticleDiscussion } from '@/components/ArticleDiscussion';
 import { NextSteps } from '@/components/article/NextSteps';
 import { TrailLeaderboard } from '@/components/ranking/TrailLeaderboard';
 import { AnkiExport } from '@/components/article/AnkiExport';
@@ -215,7 +215,7 @@ export default async function ModulePage({ params }: PageProps) {
       </section>
 
       <section className="mt-12">
-        <CommentSection targetType="article" targetId={slug} />
+        <ArticleDiscussion targetType="article" slug={slug} title={article.title} />
       </section>
     </main>
   );

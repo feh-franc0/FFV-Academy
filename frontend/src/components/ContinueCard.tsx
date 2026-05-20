@@ -3,6 +3,8 @@
 import Link from 'next/link';
 import { useGameState } from '@/hooks/useGameState';
 import { CURRICULUM, HUBS, getHubBySlug, getHubTrails, type Module, type Trail } from '@/lib/curriculum';
+import { useActiveBase } from '@/components/base/ActiveBaseContext';
+import { selectLastArticleForBase, selectCompletedForBase } from '@/lib/bases/state-selectors';
 
 type Suggestion = {
   kind: 'resume' | 'next-in-trail' | 'start-preferred' | 'start-fresh';
@@ -22,14 +24,18 @@ function allPosts(): Array<{ mod: Module; trail: Trail }> {
 
 function buildSuggestion(
   state: ReturnType<typeof useGameState>['state'],
+  activeBaseSlug: string,
 ): Suggestion | null {
   if (!state) return null;
-  const completed = state.completedModules;
+  // Filtra slices por base — Hero/ContinueCard sem filtro vazava "Postgres
+  // MVCC" pra usuário medvet (audit de integridade do frontend).
+  const completed = selectCompletedForBase(state.completedModules, activeBaseSlug);
+  const baseLastArticle = selectLastArticleForBase(state.lastArticle, activeBaseSlug);
   const all = allPosts();
 
   // 1. Active article not finished yet
-  if (state.lastArticle && !completed.includes(state.lastArticle.slug)) {
-    const la = state.lastArticle;
+  if (baseLastArticle && !completed.includes(baseLastArticle.slug)) {
+    const la = baseLastArticle;
     const progressPct = Math.round(la.progress * 100);
     return {
       kind: 'resume',
@@ -45,8 +51,8 @@ function buildSuggestion(
   }
 
   // 2. Next unfinished in the last-seen trail
-  if (state.lastArticle) {
-    const la = state.lastArticle;
+  if (baseLastArticle) {
+    const la = baseLastArticle;
     const trail = CURRICULUM.find(t => t.modules.some(m => m.slug === la.slug));
     if (trail) {
       const nextMod = trail.modules.find(m => !completed.includes(m.slug));
@@ -108,12 +114,17 @@ function buildSuggestion(
 
 export function ContinueCard() {
   const { state } = useGameState();
+  const { base: activeBase } = useActiveBase();
   if (!state) return null;
 
-  const hasAny = state.completedModules.length > 0 || state.lastArticle;
+  // hasAny também precisa filtrar por base — usuário tech que entrou em medvet
+  // pela primeira vez não deve ver "continuar" do mundo tech.
+  const completedInBase = selectCompletedForBase(state.completedModules, activeBase.slug);
+  const baseLast = selectLastArticleForBase(state.lastArticle, activeBase.slug);
+  const hasAny = completedInBase.length > 0 || baseLast;
   if (!hasAny) return null; // keep the hero clean for first-timers
 
-  const s = buildSuggestion(state);
+  const s = buildSuggestion(state, activeBase.slug);
   if (!s) return null;
 
   const hubChip = HUBS.find(h => state.preferredHub === h.slug);

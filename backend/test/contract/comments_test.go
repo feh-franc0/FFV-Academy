@@ -145,6 +145,18 @@ func (s *stubCommentsRepo) ListByStatus(_ context.Context, status string, limit,
 	return out, int64(len(out)), nil
 }
 
+func (s *stubCommentsRepo) GetForParentCheck(_ context.Context, commentID string) (handlers.ParentInfo, error) {
+	c, ok := s.items[commentID]
+	if !ok {
+		return handlers.ParentInfo{}, fmt.Errorf("comment: %w", shared.ErrNotFound)
+	}
+	return handlers.ParentInfo{
+		TargetType: c.TargetType,
+		TargetID:   c.TargetID,
+		HasParent:  c.ParentID != "",
+	}, nil
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -606,6 +618,72 @@ func Test_Comments_Create_ZeroWidthInjection_Rejected(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.Create(rec, req)
 	assert.Equal(t, http.StatusBadRequest, rec.Code, "zero-width strip deve normalizar e detectar banned word")
+}
+
+// ─── Threading invariants (P3 — audit business logic) ─────────────────────
+
+func Test_Comments_Create_WithValidParent_Accepted(t *testing.T) {
+	repo := newStubCommentsRepo()
+	root, _ := repo.Create(context.Background(), handlers.CommentCreateInput{
+		UserID: "u1", TargetType: "article", TargetID: "x", Content: "root",
+	})
+	h := handlers.NewCommentsHandler(repo)
+	body, _ := json.Marshal(map[string]string{
+		"targetType": "article", "targetId": "x", "parentId": root.ID, "content": "reply",
+	})
+	req := withAuthCtx(httptest.NewRequest(http.MethodPost, "/api/v1/comments", bytes.NewReader(body)), "u2")
+	rec := httptest.NewRecorder()
+	h.Create(rec, req)
+	assert.Equal(t, http.StatusCreated, rec.Code)
+}
+
+func Test_Comments_Create_ParentFromOtherTarget_Rejected(t *testing.T) {
+	repo := newStubCommentsRepo()
+	// Root em article "X"
+	root, _ := repo.Create(context.Background(), handlers.CommentCreateInput{
+		UserID: "u1", TargetType: "article", TargetID: "x", Content: "root",
+	})
+	h := handlers.NewCommentsHandler(repo)
+	// Reply em article "Y" mas parent_id é do article "X" — deve rejeitar.
+	body, _ := json.Marshal(map[string]string{
+		"targetType": "article", "targetId": "y", "parentId": root.ID, "content": "spoof",
+	})
+	req := withAuthCtx(httptest.NewRequest(http.MethodPost, "/api/v1/comments", bytes.NewReader(body)), "u2")
+	rec := httptest.NewRecorder()
+	h.Create(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "outro target")
+}
+
+func Test_Comments_Create_ReplyOfReply_Rejected(t *testing.T) {
+	repo := newStubCommentsRepo()
+	root, _ := repo.Create(context.Background(), handlers.CommentCreateInput{
+		UserID: "u1", TargetType: "article", TargetID: "x", Content: "root",
+	})
+	reply, _ := repo.Create(context.Background(), handlers.CommentCreateInput{
+		UserID: "u2", TargetType: "article", TargetID: "x", ParentID: root.ID, Content: "reply",
+	})
+	h := handlers.NewCommentsHandler(repo)
+	// Tentativa de reply de reply (profundidade 2) — deve rejeitar.
+	body, _ := json.Marshal(map[string]string{
+		"targetType": "article", "targetId": "x", "parentId": reply.ID, "content": "deeper",
+	})
+	req := withAuthCtx(httptest.NewRequest(http.MethodPost, "/api/v1/comments", bytes.NewReader(body)), "u3")
+	rec := httptest.NewRecorder()
+	h.Create(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "profundidade")
+}
+
+func Test_Comments_Create_ParentNotFound_Rejected(t *testing.T) {
+	h := handlers.NewCommentsHandler(newStubCommentsRepo())
+	body, _ := json.Marshal(map[string]string{
+		"targetType": "article", "targetId": "x", "parentId": "ghost-id", "content": "reply pra nada",
+	})
+	req := withAuthCtx(httptest.NewRequest(http.MethodPost, "/api/v1/comments", bytes.NewReader(body)), "u1")
+	rec := httptest.NewRecorder()
+	h.Create(rec, req)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 
 // Helper pra evitar import cycle quando o fmt é só pra format dentro do test.

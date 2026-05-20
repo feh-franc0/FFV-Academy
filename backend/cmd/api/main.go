@@ -315,7 +315,16 @@ func run() error {
 	billingH := handlers.NewBillingHandler(createCheckoutUC, handleWebhookUC, stripeClient).
 		WithEnabled(cfg.Features.BillingEnabled)
 	tutorH := handlers.NewTutorHandler(askTutorUC).
-		WithEnabled(cfg.Features.TutorAIEnabled)
+		WithEnabled(cfg.Features.TutorAIEnabled).
+		// Checker que determina tier por user — usa userRepo. Sem isso o
+		// rate-limit do tutor cai pro nível free pra todos (incluindo pagantes).
+		WithIsProChecker(func(ctx context.Context, uid shared.UserID) bool {
+			u, err := userRepo.FindByID(ctx, uid)
+			if err != nil || u == nil {
+				return false
+			}
+			return len(u.PaidProducts()) > 0
+		})
 	featuresH := handlers.NewFeaturesHandler(cfg.Features)
 	leaderboardH := handlers.NewLeaderboardHandler(leaderboardRepo)
 	statsH := handlers.NewStatsHandler(&pgxStatsRepo{pool: pool})
