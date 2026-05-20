@@ -123,8 +123,11 @@ export function GameHUD() {
         <FfvLogo size="sm" />
       </Link>
 
+      {/* Atalho pra home da base ativa — muda com a base. */}
+      <BaseHomeChip base={activeBase} pathname={pathname} />
+
       {/* Nav links — hubs primários + progresso (News/Simulados progressivos em lg/xl) */}
-      <nav className="hidden md:flex items-center gap-1 mx-6 mr-auto">
+      <nav className="hidden md:flex items-center gap-1 mx-3 mr-auto">
         {navItems.map(item => (
           <NavLink key={item.href} item={item} active={pathname === item.href || pathname.startsWith(item.href + '/')} />
         ))}
@@ -194,6 +197,47 @@ export function GameHUD() {
         <ThemeToggle />
       </div>
     </header>
+  );
+}
+
+/**
+ * Chip ao lado do logo FFV que aponta pra home da base ativa.
+ *
+ * Adapta nome + ícone à base — usuário sabe sempre em qual "mundo" está e
+ * tem 1 clique pra voltar pra home daquela base (não pra landing FFV).
+ *
+ * Esconde quando o usuário JÁ está na home da base (não polui o chrome com
+ * link redundante).
+ */
+function BaseHomeChip({
+  base,
+  pathname,
+}: {
+  base: ReturnType<typeof useActiveBase>['base'];
+  pathname: string;
+}) {
+  // Está na home da base — esconde o chip.
+  if (pathname === base.basePath) return null;
+
+  // Short label — mantém o header compacto. Tech vira "Tecnologia",
+  // "Medicina Veterinária" vira "Med. Veterinária".
+  const shortName = base.name.length > 18 ? base.name.slice(0, 16) + '…' : base.name;
+
+  return (
+    <Link
+      href={base.basePath}
+      aria-label={`Voltar para a base ${base.name}`}
+      className="ml-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold whitespace-nowrap transition-all hover:opacity-90"
+      style={{
+        background: 'color-mix(in srgb, var(--ffv-blue) 12%, transparent)',
+        border: '1px solid color-mix(in srgb, var(--ffv-blue) 28%, transparent)',
+        color: 'var(--ffv-blue)',
+        textDecoration: 'none',
+      }}
+    >
+      <span aria-hidden style={{ fontSize: 14, lineHeight: 1 }}>{base.icon}</span>
+      <span className="hidden sm:inline">{shortName}</span>
+    </Link>
   );
 }
 
