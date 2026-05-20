@@ -1032,14 +1032,15 @@ function BrowserDemo() {
         </div>
       </div>
 
-      {/* Slide stack — 4 telas absolute, cross-fading */}
+      {/* Slide stack — 4 telas absolute, cross-fading.
+          Aspect ratio responsive: em mobile (viewport ~390px) o aspect 16:10
+          dá só ~244px de altura, esmagando o conteúdo. Usamos:
+            mobile: 4/5  → ~488px em 390vw (trilha visível, módulos legíveis)
+            sm:     5/4  → ~512px em 640vw
+            md+:    16/10 → original desktop, mais wide */}
       <div
-        style={{
-          position: 'relative',
-          aspectRatio: '16 / 10',
-          background: '#fafaf7',
-          overflow: 'hidden',
-        }}
+        className="relative aspect-[4/5] sm:aspect-[5/4] md:aspect-[16/10] overflow-hidden"
+        style={{ background: '#fafaf7' }}
       >
         <DemoSlideTrilha />
         <DemoSlideModulo />
