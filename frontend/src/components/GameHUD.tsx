@@ -15,6 +15,8 @@ import { CommandPaletteTrigger } from '@/components/CommandPalette';
 import { unlockAudio } from '@/lib/sounds';
 import { toast } from '@/lib/toast';
 import { useBaseNav, type BaseNavItem } from '@/components/base/BaseNavContext';
+import { useActiveBase } from '@/components/base/ActiveBaseContext';
+import { selectDueCardsForBase } from '@/lib/bases/state-selectors';
 import type { ComponentType, SVGProps } from 'react';
 
 type LucideIcon = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
@@ -56,6 +58,10 @@ function NavIcon({ item, size }: { item: BaseNavItem; size: number }) {
 export function GameHUD() {
   const { state, levelInfo, dueCards, todayReviewCount, dailyGoalMet } = useGameState();
   const pathname = usePathname() ?? '/';
+  const { base: activeBase } = useActiveBase();
+  // Filtra os cards SRS devidos pela base ativa — sem isso, o pill mostra
+  // contagem cross-base (tech + medvet) e o usuário em medvet vê questões tech.
+  const baseDueCards = selectDueCardsForBase(dueCards, activeBase.slug);
 
   // Unlock audio on first interaction with the header
   const headerRef = useRef<HTMLElement>(null);
@@ -160,13 +166,13 @@ export function GameHUD() {
             </TooltipContent>
           </Tooltip>
         )}
-        {state && dueCards.length > 0 && (
+        {state && baseDueCards.length > 0 && (
           <Tooltip>
             <TooltipTrigger
               render={
                 <Link
                   href="/revisar"
-                  aria-label={`${dueCards.length} cards pendentes`}
+                  aria-label={`${baseDueCards.length} cards pendentes`}
                   className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold transition-opacity hover:opacity-90"
                   style={{
                     background: 'color-mix(in srgb, var(--ffv-green) 14%, transparent)',
@@ -176,10 +182,10 @@ export function GameHUD() {
                 />
               }
             >
-              🧠 {dueCards.length}
+              🧠 {baseDueCards.length}
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              <p>{dueCards.length} card{dueCards.length !== 1 ? 's' : ''} pendente{dueCards.length !== 1 ? 's' : ''} — revisar agora</p>
+              <p>{baseDueCards.length} card{baseDueCards.length !== 1 ? 's' : ''} pendente{baseDueCards.length !== 1 ? 's' : ''} — revisar agora</p>
             </TooltipContent>
           </Tooltip>
         )}

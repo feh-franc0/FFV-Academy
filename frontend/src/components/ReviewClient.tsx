@@ -6,6 +6,9 @@ import { useGameState } from '@/hooks/useGameState';
 import type { ReviewCard } from '@/lib/srs';
 import type { ReviewQuality } from '@/lib/srs';
 import { playXPCoin, playPop, unlockAudio } from '@/lib/sounds';
+import { useActiveBase } from '@/components/base/ActiveBaseContext';
+import { selectDueCardsForBase } from '@/lib/bases/state-selectors';
+import { getBaseSlugForModule } from '@/lib/bases/module-base-resolver';
 
 type Phase = 'empty' | 'answering' | 'revealed' | 'finished';
 
@@ -31,6 +34,7 @@ export interface ReviewClientProps {
 
 export function ReviewClient(props: ReviewClientProps = {}) {
   const { state, dueCards, reviewOne } = useGameState();
+  const { base: activeBase } = useActiveBase();
   const [selected, setSelected] = useState<number | null>(null);
   const [revealed, setRevealed] = useState(false);
   const [finished, setFinished] = useState(false);
@@ -39,7 +43,9 @@ export function ReviewClient(props: ReviewClientProps = {}) {
 
   useEffect(() => {
     if (queue !== null || !state) return;
-    let pool = [...dueCards];
+    // Filtra os cards SRS pela base ativa — usuário em medvet só revisa
+    // questões de medvet; usuário em tech só revisa tech.
+    let pool = selectDueCardsForBase([...dueCards], activeBase.slug);
     if (props.trailFilter && props.slugToTrail) {
       pool = pool.filter(c => props.slugToTrail!(c.slug) === props.trailFilter);
     }
@@ -221,7 +227,7 @@ export function ReviewClient(props: ReviewClientProps = {}) {
               Seja honesto — a fila só ajuda se você calibrar pelo esforço real.
             </p>
             <Link
-              href={`/aprenda/${currentCard.slug}`}
+              href={buildModuleHref(currentCard.slug)}
               className="text-[11px] font-semibold shrink-0 ml-4 hover:opacity-70 transition-opacity"
               style={{ color: 'var(--ffv-blue)' }}
             >
@@ -344,3 +350,14 @@ function FinishedState({ stats }: { stats: SessionStats }) {
     </main>
   );
 }
+
+/**
+ * Resolve href de um módulo respeitando a base dele. Tech vive em /aprenda/<slug>;
+ * medvet e bases futuras vivem em /<basePath>/<slug>.
+ */
+function buildModuleHref(slug: string): string {
+  const base = getBaseSlugForModule(slug);
+  if (base === 'medicina-veterinaria') return `/medicina-veterinaria/${slug}`;
+  return `/aprenda/${slug}`;
+}
+

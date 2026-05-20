@@ -25,9 +25,21 @@ import {
 import { StudyHeatmap } from '@/components/StudyHeatmap';
 import { TrailStatsTable } from '@/components/TrailStatsTable';
 import { toast } from '@/lib/toast';
+import { useActiveBase } from '@/components/base/ActiveBaseContext';
+import {
+  selectCompletedForBase,
+  selectDueCardsForBase,
+  selectLastArticleForBase,
+  selectBookmarksForBase,
+  selectTotalModulesForBase,
+  selectTotalXpForBase,
+  selectRecommendationsForBase,
+} from '@/lib/bases/state-selectors';
 
 export function ProgressoClient() {
-  const { state, levelInfo, dueCards, refresh, weeklyStats, recommendations } = useGameState();
+  const { state, levelInfo, refresh, weeklyStats } = useGameState();
+  const { base: activeBase } = useActiveBase();
+  const isActiveTech = activeBase.slug === 'tecnologia';
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showShare, setShowShare] = useState(false);
   const [certificateTrailId, setCertificateTrailId] = useState<string | null>(null);
@@ -75,13 +87,17 @@ export function ProgressoClient() {
     );
   }
 
-  const completed = state.completedModules;
-  const totalModules = CURRICULUM.reduce((acc, t) => acc + t.modules.length, 0);
+  // Filtra slices do estado pela base ativa — nada de vazar tech em medvet.
+  const completed = selectCompletedForBase(state.completedModules, activeBase.slug);
+  const baseLastArticle = selectLastArticleForBase(state.lastArticle, activeBase.slug);
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const baseDueCards = selectDueCardsForBase(state.reviewCards ?? [], activeBase.slug)
+    .filter(c => c.dueDate <= todayISO);
+  const baseBookmarks = selectBookmarksForBase(state.bookmarks ?? [], activeBase.slug);
+  const totalModules = selectTotalModulesForBase(activeBase.slug);
   const overallPct = totalModules === 0 ? 0 : Math.round((completed.length / totalModules) * 100);
-  const totalXpPossible = CURRICULUM.reduce(
-    (acc, t) => acc + t.modules.reduce((a, m) => a + m.xp, 0),
-    0
-  );
+  const totalXpPossible = selectTotalXpForBase(activeBase.slug);
+  const recommendations = selectRecommendationsForBase(state.completedModules, activeBase.slug, 3);
 
   const nextLevel = LEVELS.find(l => l.level === state.level + 1);
   const xpInLevel = state.xp - (levelInfo?.xpMin ?? 0);
@@ -116,7 +132,7 @@ export function ProgressoClient() {
           <Stat label="XP total" value={state.xp.toLocaleString('pt-BR')} sub={`de ${totalXpPossible.toLocaleString('pt-BR')} disponíveis`} accent="var(--ffv-yellow)" />
           <Stat label="Streak atual" value={`${state.streak}d`} sub={state.freezes > 0 ? `🧊 ${state.freezes} freeze${state.freezes !== 1 ? 's' : ''}` : 'Volte amanhã'} accent="var(--ffv-orange)" />
           <Stat label="Badges" value={`${state.badges.length}`} sub={`de ${BADGES_DEF.length} conquistas`} accent="var(--ffv-purple)" />
-          <Stat label="Cards devidos" value={`${dueCards.length}`} sub={dueCards.length > 0 ? 'revisar agora' : 'em dia'} accent="var(--ffv-green)" link={dueCards.length > 0 ? '/revisar' : undefined} />
+          <Stat label="Cards devidos" value={`${baseDueCards.length}`} sub={baseDueCards.length > 0 ? 'revisar agora' : 'em dia'} accent="var(--ffv-green)" link={baseDueCards.length > 0 ? '/revisar' : undefined} />
         </div>
       </section>
 
@@ -134,36 +150,36 @@ export function ProgressoClient() {
       )}
 
       {/* Continue de onde parou */}
-      {state.lastArticle && !completed.includes(state.lastArticle.slug) && (
+      {baseLastArticle && !completed.includes(baseLastArticle.slug) && (
         <section className="max-w-5xl mx-auto px-6 pb-8">
           <SectionLabel>CONTINUE DE ONDE PAROU</SectionLabel>
           <Link
-            href={state.lastArticle.href}
+            href={baseLastArticle.href}
             className="flex items-center gap-4 mt-4 p-4 rounded-xl transition-all hover:opacity-90"
             style={{
-              background: `color-mix(in srgb, ${state.lastArticle.trailColor} 8%, var(--ffv-bg2))`,
-              border: `1px solid ${state.lastArticle.trailColor}40`,
+              background: `color-mix(in srgb, ${baseLastArticle.trailColor} 8%, var(--ffv-bg2))`,
+              border: `1px solid ${baseLastArticle.trailColor}40`,
               textDecoration: 'none',
               color: 'inherit',
             }}
           >
             <div
               className="flex-shrink-0 flex items-center justify-center"
-              style={{ width: 48, height: 48, borderRadius: 12, background: `${state.lastArticle.trailColor}20`, fontSize: 24 }}
+              style={{ width: 48, height: 48, borderRadius: 12, background: `${baseLastArticle.trailColor}20`, fontSize: 24 }}
             >
               ▶
             </div>
             <div className="flex-1 min-w-0">
-              <p className="font-semibold text-sm truncate">{state.lastArticle.title}</p>
+              <p className="font-semibold text-sm truncate">{baseLastArticle.title}</p>
               <p className="text-xs mt-0.5" style={{ color: 'var(--ffv-muted)' }}>
-                {state.lastArticle.trailName} · {state.lastArticle.readTime} min ·{' '}
-                <span style={{ color: state.lastArticle.trailColor }}>+{state.lastArticle.xp} XP</span>
-                {state.lastArticle.progress > 0.05 && (
-                  <> · {Math.round(state.lastArticle.progress * 100)}% lido</>
+                {baseLastArticle.trailName} · {baseLastArticle.readTime} min ·{' '}
+                <span style={{ color: baseLastArticle.trailColor }}>+{baseLastArticle.xp} XP</span>
+                {baseLastArticle.progress > 0.05 && (
+                  <> · {Math.round(baseLastArticle.progress * 100)}% lido</>
                 )}
               </p>
             </div>
-            <span className="flex-shrink-0 text-xs font-semibold px-3 py-1 rounded-full" style={{ background: state.lastArticle.trailColor, color: '#0d1117' }}>
+            <span className="flex-shrink-0 text-xs font-semibold px-3 py-1 rounded-full" style={{ background: baseLastArticle.trailColor, color: '#0d1117' }}>
               Continuar →
             </span>
           </Link>
@@ -209,9 +225,11 @@ export function ProgressoClient() {
         <StudyHeatmap studyDays={state.studyDays} />
       </section>
 
-      <section className="max-w-5xl mx-auto px-6 pb-12">
-        <TrailStatsTable />
-      </section>
+      {isActiveTech && (
+        <section className="max-w-5xl mx-auto px-6 pb-12">
+          <TrailStatsTable />
+        </section>
+      )}
 
       <section className="max-w-5xl mx-auto px-6 pb-12">
         <SectionLabel>QUESTS</SectionLabel>
@@ -261,28 +279,38 @@ export function ProgressoClient() {
         <MyRankCard />
       </section>
 
-      <section className="max-w-5xl mx-auto px-6 pb-12">
-        <SectionLabel>PERFORMANCE POR TRILHA</SectionLabel>
-        <TrailPerformanceGrid completedSlugs={completed} quizScores={state.quizScores} />
-      </section>
+      {isActiveTech && (
+        <section className="max-w-5xl mx-auto px-6 pb-12">
+          <SectionLabel>PERFORMANCE POR TRILHA</SectionLabel>
+          <TrailPerformanceGrid completedSlugs={completed} quizScores={state.quizScores} />
+        </section>
+      )}
 
-      <section className="max-w-5xl mx-auto px-6 pb-12">
-        <SectionLabel>PROGRESSO POR HUB</SectionLabel>
-        <div className="grid gap-4 mt-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
-          {HUBS.map(h => (
-            <HubProgressCard key={h.id} hub={h} completedSlugs={completed} />
-          ))}
-        </div>
-      </section>
+      {isActiveTech && (
+        <section className="max-w-5xl mx-auto px-6 pb-12">
+          <SectionLabel>PROGRESSO POR HUB</SectionLabel>
+          <div className="grid gap-4 mt-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
+            {HUBS.map(h => (
+              <HubProgressCard key={h.id} hub={h} completedSlugs={completed} />
+            ))}
+          </div>
+        </section>
+      )}
 
-      <section className="max-w-5xl mx-auto px-6 pb-12">
-        <SectionLabel>TRILHAS</SectionLabel>
-        <div className="flex flex-col gap-3 mt-4">
-          {CURRICULUM.map(t => (
-            <TrailProgressRow key={t.id} trail={t} completedSlugs={completed} />
-          ))}
-        </div>
-      </section>
+      {isActiveTech && (
+        <section className="max-w-5xl mx-auto px-6 pb-12">
+          <SectionLabel>TRILHAS</SectionLabel>
+          <div className="flex flex-col gap-3 mt-4">
+            {CURRICULUM.map(t => (
+              <TrailProgressRow key={t.id} trail={t} completedSlugs={completed} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {!isActiveTech && (
+        <BaseProgressSections baseSlug={activeBase.slug} completedSlugs={completed} />
+      )}
 
       {/* Certificate modal */}
       {certificateTrailId && (
@@ -292,8 +320,8 @@ export function ProgressoClient() {
         />
       )}
 
-      {/* Certificados de trilhas concluídas */}
-      {(() => {
+      {/* Certificados de trilhas concluídas — tech-only por ora (medvet trails geram cert quando habilitarmos) */}
+      {isActiveTech && (() => {
         const completedTrails = getCompletedTrailIds(completed);
         if (completedTrails.length === 0) return null;
         return (
@@ -335,12 +363,12 @@ export function ProgressoClient() {
         );
       })()}
 
-      {/* Módulos salvos */}
-      {state.bookmarks.length > 0 && (
+      {/* Módulos salvos — só os da base ativa */}
+      {isActiveTech && baseBookmarks.length > 0 && (
         <section className="max-w-5xl mx-auto px-6 pb-12">
-          <SectionLabel>MÓDULOS SALVOS — {state.bookmarks.length}</SectionLabel>
+          <SectionLabel>MÓDULOS SALVOS — {baseBookmarks.length}</SectionLabel>
           <div className="flex flex-col gap-2 mt-4">
-            {state.bookmarks.map(slug => {
+            {baseBookmarks.map(slug => {
               const found = CURRICULUM.flatMap(t => t.modules.map(m => ({ ...m, trail: t }))).find(m => m.slug === slug);
               if (!found) return null;
               const isDone = completed.includes(slug);
@@ -824,5 +852,98 @@ function TrailPerformanceGrid({
         );
       })}
     </div>
+  );
+}
+
+// ─── BaseProgressSections ────────────────────────────────────────────────────
+// Render genérico de "Trilhas + Hubs" pra bases que não são tecnologia.
+// Hoje conhece medvet; outras bases caem aqui automaticamente quando registradas.
+// Mantém a estética cream/sage da base ativa via CSS vars.
+import { MEDVET_BASE } from '@/lib/bases/medvet';
+
+function BaseProgressSections({ baseSlug, completedSlugs }: { baseSlug: string; completedSlugs: string[] }) {
+  if (baseSlug === 'medicina-veterinaria') {
+    const completedSet = new Set(completedSlugs);
+    return (
+      <>
+        {(MEDVET_BASE.hubs ?? []).length > 0 && (
+          <section className="max-w-5xl mx-auto px-6 pb-12">
+            <SectionLabel>PROGRESSO POR HUB</SectionLabel>
+            <div className="grid gap-4 mt-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
+              {(MEDVET_BASE.hubs ?? []).map(h => {
+                const done = h.moduleSlugs.filter(s => completedSet.has(s)).length;
+                const total = h.moduleSlugs.length;
+                const pct = total === 0 ? 0 : Math.round((done / total) * 100);
+                return (
+                  <div
+                    key={h.slug}
+                    className="rounded-2xl p-5"
+                    style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <span style={{ fontSize: 22 }}>{h.icon}</span>
+                      <span className="font-bold text-sm">{h.name}</span>
+                    </div>
+                    <p className="text-xs mb-3" style={{ color: 'var(--ffv-muted)' }}>{h.description}</p>
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="font-mono">{done}/{total}</span>
+                      <span style={{ color: 'var(--ffv-muted)' }}>·</span>
+                      <span style={{ color: 'var(--ffv-blue)' }}>{pct}%</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
+        <section className="max-w-5xl mx-auto px-6 pb-12">
+          <SectionLabel>TRILHAS</SectionLabel>
+          <div className="flex flex-col gap-3 mt-4">
+            {MEDVET_BASE.trails.map(t => {
+              const done = t.modules.filter(m => completedSet.has(m.slug)).length;
+              const total = t.modules.length;
+              const pct = total === 0 ? 0 : Math.round((done / total) * 100);
+              return (
+                <Link
+                  key={t.slug}
+                  href={`/medicina-veterinaria`}
+                  className="flex items-center gap-4 p-4 rounded-xl transition-all hover:opacity-90"
+                  style={{
+                    background: 'var(--ffv-bg2)',
+                    border: '1px solid var(--ffv-border)',
+                    textDecoration: 'none',
+                    color: 'inherit',
+                  }}
+                >
+                  <span style={{ fontSize: 24 }}>{t.icon}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-sm">{t.title}</p>
+                    <p className="text-xs mt-0.5" style={{ color: 'var(--ffv-muted)' }}>
+                      {done} de {total} módulos · {pct}%
+                    </p>
+                  </div>
+                  <span className="text-xs font-mono px-2 py-1 rounded-full" style={{ background: 'var(--ffv-bg)', color: 'var(--ffv-blue)' }}>
+                    {pct}%
+                  </span>
+                </Link>
+              );
+            })}
+          </div>
+        </section>
+      </>
+    );
+  }
+
+  // Bases sem render específico — placeholder neutro.
+  return (
+    <section className="max-w-5xl mx-auto px-6 pb-12">
+      <SectionLabel>PROGRESSO</SectionLabel>
+      <div className="rounded-2xl p-6 mt-4 text-center" style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}>
+        <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
+          Estatísticas detalhadas desta base estão sendo preparadas.
+        </p>
+      </div>
+    </section>
   );
 }
