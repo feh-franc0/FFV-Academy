@@ -1,6 +1,7 @@
 import { MetadataRoute } from 'next';
 import { CURRICULUM, HUBS } from '@/lib/curriculum';
 import { SIMULADOS_CATALOG } from '@/lib/simulados-catalog';
+import { MEDVET_BASE } from '@/lib/bases/medvet';
 
 export const dynamic = 'force-static';
 
@@ -32,8 +33,24 @@ export default function sitemap(): MetadataRoute.Sitemap {
     priority: 0.9,
   }));
 
+  // Bases de conhecimento — top-tier do sitemap. Cada base = uma "escola
+  // completa", deve aparecer com priority alta + módulos individuais.
+  const medvetModules = MEDVET_BASE.trails.flatMap(t =>
+    t.modules.map(m => ({
+      url: `${base}/medicina-veterinaria/${m.slug}`,
+      lastModified: BUILD_DATE,
+      changeFrequency: 'monthly' as const,
+      priority: 0.85,
+    }))
+  );
+
   return [
     { url: base, lastModified: BUILD_DATE, changeFrequency: 'weekly' as const, priority: 1.0 },
+    // BASES — homes principais (priority 1.0 — equivalente ao /)
+    { url: `${base}/bases`, lastModified: BUILD_DATE, changeFrequency: 'weekly' as const, priority: 0.95 },
+    { url: `${base}/tecnologia`, lastModified: BUILD_DATE, changeFrequency: 'weekly' as const, priority: 1.0 },
+    { url: `${base}/medicina-veterinaria`, lastModified: BUILD_DATE, changeFrequency: 'weekly' as const, priority: 1.0 },
+    { url: `${base}/medicina-veterinaria/simulado-genetica`, lastModified: BUILD_DATE, changeFrequency: 'monthly' as const, priority: 0.9 },
     { url: `${base}/progresso`, lastModified: BUILD_DATE, changeFrequency: 'monthly' as const, priority: 0.5 },
     { url: `${base}/revisar`, lastModified: BUILD_DATE, changeFrequency: 'weekly' as const, priority: 0.7 },
     { url: `${base}/glossario`, lastModified: BUILD_DATE, changeFrequency: 'monthly' as const, priority: 0.6 },
@@ -75,5 +92,6 @@ export default function sitemap(): MetadataRoute.Sitemap {
     ...hubs,
     ...trails,
     ...articles,
+    ...medvetModules,
   ];
 }

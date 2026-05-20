@@ -17,7 +17,7 @@ import { toast } from '@/lib/toast';
 import { useBaseNav, type BaseNavItem } from '@/components/base/BaseNavContext';
 import { useActiveBase } from '@/components/base/ActiveBaseContext';
 import { BaseSwitcher } from '@/components/base/BaseSwitcher';
-import { selectDueCardsForBase, getBaseReviewCountToday } from '@/lib/bases/state-selectors';
+import { selectDueCardsForBase, getBaseReviewCountToday, selectBookmarksForBase } from '@/lib/bases/state-selectors';
 import type { ComponentType, SVGProps } from 'react';
 
 type LucideIcon = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
@@ -63,6 +63,8 @@ export function GameHUD() {
   // Filtra os cards SRS devidos pela base ativa — sem isso, o pill mostra
   // contagem cross-base (tech + medvet) e o usuário em medvet vê questões tech.
   const baseDueCards = selectDueCardsForBase(dueCards, activeBase.slug);
+  // Bookmarks da base ativa — chip discreto pra acesso rápido.
+  const baseBookmarks = selectBookmarksForBase(state?.bookmarks ?? [], activeBase.slug);
   // Meta diária por base: contador transient em localStorage por dia+base,
   // re-renderiza quando o usuário navega/foca a janela.
   const [baseReviewCount, setBaseReviewCount] = useState(0);
@@ -182,6 +184,30 @@ export function GameHUD() {
             </TooltipTrigger>
             <TooltipContent side="bottom">
               <p>{baseGoalMet ? '✅ Meta diária atingida!' : `Meta: ${baseReviewCount} de ${goal} cards hoje`}</p>
+            </TooltipContent>
+          </Tooltip>
+        )}
+        {state && baseBookmarks.length > 0 && (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Link
+                  href="/progresso#bookmarks"
+                  aria-label={`${baseBookmarks.length} módulos salvos`}
+                  className="hidden md:flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold transition-opacity hover:opacity-90"
+                  style={{
+                    background: 'color-mix(in srgb, var(--ffv-purple) 12%, transparent)',
+                    border: '1px solid color-mix(in srgb, var(--ffv-purple) 30%, transparent)',
+                    color: 'var(--ffv-purple)',
+                    textDecoration: 'none',
+                  }}
+                />
+              }
+            >
+              🔖 {baseBookmarks.length}
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              <p>{baseBookmarks.length} módulo{baseBookmarks.length !== 1 ? 's' : ''} salvo{baseBookmarks.length !== 1 ? 's' : ''}</p>
             </TooltipContent>
           </Tooltip>
         )}

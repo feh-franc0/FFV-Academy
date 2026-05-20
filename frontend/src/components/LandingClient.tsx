@@ -240,11 +240,11 @@ function Hero() {
             marginRight: 'auto',
           }}
         >
-          Envie seu material. Em 24h, você recebe{' '}
+          IA que vira seus PDFs em{' '}
           <span style={{ color: SAGE_ACCENT, fontStyle: 'italic', fontWeight: 600 }}>
             uma escola completa
           </span>
-          .
+          {' '}em 24h.
         </h1>
 
         <p
@@ -258,10 +258,11 @@ function Hero() {
             fontWeight: 400,
           }}
         >
-          Manda PDF, slides, edital. A FFV transforma — e em até 24h chega um email
-          com link pro <strong style={{ color: SAGE_INK }}>portal completo</strong>:
-          trilha numerada, módulos, quizzes integrados e revisão espaçada calibrada
-          pelo SEU material. Curadoria humana, gratuito.
+          Manda os <strong style={{ color: SAGE_INK }}>PDFs, slides e anotações</strong> do que
+          você precisa estudar. Nossa IA + curadoria humana montam <strong style={{ color: SAGE_INK }}>trilhas
+          sequenciais, módulos com teoria, questões e revisão espaçada (SM-2)</strong> calibradas
+          pelo SEU material. Em até 24h o email chega com o link pra sua base completa.
+          Não é chatbot. É a sua escola. Gratuito na V1.
         </p>
 
         {/* Flow strip — 3 etapas claras do fluxo */}

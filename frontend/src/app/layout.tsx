@@ -9,6 +9,7 @@ import { ReferralCapture } from '@/components/ReferralCapture';
 import { PWARegister } from '@/components/PWARegister';
 import { AuthProvider } from '@/components/auth/AuthProvider';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { RootStructuredData } from '@/components/seo/StructuredData';
 
 // Inter — corpo do texto (máxima legibilidade)
 const inter = Inter({
@@ -44,34 +45,51 @@ const sourceSerif = Source_Serif_4({
 export const metadata: Metadata = {
   metadataBase: new URL('https://fernandofrancovalle.com'),
   title: {
-    default: 'FFV Academy — Sua base de estudo personalizada em 24h',
+    default: 'FFV Academy — IA que transforma seus arquivos em uma escola completa em 24h',
     template: '%s — FFV Academy',
   },
   description:
-    'Envie o que precisa estudar — matéria, prova, edital, conteúdo da faculdade — e em até 24 horas nossa IA + curadoria criam uma base completa: trilhas, módulos, questões e revisão espaçada. Para qualquer área: Medicina, Veterinária, Engenharia, Direito, Tecnologia, concursos e mais.',
+    'Envie seus PDFs, slides ou anotações — IA + curadoria humana montam em 24h uma base completa de estudo: trilhas sequenciais, módulos, exercícios e revisão espaçada (SM-2). Não é chatbot. É a sua escola personalizada. Já no ar: Tecnologia (157 módulos) e Medicina Veterinária — Genética (12 módulos). Pode pedir Medicina, Engenharia, Direito, Administração, Design e mais. Grátis na V1.',
   keywords: [
-    'base de estudo personalizada com IA',
-    'plataforma que gera base de estudo',
+    // Hero search intent — pivot de produto
+    'IA que gera base de conhecimento',
+    'criar curso personalizado com IA',
+    'plataforma de estudo gerada por IA',
+    'transformar PDF em curso online',
+    'IA monta trilha de estudo do meu material',
+    'gerar curso a partir de arquivos',
+    'aprender com PDF da faculdade',
     'estudo personalizado em 24 horas',
-    'criar trilha de estudo a partir do material',
-    'IA que organiza conteúdo de faculdade',
-    'medicina veterinaria estudos',
-    'engenharia estudos',
-    'direito estudos',
-    'concursos personalizados',
-    'faculdade aprender',
-    'curso livre online',
-    'aprender qualquer matéria',
-    'educação personalizada brasil',
+    'base de conhecimento sob demanda',
+    // Long-tail por área (cobre bases existentes + queued)
+    'medicina veterinária genética estudos',
+    'leis de mendel veterinária',
+    'hardy weinberg genética animal',
+    'engenharia de software curso gratuito',
+    'aws cloud practitioner português',
+    'transformers IA arquitetura',
+    'simulado oab personalizado',
+    'concurso público estudo personalizado',
+    'residência médica estudo organizado',
+    // Plataforma + diferencial
+    'revisão espaçada SM-2 português',
+    'algoritmo Anki em plataforma educacional',
+    'gamificação estudo XP badges streak',
+    'plataforma de estudo gratuita PT-BR',
+    'curso gratuito gamificado brasil',
   ],
   authors: [{ name: 'Fernando Franco Valle', url: 'https://fernandofrancovalle.com' }],
   creator: 'Fernando Franco Valle',
   publisher: 'FFV Academy',
   category: 'education',
+  alternates: {
+    canonical: 'https://fernandofrancovalle.com',
+    languages: { 'pt-BR': 'https://fernandofrancovalle.com' },
+  },
   openGraph: {
-    title: 'FFV Academy — Sua base de estudo personalizada em 24h',
+    title: 'FFV Academy — IA que transforma seus arquivos em uma escola completa em 24h',
     description:
-      'Envie o que precisa estudar e em até 24h sua base completa fica no ar: trilhas, módulos, questões e revisão espaçada. Para qualquer área. Não é chatbot — é experiência real de aprendizado.',
+      'Mande seus PDFs, slides e anotações. IA + curadoria humana entregam trilhas, módulos, exercícios e revisão espaçada em 24h. Já no ar: Tecnologia e Medicina Veterinária — Genética. Grátis na V1.',
     type: 'website',
     url: 'https://fernandofrancovalle.com',
     siteName: 'FFV Academy',
@@ -81,15 +99,15 @@ export const metadata: Metadata = {
         url: '/opengraph-image',
         width: 1200,
         height: 630,
-        alt: 'FFV Academy — Sua base de estudo personalizada em 24h',
+        alt: 'FFV Academy — IA que vira PDF em escola completa em 24h',
       },
     ],
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'FFV Academy — Sua base de estudo personalizada em 24h',
+    title: 'FFV Academy — IA transforma seu PDF em escola completa em 24h',
     description:
-      'Envie sua matéria, em 24h sua base de aprendizado fica no ar. Trilhas, módulos e revisão para qualquer área.',
+      'Envie arquivos, receba trilhas + módulos + exercícios + revisão espaçada. Tecnologia e Medicina Veterinária já no ar. Grátis.',
     images: ['/opengraph-image'],
     creator: '@fernandofv',
     site: '@ffvacademy',
@@ -189,6 +207,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <meta name="referrer" content="strict-origin-when-cross-origin" />
         <meta httpEquiv="Permissions-Policy" content="geolocation=(), microphone=(), camera=()" />
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        {/* JSON-LD: Organization + WebSite + Courses (tech + medvet) — emite
+            structured data pro Google indexar como rich results e cards de curso. */}
+        <RootStructuredData />
         {/* Google Search Console — verificação de propriedade (substituir pelo token gerado no GSC) */}
         {/* <meta name="google-site-verification" content="SEU_TOKEN_GSC_AQUI" /> */}
         {/* Plausible Analytics — privacy-first, sem cookies, LGPD-ok, evento quiz-complete via JS */}

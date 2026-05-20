@@ -9,12 +9,34 @@ import {
   MEDVET_TOTAL_HUBS,
 } from '@/lib/bases/medvet/adapters';
 import { KnowledgeBaseHome } from '@/components/base/KnowledgeBaseHome';
+import { BaseStructuredData } from '@/components/seo/StructuredData';
 
 export const metadata: Metadata = {
-  title: 'Medicina Veterinária — Base de conhecimento — FFV Academy',
+  title: 'Medicina Veterinária — Genética Animal · 12 módulos gratuitos',
   description:
-    'Base de Medicina Veterinária com 12 módulos de Genética: leis de Mendel, alelismo múltiplo, genes letais, padrões de herança, Hardy-Weinberg, melhoramento genético e mais.',
+    'Trilha completa de Genética Veterinária: das Leis de Mendel ao melhoramento animal. 12 módulos sequenciais com teoria + 100 questões de simulado + revisão espaçada SM-2. Alelismo múltiplo, genes letais, padrões de herança, Hardy-Weinberg, endogamia e exogamia. Gratuito em PT-BR.',
+  keywords: [
+    'genética veterinária gratuito',
+    'leis de mendel veterinária',
+    'hardy weinberg genética animal',
+    'melhoramento genético animal',
+    'alelismo múltiplo gatos',
+    'pelagem mamíferos genética',
+    'endogamia exogamia veterinária',
+    'simulado genética 100 questões',
+    'curso veterinária online gratuito',
+    'estudo veterinária PT-BR',
+    'profa rafaella olivieri',
+  ],
   alternates: { canonical: 'https://fernandofrancovalle.com/medicina-veterinaria' },
+  openGraph: {
+    title: 'Medicina Veterinária — Genética Animal · 12 módulos gratuitos',
+    description:
+      'Trilha completa de Genética: Mendel, alelismo, Hardy-Weinberg, melhoramento. 12 módulos + simulado de 100 questões + revisão espaçada. Gratuito.',
+    type: 'website',
+    url: 'https://fernandofrancovalle.com/medicina-veterinaria',
+    locale: 'pt_BR',
+  },
 };
 
 const firstModule = MEDVET_BASE.trails[0]?.modules[0];
@@ -22,7 +44,17 @@ const firstModuleHref = firstModule ? `/medicina-veterinaria/${firstModule.slug}
 
 export default function MedicinaVeterinariaPage() {
   return (
-    <KnowledgeBaseHome
+    <>
+      <BaseStructuredData
+        slug="medicina-veterinaria"
+        name="Medicina Veterinária — Genética Animal"
+        description="Trilha completa de Genética Veterinária: das Leis de Mendel ao melhoramento animal. 12 módulos sequenciais com teoria, exercícios, simulado de 100 questões e revisão espaçada SM-2."
+        url="https://fernandofrancovalle.com/medicina-veterinaria"
+        modules={MEDVET_TOTAL_MODULES}
+        workloadHours={30}
+        teaches="Genética Veterinária · Leis de Mendel · Hardy-Weinberg · Melhoramento Animal"
+      />
+      <KnowledgeBaseHome
       theme={MEDVET_THEME}
       hero={{
         kicker: 'Medicina Veterinária · Base de conhecimento',
@@ -80,6 +112,7 @@ export default function MedicinaVeterinariaPage() {
         ctaLabel: 'Criar minha base →',
         footnote: 'IA + curadoria humana · 100% gratuito na V1',
       }}
-    />
+      />
+    </>
   );
 }

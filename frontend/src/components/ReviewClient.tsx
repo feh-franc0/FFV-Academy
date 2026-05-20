@@ -40,6 +40,9 @@ export function ReviewClient(props: ReviewClientProps = {}) {
   const [finished, setFinished] = useState(false);
   const [stats, setStats] = useState<SessionStats>({ total: 0, correct: 0, xpGained: 0 });
   const [queue, setQueue] = useState<ReviewCard[] | null>(null);
+  // Confirmação 2-step pro "Errei": primeiro click arma, segundo confirma.
+  // Evita reset acidental do card (penalidade pesada do SM-2).
+  const [armedAgain, setArmedAgain] = useState(false);
 
   useEffect(() => {
     if (queue !== null || !state) return;
@@ -232,10 +235,25 @@ export function ReviewClient(props: ReviewClientProps = {}) {
             Quão fácil foi lembrar disso?
           </p>
           <div className="grid grid-cols-4 gap-2">
-            <RatingButton label="Errei" sublabel="+0 XP · reset" tone="#f78166" onClick={() => handleRate('again')} />
-            <RatingButton label="Difícil" sublabel="+1 XP · 1d" tone="#e3b341" onClick={() => handleRate('hard')} />
-            <RatingButton label="Bom" sublabel="+2 XP · 3d" tone="#3fb950" onClick={() => handleRate('good')} />
-            <RatingButton label="Fácil" sublabel="+4 XP · longo" tone="#58a6ff" onClick={() => handleRate('easy')} />
+            <RatingButton
+              label={armedAgain ? 'Confirmar' : 'Errei'}
+              sublabel={armedAgain ? 'clique de novo' : '+0 XP · reset'}
+              tone="#f78166"
+              armed={armedAgain}
+              onClick={() => {
+                if (armedAgain) {
+                  setArmedAgain(false);
+                  handleRate('again');
+                } else {
+                  setArmedAgain(true);
+                  // Desarma se demorar 4s sem confirmar — evita re-click acidental.
+                  setTimeout(() => setArmedAgain(false), 4000);
+                }
+              }}
+            />
+            <RatingButton label="Difícil" sublabel="+1 XP · 1d" tone="#e3b341" onClick={() => { setArmedAgain(false); handleRate('hard'); }} />
+            <RatingButton label="Bom" sublabel="+2 XP · 3d" tone="#3fb950" onClick={() => { setArmedAgain(false); handleRate('good'); }} />
+            <RatingButton label="Fácil" sublabel="+4 XP · longo" tone="#58a6ff" onClick={() => { setArmedAgain(false); handleRate('easy'); }} />
           </div>
           <div className="mt-4 flex items-center justify-between">
             <p className="text-[11px]" style={{ color: 'var(--ffv-muted)' }}>
@@ -255,12 +273,18 @@ export function ReviewClient(props: ReviewClientProps = {}) {
   );
 }
 
-function RatingButton({ label, sublabel, tone, onClick }: { label: string; sublabel: string; tone: string; onClick: () => void }) {
+function RatingButton({ label, sublabel, tone, onClick, armed = false }: { label: string; sublabel: string; tone: string; onClick: () => void; armed?: boolean }) {
   return (
     <button
       onClick={onClick}
+      aria-pressed={armed}
       className="flex flex-col items-center gap-1 py-3 rounded-lg transition-all hover:opacity-90 active:scale-95"
-      style={{ background: `${tone}15`, border: `1px solid ${tone}50`, color: tone }}
+      style={{
+        background: armed ? `${tone}30` : `${tone}15`,
+        border: armed ? `2px solid ${tone}` : `1px solid ${tone}50`,
+        color: tone,
+        animation: armed ? 'ffv-pulse-soft 1.2s ease-in-out infinite' : undefined,
+      }}
     >
       <span className="text-sm font-bold">{label}</span>
       <span className="text-[10px] opacity-80">{sublabel}</span>
