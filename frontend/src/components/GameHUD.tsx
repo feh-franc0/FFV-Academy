@@ -287,30 +287,51 @@ function HUDStats({
         <span aria-hidden>{levelInfo?.icon ?? '🌱'}</span>
       </Link>
 
-      {/* Streak — sm+ */}
-      {state.streak > 0 && (
-        <Tooltip>
-          <TooltipTrigger>
-            <div
-              className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold cursor-default"
-              style={{
-                background: 'color-mix(in srgb, var(--ffv-orange) 12%, transparent)',
-                border: '1px solid color-mix(in srgb, var(--ffv-orange) 28%, transparent)',
-                color: 'var(--ffv-orange)',
-              }}
+      {/* Streak — sm+. Pill ganha estado "em risco" (vermelho + pulse + sufixo)
+          quando streak > 0 e usuário não estudou hoje (lastStudyDate ≠ hoje). */}
+      {state.streak > 0 && (() => {
+        const todayISO = new Date().toISOString().slice(0, 10);
+        const atRisk = state.lastStudyDate !== todayISO;
+        return (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Link
+                  href="/revisar"
+                  aria-label={atRisk ? `Streak de ${state.streak} dias em risco — estude hoje` : `Streak de ${state.streak} dias`}
+                  className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold transition-opacity hover:opacity-90"
+                  style={{
+                    background: atRisk
+                      ? 'color-mix(in srgb, var(--ffv-red, #f78166) 18%, transparent)'
+                      : 'color-mix(in srgb, var(--ffv-orange) 12%, transparent)',
+                    border: `1px solid ${atRisk
+                      ? 'color-mix(in srgb, var(--ffv-red, #f78166) 45%, transparent)'
+                      : 'color-mix(in srgb, var(--ffv-orange) 28%, transparent)'}`,
+                    color: atRisk ? 'var(--ffv-red, #f78166)' : 'var(--ffv-orange)',
+                    textDecoration: 'none',
+                    animation: atRisk ? 'ffv-pulse-soft 2s ease-in-out infinite' : undefined,
+                  }}
+                />
+              }
             >
               🔥 {state.streak}d
-              {state.freezes > 0 && <span className="ml-1 opacity-80">· 🧊{state.freezes}</span>}
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            <p>{state.streak} dias seguidos de estudo</p>
-            {state.freezes > 0 && (
-              <p className="text-xs opacity-70">🧊 {state.freezes} freeze{state.freezes !== 1 ? 's' : ''} — te salva se você pular um dia</p>
-            )}
-          </TooltipContent>
-        </Tooltip>
-      )}
+              {atRisk && <span className="ml-1 font-bold">· em risco</span>}
+              {!atRisk && state.freezes > 0 && <span className="ml-1 opacity-80">· 🧊{state.freezes}</span>}
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              <p>{state.streak} dias seguidos de estudo</p>
+              {atRisk && (
+                <p className="text-xs" style={{ color: 'var(--ffv-red, #f78166)' }}>
+                  ⚠ Você ainda não estudou hoje — clique pra revisar e manter o streak
+                </p>
+              )}
+              {state.freezes > 0 && (
+                <p className="text-xs opacity-70">🧊 {state.freezes} freeze{state.freezes !== 1 ? 's' : ''} — te salva se você pular um dia</p>
+              )}
+            </TooltipContent>
+          </Tooltip>
+        );
+      })()}
 
       {/* Level + XP bar — sm+ apenas (mobile usa o link compacto acima) */}
       <Tooltip>

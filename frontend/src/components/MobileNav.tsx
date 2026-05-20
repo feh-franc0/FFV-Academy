@@ -24,6 +24,7 @@ import {
 import { useGameState } from '@/hooks/useGameState';
 import { useActiveBase } from '@/components/base/ActiveBaseContext';
 import { selectDueCardsForBase } from '@/lib/bases/state-selectors';
+import { useTheme } from '@/hooks/useTheme';
 import type { ComponentType, SVGProps } from 'react';
 
 type LucideIcon = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
@@ -311,6 +312,7 @@ export function MobileNav() {
 
               <SheetSection title="Conta">
                 <SheetLink href="/preferencias" label="Preferências" color="var(--ffv-muted)" Icon={UserCog} />
+                <ThemeToggleSheet />
               </SheetSection>
 
               <button
@@ -399,6 +401,53 @@ function SheetLink({
         </span>
         <span className="text-sm font-medium">{label}</span>
       </Link>
+    </li>
+  );
+}
+
+/** Linha do drawer com toggle de tema — usuário mobile precisa de acesso
+ *  óbvio ao tema (desktop tem o ThemeToggle visível no header). */
+function ThemeToggleSheet() {
+  const { theme, toggle, mounted } = useTheme();
+  if (!mounted) return null;
+  const isDark = theme === 'dark';
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-label={`Trocar para tema ${isDark ? 'claro' : 'escuro'}`}
+        className="w-full flex items-center gap-3 rounded-xl"
+        style={{
+          minHeight: 52,
+          padding: '0 12px',
+          background: 'var(--ffv-bg2)',
+          border: '1px solid var(--ffv-border)',
+          color: 'var(--foreground)',
+          cursor: 'pointer',
+        }}
+      >
+        <span
+          className="flex items-center justify-center flex-shrink-0"
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 8,
+            background: 'color-mix(in srgb, var(--ffv-blue) 14%, transparent)',
+            border: '1px solid color-mix(in srgb, var(--ffv-blue) 30%, transparent)',
+            color: 'var(--ffv-blue)',
+            fontSize: 16,
+          }}
+        >
+          {isDark ? '☀️' : '🌙'}
+        </span>
+        <span className="text-sm font-medium flex-1 text-left">
+          {isDark ? 'Tema claro' : 'Tema escuro'}
+        </span>
+        <span className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
+          {isDark ? 'Light' : 'Dark'}
+        </span>
+      </button>
     </li>
   );
 }

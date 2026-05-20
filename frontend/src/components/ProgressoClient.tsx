@@ -89,6 +89,13 @@ export function ProgressoClient() {
 
   // Filtra slices do estado pela base ativa — nada de vazar tech em medvet.
   const completed = selectCompletedForBase(state.completedModules, activeBase.slug);
+
+  // Empty state ativador: usuário sem nenhum módulo completo na base atual
+  // ganha CTA grande em vez de dashboard zerado e desmotivador.
+  if (completed.length === 0 && state.xp === 0) {
+    return <FirstTimeProgressoEmpty base={activeBase} />;
+  }
+
   const baseLastArticle = selectLastArticleForBase(state.lastArticle, activeBase.slug);
   const todayISO = new Date().toISOString().slice(0, 10);
   const baseDueCards = selectDueCardsForBase(state.reviewCards ?? [], activeBase.slug)
@@ -853,6 +860,88 @@ function TrailPerformanceGrid({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ─── FirstTimeProgressoEmpty ────────────────────────────────────────────────
+// Empty state ativador pra usuários sem nenhuma atividade na base atual.
+// Substitui o dashboard zerado (0 XP / 0 módulos / 0 badges) por um CTA
+// grande convidando a começar. Funciona pra qualquer base.
+
+function FirstTimeProgressoEmpty({ base }: { base: ReturnType<typeof useActiveBase>['base'] }) {
+  const totalModules = selectTotalModulesForBase(base.slug);
+  return (
+    <section className="max-w-3xl mx-auto px-6 pt-24 pb-20 text-center">
+      <div className="text-6xl mb-6">{base.icon}</div>
+      <p
+        className="font-mono uppercase mb-4"
+        style={{
+          fontSize: 11,
+          color: 'var(--ffv-muted)',
+          letterSpacing: '0.18em',
+        }}
+      >
+        Comece sua jornada em {base.name}
+      </p>
+      <h1
+        className="font-bold mb-6"
+        style={{ fontSize: 'clamp(1.8rem, 4vw, 2.6rem)', letterSpacing: '-0.02em', lineHeight: 1.15 }}
+      >
+        Tudo pronto pra você começar — <br />
+        <span style={{ color: 'var(--ffv-blue)' }}>{totalModules} módulos esperam.</span>
+      </h1>
+      <p
+        className="text-sm mb-10 mx-auto leading-relaxed"
+        style={{ maxWidth: 540, color: 'var(--ffv-muted)' }}
+      >
+        Cada módulo tem teoria + quiz + cards de revisão espaçada. Você acumula XP, sobe de nível
+        e mantém streak diário. Seu progresso aparece aqui assim que completar o primeiro módulo.
+      </p>
+      <div className="flex flex-wrap items-center justify-center gap-3 mb-10">
+        <Link
+          href={base.basePath}
+          className="inline-flex items-center gap-2 px-6 py-3 rounded-full text-sm font-bold transition-all hover:opacity-90"
+          style={{ background: 'var(--ffv-blue)', color: '#0d1117' }}
+        >
+          {base.microcopy.ctaPrimary} →
+        </Link>
+        <Link
+          href="/revisar"
+          className="inline-flex items-center gap-2 px-6 py-3 rounded-full text-sm font-semibold transition-all hover:opacity-90"
+          style={{
+            background: 'transparent',
+            border: '1px solid var(--ffv-border)',
+            color: 'var(--ffv-muted)',
+          }}
+        >
+          Como funciona o SRS
+        </Link>
+      </div>
+      <div
+        className="grid sm:grid-cols-3 gap-4 mt-6 mx-auto"
+        style={{ maxWidth: 560 }}
+      >
+        <FirstTimeStat icon="📚" label="Módulos" value={totalModules} />
+        <FirstTimeStat icon="🧠" label="SRS científico" value="SM-2" />
+        <FirstTimeStat icon="🎓" label="Custo" value="R$ 0" />
+      </div>
+    </section>
+  );
+}
+
+function FirstTimeStat({ icon, label, value }: { icon: string; label: string; value: string | number }) {
+  return (
+    <div
+      className="p-4 rounded-xl"
+      style={{
+        background: 'var(--ffv-bg2)',
+        border: '1px solid var(--ffv-border)',
+      }}
+    >
+      <div className="text-2xl mb-1">{icon}</div>
+      <p className="text-xs" style={{ color: 'var(--ffv-muted)' }}>{label}</p>
+      <p className="font-bold text-base">{value}</p>
     </div>
   );
 }

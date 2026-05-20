@@ -556,7 +556,12 @@ function LegendKey({ children, label }: { children: React.ReactNode; label: stri
   );
 }
 
-/** Exported button that opens the palette — used in the HUD. */
+/** Exported button that opens the palette — used in the HUD.
+ *
+ * Mobile: ícone "lupa" maior, com background sólido pra ser obviamente
+ * clicável (não some no meio de outros pills). Desktop: barra de busca
+ * com placeholder "Buscar" + kbd "⌘K". Touch target ≥36px.
+ */
 export function CommandPaletteTrigger() {
   const isMac = useIsMac();
   function open() {
@@ -567,28 +572,27 @@ export function CommandPaletteTrigger() {
     <button
       type="button"
       onClick={open}
-      aria-label="Buscar no Hub"
-      className="inline-flex items-center gap-2 rounded-md transition-colors"
+      aria-label="Buscar — abrir paleta de comandos"
+      className="inline-flex items-center justify-center gap-2 rounded-lg transition-colors"
       style={{
-        height: 32,
-        padding: '0 10px 0 10px',
-        background: 'var(--ffv-bg2)',
-        border: '1px solid var(--ffv-border)',
-        color: 'var(--ffv-muted)',
+        minHeight: 36,
+        minWidth: 36,
+        padding: '0 10px',
+        background: 'color-mix(in srgb, var(--ffv-blue) 10%, var(--ffv-bg2))',
+        border: '1px solid color-mix(in srgb, var(--ffv-blue) 26%, var(--ffv-border))',
+        color: 'var(--ffv-blue)',
         fontSize: 12,
         cursor: 'pointer',
       }}
       onMouseOver={e => {
-        e.currentTarget.style.borderColor = 'var(--ffv-blue)';
-        e.currentTarget.style.color = 'var(--foreground)';
+        e.currentTarget.style.background = 'color-mix(in srgb, var(--ffv-blue) 18%, var(--ffv-bg2))';
       }}
       onMouseOut={e => {
-        e.currentTarget.style.borderColor = 'var(--ffv-border)';
-        e.currentTarget.style.color = 'var(--ffv-muted)';
+        e.currentTarget.style.background = 'color-mix(in srgb, var(--ffv-blue) 10%, var(--ffv-bg2))';
       }}
     >
       <SearchIcon />
-      <span className="hidden md:inline">Buscar</span>
+      <span className="hidden md:inline" style={{ color: 'var(--ffv-muted)' }}>Buscar</span>
       <kbd
         className="font-mono hidden sm:inline"
         style={{

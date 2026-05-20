@@ -398,16 +398,29 @@ function BaseCard({ base }: { base: KnowledgeBase }) {
           <span><strong style={{ color: 'var(--ffv-ink)' }}>{base.hubs}</strong> hubs</span>
         </div>
       ) : (
-        base.demandCount > 0 && (
-          <div
-            className="mb-4 text-[11px] flex items-center gap-1.5"
-            style={{ color: 'var(--ffv-amber)' }}
-          >
-            <span aria-hidden>👥</span>
-            <strong>{base.demandCount}</strong>
-            {base.demandCount === 1 ? ' pessoa já solicitou' : ' pessoas já solicitaram'}
-          </div>
-        )
+        <div
+          className="mb-4 flex items-center gap-2 text-[11px] px-2.5 py-1.5 rounded-lg"
+          style={{
+            background: base.demandCount > 0
+              ? 'color-mix(in srgb, var(--ffv-amber) 12%, transparent)'
+              : 'var(--ffv-bg2)',
+            border: base.demandCount > 0
+              ? '1px solid color-mix(in srgb, var(--ffv-amber) 30%, transparent)'
+              : '1px solid var(--ffv-border)',
+            color: base.demandCount > 0 ? 'var(--ffv-amber)' : 'var(--ffv-muted)',
+          }}
+        >
+          <span aria-hidden style={{ fontSize: 13 }}>{base.demandCount > 0 ? '🔥' : '🌱'}</span>
+          {base.demandCount > 0 ? (
+            <span>
+              <strong>{base.demandCount}</strong>
+              {base.demandCount === 1 ? ' pessoa pediu' : ' pessoas pediram'} —
+              <strong> +1</strong> pode mudar a fila
+            </span>
+          ) : (
+            <span>Seja a primeira pessoa a pedir essa base</span>
+          )}
+        </div>
       )}
 
       {/* CTA por status */}

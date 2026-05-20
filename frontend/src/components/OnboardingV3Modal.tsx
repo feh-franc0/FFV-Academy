@@ -23,6 +23,7 @@ import { useEffect, useState } from 'react';
 import { useGameState } from '@/hooks/useGameState';
 import { useUserPreferences } from '@/hooks/useUserPreferences';
 import { listBases } from '@/lib/bases/registry';
+import { useActiveBase } from '@/components/base/ActiveBaseContext';
 import { countSignals, type MaterialKind, type StudyFrequency } from '@/lib/user-preferences';
 
 type Step = 'intro' | 'bases' | 'home' | 'frequency' | 'materials' | 'done';
@@ -49,11 +50,21 @@ const WEEKDAY_LABELS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 export function OnboardingV3Modal() {
   const { state, finishOnboarding } = useGameState();
   const { prefs, update, hydrated } = useUserPreferences();
+  const { base: activeBase, isPathnameDerived } = useActiveBase();
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<Step>('intro');
 
-  // Critério de abertura: GameState sem onboarded + preferences vazias +
-  // sem flag de skip na URL.
+  // Critério de abertura:
+  //  - GameState sem onboarded
+  //  - preferences vazias
+  //  - sem ?skipOnboarding=1
+  //  - **e** o usuário não veio de uma rota DENTRO de uma base
+  //
+  // Se ele entrou direto em /medicina-veterinaria (deep link, share),
+  // já sinalizou interesse — não interrompemos com modal de "qual base
+  // te interessa?". Ativamos silenciosamente: registramos a base como
+  // home + interested e marcamos onboarded. Ele pode customizar depois
+  // em /perfil.
   useEffect(() => {
     if (!state || !hydrated) return;
     if (typeof window !== 'undefined' &&
@@ -63,11 +74,21 @@ export function OnboardingV3Modal() {
     const neverOnboarded = !state.onboardedAt;
     const noPrefs = prefs.interestedBases.length === 0 && !prefs.homeBase;
     const noActivity = state.completedModules.length === 0 && state.xp === 0;
-    if (neverOnboarded && noPrefs && noActivity) {
-      const t = setTimeout(() => setOpen(true), 450);
-      return () => clearTimeout(t);
+    if (!(neverOnboarded && noPrefs && noActivity)) return;
+
+    // Deep link em uma base: silent-onboard pra essa base, sem modal.
+    if (isPathnameDerived) {
+      update({
+        interestedBases: [activeBase.slug],
+        homeBase: activeBase.slug,
+      });
+      finishOnboarding(null);
+      return;
     }
-  }, [state, hydrated, prefs.interestedBases.length, prefs.homeBase]);
+
+    const t = setTimeout(() => setOpen(true), 450);
+    return () => clearTimeout(t);
+  }, [state, hydrated, prefs.interestedBases.length, prefs.homeBase, isPathnameDerived, activeBase.slug, update, finishOnboarding]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {

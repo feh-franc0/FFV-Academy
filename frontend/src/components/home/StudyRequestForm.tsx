@@ -359,6 +359,34 @@ export function StudyRequestForm() {
           se a trilha não te servir, responde o e-mail que a gente refaz. Não usamos seu material pra treinar IA.
         </p>
 
+        {/* Enquanto espera — não deixa o usuário em dead air. Direciona pra
+            base de tech como prova viva do que vai vir. */}
+        <div
+          className="rounded-xl p-4 mb-4"
+          style={{
+            background: 'color-mix(in srgb, var(--ffv-green) 8%, var(--ffv-bg))',
+            border: '1px solid color-mix(in srgb, var(--ffv-green) 22%, transparent)',
+          }}
+        >
+          <p
+            className="font-mono uppercase text-[10px] mb-2"
+            style={{ color: 'var(--ffv-green)', letterSpacing: '0.12em', fontWeight: 700 }}
+          >
+            Enquanto espera
+          </p>
+          <p className="text-sm mb-3" style={{ lineHeight: 1.5 }}>
+            <strong>Conheça nossa base de Tecnologia</strong> — mesmo padrão, mesma estrutura.
+            157 módulos prontos no ar, igual ao que vai chegar pra você em 24h.
+          </p>
+          <a
+            href="/tecnologia"
+            className="inline-flex items-center gap-1.5 text-xs font-semibold transition-opacity hover:opacity-80"
+            style={{ color: 'var(--ffv-green)' }}
+          >
+            Explorar Tecnologia agora →
+          </a>
+        </div>
+
         <button
           type="button"
           onClick={() => {
