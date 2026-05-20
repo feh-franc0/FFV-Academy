@@ -23,7 +23,9 @@ export interface BasesResponse {
   totalQueued: number;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8080';
+// `||` em vez de `??` porque o frontend pode rodar com NEXT_PUBLIC_API_BASE_URL=""
+// (modo mock do Playwright). Empty string deve cair pro default local também.
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8080';
 
 export async function fetchBases(opts: { signal?: AbortSignal } = {}): Promise<BasesResponse> {
   const res = await fetch(`${API_BASE}/api/v1/bases`, {
