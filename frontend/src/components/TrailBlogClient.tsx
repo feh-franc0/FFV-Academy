@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useGameState } from '@/hooks/useGameState';
 import { Progress } from '@/components/ui/progress';
 import { type Trail } from '@/lib/curriculum';
+import { ArticleDiscussion } from './ArticleDiscussion';
 
 interface Props {
   trail: Trail;
@@ -174,6 +175,14 @@ export function TrailBlogClient({ trail }: Props) {
           );
         })}
       </div>
+
+      {/* ── Discussão da trilha — comentários cross-user via backend ── */}
+      <ArticleDiscussion
+        slug={trail.id}
+        title={trail.name}
+        accentColor={trail.color}
+        targetType="trail"
+      />
 
       {/* ── Footer do blog ── */}
       <div className="mt-12 pt-8 flex items-center justify-between flex-wrap gap-4" style={{ borderTop: '1px solid var(--ffv-border)' }}>

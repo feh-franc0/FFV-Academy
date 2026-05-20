@@ -347,7 +347,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 			// Moderação de comentários.
 			if cfg.Comments != nil {
+				r.Get("/api/v1/admin/comments", cfg.Comments.AdminList)
 				r.Post("/api/v1/admin/comments/{id}/hide", cfg.Comments.Hide)
+				r.Post("/api/v1/admin/comments/{id}/restore", cfg.Comments.Restore)
 			}
 
 			// CRUD admin: news, cheatsheets, playlists.

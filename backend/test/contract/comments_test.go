@@ -126,6 +126,18 @@ func (s *stubCommentsRepo) Report(_ context.Context, commentID, reporterID, reas
 	return nil
 }
 
+func (s *stubCommentsRepo) ListByStatus(_ context.Context, status string, limit, offset int) ([]handlers.Comment, int64, error) {
+	_ = limit
+	_ = offset
+	out := []handlers.Comment{}
+	for _, v := range s.items {
+		if v.Status == status {
+			out = append(out, *v)
+		}
+	}
+	return out, int64(len(out)), nil
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a

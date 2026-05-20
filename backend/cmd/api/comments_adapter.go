@@ -139,6 +139,45 @@ func (r *pgxCommentsRepo) UnVote(ctx context.Context, commentID, userID string) 
 	return nil
 }
 
+// ListByStatus — usado por admin pra moderação. Filtra por status sem
+// restringir target. Inclui autor + score + report_count pra contexto.
+func (r *pgxCommentsRepo) ListByStatus(ctx context.Context, status string, limit, offset int) ([]handlers.Comment, int64, error) {
+	var total int64
+	if err := r.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM comments WHERE status = $1
+	`, status).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT c.id::text, c.user_id, COALESCE(u.name, ''),
+		       c.target_type, c.target_id, COALESCE(c.parent_id::text, ''),
+		       c.content, c.status, c.edited, c.score,
+		       c.created_at, c.updated_at
+		FROM comments c
+		LEFT JOIN users u ON u.id = c.user_id
+		WHERE c.status = $1
+		ORDER BY c.updated_at DESC
+		LIMIT $2 OFFSET $3
+	`, status, limit, offset)
+	if err != nil {
+		return nil, total, err
+	}
+	defer rows.Close()
+	out := []handlers.Comment{}
+	for rows.Next() {
+		var c handlers.Comment
+		if err := rows.Scan(
+			&c.ID, &c.UserID, &c.AuthorName, &c.TargetType, &c.TargetID, &c.ParentID,
+			&c.Content, &c.Status, &c.Edited, &c.Score,
+			&c.CreatedAt, &c.UpdatedAt,
+		); err != nil {
+			return out, total, err
+		}
+		out = append(out, c)
+	}
+	return out, total, nil
+}
+
 // Report — registra reporte. PK composta evita duplicata do mesmo user.
 // ON CONFLICT DO NOTHING = idempotente (segundo reporte do mesmo user = no-op).
 // Trigger auto-flag em ≥3 reports.

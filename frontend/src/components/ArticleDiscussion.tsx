@@ -49,6 +49,8 @@ export function ArticleDiscussion({
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
+  // Threading: parentId quando o usuário está respondendo um comment.
+  const [replyParentId, setReplyParentId] = useState<string | null>(null);
 
   const fetchComments = useCallback(async (signal?: AbortSignal) => {
     setLoadError(null);
@@ -94,10 +96,12 @@ export function ArticleDiscussion({
         targetType,
         targetId: slug,
         content: draft.trim(),
+        parentId: replyParentId ?? undefined,
       });
       setComments(prev => [...(prev ?? []), created]);
       setDraft('');
-      toast.success('Comentário publicado.');
+      setReplyParentId(null);
+      toast.success(replyParentId ? 'Resposta publicada.' : 'Comentário publicado.');
     } catch (err) {
       if (err instanceof CommentApiError) {
         if (err.isRateLimited) {
@@ -198,7 +202,21 @@ export function ArticleDiscussion({
       {expanded && (
         <form onSubmit={handleSubmit} className="mb-6" aria-label="Novo comentário">
           <label htmlFor="comment-draft" className="block text-xs font-semibold mb-2" style={{ color: 'var(--ffv-muted)' }}>
-            Seu comentário {user ? `· ${user.name}` : '· (faça login pra publicar)'}
+            {replyParentId ? (
+              <span>
+                Respondendo a um comentário
+                {' '}
+                <button
+                  type="button"
+                  onClick={() => setReplyParentId(null)}
+                  style={{ color: accentColor, background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 600 }}
+                >
+                  · cancelar
+                </button>
+              </span>
+            ) : (
+              <>Seu comentário {user ? `· ${user.name}` : '· (faça login pra publicar)'}</>
+            )}
           </label>
           <textarea
             id="comment-draft"
@@ -285,15 +303,24 @@ export function ArticleDiscussion({
 
       {comments !== null && comments.length > 0 && (
         <ul className="flex flex-col gap-4 list-none p-0">
-          {comments.map(c => (
-            <CommentRow
-              key={c.id}
-              c={c}
-              isOwn={user?.id === c.userId}
+          {buildThreads(comments).map(thread => (
+            <CommentThread
+              key={thread.root.id}
+              root={thread.root}
+              replies={thread.replies}
+              currentUserId={user?.id}
               accentColor={accentColor}
+              activeReplyTarget={replyParentId}
               onVote={handleVote}
               onReport={handleReport}
               onDelete={handleDelete}
+              onReply={(parentId) => {
+                setReplyParentId(parentId);
+                setExpanded(true);
+                setTimeout(() => {
+                  document.getElementById('comment-draft')?.focus();
+                }, 50);
+              }}
             />
           ))}
         </ul>
@@ -302,20 +329,122 @@ export function ArticleDiscussion({
   );
 }
 
+/**
+ * Agrupa comentários em threads (root + replies). Profundidade limitada a 1
+ * nível (replies de replies aparecem flat na mesma thread root) — UX mais
+ * clara que threads infinitas.
+ */
+interface Thread { root: Comment; replies: Comment[] }
+function buildThreads(comments: Comment[]): Thread[] {
+  const rootMap = new Map<string, Thread>();
+  const orphanReplies: Comment[] = [];
+  // Primeiro pass: separa roots dos replies
+  for (const c of comments) {
+    if (!c.parentId) rootMap.set(c.id, { root: c, replies: [] });
+  }
+  for (const c of comments) {
+    if (c.parentId) {
+      const t = rootMap.get(c.parentId);
+      if (t) t.replies.push(c);
+      else orphanReplies.push(c); // parent deletado/escondido — vira root
+    }
+  }
+  // Replies ordenadas por created_at ascending (linha do tempo)
+  for (const t of rootMap.values()) {
+    t.replies.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+  // Roots ordenados por score DESC (já vem assim do backend) — mas se um reply
+  // virou orphan, tratamos como root no fim.
+  const threads = Array.from(rootMap.values());
+  for (const o of orphanReplies) threads.push({ root: o, replies: [] });
+  return threads;
+}
+
+function CommentThread({
+  root,
+  replies,
+  currentUserId,
+  accentColor,
+  activeReplyTarget,
+  onVote,
+  onReport,
+  onDelete,
+  onReply,
+}: {
+  root: Comment;
+  replies: Comment[];
+  currentUserId?: string;
+  accentColor: string;
+  activeReplyTarget: string | null;
+  onVote: (c: Comment, v: 1 | -1) => void;
+  onReport: (c: Comment) => void;
+  onDelete: (c: Comment) => void;
+  onReply: (parentId: string) => void;
+}) {
+  return (
+    <li className="list-none">
+      <CommentRow
+        c={root}
+        isOwn={currentUserId === root.userId}
+        accentColor={accentColor}
+        showReply
+        replyActive={activeReplyTarget === root.id}
+        onVote={onVote}
+        onReport={onReport}
+        onDelete={onDelete}
+        onReply={() => onReply(root.id)}
+      />
+      {replies.length > 0 && (
+        <ul
+          className="list-none p-0 mt-2"
+          style={{
+            marginLeft: 28,
+            paddingLeft: 16,
+            borderLeft: '2px solid var(--ffv-border)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 12,
+          }}
+        >
+          {replies.map(r => (
+            <li key={r.id} className="list-none">
+              <CommentRow
+                c={r}
+                isOwn={currentUserId === r.userId}
+                accentColor={accentColor}
+                showReply={false}
+                onVote={onVote}
+                onReport={onReport}
+                onDelete={onDelete}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+    </li>
+  );
+}
+
 function CommentRow({
   c,
   isOwn,
   accentColor,
+  showReply = false,
+  replyActive = false,
   onVote,
   onReport,
   onDelete,
+  onReply,
 }: {
   c: Comment;
   isOwn: boolean;
   accentColor: string;
+  showReply?: boolean;
+  replyActive?: boolean;
   onVote: (c: Comment, v: 1 | -1) => void;
   onReport: (c: Comment) => void;
   onDelete: (c: Comment) => void;
+  onReply?: () => void;
 }) {
   const upActive = c.userVote === 1;
   const downActive = c.userVote === -1;
@@ -389,7 +518,24 @@ function CommentRow({
           <p style={{ fontSize: 14, lineHeight: 1.55, color: 'var(--foreground)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
             {c.content}
           </p>
-          <div className="flex items-center gap-3 mt-2" style={{ fontSize: 11 }}>
+          <div className="flex items-center gap-3 mt-2 flex-wrap" style={{ fontSize: 11 }}>
+            {showReply && onReply && (
+              <button
+                type="button"
+                onClick={onReply}
+                aria-pressed={replyActive}
+                style={{
+                  color: replyActive ? accentColor : 'var(--ffv-muted)',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: 0,
+                  fontWeight: 600,
+                }}
+              >
+                {replyActive ? 'Respondendo…' : 'Responder'}
+              </button>
+            )}
             {isOwn ? (
               <button
                 type="button"

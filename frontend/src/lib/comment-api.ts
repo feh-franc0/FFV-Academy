@@ -146,6 +146,44 @@ export async function reportComment(id: string, reason: string): Promise<void> {
   if (!res.ok) throw await parseError(res);
 }
 
+// ─── Admin moderation ─────────────────────────────────────────────────────
+
+export type CommentStatus = 'visible' | 'flagged' | 'hidden' | 'deleted';
+
+/** Lista comments por status pra moderação. Requer role=admin. */
+export async function adminListComments(
+  status: CommentStatus = 'flagged',
+  opts: { limit?: number; offset?: number; signal?: AbortSignal } = {},
+): Promise<CommentList> {
+  const params = new URLSearchParams({
+    status,
+    limit: String(opts.limit ?? 50),
+    offset: String(opts.offset ?? 0),
+  });
+  const res = await fetch(`${API_BASE}/api/v1/admin/comments?${params}`, {
+    signal: opts.signal,
+    headers: { ...getAuthHeader() },
+  });
+  if (!res.ok) throw await parseError(res);
+  return res.json() as Promise<CommentList>;
+}
+
+export async function adminHideComment(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/v1/admin/comments/${encodeURIComponent(id)}/hide`, {
+    method: 'POST',
+    headers: { ...getAuthHeader() },
+  });
+  if (!res.ok) throw await parseError(res);
+}
+
+export async function adminRestoreComment(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/v1/admin/comments/${encodeURIComponent(id)}/restore`, {
+    method: 'POST',
+    headers: { ...getAuthHeader() },
+  });
+  if (!res.ok) throw await parseError(res);
+}
+
 // ─── Client-side validation (mirror do backend) ──────────────────────────
 
 /**

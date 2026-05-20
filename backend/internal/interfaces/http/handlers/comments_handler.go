@@ -33,6 +33,8 @@ type CommentsRepository interface {
 	UnVote(ctx context.Context, commentID, userID string) error
 	// Report: registra reporte (uma vez por user/comment). Auto-flag em ≥3 via trigger DB.
 	Report(ctx context.Context, commentID, reporterID, reason string) error
+	// ListByStatus: usado por admin pra listar flagged/hidden pra moderação.
+	ListByStatus(ctx context.Context, status string, limit, offset int) ([]Comment, int64, error)
 }
 
 // Comment é a projeção pública de um comentário.
@@ -211,8 +213,67 @@ func (h *CommentsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// AdminList — GET /api/v1/admin/comments?status=flagged&limit=50&offset=0
+// Lista comments por status pra moderação. Admin only (auth no router).
+func (h *CommentsHandler) AdminList(w http.ResponseWriter, r *http.Request) {
+	if h.repo == nil {
+		WriteJSON(w, http.StatusOK, map[string]interface{}{"data": []Comment{}, "total": 0})
+		return
+	}
+	q := r.URL.Query()
+	status := q.Get("status")
+	if status == "" {
+		status = "flagged"
+	}
+	// Whitelist — não permitir status arbitrário (proteção defesa em profundidade).
+	if status != "flagged" && status != "hidden" && status != "visible" && status != "deleted" {
+		WriteError(w, http.StatusBadRequest, "status inválido", "validation")
+		return
+	}
+
+	limit := parseIntParam(q.Get("limit"), 50)
+	if limit > 200 {
+		limit = 200
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	offset := parseIntParam(q.Get("offset"), 0)
+	if offset < 0 {
+		offset = 0
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+
+	items, total, err := h.repo.ListByStatus(ctx, status, limit, offset)
+	if err != nil {
+		HandleDomainError(w, err)
+		return
+	}
+	if items == nil {
+		items = []Comment{}
+	}
+	WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"data":   items,
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
+	})
+}
+
 // Hide — POST /api/v1/admin/comments/{id}/hide (admin only)
 func (h *CommentsHandler) Hide(w http.ResponseWriter, r *http.Request) {
+	h.changeStatus(w, r, "hidden")
+}
+
+// Restore — POST /api/v1/admin/comments/{id}/restore (admin only).
+// Devolve comentário marcado como flagged/hidden pra 'visible' (após revisão).
+func (h *CommentsHandler) Restore(w http.ResponseWriter, r *http.Request) {
+	h.changeStatus(w, r, "visible")
+}
+
+func (h *CommentsHandler) changeStatus(w http.ResponseWriter, r *http.Request, status string) {
 	if h.repo == nil {
 		WriteError(w, http.StatusServiceUnavailable, "comments não configurados", "service-unavailable")
 		return
@@ -224,7 +285,7 @@ func (h *CommentsHandler) Hide(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
-	if err := h.repo.UpdateStatus(ctx, id, "hidden"); err != nil {
+	if err := h.repo.UpdateStatus(ctx, id, status); err != nil {
 		HandleDomainError(w, err)
 		return
 	}
