@@ -13,6 +13,9 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { fetchBases, type KnowledgeBase, type BasesResponse } from '@/lib/bases-api';
+import { useUserPreferences } from '@/hooks/useUserPreferences';
+import { rankItemsSimple } from '@/lib/personalization/rank';
+import { loadEngagement } from '@/lib/personalization/engagement-store';
 
 const SERIF: React.CSSProperties = { fontFamily: 'var(--font-serif)' };
 
@@ -46,6 +49,11 @@ export function BasesClient() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('todas');
+  // Personalização (PERSONALIZATION_PLAN §3.b — ranker aplicado em /bases).
+  // Quando user tem prefs ou engagement, bases preferidas sobem dentro do
+  // grupo "live". Sem prefs, o ordenamento default (live + demandCount +
+  // alfabética) prevalece.
+  const { prefs, hydrated } = useUserPreferences();
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -61,6 +69,33 @@ export function BasesClient() {
   const filteredBases = useMemo(() => {
     if (!resp) return [];
     const q = query.trim().toLowerCase();
+
+    // Calcula índice de personalização — bases preferidas/engajadas ficam
+    // com índice baixo (ordem prioritária). Bases sem sinal recebem índice
+    // alto (manda pro final dentro do mesmo status). Quando hydrated=false
+    // (SSR ou pré-mount), pula personalização — usa só ordem default.
+    const engagement = hydrated && typeof window !== 'undefined'
+      ? loadEngagement()
+      : null;
+    const personalRanked = hydrated && engagement
+      ? rankItemsSimple(
+          // areaLabel é texto formatado (ex: "Tecnologia · IA"). Quebra
+          // em tokens lowercased pra fazer match com user.topicTags.
+          resp.bases.map(b => ({
+            slug: b.slug,
+            name: b.name,
+            tags: b.areaLabel
+              .toLowerCase()
+              .split(/[\s·,/]+/)
+              .filter(t => t.length > 2),
+          })),
+          prefs,
+          engagement,
+        )
+      : null;
+    const slugPriority = new Map<string, number>();
+    personalRanked?.forEach((r, idx) => slugPriority.set(r.slug, idx));
+
     return resp.bases
       .filter(b => filter === 'todas' || b.status === filter)
       .filter(b => {
@@ -71,14 +106,19 @@ export function BasesClient() {
           b.description.toLowerCase().includes(q)
         );
       })
-      // Ordena: live primeiro, depois por demandCount desc, depois alfa.
+      // Ordena: live primeiro, depois personalização (se aplicada),
+      // depois demandCount desc, depois alfabética.
       .sort((a, b) => {
         if (a.status === 'live' && b.status !== 'live') return -1;
         if (b.status === 'live' && a.status !== 'live') return 1;
+        // Tie-break por personalização (índice menor = mais alto na lista)
+        const pa = slugPriority.get(a.slug);
+        const pb = slugPriority.get(b.slug);
+        if (pa !== undefined && pb !== undefined && pa !== pb) return pa - pb;
         if (b.demandCount !== a.demandCount) return b.demandCount - a.demandCount;
         return a.name.localeCompare(b.name);
       });
-  }, [resp, query, filter]);
+  }, [resp, query, filter, prefs, hydrated]);
 
   return (
     <div style={{ background: 'var(--ffv-paper)', color: 'var(--ffv-ink)' }}>

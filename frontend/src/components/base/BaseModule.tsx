@@ -14,6 +14,7 @@ import type { Base, Module, Trail, Section } from '@/lib/bases/types';
 import type { BaseTheme } from '@/lib/bases/theme';
 import { useGameState } from '@/hooks/useGameState';
 import { saveQuizScore } from '@/lib/engine';
+import { emit as emitEngagement } from '@/lib/personalization/engagement-store';
 import { TrailProvider } from './TrailContext';
 import { TrailSummaryDrawer } from './TrailSummaryDrawer';
 import { FloatingTrailMenuButton } from './FloatingTrailMenuButton';
@@ -34,6 +35,14 @@ function BaseModuleInner({ base, trail, module: m, theme, basePath }: BaseModule
   const currentIdx = trail.modules.findIndex(x => x.slug === m.slug);
   const prev = currentIdx > 0 ? trail.modules[currentIdx - 1] : null;
   const next = currentIdx < trail.modules.length - 1 ? trail.modules[currentIdx + 1] : null;
+
+  // Engagement tracking — alimenta o ranker em /bases e métricas futuras
+  // do admin. Eventos: visit_base ao mount + open_module pro slug atual.
+  // Dispara só uma vez por render do módulo (não em re-renders).
+  useEffect(() => {
+    emitEngagement({ kind: 'visit_base', baseSlug: base.slug });
+    emitEngagement({ kind: 'open_module', baseSlug: base.slug, moduleSlug: m.slug });
+  }, [base.slug, m.slug]);
 
   // ── Gamificação — XP + badges + streak quando o quiz é concluído ──
   // Triggered uma vez quando o usuário revela todas as questões. Engine global
