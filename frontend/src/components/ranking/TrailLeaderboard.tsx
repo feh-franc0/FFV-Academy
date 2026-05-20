@@ -44,7 +44,7 @@ export function TrailLeaderboard({ trailId, limit = 10 }: { trailId: string; lim
   if (items.length === 0) {
     return (
       <div className="p-4 rounded-xl" style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}>
-        <h3 className="text-sm font-bold mb-2">Top devs nesta trilha</h3>
+        <h3 className="text-sm font-bold mb-2">Top da trilha</h3>
         <p className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
           Ainda sem ranking — seja o primeiro a estudar e apareça aqui.
         </p>
@@ -55,7 +55,7 @@ export function TrailLeaderboard({ trailId, limit = 10 }: { trailId: string; lim
   return (
     <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--ffv-border)' }}>
       <div className="px-4 py-2" style={{ background: 'var(--ffv-bg2)' }}>
-        <h3 className="text-sm font-bold">Top devs nesta trilha (30d)</h3>
+        <h3 className="text-sm font-bold">Top da trilha · 30 dias</h3>
       </div>
       <ol>
         {items.map((e, i) => (

@@ -334,7 +334,7 @@ export function CommandPalette() {
             value={query}
             onChange={e => setQuery(e.target.value)}
             onKeyDown={onListKeyDown}
-            placeholder="Buscar artigos, trilhas, hubs, páginas…"
+            placeholder={activeBase.microcopy.searchPlaceholder}
             className="flex-1 bg-transparent outline-none text-sm py-3.5"
             style={{ color: 'var(--foreground)' }}
             aria-label="Campo de busca"

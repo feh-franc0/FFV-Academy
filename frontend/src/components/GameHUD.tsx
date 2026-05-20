@@ -16,6 +16,7 @@ import { unlockAudio } from '@/lib/sounds';
 import { toast } from '@/lib/toast';
 import { useBaseNav, type BaseNavItem } from '@/components/base/BaseNavContext';
 import { useActiveBase } from '@/components/base/ActiveBaseContext';
+import { BaseSwitcher } from '@/components/base/BaseSwitcher';
 import { selectDueCardsForBase, getBaseReviewCountToday } from '@/lib/bases/state-selectors';
 import type { ComponentType, SVGProps } from 'react';
 
@@ -138,8 +139,8 @@ export function GameHUD() {
         <FfvLogo size="sm" />
       </Link>
 
-      {/* Atalho pra home da base ativa — muda com a base. */}
-      <BaseHomeChip base={activeBase} pathname={pathname} />
+      {/* Switcher de base: chip com dropdown de bases disponíveis. */}
+      <BaseSwitcher pathname={pathname} />
 
       {/* Nav links — hubs primários + progresso (News/Simulados progressivos em lg/xl) */}
       <nav className="hidden md:flex items-center gap-1 mx-3 mr-auto">
@@ -212,51 +213,6 @@ export function GameHUD() {
         <ThemeToggle />
       </div>
     </header>
-  );
-}
-
-/**
- * Chip ao lado do logo FFV que aponta pra home da base ativa.
- *
- * Adapta nome + ícone à base — funciona como indicador visual constante
- * de "você está no mundinho X" + 1 clique pra voltar pra home da base
- * (não pra landing FFV).
- *
- * Renderiza em todas as rotas autenticadas (não-marketing). Em rotas globais
- * (/progresso, /ranking) reflete a base ativa persistida; em rotas dentro de
- * uma base, reflete a base do pathname.
- */
-function BaseHomeChip({
-  base,
-  pathname,
-}: {
-  base: ReturnType<typeof useActiveBase>['base'];
-  pathname: string;
-}) {
-  // Está EXATAMENTE na home da base — destaca como "atual" mas mantém visível.
-  const isOnBaseHome = pathname === base.basePath;
-
-  // Short label — mantém o header compacto.
-  const shortName = base.name.length > 16 ? base.name.slice(0, 14) + '…' : base.name;
-
-  return (
-    <Link
-      href={base.basePath}
-      aria-label={`Home da base ${base.name}`}
-      aria-current={isOnBaseHome ? 'page' : undefined}
-      className="ml-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all hover:opacity-90"
-      style={{
-        background: isOnBaseHome
-          ? 'color-mix(in srgb, var(--ffv-blue) 22%, transparent)'
-          : 'color-mix(in srgb, var(--ffv-blue) 14%, transparent)',
-        border: '1px solid color-mix(in srgb, var(--ffv-blue) 38%, transparent)',
-        color: 'var(--ffv-blue)',
-        textDecoration: 'none',
-      }}
-    >
-      <span aria-hidden style={{ fontSize: 14, lineHeight: 1 }}>{base.icon}</span>
-      <span className="hidden sm:inline">{shortName}</span>
-    </Link>
   );
 }
 

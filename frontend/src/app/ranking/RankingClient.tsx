@@ -10,6 +10,7 @@ import {
   type MyRankByPeriod,
 } from '@/lib/leaderboard-api';
 import { HUBS } from '@/lib/curriculum';
+import { useActiveBase } from '@/components/base/ActiveBaseContext';
 
 const PERIODS: { id: RankPeriod; label: string; short: string; emoji: string }[] = [
   { id: 'all-time', label: 'Geral', short: 'GERAL', emoji: '👑' },
@@ -19,6 +20,7 @@ const PERIODS: { id: RankPeriod; label: string; short: string; emoji: string }[]
 ];
 
 export function RankingClient() {
+  const { base: activeBase } = useActiveBase();
   const [period, setPeriod] = useState<RankPeriod>('all-time');
   const [entries, setEntries] = useState<PublicLeaderboardEntry[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -77,7 +79,7 @@ export function RankingClient() {
               className="font-mono uppercase tracking-widest text-xs"
               style={{ color: 'var(--ffv-gold)', letterSpacing: '0.14em' }}
             >
-              Ranking da Academia
+              {activeBase.microcopy.rankingTitle}
             </p>
           </div>
           <h1

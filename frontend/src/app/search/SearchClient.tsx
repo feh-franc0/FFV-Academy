@@ -176,7 +176,7 @@ export function SearchClient() {
               value={query}
               onChange={e => setQuery(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Buscar módulo, trilha ou tema..."
+              placeholder={activeBase.microcopy.searchPlaceholder}
               className="w-full px-5 py-4 rounded-2xl text-base font-medium pr-16"
               style={{
                 background: 'var(--ffv-bg2)',

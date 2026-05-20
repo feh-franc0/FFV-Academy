@@ -11,6 +11,7 @@ vi.mock('next/link', () => ({
 }));
 vi.mock('next/navigation', () => ({
   usePathname: () => '/',
+  useRouter: () => ({ push: () => {}, replace: () => {}, prefetch: () => {}, back: () => {} }),
 }));
 
 // AuthBadge usa useAuth (requer provider) — mockamos o hook
