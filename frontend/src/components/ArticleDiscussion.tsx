@@ -1,222 +1,426 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { STORAGE_KEYS } from '@/lib/constants';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  listComments,
+  createComment,
+  voteComment,
+  reportComment,
+  deleteComment,
+  validateCommentLocally,
+  CommentApiError,
+  COMMENT_MAX_CHARS,
+  type Comment,
+  type CommentTargetType,
+} from '@/lib/comment-api';
+import { useAuth } from '@/hooks/useAuth';
+import { toast } from '@/lib/toast';
 
-interface Question {
-  id: string;
-  text: string;
-  authorName: string;
-  createdAt: string;
-  upvotes: number;
-  answered: boolean;
-}
-
-interface ArticleDiscussionProps {
+interface Props {
   slug: string;
   title: string;
   accentColor?: string;
+  /** Tipo do alvo. Default 'article' — pra trilha passa 'trail'. */
+  targetType?: CommentTargetType;
 }
 
-const KEY = (slug: string) => `ffv_discussion_${slug}`;
-const UPVOTES_KEY = (slug: string) => `ffv_discussion_upvotes_${slug}`;
-
-function loadQuestions(slug: string): Question[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    return JSON.parse(localStorage.getItem(KEY(slug)) ?? '[]') as Question[];
-  } catch {
-    return [];
-  }
-}
-
-function saveQuestions(slug: string, questions: Question[]) {
-  localStorage.setItem(KEY(slug), JSON.stringify(questions));
-}
-
-function loadUpvoted(slug: string): Set<string> {
-  if (typeof window === 'undefined') return new Set();
-  try {
-    return new Set(JSON.parse(localStorage.getItem(UPVOTES_KEY(slug)) ?? '[]') as string[]);
-  } catch {
-    return new Set();
-  }
-}
-
-export function ArticleDiscussion({ slug, title, accentColor = 'var(--ffv-blue)' }: ArticleDiscussionProps) {
-  const [questions, setQuestions] = useState<Question[]>([]);
-  const [upvoted, setUpvoted] = useState<Set<string>>(new Set());
-  const [newQuestion, setNewQuestion] = useState('');
-  const [authorName, setAuthorName] = useState('');
+/**
+ * ArticleDiscussion — comentários cross-user persistidos no backend.
+ *
+ * Substitui versão legada localStorage-only. Backend Go cuida de:
+ *  - Auth required (POST/DELETE/Vote/Report — 401 se sem JWT)
+ *  - Char limit 1000 (CHECK constraint + handler validation)
+ *  - Anti-spam (URLs, all caps, char repeat, banned words) — backend rejeita 400
+ *  - Rate limit Redis (10/min create, 60/min vote, 20/min report)
+ *  - Auto-flag em ≥3 reports
+ *
+ * Cliente faz validação espelho (instantânea) + UI states de erro/rate-limit.
+ */
+export function ArticleDiscussion({
+  slug,
+  title: _title,
+  accentColor = 'var(--ffv-blue)',
+  targetType = 'article',
+}: Props) {
+  const { user, requireLogin } = useAuth();
+  const [comments, setComments] = useState<Comment[] | null>(null); // null = loading, [] = empty
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
+
+  const fetchComments = useCallback(async (signal?: AbortSignal) => {
+    setLoadError(null);
+    try {
+      const res = await listComments(targetType, slug, { signal, limit: 100 });
+      setComments(res.data);
+    } catch (err) {
+      if ((err as DOMException).name === 'AbortError') return;
+      setLoadError(err instanceof CommentApiError ? err.message : 'Erro ao carregar comentários');
+      setComments([]);
+    }
+  }, [slug, targetType]);
 
   useEffect(() => {
-    setQuestions(loadQuestions(slug));
-    setUpvoted(loadUpvoted(slug));
-    const name = localStorage.getItem(STORAGE_KEYS.USER_NAME) ?? '';
-    setAuthorName(name);
-  }, [slug]);
+    const ctrl = new AbortController();
+    void fetchComments(ctrl.signal);
+    return () => ctrl.abort();
+  }, [fetchComments]);
 
-  function handleSubmit() {
-    if (!newQuestion.trim()) return;
-    const q: Question = {
-      id: Date.now().toString(36),
-      text: newQuestion.trim(),
-      authorName: authorName.trim() || 'Anônimo',
-      createdAt: new Date().toISOString(),
-      upvotes: 0,
-      answered: false,
-    };
-    const updated = [q, ...questions];
-    setQuestions(updated);
-    saveQuestions(slug, updated);
-    setNewQuestion('');
-    setSubmitted(true);
-    setTimeout(() => setSubmitted(false), 3000);
+  const draftValidation = useMemo(() => validateCommentLocally(draft), [draft]);
+  const remaining = COMMENT_MAX_CHARS - draft.trim().length;
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setSubmitError(null);
+
+    if (!draftValidation.ok) {
+      setSubmitError(draftValidation.reason);
+      return;
+    }
+
+    if (!user) {
+      try {
+        await requireLogin('comentar');
+      } catch {
+        return; // usuário cancelou
+      }
+    }
+
+    setSubmitting(true);
+    try {
+      const created = await createComment({
+        targetType,
+        targetId: slug,
+        content: draft.trim(),
+      });
+      setComments(prev => [...(prev ?? []), created]);
+      setDraft('');
+      toast.success('Comentário publicado.');
+    } catch (err) {
+      if (err instanceof CommentApiError) {
+        if (err.isRateLimited) {
+          setSubmitError('Você está comentando muito rápido. Aguarde 1 minuto.');
+        } else if (err.isAuthRequired) {
+          setSubmitError('Sessão expirou. Faça login novamente.');
+        } else {
+          setSubmitError(err.message);
+        }
+      } else {
+        setSubmitError('Erro inesperado. Tente novamente.');
+      }
+    } finally {
+      setSubmitting(false);
+    }
   }
 
-  function handleUpvote(id: string) {
-    if (upvoted.has(id)) return;
-    const updated = questions.map(q => q.id === id ? { ...q, upvotes: q.upvotes + 1 } : q);
-    const newUpvoted = new Set([...upvoted, id]);
-    setQuestions(updated);
-    setUpvoted(newUpvoted);
-    saveQuestions(slug, updated);
-    localStorage.setItem(UPVOTES_KEY(slug), JSON.stringify([...newUpvoted]));
+  async function handleVote(c: Comment, vote: -1 | 1) {
+    // Toggle: se já votou no mesmo, desfaz (vote=0). Senão, troca pro novo.
+    const targetVote: -1 | 0 | 1 = c.userVote === vote ? 0 : vote;
+    // Optimistic update
+    setComments(prev =>
+      (prev ?? []).map(x => {
+        if (x.id !== c.id) return x;
+        const delta = targetVote - (x.userVote ?? 0);
+        return { ...x, userVote: targetVote, score: x.score + delta };
+      }),
+    );
+    try {
+      if (!user) await requireLogin('votar');
+      await voteComment(c.id, targetVote);
+    } catch (err) {
+      // Rollback optimistic + mensagem.
+      setComments(prev =>
+        (prev ?? []).map(x => (x.id === c.id ? c : x)),
+      );
+      if (err instanceof CommentApiError && err.isRateLimited) {
+        toast.error('Muitos votos seguidos. Aguarde um minuto.');
+      } else if (!(err instanceof Error && err.message === 'login cancelado')) {
+        toast.error('Não foi possível registrar o voto.');
+      }
+    }
   }
 
-  const twitterShareUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(`Tenho uma dúvida sobre "${title}" na @feh_franc0 FFV Academy:\n\n${newQuestion}\n\nhttps://fernandofrancovalle.com/aprenda/${slug}`)}`;
+  async function handleReport(c: Comment) {
+    if (!confirm('Reportar esse comentário? Admin será notificado.')) return;
+    try {
+      if (!user) await requireLogin('reportar');
+      await reportComment(c.id, 'reportado pelo usuário');
+      toast.success('Reporte registrado. Obrigado.');
+    } catch (err) {
+      if (err instanceof CommentApiError && err.isRateLimited) {
+        toast.error('Muitos reportes. Aguarde um minuto.');
+      } else if (!(err instanceof Error && err.message === 'login cancelado')) {
+        toast.error('Não foi possível reportar.');
+      }
+    }
+  }
 
-  const sortedQuestions = [...questions].sort((a, b) => b.upvotes - a.upvotes);
+  async function handleDelete(c: Comment) {
+    if (!confirm('Apagar seu comentário? Não dá pra desfazer.')) return;
+    try {
+      await deleteComment(c.id);
+      setComments(prev => (prev ?? []).filter(x => x.id !== c.id));
+      toast.success('Comentário apagado.');
+    } catch (err) {
+      toast.error(err instanceof CommentApiError ? err.message : 'Erro ao apagar.');
+    }
+  }
+
+  const headerCount = comments?.length ?? 0;
 
   return (
-    <section className="mt-14 ffv-no-print" style={{ borderTop: '1px solid var(--ffv-border)', paddingTop: 48 }}>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <p className="font-mono uppercase tracking-widest text-xs mb-1" style={{ color: accentColor, letterSpacing: '0.12em' }}>
-            Discussão
-          </p>
-          <h2 className="text-base font-bold">
-            Dúvidas sobre este artigo
-            {questions.length > 0 && <span className="ml-2 text-sm font-normal" style={{ color: 'var(--ffv-muted)' }}>({questions.length})</span>}
-          </h2>
-        </div>
-        {questions.length > 2 && (
-          <button
-            onClick={() => setExpanded(e => !e)}
-            className="text-xs hover:opacity-70 transition-opacity"
-            style={{ color: 'var(--ffv-muted)' }}
+    <section
+      className="max-w-3xl mx-auto px-6 pt-12 pb-8"
+      style={{ borderTop: '1px solid var(--ffv-border)' }}
+      aria-labelledby="discussion-heading"
+    >
+      <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
+        <h2 id="discussion-heading" className="text-xl font-bold" style={{ color: 'var(--foreground)' }}>
+          Discussão {headerCount > 0 && (
+            <span style={{ color: 'var(--ffv-muted)', fontWeight: 500, fontSize: '0.85em' }}>
+              · {headerCount}
+            </span>
+          )}
+        </h2>
+        <button
+          type="button"
+          onClick={() => setExpanded(e => !e)}
+          className="text-xs font-semibold transition-opacity hover:opacity-80"
+          style={{ color: accentColor, background: 'none', border: 'none', cursor: 'pointer' }}
+          aria-expanded={expanded}
+        >
+          {expanded ? 'Recolher ↑' : 'Comentar ou perguntar →'}
+        </button>
+      </div>
+
+      {expanded && (
+        <form onSubmit={handleSubmit} className="mb-6" aria-label="Novo comentário">
+          <label htmlFor="comment-draft" className="block text-xs font-semibold mb-2" style={{ color: 'var(--ffv-muted)' }}>
+            Seu comentário {user ? `· ${user.name}` : '· (faça login pra publicar)'}
+          </label>
+          <textarea
+            id="comment-draft"
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            placeholder="Compartilhe uma dúvida, complemente o conteúdo, troque ideia com outros estudantes…"
+            maxLength={COMMENT_MAX_CHARS + 100}
+            rows={3}
+            className="w-full p-3 rounded-lg text-sm"
+            style={{
+              background: 'var(--ffv-bg2)',
+              border: `1px solid ${submitError ? 'var(--ffv-red, #f78166)' : 'var(--ffv-border)'}`,
+              color: 'var(--foreground)',
+              outline: 'none',
+              fontFamily: 'inherit',
+              resize: 'vertical',
+              minHeight: 80,
+            }}
+            aria-invalid={submitError ? 'true' : undefined}
+            aria-describedby="comment-helper"
+          />
+          <div
+            id="comment-helper"
+            className="flex items-center justify-between mt-2 flex-wrap gap-2"
+            style={{ fontSize: 11 }}
           >
-            {expanded ? 'Ver menos' : `Ver todas (${questions.length})`}
-          </button>
-        )}
-      </div>
-
-      {/* Submit question */}
-      <div className="p-5 rounded-2xl mb-6" style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}>
-        <p className="text-xs font-semibold mb-3" style={{ color: 'var(--ffv-muted)' }}>Ficou com alguma dúvida?</p>
-        {!submitted ? (
-          <>
-            <textarea
-              value={newQuestion}
-              onChange={e => setNewQuestion(e.target.value)}
-              placeholder="Escreva sua dúvida técnica aqui..."
-              rows={3}
-              className="w-full px-4 py-3 rounded-xl text-sm resize-none outline-none transition-all mb-3"
-              style={{ background: 'var(--ffv-bg3)', border: '1px solid var(--ffv-border)', color: 'var(--foreground)', lineHeight: 1.6 }}
-            />
-            <div className="flex items-center justify-between gap-3 flex-wrap">
-              <input
-                type="text"
-                value={authorName}
-                onChange={e => setAuthorName(e.target.value)}
-                placeholder="Seu nome (opcional)"
-                className="flex-1 min-w-0 px-4 py-2 rounded-xl text-sm outline-none transition-all"
-                style={{ background: 'var(--ffv-bg3)', border: '1px solid var(--ffv-border)', color: 'var(--foreground)', maxWidth: 220 }}
-              />
-              <div className="flex items-center gap-2">
-                {newQuestion.trim().length > 10 && (
-                  <a
-                    href={twitterShareUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-3 py-2 rounded-lg text-xs font-semibold transition-all hover:opacity-80"
-                    style={{ color: '#1da1f2', background: 'color-mix(in srgb, #1da1f2 12%, transparent)', border: '1px solid color-mix(in srgb, #1da1f2 30%, transparent)', textDecoration: 'none' }}
-                    title="Perguntar no X/Twitter para resposta pública"
-                  >
-                    𝕏 Perguntar no Twitter
-                  </a>
-                )}
-                <button
-                  onClick={handleSubmit}
-                  disabled={!newQuestion.trim()}
-                  className="px-4 py-2 rounded-lg text-sm font-semibold transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-                  style={{ background: accentColor, color: '#0d1117' }}
-                >
-                  Enviar →
-                </button>
-              </div>
-            </div>
-          </>
-        ) : (
-          <div className="text-center py-4">
-            <div className="text-2xl mb-2">✅</div>
-            <p className="text-sm font-semibold">Dúvida registrada!</p>
-            <p className="text-xs mt-1" style={{ color: 'var(--ffv-muted)' }}>
-              Para resposta mais rápida, compartilhe no X e marque @feh_franc0
-            </p>
-          </div>
-        )}
-      </div>
-
-      {/* Questions list */}
-      {sortedQuestions.length > 0 && (
-        <div className="flex flex-col gap-3">
-          {(expanded ? sortedQuestions : sortedQuestions.slice(0, 3)).map(q => (
-            <div
-              key={q.id}
-              className="p-4 rounded-xl"
+            <span style={{ color: submitError ? 'var(--ffv-red, #f78166)' : 'var(--ffv-muted)' }}>
+              {submitError ?? 'Markdown não suportado · 1 link por comentário · sem CAIXA ALTA'}
+            </span>
+            <span
               style={{
-                background: 'var(--ffv-bg2)',
-                border: `1px solid ${q.answered ? 'color-mix(in srgb, var(--ffv-green) 25%, transparent)' : 'var(--ffv-border)'}`,
+                color: remaining < 50 ? 'var(--ffv-red, #f78166)' : 'var(--ffv-muted)',
+                fontVariantNumeric: 'tabular-nums',
               }}
+              aria-live="polite"
             >
-              <div className="flex items-start gap-3">
-                <button
-                  onClick={() => handleUpvote(q.id)}
-                  className="flex flex-col items-center gap-0.5 pt-0.5 transition-all hover:opacity-80"
-                  style={{ color: upvoted.has(q.id) ? accentColor : 'var(--ffv-muted)', minWidth: 28 }}
-                  title={upvoted.has(q.id) ? 'Já votou' : 'Votar nesta dúvida'}
-                >
-                  <span style={{ fontSize: 14 }}>▲</span>
-                  <span className="text-xs font-bold tabular-nums">{q.upvotes}</span>
-                </button>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm leading-relaxed">{q.text}</p>
-                  <div className="flex items-center gap-2 mt-2 text-[11px]" style={{ color: 'var(--ffv-muted)' }}>
-                    <span>{q.authorName}</span>
-                    <span>·</span>
-                    <span>{new Date(q.createdAt).toLocaleDateString('pt-BR')}</span>
-                    {q.answered && <span className="px-1.5 py-0.5 rounded-full font-semibold" style={{ background: 'color-mix(in srgb, var(--ffv-green) 15%, transparent)', color: 'var(--ffv-green)' }}>✓ Respondida</span>}
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
+              {remaining} / {COMMENT_MAX_CHARS} chars
+            </span>
+          </div>
+          <div className="flex items-center gap-2 mt-3 flex-wrap">
+            <button
+              type="submit"
+              disabled={submitting || !draftValidation.ok}
+              className="px-4 py-2 rounded-lg text-sm font-bold transition-opacity disabled:opacity-50"
+              style={{ background: accentColor, color: '#0d1117', border: 'none', cursor: submitting ? 'wait' : 'pointer' }}
+            >
+              {submitting ? 'Publicando…' : 'Publicar comentário'}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setDraft(''); setSubmitError(null); }}
+              className="px-3 py-2 rounded-lg text-xs"
+              style={{ background: 'transparent', border: '1px solid var(--ffv-border)', color: 'var(--ffv-muted)', cursor: 'pointer' }}
+            >
+              Limpar
+            </button>
+          </div>
+        </form>
       )}
 
-      {questions.length === 0 && (
-        <p className="text-sm text-center py-6" style={{ color: 'var(--ffv-muted)' }}>
-          Seja o primeiro a fazer uma pergunta sobre este artigo.
+      {loadError && (
+        <p className="text-sm" style={{ color: 'var(--ffv-red, #f78166)' }}>
+          {loadError}
+          <button
+            type="button"
+            onClick={() => void fetchComments()}
+            className="ml-2 underline"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit' }}
+          >
+            tentar de novo
+          </button>
         </p>
       )}
 
-      <p className="mt-6 text-xs text-center" style={{ color: 'var(--ffv-muted)' }}>
-        Para discussões mais ricas, entre no{' '}
-        <a href="/comunidade" style={{ color: accentColor, textDecoration: 'none' }}>canal da comunidade</a>.
-      </p>
+      {comments === null && !loadError && (
+        <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>Carregando…</p>
+      )}
+
+      {comments !== null && comments.length === 0 && !loadError && (
+        <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
+          Ainda sem comentários. Seja a primeira pessoa a compartilhar.
+        </p>
+      )}
+
+      {comments !== null && comments.length > 0 && (
+        <ul className="flex flex-col gap-4 list-none p-0">
+          {comments.map(c => (
+            <CommentRow
+              key={c.id}
+              c={c}
+              isOwn={user?.id === c.userId}
+              accentColor={accentColor}
+              onVote={handleVote}
+              onReport={handleReport}
+              onDelete={handleDelete}
+            />
+          ))}
+        </ul>
+      )}
     </section>
   );
+}
+
+function CommentRow({
+  c,
+  isOwn,
+  accentColor,
+  onVote,
+  onReport,
+  onDelete,
+}: {
+  c: Comment;
+  isOwn: boolean;
+  accentColor: string;
+  onVote: (c: Comment, v: 1 | -1) => void;
+  onReport: (c: Comment) => void;
+  onDelete: (c: Comment) => void;
+}) {
+  const upActive = c.userVote === 1;
+  const downActive = c.userVote === -1;
+  return (
+    <li
+      className="rounded-xl p-4"
+      style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}
+    >
+      <div className="flex items-start gap-3">
+        {/* Vote column */}
+        <div className="flex flex-col items-center gap-1 shrink-0">
+          <button
+            type="button"
+            onClick={() => onVote(c, 1)}
+            aria-label="Upvote"
+            aria-pressed={upActive}
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: 6,
+              border: `1px solid ${upActive ? accentColor : 'var(--ffv-border)'}`,
+              background: upActive ? `color-mix(in srgb, ${accentColor} 14%, transparent)` : 'transparent',
+              color: upActive ? accentColor : 'var(--ffv-muted)',
+              cursor: 'pointer',
+              fontSize: 16,
+              lineHeight: 1,
+            }}
+          >
+            ▲
+          </button>
+          <span
+            className="font-mono tabular-nums"
+            style={{ fontSize: 12, fontWeight: 700, color: c.score > 0 ? accentColor : 'var(--ffv-muted)' }}
+          >
+            {c.score}
+          </span>
+          <button
+            type="button"
+            onClick={() => onVote(c, -1)}
+            aria-label="Downvote"
+            aria-pressed={downActive}
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: 6,
+              border: `1px solid ${downActive ? 'var(--ffv-red, #f78166)' : 'var(--ffv-border)'}`,
+              background: downActive ? 'color-mix(in srgb, var(--ffv-red, #f78166) 14%, transparent)' : 'transparent',
+              color: downActive ? 'var(--ffv-red, #f78166)' : 'var(--ffv-muted)',
+              cursor: 'pointer',
+              fontSize: 16,
+              lineHeight: 1,
+            }}
+          >
+            ▼
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1 flex-wrap" style={{ fontSize: 12 }}>
+            <span style={{ fontWeight: 700, color: 'var(--foreground)' }}>
+              {c.authorName || 'Anônimo'}
+            </span>
+            <span style={{ color: 'var(--ffv-muted)' }}>
+              · {formatRelative(c.createdAt)}
+            </span>
+            {c.edited && (
+              <span style={{ color: 'var(--ffv-muted)', fontStyle: 'italic' }}>(editado)</span>
+            )}
+          </div>
+          <p style={{ fontSize: 14, lineHeight: 1.55, color: 'var(--foreground)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+            {c.content}
+          </p>
+          <div className="flex items-center gap-3 mt-2" style={{ fontSize: 11 }}>
+            {isOwn ? (
+              <button
+                type="button"
+                onClick={() => onDelete(c)}
+                style={{ color: 'var(--ffv-red, #f78166)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 600 }}
+              >
+                Apagar
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => onReport(c)}
+                style={{ color: 'var(--ffv-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 500 }}
+              >
+                Reportar
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </li>
+  );
+}
+
+function formatRelative(iso: string): string {
+  const date = new Date(iso);
+  const now = new Date();
+  const diff = (now.getTime() - date.getTime()) / 1000;
+  if (diff < 60) return 'agora';
+  if (diff < 3600) return `${Math.floor(diff / 60)}min`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+  if (diff < 604800) return `${Math.floor(diff / 86400)}d`;
+  return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
 }

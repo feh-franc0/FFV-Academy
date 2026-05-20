@@ -26,19 +26,21 @@ func (r *pgxCommentsRepo) Create(ctx context.Context, in handlers.CommentCreateI
 	err := r.pool.QueryRow(ctx, `
 		INSERT INTO comments (user_id, target_type, target_id, parent_id, content, status)
 		VALUES ($1, $2, $3, $4, $5, 'visible')
-		RETURNING id::text, user_id, target_type, target_id, COALESCE(parent_id::text, ''), content, status, edited, created_at, updated_at
+		RETURNING id::text, user_id, target_type, target_id, COALESCE(parent_id::text, ''),
+		          content, status, edited, score, created_at, updated_at
 	`, in.UserID, in.TargetType, in.TargetID, parentID, in.Content).Scan(
-		&c.ID, &c.UserID, &c.TargetType, &c.TargetID, &c.ParentID, &c.Content, &c.Status, &c.Edited, &c.CreatedAt, &c.UpdatedAt,
+		&c.ID, &c.UserID, &c.TargetType, &c.TargetID, &c.ParentID,
+		&c.Content, &c.Status, &c.Edited, &c.Score, &c.CreatedAt, &c.UpdatedAt,
 	)
 	if err != nil {
 		return handlers.Comment{}, fmt.Errorf("insert comment: %w", err)
 	}
-	// Autor name é melhor populado em ListByTarget com JOIN; aqui retornamos vazio
-	// porque o cliente já sabe quem é o autor (acabou de postar).
+	// Autor name é populado em ListByTarget com JOIN; aqui retornamos vazio porque
+	// o cliente já sabe quem é (acabou de postar). UserVote = 0 inicial.
 	return c, nil
 }
 
-func (r *pgxCommentsRepo) ListByTarget(ctx context.Context, targetType, targetID string, limit, offset int) ([]handlers.Comment, int64, error) {
+func (r *pgxCommentsRepo) ListByTarget(ctx context.Context, targetType, targetID string, limit, offset int, viewerUserID string) ([]handlers.Comment, int64, error) {
 	var total int64
 	if err := r.pool.QueryRow(ctx, `
 		SELECT COUNT(*) FROM comments
@@ -47,16 +49,23 @@ func (r *pgxCommentsRepo) ListByTarget(ctx context.Context, targetType, targetID
 		return nil, 0, err
 	}
 
+	// LEFT JOIN comment_votes com filtro pelo viewer (se autenticado) pra trazer
+	// o voto que o user atual deu em cada comment. Se anônimo, viewerUserID=''
+	// e o JOIN não retorna linha → user_vote vira NULL → COALESCE = 0.
 	rows, err := r.pool.Query(ctx, `
-		SELECT c.id::text, c.user_id, COALESCE(u.name, ''), c.target_type, c.target_id,
-		       COALESCE(c.parent_id::text, ''), c.content, c.status, c.edited,
+		SELECT c.id::text, c.user_id, COALESCE(u.name, ''),
+		       c.target_type, c.target_id,
+		       COALESCE(c.parent_id::text, ''),
+		       c.content, c.status, c.edited, c.score,
+		       COALESCE(v.vote, 0),
 		       c.created_at, c.updated_at
 		FROM comments c
 		LEFT JOIN users u ON u.id = c.user_id
+		LEFT JOIN comment_votes v ON v.comment_id = c.id AND v.user_id = $3
 		WHERE c.target_type = $1 AND c.target_id = $2 AND c.status = 'visible'
-		ORDER BY c.created_at ASC
-		LIMIT $3 OFFSET $4
-	`, targetType, targetID, limit, offset)
+		ORDER BY c.score DESC, c.created_at ASC
+		LIMIT $4 OFFSET $5
+	`, targetType, targetID, viewerUserID, limit, offset)
 	if err != nil {
 		return nil, total, err
 	}
@@ -65,7 +74,11 @@ func (r *pgxCommentsRepo) ListByTarget(ctx context.Context, targetType, targetID
 	var out []handlers.Comment
 	for rows.Next() {
 		var c handlers.Comment
-		if err := rows.Scan(&c.ID, &c.UserID, &c.AuthorName, &c.TargetType, &c.TargetID, &c.ParentID, &c.Content, &c.Status, &c.Edited, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(
+			&c.ID, &c.UserID, &c.AuthorName, &c.TargetType, &c.TargetID, &c.ParentID,
+			&c.Content, &c.Status, &c.Edited, &c.Score, &c.UserVote,
+			&c.CreatedAt, &c.UpdatedAt,
+		); err != nil {
 			return out, total, err
 		}
 		out = append(out, c)
@@ -96,6 +109,47 @@ func (r *pgxCommentsRepo) UpdateStatus(ctx context.Context, commentID, status st
 	}
 	if cmd.RowsAffected() == 0 {
 		return errNotFoundComment
+	}
+	return nil
+}
+
+// Vote — upsert atômico via ON CONFLICT. Trigger update_comment_score()
+// propaga pro comments.score.
+func (r *pgxCommentsRepo) Vote(ctx context.Context, commentID, userID string, vote int) error {
+	cmd, err := r.pool.Exec(ctx, `
+		INSERT INTO comment_votes (comment_id, user_id, vote)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (comment_id, user_id)
+		DO UPDATE SET vote = EXCLUDED.vote, updated_at = now()
+		WHERE comment_votes.vote <> EXCLUDED.vote
+	`, commentID, userID, vote)
+	if err != nil {
+		return fmt.Errorf("vote: %w", err)
+	}
+	_ = cmd
+	return nil
+}
+
+// UnVote — remove o voto do user (se existir). Idempotente.
+func (r *pgxCommentsRepo) UnVote(ctx context.Context, commentID, userID string) error {
+	_, err := r.pool.Exec(ctx, `DELETE FROM comment_votes WHERE comment_id = $1 AND user_id = $2`, commentID, userID)
+	if err != nil {
+		return fmt.Errorf("unvote: %w", err)
+	}
+	return nil
+}
+
+// Report — registra reporte. PK composta evita duplicata do mesmo user.
+// ON CONFLICT DO NOTHING = idempotente (segundo reporte do mesmo user = no-op).
+// Trigger auto-flag em ≥3 reports.
+func (r *pgxCommentsRepo) Report(ctx context.Context, commentID, reporterID, reason string) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO comment_reports (comment_id, reporter_id, reason)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (comment_id, reporter_id) DO NOTHING
+	`, commentID, reporterID, reason)
+	if err != nil {
+		return fmt.Errorf("report: %w", err)
 	}
 	return nil
 }

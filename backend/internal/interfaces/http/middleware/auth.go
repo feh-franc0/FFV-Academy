@@ -76,6 +76,32 @@ func RequireAdmin(next http.Handler) http.Handler {
 	})
 }
 
+// MaybeAuthenticate é como Authenticate, mas NÃO falha quando o token está
+// ausente ou é inválido — apenas não injeta o userID no contexto.
+//
+// Use em endpoints públicos que QUEREM saber se há um user logado (ex.: GET
+// /api/v1/comments retorna o userVote do usuário atual quando autenticado,
+// mas funciona pra anônimos também).
+func MaybeAuthenticate(jwtSvc *auth.JWTService) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			raw := extractBearerToken(r)
+			if raw == "" {
+				next.ServeHTTP(w, r) // anônimo — segue sem injetar contexto
+				return
+			}
+			claims, err := jwtSvc.ValidateAccessToken(raw)
+			if err != nil {
+				next.ServeHTTP(w, r) // token ruim — trata como anônimo (não 401)
+				return
+			}
+			ctx := context.WithValue(r.Context(), CtxKeyUserID, shared.UserID(claims.Subject))
+			ctx = context.WithValue(ctx, CtxKeyRole, claims.Role)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
 // UserIDFromContext extrai o UserID do contexto. Panic se não existir (uso incorreto).
 func UserIDFromContext(ctx context.Context) shared.UserID {
 	id, _ := ctx.Value(CtxKeyUserID).(shared.UserID)

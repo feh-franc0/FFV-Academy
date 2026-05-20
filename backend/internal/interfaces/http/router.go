@@ -143,9 +143,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/api/v1/curriculum/{slug}/blocks", cfg.Curriculum.GetBlocks)
 	}
 
-	// Comments — leitura pública, escrita JWT, moderação admin.
+	// Comments — leitura pública com auth opcional (pra exibir userVote do
+	// viewer quando autenticado). MaybeAuthenticate não falha em token
+	// ausente/inválido — apenas não injeta contexto.
 	if cfg.Comments != nil {
-		r.Get("/api/v1/comments", cfg.Comments.List)
+		r.With(middleware.MaybeAuthenticate(cfg.JWTService)).Get("/api/v1/comments", cfg.Comments.List)
 	}
 
 	// Trending — público, módulos mais acessados.
@@ -185,6 +187,15 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// Listagens públicas (news, cheatsheets, playlists) — cache de 5-10min no
 	// header já protege, mas rate-limit fecha vetor de scraping massivo.
 	contentLimit := middleware.NewRateLimiter(cfg.Redis, 300, time.Minute, "rl:content")
+
+	// Comments — escrita autenticada. Limite agressivo pra prevenir spam:
+	// 10 comentários/minuto/IP é generoso pra usuário humano. Bot que tenta
+	// inundar trava no 429 em 6 segundos.
+	commentCreateLimit := middleware.NewRateLimiter(cfg.Redis, 10, time.Minute, "rl:comment:create")
+	// Vote e Report — operações leves, mas alvos óbvios pra abuse (brigadeiro
+	// de upvotes, mass-report pra silenciar). Limite mais alto que create.
+	commentVoteLimit := middleware.NewRateLimiter(cfg.Redis, 60, time.Minute, "rl:comment:vote")
+	commentReportLimit := middleware.NewRateLimiter(cfg.Redis, 20, time.Minute, "rl:comment:report")
 
 	// Tracking de acesso a módulo — público, fire-and-forget. Body limit
 	// pequeno + rate limit por IP previnem abuso.
@@ -305,10 +316,16 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/api/v1/leaderboard/me", cfg.Leaderboard.GetMyRank)
 		r.Get("/api/v1/leaderboard/me/all", cfg.Leaderboard.GetMyRankAll)
 
-		// Comments — escrita autenticada (body ≤ 8KB para evitar dump abuse).
+		// Comments — escrita autenticada (body ≤ 8KB) + rate limit anti-spam.
+		// Vote/Report têm limits próprios e body pequeno (≤512B).
 		if cfg.Comments != nil {
-			r.With(middleware.BodyLimit(8*1024)).Post("/api/v1/comments", cfg.Comments.Create)
+			r.With(commentCreateLimit.Middleware(), middleware.BodyLimit(8*1024)).
+				Post("/api/v1/comments", cfg.Comments.Create)
 			r.Delete("/api/v1/comments/{id}", cfg.Comments.Delete)
+			r.With(commentVoteLimit.Middleware(), middleware.BodyLimit(512)).
+				Post("/api/v1/comments/{id}/vote", cfg.Comments.Vote)
+			r.With(commentReportLimit.Middleware(), middleware.BodyLimit(512)).
+				Post("/api/v1/comments/{id}/report", cfg.Comments.Report)
 		}
 
 		// Admin — requer role=admin.

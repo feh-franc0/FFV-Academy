@@ -24,9 +24,15 @@ import (
 // CommentsRepository é o port que o handler usa.
 type CommentsRepository interface {
 	Create(ctx context.Context, c CommentCreateInput) (Comment, error)
-	ListByTarget(ctx context.Context, targetType, targetID string, limit, offset int) ([]Comment, int64, error)
+	ListByTarget(ctx context.Context, targetType, targetID string, limit, offset int, userID string) ([]Comment, int64, error)
 	SoftDelete(ctx context.Context, commentID, userID string, isAdmin bool) error
 	UpdateStatus(ctx context.Context, commentID, status string) error
+	// Vote: insere ou atualiza voto. vote ∈ {-1, 1}.
+	Vote(ctx context.Context, commentID, userID string, vote int) error
+	// UnVote: remove voto do user nesse comment (idempotente).
+	UnVote(ctx context.Context, commentID, userID string) error
+	// Report: registra reporte (uma vez por user/comment). Auto-flag em ≥3 via trigger DB.
+	Report(ctx context.Context, commentID, reporterID, reason string) error
 }
 
 // Comment é a projeção pública de um comentário.
@@ -40,6 +46,8 @@ type Comment struct {
 	Content    string    `json:"content"`
 	Status     string    `json:"status"`
 	Edited     bool      `json:"edited"`
+	Score      int       `json:"score"`              // soma de upvotes/downvotes
+	UserVote   int       `json:"userVote,omitempty"` // -1/0/+1 do usuário atual (0 = ninguém ou anônimo)
 	CreatedAt  time.Time `json:"createdAt"`
 	UpdatedAt  time.Time `json:"updatedAt"`
 }
@@ -98,8 +106,10 @@ func (h *CommentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	content := strings.TrimSpace(req.Content)
-	if len(content) < 1 || len(content) > 4000 {
-		WriteError(w, http.StatusBadRequest, "content entre 1 e 4000 chars", "validation")
+	// Validação completa: tamanho + URLs + caps + char-repeat + banned words.
+	// Cobre 90% dos casos óbvios de spam sem precisar de serviço externo.
+	if check := CheckCommentForSpam(content); !check.OK {
+		WriteError(w, http.StatusBadRequest, check.Reason, check.Code)
 		return
 	}
 
@@ -150,7 +160,10 @@ func (h *CommentsHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 
-	items, total, err := h.repo.ListByTarget(ctx, targetType, targetID, limit, offset)
+	// userID opcional — quando autenticado, preenchemos userVote em cada comment
+	// pra UI mostrar "você upvotou esse".
+	userID := string(middleware.UserIDFromContext(r.Context()))
+	items, total, err := h.repo.ListByTarget(ctx, targetType, targetID, limit, offset, userID)
 	if err != nil {
 		HandleDomainError(w, err)
 		return
@@ -220,4 +233,102 @@ func (h *CommentsHandler) Hide(w http.ResponseWriter, r *http.Request) {
 
 func isValidTargetType(t string) bool {
 	return t == "article" || t == "trail" || t == "block"
+}
+
+// ─── Vote ─────────────────────────────────────────────────────────────────────
+//
+// POST /api/v1/comments/{id}/vote — body: {"vote": 1} ou {"vote": -1}
+// Insere ou atualiza voto do user. PK composta no DB garante 1 voto por par.
+// Score do comment é atualizado via trigger postgres (sem agregação cara).
+//
+// Vote = 0 → remove o voto (atalho pra UnVote).
+
+type commentVoteRequest struct {
+	Vote int `json:"vote"`
+}
+
+func (h *CommentsHandler) Vote(w http.ResponseWriter, r *http.Request) {
+	if h.repo == nil {
+		WriteError(w, http.StatusServiceUnavailable, "comments não configurados", "service-unavailable")
+		return
+	}
+	userID := string(middleware.UserIDFromContext(r.Context()))
+	if userID == "" {
+		WriteError(w, http.StatusUnauthorized, "autenticação requerida", "unauthorized")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		WriteError(w, http.StatusBadRequest, "id obrigatório", "validation")
+		return
+	}
+	var req commentVoteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, "json inválido", "validation")
+		return
+	}
+	if req.Vote != -1 && req.Vote != 0 && req.Vote != 1 {
+		WriteError(w, http.StatusBadRequest, "vote deve ser -1, 0 ou 1", "validation")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+
+	var err error
+	if req.Vote == 0 {
+		err = h.repo.UnVote(ctx, id, userID)
+	} else {
+		err = h.repo.Vote(ctx, id, userID, req.Vote)
+	}
+	if err != nil {
+		HandleDomainError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ─── Report ───────────────────────────────────────────────────────────────────
+//
+// POST /api/v1/comments/{id}/report — body: {"reason": "spam"}
+// Registra reporte. PK composta no DB evita reportes duplicados do mesmo user.
+// Trigger auto-flag em ≥3 reports — admin revisa via /admin/comments.
+
+type commentReportRequest struct {
+	Reason string `json:"reason"`
+}
+
+func (h *CommentsHandler) Report(w http.ResponseWriter, r *http.Request) {
+	if h.repo == nil {
+		WriteError(w, http.StatusServiceUnavailable, "comments não configurados", "service-unavailable")
+		return
+	}
+	userID := string(middleware.UserIDFromContext(r.Context()))
+	if userID == "" {
+		WriteError(w, http.StatusUnauthorized, "autenticação requerida", "unauthorized")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		WriteError(w, http.StatusBadRequest, "id obrigatório", "validation")
+		return
+	}
+	var req commentReportRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// reason vazio é ok — registra report sem motivo
+		req = commentReportRequest{}
+	}
+	reason := strings.TrimSpace(req.Reason)
+	if len(reason) > 200 {
+		reason = reason[:200]
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+
+	if err := h.repo.Report(ctx, id, userID, reason); err != nil {
+		HandleDomainError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
