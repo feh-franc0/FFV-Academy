@@ -16,7 +16,7 @@ import { unlockAudio } from '@/lib/sounds';
 import { toast } from '@/lib/toast';
 import { useBaseNav, type BaseNavItem } from '@/components/base/BaseNavContext';
 import { useActiveBase } from '@/components/base/ActiveBaseContext';
-import { selectDueCardsForBase } from '@/lib/bases/state-selectors';
+import { selectDueCardsForBase, getBaseReviewCountToday } from '@/lib/bases/state-selectors';
 import type { ComponentType, SVGProps } from 'react';
 
 type LucideIcon = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
@@ -56,12 +56,27 @@ function NavIcon({ item, size }: { item: BaseNavItem; size: number }) {
 }
 
 export function GameHUD() {
-  const { state, levelInfo, dueCards, todayReviewCount, dailyGoalMet } = useGameState();
+  const { state, levelInfo, dueCards } = useGameState();
   const pathname = usePathname() ?? '/';
   const { base: activeBase } = useActiveBase();
   // Filtra os cards SRS devidos pela base ativa — sem isso, o pill mostra
   // contagem cross-base (tech + medvet) e o usuário em medvet vê questões tech.
   const baseDueCards = selectDueCardsForBase(dueCards, activeBase.slug);
+  // Meta diária por base: contador transient em localStorage por dia+base,
+  // re-renderiza quando o usuário navega/foca a janela.
+  const [baseReviewCount, setBaseReviewCount] = useState(0);
+  useEffect(() => {
+    setBaseReviewCount(getBaseReviewCountToday(activeBase.slug));
+    function refresh() { setBaseReviewCount(getBaseReviewCountToday(activeBase.slug)); }
+    window.addEventListener('focus', refresh);
+    window.addEventListener('storage', refresh);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('storage', refresh);
+    };
+  }, [activeBase.slug, pathname]);
+  const goal = state?.dailyGoal ?? 3;
+  const baseGoalMet = baseReviewCount >= goal;
 
   // Unlock audio on first interaction with the header
   const headerRef = useRef<HTMLElement>(null);
@@ -151,21 +166,21 @@ export function GameHUD() {
             <TooltipTrigger>
               <Link
                 href="/revisar"
-                aria-label={`Meta diária: ${todayReviewCount} de ${state.dailyGoal} cards`}
+                aria-label={`Meta diária: ${baseReviewCount} de ${goal} cards`}
                 className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold transition-opacity hover:opacity-90"
                 style={{
-                  background: dailyGoalMet
+                  background: baseGoalMet
                     ? 'color-mix(in srgb, var(--ffv-green) 14%, transparent)'
                     : 'color-mix(in srgb, var(--ffv-yellow) 12%, transparent)',
-                  border: `1px solid ${dailyGoalMet ? 'color-mix(in srgb, var(--ffv-green) 32%, transparent)' : 'color-mix(in srgb, var(--ffv-yellow) 28%, transparent)'}`,
-                  color: dailyGoalMet ? 'var(--ffv-green)' : 'var(--ffv-yellow)',
+                  border: `1px solid ${baseGoalMet ? 'color-mix(in srgb, var(--ffv-green) 32%, transparent)' : 'color-mix(in srgb, var(--ffv-yellow) 28%, transparent)'}`,
+                  color: baseGoalMet ? 'var(--ffv-green)' : 'var(--ffv-yellow)',
                 }}
               >
-                🎯 {todayReviewCount}/{state.dailyGoal}
+                🎯 {baseReviewCount}/{goal}
               </Link>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              <p>{dailyGoalMet ? '✅ Meta diária atingida!' : `Meta: ${todayReviewCount} de ${state.dailyGoal} cards hoje`}</p>
+              <p>{baseGoalMet ? '✅ Meta diária atingida!' : `Meta: ${baseReviewCount} de ${goal} cards hoje`}</p>
             </TooltipContent>
           </Tooltip>
         )}

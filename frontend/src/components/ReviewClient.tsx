@@ -7,7 +7,7 @@ import type { ReviewCard } from '@/lib/srs';
 import type { ReviewQuality } from '@/lib/srs';
 import { playXPCoin, playPop, unlockAudio } from '@/lib/sounds';
 import { useActiveBase } from '@/components/base/ActiveBaseContext';
-import { selectDueCardsForBase } from '@/lib/bases/state-selectors';
+import { selectDueCardsForBase, bumpBaseReviewCount } from '@/lib/bases/state-selectors';
 import { getBaseSlugForModule } from '@/lib/bases/module-base-resolver';
 
 type Phase = 'empty' | 'answering' | 'revealed' | 'finished';
@@ -91,6 +91,9 @@ export function ReviewClient(props: ReviewClientProps = {}) {
   function handleRate(outcome: ReviewQuality) {
     if (!currentCard) return;
     const result = reviewOne(currentCard.id, outcome);
+    // Incrementa contador per-base pra "0/3" do GameHUD refletir só esta base.
+    const cardBase = getBaseSlugForModule(currentCard.slug) ?? activeBase.slug;
+    bumpBaseReviewCount(cardBase);
     const isCorrect = outcome !== 'again';
     const nextStats = {
       total: stats.total + 1,
@@ -110,12 +113,24 @@ export function ReviewClient(props: ReviewClientProps = {}) {
     if (rest.length === 0) setFinished(true);
   }
 
-  if (phase === 'empty' && (!state || (state.reviewCards?.length ?? 0) === 0)) {
-    return <EmptyStateNoCards />;
+  // Filtra reviewCards pela base ativa pra detectar empty states corretos
+  // — "fila vazia" deve ser por base, não cross-base.
+  const baseReviewCardsAll = selectDueCardsForBase(state?.reviewCards ?? [], activeBase.slug);
+  const upcomingForBase = baseReviewCardsAll.length;
+
+  if (phase === 'empty' && upcomingForBase === 0) {
+    return <EmptyStateNoCards baseName={activeBase.name} basePath={activeBase.basePath} />;
   }
 
   if (phase === 'empty') {
-    return <EmptyStateZeroDue streak={state?.streak ?? 0} upcoming={state?.reviewCards?.length ?? 0} />;
+    return (
+      <EmptyStateZeroDue
+        streak={state?.streak ?? 0}
+        upcoming={upcomingForBase}
+        baseName={activeBase.name}
+        basePath={activeBase.basePath}
+      />
+    );
   }
 
   if (phase === 'finished') {
@@ -253,32 +268,42 @@ function RatingButton({ label, sublabel, tone, onClick }: { label: string; subla
   );
 }
 
-function EmptyStateNoCards() {
+function EmptyStateNoCards({ baseName, basePath }: { baseName: string; basePath: string }) {
   return (
     <main className="max-w-lg mx-auto px-6 pt-20 pb-20 text-center">
       <div className="text-6xl mb-6">🧠</div>
-      <h1 className="text-2xl font-bold mb-3">Sua fila de revisão está vazia</h1>
+      <h1 className="text-2xl font-bold mb-3">Sua fila de {baseName} está vazia</h1>
       <p className="text-sm mb-8 leading-relaxed" style={{ color: 'var(--ffv-muted)' }}>
-        Conclua um quiz em qualquer artigo para que as perguntas virem cards de revisão espaçada.
-        Quanto mais você aprende, mais inteligente fica a fila — ela te devolve na hora certa
-        aquilo que você está prestes a esquecer.
+        Conclua um quiz em qualquer módulo de <strong>{baseName}</strong> para que as perguntas virem
+        cards de revisão espaçada. Quanto mais você aprende, mais inteligente fica a fila — ela te
+        devolve na hora certa aquilo que você está prestes a esquecer.
       </p>
       <Link
-        href="/"
+        href={basePath}
         className="inline-block px-6 py-3 rounded-full text-sm font-semibold transition-all hover:opacity-90"
         style={{ background: 'var(--ffv-blue)', color: '#0d1117' }}
       >
-        Começar a estudar →
+        Ir para {baseName} →
       </Link>
     </main>
   );
 }
 
-function EmptyStateZeroDue({ streak, upcoming }: { streak: number; upcoming: number }) {
+function EmptyStateZeroDue({
+  streak,
+  upcoming,
+  baseName,
+  basePath,
+}: {
+  streak: number;
+  upcoming: number;
+  baseName: string;
+  basePath: string;
+}) {
   return (
     <main className="max-w-lg mx-auto px-6 pt-20 pb-20 text-center">
       <div className="text-6xl mb-6">✨</div>
-      <h1 className="text-2xl font-bold mb-3">Fila zerada hoje</h1>
+      <h1 className="text-2xl font-bold mb-3">Fila de {baseName} zerada hoje</h1>
       <p className="text-sm mb-2 leading-relaxed" style={{ color: 'var(--ffv-muted)' }}>
         Você já revisou tudo o que estava devido. O algoritmo vai devolver seus cards no momento
         certo para fixar a memória de longo prazo.
@@ -294,11 +319,11 @@ function EmptyStateZeroDue({ streak, upcoming }: { streak: number; upcoming: num
         </div>
       </div>
       <Link
-        href="/"
+        href={basePath}
         className="inline-block px-6 py-3 rounded-full text-sm font-semibold transition-all hover:opacity-90"
         style={{ background: 'var(--ffv-blue)', color: '#0d1117' }}
       >
-        Explorar artigos novos →
+        Explorar módulos novos de {baseName} →
       </Link>
     </main>
   );

@@ -21,8 +21,9 @@ import {
   UserCog,
   GraduationCap,
 } from 'lucide-react';
-import { HUBS } from '@/lib/curriculum';
 import { useGameState } from '@/hooks/useGameState';
+import { useActiveBase } from '@/components/base/ActiveBaseContext';
+import { selectDueCardsForBase } from '@/lib/bases/state-selectors';
 import type { ComponentType, SVGProps } from 'react';
 
 type LucideIcon = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
@@ -36,6 +37,17 @@ const HUB_ICONS: Record<string, LucideIcon> = {
   '/programacao': Code2,
   '/dados': Database,
   '/construcao': Hammer,
+};
+
+// Mapeamento por iconName (usado por BaseNavItem da base) → Lucide icon.
+const ICON_BY_NAME: Record<string, LucideIcon> = {
+  brain: BrainCircuit,
+  cloud: Cloud,
+  wrench: Wrench,
+  bot: Bot,
+  book: BookOpen,
+  target: Target,
+  chart: ChartBarIncreasing,
 };
 
 type Item = { href: string; label: string; color: string; Icon: LucideIcon };
@@ -55,7 +67,11 @@ function getPrimaryItems(): Item[] {
 export function MobileNav() {
   const pathname = usePathname() ?? '/';
   const { dueCards } = useGameState();
+  const { base: activeBase } = useActiveBase();
   const [sheetOpen, setSheetOpen] = useState(false);
+
+  // Cards SRS devidos da base ativa — sem cross-base.
+  const baseDueCards = selectDueCardsForBase(dueCards, activeBase.slug);
 
   // Fecha sheet ao trocar de rota
   useEffect(() => { setSheetOpen(false); }, [pathname]);
@@ -71,8 +87,9 @@ export function MobileNav() {
 
   const primary = getPrimaryItems();
 
-  // Itens secundários — drawer "Mais" mostra TODOS os 8 hubs
-  const otherHubs = HUBS;
+  // Hubs do drawer — vêm da BASE ATIVA (não mais HUBS hardcoded tech).
+  const baseHubs = activeBase.nav.hubNavItems;
+  const hideGlobalContent = activeBase.nav.hideGlobalContentNav;
 
   return (
     <>
@@ -167,9 +184,9 @@ export function MobileNav() {
               >
                 Mais
               </span>
-              {dueCards.length > 0 && (
+              {baseDueCards.length > 0 && (
                 <span
-                  aria-label={`${dueCards.length} cards pendentes`}
+                  aria-label={`${baseDueCards.length} cards pendentes`}
                   style={{
                     position: 'absolute',
                     top: 6,
@@ -188,7 +205,7 @@ export function MobileNav() {
                     lineHeight: 1,
                   }}
                 >
-                  {dueCards.length > 9 ? '9+' : dueCards.length}
+                  {baseDueCards.length > 9 ? '9+' : baseDueCards.length}
                 </span>
               )}
             </button>
@@ -250,12 +267,20 @@ export function MobileNav() {
             </div>
 
             <div className="px-4 pb-4 overflow-y-auto" style={{ maxHeight: 'calc(80vh - 70px)' }}>
-              {otherHubs.length > 0 && (
-                <SheetSection title="Outros hubs">
-                  {otherHubs.map(h => {
-                    const Icon = HUB_ICONS[h.href] ?? GraduationCap;
+              {baseHubs.length > 0 && (
+                <SheetSection title={`Hubs · ${activeBase.name}`}>
+                  {baseHubs.map(h => {
+                    const Icon = HUB_ICONS[h.href]
+                      ?? (h.iconName ? ICON_BY_NAME[h.iconName] : null)
+                      ?? GraduationCap;
                     return (
-                      <SheetLink key={h.href} href={h.href} label={h.name} color={h.color} Icon={Icon} />
+                      <SheetLink
+                        key={h.href}
+                        href={h.href}
+                        label={h.label}
+                        color={h.color ?? 'var(--ffv-blue)'}
+                        Icon={Icon}
+                      />
                     );
                   })}
                 </SheetSection>
@@ -263,11 +288,18 @@ export function MobileNav() {
 
               <SheetSection title="Atividade">
                 <SheetLink href="/progresso" label="Progresso" color="var(--ffv-green)" Icon={ChartBarIncreasing} />
-                <SheetLink href="/revisar" label={dueCards.length > 0 ? `Revisar (${dueCards.length})` : 'Revisar'} color="var(--ffv-green)" Icon={BookOpen} />
-                <SheetLink href="/revisao" label="Maratona de Revisão" color="var(--ffv-blue)" Icon={Brain} />
-                <SheetLink href="/plano" label="Meu Plano de Estudos" color="var(--ffv-purple)" Icon={Target} />
-                <SheetLink href="/simulados" label="Simulados" color="#f78166" Icon={Target} />
-                <SheetLink href="/certificacoes" label="Prep de Certificações" color="var(--ffv-yellow)" Icon={GraduationCap} />
+                <SheetLink href="/revisar" label={baseDueCards.length > 0 ? `Revisar (${baseDueCards.length})` : 'Revisar'} color="var(--ffv-green)" Icon={BookOpen} />
+                {!hideGlobalContent && (
+                  <>
+                    <SheetLink href="/revisao" label="Maratona de Revisão" color="var(--ffv-blue)" Icon={Brain} />
+                    <SheetLink href="/plano" label="Meu Plano de Estudos" color="var(--ffv-purple)" Icon={Target} />
+                    <SheetLink href="/simulados" label="Simulados" color="#f78166" Icon={Target} />
+                    <SheetLink href="/certificacoes" label="Prep de Certificações" color="var(--ffv-yellow)" Icon={GraduationCap} />
+                  </>
+                )}
+                {activeBase.simulados?.map(s => (
+                  <SheetLink key={s.slug} href={s.href} label={s.title} color="#f78166" Icon={Target} />
+                ))}
               </SheetSection>
 
               <SheetSection title="Comunidade">

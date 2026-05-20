@@ -150,6 +150,10 @@ describe('<GameHUD> com state preenchido', () => {
   });
 
   it('mostra pill de meta diária', async () => {
+    // Counter agora vem de localStorage per-base (não do hook todayReviewCount).
+    // Seedeamos manualmente o key da base default (tecnologia) pra simular 1 review hoje.
+    const todayISO = new Date().toISOString().slice(0, 10);
+    window.localStorage.setItem(`ffv_review_count:${todayISO}:tecnologia`, '1');
     renderGameHUD();
     expect(await screen.findByText(/🎯 1\/3/)).toBeInTheDocument();
   });

@@ -5,30 +5,63 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { CURRICULUM, type Module, type Trail } from '@/lib/curriculum';
 import { track } from '@/lib/analytics';
+import { useActiveBase } from '@/components/base/ActiveBaseContext';
+import { MEDVET_BASE } from '@/lib/bases/medvet';
 
 type ModuleWithTrail = Module & { trail: Trail };
 
-const ALL_MODULES: ModuleWithTrail[] = CURRICULUM.flatMap(trail =>
-  trail.modules.map(m => ({ ...m, trail })),
-);
+/**
+ * Busca por base ativa — usuário em medvet só vê resultados de medvet,
+ * usuário em tech só vê tech. Sem cross-base leakage.
+ */
+function buildModulesForBase(baseSlug: string): ModuleWithTrail[] {
+  if (baseSlug === 'tecnologia') {
+    return CURRICULUM.flatMap(trail => trail.modules.map(m => ({ ...m, trail })));
+  }
+  if (baseSlug === 'medicina-veterinaria') {
+    // Adapta o shape do medvet Trail/Module pro shape do tech curriculum.
+    return MEDVET_BASE.trails.flatMap(trail =>
+      trail.modules.map(m => ({
+        slug: m.slug,
+        title: m.title,
+        icon: m.icon,
+        xp: 0,
+        readTime: m.estimatedMin ?? 10,
+        desc: m.summary,
+        seoDesc: m.summary,
+        keywords: m.keyTerms.map(k => k.term).join(' '),
+        trail: {
+          id: trail.slug,
+          name: trail.title,
+          color: 'var(--ffv-blue)',
+          icon: trail.icon,
+          desc: trail.description,
+          modules: [],
+        } as Trail,
+      })),
+    );
+  }
+  return [];
+}
+
+function makeModuleHref(m: ModuleWithTrail, baseSlug: string): string {
+  if (baseSlug === 'medicina-veterinaria') return `/medicina-veterinaria/${m.slug}`;
+  return `/aprenda/${m.slug}`;
+}
 
 /**
- * SearchClient — busca local instantânea em todos os módulos do CURRICULUM.
- *
- * Usa busca por substring case-insensitive em title + desc + keywords + trail.
- * Para 600+ módulos, isso roda em <10ms — não vale o overhead de Fuse.js
- * ou MeiliSearch nesta escala. Se passarmos de 5000 módulos, considerar.
+ * SearchClient — busca local instantânea por base.
  *
  * Score simples: matches em title valem 3x, desc 2x, keywords 1x.
  * Resultados ordenados por score desc, limit 50.
  */
-function searchModules(query: string): Array<ModuleWithTrail & { score: number }> {
+function searchModules(query: string, modules: ModuleWithTrail[]): Array<ModuleWithTrail & { score: number }> {
   const q = query.trim().toLowerCase();
   if (q.length < 2) return [];
 
   const tokens = q.split(/\s+/).filter(Boolean);
 
-  const scored = ALL_MODULES.map(m => {
+  const scored = modules.map(m => {
     const title = m.title.toLowerCase();
     const desc = m.desc.toLowerCase();
     const keywords = (m.keywords ?? '').toLowerCase();
@@ -80,7 +113,9 @@ export function SearchClient() {
     inputRef.current?.focus();
   }, []);
 
-  const results = useMemo(() => searchModules(debouncedQuery), [debouncedQuery]);
+  const { base: activeBase } = useActiveBase();
+  const allModules = useMemo(() => buildModulesForBase(activeBase.slug), [activeBase.slug]);
+  const results = useMemo(() => searchModules(debouncedQuery, allModules), [debouncedQuery, allModules]);
 
   // Reset índice ativo ao mudar query
   useEffect(() => { setActiveIndex(0); }, [debouncedQuery]);
@@ -97,7 +132,7 @@ export function SearchClient() {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       const target = results[activeIndex];
-      if (target) router.push(`/aprenda/${target.slug}`);
+      if (target) router.push(makeModuleHref(target, activeBase.slug));
     }
   }
 
@@ -165,7 +200,7 @@ export function SearchClient() {
             className="text-xs mt-3 font-mono"
             style={{ color: 'var(--ffv-muted)', letterSpacing: '0.04em' }}
           >
-            {ALL_MODULES.length} ARTIGOS · BUSCA INSTANTÂNEA
+            {allModules.length} ARTIGOS · BUSCA INSTANTÂNEA
           </p>
         </div>
       </section>
@@ -182,6 +217,7 @@ export function SearchClient() {
                   module={m}
                   query={debouncedQuery}
                   active={i === activeIndex}
+                  baseSlug={activeBase.slug}
                 />
               ))}
             </div>
@@ -251,10 +287,10 @@ function EmptyState({ query }: { query: string }) {
   );
 }
 
-function ResultRow({ module: m, query, active }: { module: ModuleWithTrail; query: string; active?: boolean }) {
+function ResultRow({ module: m, query, active, baseSlug }: { module: ModuleWithTrail; query: string; active?: boolean; baseSlug: string }) {
   return (
     <Link
-      href={`/aprenda/${m.slug}`}
+      href={makeModuleHref(m, baseSlug)}
       className="group block p-4 rounded-xl transition-all"
       style={{
         background: active ? 'var(--ffv-bg3)' : 'var(--ffv-bg2)',

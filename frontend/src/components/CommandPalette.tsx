@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { CURRICULUM, HUBS, getTrailHref } from '@/lib/curriculum';
+import { useActiveBase } from '@/components/base/ActiveBaseContext';
+import { MEDVET_BASE } from '@/lib/bases/medvet';
 
 type Item = {
   id: string;
@@ -15,7 +17,7 @@ type Item = {
   accent: string;
 };
 
-function buildItems(): Item[] {
+function buildItems(baseSlug: string, hideGlobalContentNav: boolean): Item[] {
   const items: Item[] = [];
 
   // Utility pages first — so they show up at top of empty state
@@ -49,26 +51,28 @@ function buildItems(): Item[] {
     haystack: 'revisar srs spaced repetition flashcards cards',
     accent: 'var(--ffv-green)',
   });
-  items.push({
-    id: 'page-simulados',
-    kind: 'page',
-    title: 'Simulados',
-    subtitle: 'Simulados com tutor IA para certificações AWS',
-    icon: '🎯',
-    href: '/simulados',
-    haystack: 'simulados aws certificação exam prova tutor ia',
-    accent: '#f78166',
-  });
-  items.push({
-    id: 'page-news',
-    kind: 'page',
-    title: 'News',
-    subtitle: 'Curadoria editorial das notícias de IA, infra e arquitetura',
-    icon: '📰',
-    href: '/news',
-    haystack: 'news noticias ia anthropic openai claude gemini llama regulação ai act benchmarks',
-    accent: '#ff5a36',
-  });
+  if (!hideGlobalContentNav) {
+    items.push({
+      id: 'page-simulados',
+      kind: 'page',
+      title: 'Simulados',
+      subtitle: 'Simulados com tutor IA para certificações AWS',
+      icon: '🎯',
+      href: '/simulados',
+      haystack: 'simulados aws certificação exam prova tutor ia',
+      accent: '#f78166',
+    });
+    items.push({
+      id: 'page-news',
+      kind: 'page',
+      title: 'News',
+      subtitle: 'Curadoria editorial das notícias de IA, infra e arquitetura',
+      icon: '📰',
+      href: '/news',
+      haystack: 'news noticias ia anthropic openai claude gemini llama regulação ai act benchmarks',
+      accent: '#ff5a36',
+    });
+  }
   items.push({
     id: 'page-preferencias',
     kind: 'page',
@@ -80,47 +84,82 @@ function buildItems(): Item[] {
     accent: 'var(--ffv-muted)',
   });
 
-  // Hubs
-  for (const hub of HUBS) {
-    items.push({
-      id: `hub-${hub.slug}`,
-      kind: 'hub',
-      title: hub.name,
-      subtitle: hub.tagline,
-      icon: hub.icon,
-      href: hub.href,
-      haystack: `${hub.name} ${hub.shortName} ${hub.tagline} ${hub.desc}`.toLowerCase(),
-      accent: hub.color,
-    });
-  }
-
-  // Trails
-  for (const trail of CURRICULUM) {
-    items.push({
-      id: `trail-${trail.id}`,
-      kind: 'trail',
-      title: trail.name,
-      subtitle: trail.desc,
-      icon: trail.icon,
-      href: getTrailHref(trail.id),
-      haystack: `${trail.name} ${trail.desc} ${trail.id}`.toLowerCase(),
-      accent: trail.color,
-    });
-  }
-
-  // Articles
-  for (const trail of CURRICULUM) {
-    for (const mod of trail.modules) {
+  // Hubs / Trails / Articles — vêm da base ativa.
+  if (baseSlug === 'tecnologia') {
+    for (const hub of HUBS) {
       items.push({
-        id: `art-${mod.slug}`,
-        kind: 'article',
-        title: mod.title,
-        subtitle: `${trail.name} · ${mod.readTime} min · +${mod.xp} XP`,
-        icon: mod.icon,
-        href: `/aprenda/${mod.slug}`,
-        haystack: `${mod.title} ${mod.desc} ${mod.keywords} ${trail.name} ${mod.slug}`.toLowerCase(),
+        id: `hub-${hub.slug}`,
+        kind: 'hub',
+        title: hub.name,
+        subtitle: hub.tagline,
+        icon: hub.icon,
+        href: hub.href,
+        haystack: `${hub.name} ${hub.shortName} ${hub.tagline} ${hub.desc}`.toLowerCase(),
+        accent: hub.color,
+      });
+    }
+    for (const trail of CURRICULUM) {
+      items.push({
+        id: `trail-${trail.id}`,
+        kind: 'trail',
+        title: trail.name,
+        subtitle: trail.desc,
+        icon: trail.icon,
+        href: getTrailHref(trail.id),
+        haystack: `${trail.name} ${trail.desc} ${trail.id}`.toLowerCase(),
         accent: trail.color,
       });
+    }
+    for (const trail of CURRICULUM) {
+      for (const mod of trail.modules) {
+        items.push({
+          id: `art-${mod.slug}`,
+          kind: 'article',
+          title: mod.title,
+          subtitle: `${trail.name} · ${mod.readTime} min · +${mod.xp} XP`,
+          icon: mod.icon,
+          href: `/aprenda/${mod.slug}`,
+          haystack: `${mod.title} ${mod.desc} ${mod.keywords} ${trail.name} ${mod.slug}`.toLowerCase(),
+          accent: trail.color,
+        });
+      }
+    }
+  } else if (baseSlug === 'medicina-veterinaria') {
+    for (const hub of MEDVET_BASE.hubs ?? []) {
+      items.push({
+        id: `hub-${hub.slug}`,
+        kind: 'hub',
+        title: hub.name,
+        subtitle: hub.description,
+        icon: hub.icon,
+        href: `/medicina-veterinaria#${hub.slug}`,
+        haystack: `${hub.name} ${hub.description}`.toLowerCase(),
+        accent: 'var(--ffv-blue)',
+      });
+    }
+    for (const trail of MEDVET_BASE.trails) {
+      items.push({
+        id: `trail-${trail.slug}`,
+        kind: 'trail',
+        title: trail.title,
+        subtitle: trail.description,
+        icon: trail.icon,
+        href: `/medicina-veterinaria`,
+        haystack: `${trail.title} ${trail.description} ${trail.slug}`.toLowerCase(),
+        accent: 'var(--ffv-blue)',
+      });
+      for (const mod of trail.modules) {
+        items.push({
+          id: `art-${mod.slug}`,
+          kind: 'article',
+          title: mod.title,
+          subtitle: `${trail.title} · ${mod.estimatedMin} min`,
+          icon: mod.icon,
+          href: `/medicina-veterinaria/${mod.slug}`,
+          haystack: `${mod.title} ${mod.summary} ${trail.title} ${mod.slug}`.toLowerCase(),
+          accent: 'var(--ffv-blue)',
+        });
+      }
     }
   }
   return items;
@@ -171,7 +210,11 @@ export function CommandPalette() {
   const listRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
-  const items = useMemo(() => buildItems(), []);
+  const { base: activeBase } = useActiveBase();
+  const items = useMemo(
+    () => buildItems(activeBase.slug, activeBase.nav.hideGlobalContentNav),
+    [activeBase.slug, activeBase.nav.hideGlobalContentNav]
+  );
 
   const filtered = useMemo(() => {
     if (!query.trim()) {

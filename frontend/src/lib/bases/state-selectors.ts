@@ -126,6 +126,44 @@ export function selectTotalXpForBase(baseSlug: string): number {
   return 0;
 }
 
+// ─── Daily review counter per base (localStorage-based, sem mudar schema) ───
+//
+// O GameState.studyDays é flat e cross-base. Pra que a pílula "0/3" no GameHUD
+// e o todayReviewCount em /progresso reflitam só a base ativa, mantemos um
+// contador transient em localStorage chaveado por dia + base.
+
+const REVIEW_COUNT_KEY_PREFIX = 'ffv_review_count';
+
+function todayISO(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function reviewCountKey(baseSlug: string, dateISO: string = todayISO()): string {
+  return `${REVIEW_COUNT_KEY_PREFIX}:${dateISO}:${baseSlug}`;
+}
+
+/** Incrementa o contador de revisões de hoje pra base. Chama quando o usuário rateia um card. */
+export function bumpBaseReviewCount(baseSlug: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const key = reviewCountKey(baseSlug);
+    const current = Number(window.localStorage.getItem(key) ?? 0);
+    window.localStorage.setItem(key, String(current + 1));
+  } catch {
+    /* storage bloqueado */
+  }
+}
+
+/** Lê o contador de revisões de hoje pra base. */
+export function getBaseReviewCountToday(baseSlug: string): number {
+  if (typeof window === 'undefined') return 0;
+  try {
+    return Number(window.localStorage.getItem(reviewCountKey(baseSlug)) ?? 0);
+  } catch {
+    return 0;
+  }
+}
+
 // ─── Recommendations base-aware ─────────────────────────────────────────────
 
 /**
