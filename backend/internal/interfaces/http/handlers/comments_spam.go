@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // Limites configurados via constantes pra fácil ajuste sem deploy.
@@ -128,10 +130,13 @@ func CheckCommentForSpam(content string) SpamCheckResult {
 		}
 	}
 
-	// 5) Banned words — busca case-insensitive.
-	lower := strings.ToLower(trimmed)
+	// 5) Banned words — busca case-insensitive em forma normalizada
+	//    (NFKC + zero-width strip + lowercase) pra fechar bypass de unicode
+	//    lookalikes (e.g. "сompre" com 'с' cirílico) e zero-width joiners
+	//    no meio da palavra ("c​ompre").
+	normalized := normalizeForSpamCheck(trimmed)
 	for _, w := range bannedWords {
-		if strings.Contains(lower, w) {
+		if strings.Contains(normalized, w) {
 			return SpamCheckResult{
 				OK: false, Code: "spam:banned-word",
 				Reason: "linguagem ofensiva ou spam detectado",
@@ -140,4 +145,56 @@ func CheckCommentForSpam(content string) SpamCheckResult {
 	}
 
 	return SpamCheckResult{OK: true}
+}
+
+// normalizeForSpamCheck aplica NFKC + strip de zero-width + lowercase.
+// NFKC mapeia caracteres compatíveis (ﬁ → fi, ３ → 3) mas NÃO converte
+// cirílico/grego lookalikes pra latim (essas são letras distintas em Unicode).
+// Pra cobrir isso adicionamos um mapa explícito dos lookalikes mais comuns.
+func normalizeForSpamCheck(s string) string {
+	// Strip zero-width chars que atacantes meterem no meio de palavras.
+	s = stripInvisibleChars(s)
+	// NFKC normalization — colapsa formas equivalentes.
+	s = norm.NFKC.String(s)
+	// Lookalike fold — cobre os mais comuns em PT-BR/EN.
+	s = lookalikeFold(s)
+	return strings.ToLower(s)
+}
+
+func stripInvisibleChars(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		// Bloqueia U+200B..200D (zero-width), U+FEFF (BOM), U+2060 (word joiner),
+		// e categoria Mn (combining marks são OK, mantemos).
+		if r == 0x200B || r == 0x200C || r == 0x200D || r == 0xFEFF || r == 0x2060 {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// lookalikeFold mapeia caracteres cirílicos/gregos visualmente idênticos
+// aos latinos correspondentes — fecha bypass tipo "сompre" (с=U+0441 cirílico).
+var lookalikeMap = map[rune]rune{
+	// Cirílico → Latino (lowercase)
+	'а': 'a', 'е': 'e', 'о': 'o', 'р': 'p', 'с': 'c', 'у': 'y', 'х': 'x',
+	'А': 'A', 'Е': 'E', 'О': 'O', 'Р': 'P', 'С': 'C', 'У': 'Y', 'Х': 'X',
+	// Grego → Latino
+	'α': 'a', 'ο': 'o', 'ρ': 'p', 'ν': 'v', 'υ': 'y',
+	'Α': 'A', 'Ο': 'O', 'Ρ': 'P', 'Ν': 'V', 'Υ': 'Y',
+}
+
+func lookalikeFold(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if mapped, ok := lookalikeMap[r]; ok {
+			b.WriteRune(mapped)
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }

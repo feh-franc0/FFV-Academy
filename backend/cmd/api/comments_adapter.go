@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -103,6 +104,15 @@ func (r *pgxCommentsRepo) SoftDelete(ctx context.Context, commentID, userID stri
 }
 
 func (r *pgxCommentsRepo) UpdateStatus(ctx context.Context, commentID, status string) error {
+	// Defense in depth — handler já valida via changeStatus(), mas o adapter
+	// é o último guardião antes do DB. Whitelist explícita previne bug futuro
+	// onde algum chamador passe lixo direto.
+	switch status {
+	case "visible", "hidden", "flagged", "deleted":
+		// ok
+	default:
+		return errValidationComment
+	}
 	cmd, err := r.pool.Exec(ctx, `UPDATE comments SET status = $2, updated_at = now() WHERE id = $1`, commentID, status)
 	if err != nil {
 		return err
@@ -115,8 +125,12 @@ func (r *pgxCommentsRepo) UpdateStatus(ctx context.Context, commentID, status st
 
 // Vote — upsert atômico via ON CONFLICT. Trigger update_comment_score()
 // propaga pro comments.score.
+//
+// Detecta comment inexistente via FK error (commentID UUID válido mas
+// não cadastrado) — sem isso o INSERT falha silenciosamente e o user vê
+// "voto registrado" sem ter votado em nada.
 func (r *pgxCommentsRepo) Vote(ctx context.Context, commentID, userID string, vote int) error {
-	cmd, err := r.pool.Exec(ctx, `
+	_, err := r.pool.Exec(ctx, `
 		INSERT INTO comment_votes (comment_id, user_id, vote)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (comment_id, user_id)
@@ -124,9 +138,15 @@ func (r *pgxCommentsRepo) Vote(ctx context.Context, commentID, userID string, vo
 		WHERE comment_votes.vote <> EXCLUDED.vote
 	`, commentID, userID, vote)
 	if err != nil {
+		// FK violation ⇒ comment não existe. pgx expõe code "23503" pra FK.
+		// String match cobre todos os drivers de Postgres sem importar
+		// pgconn.PgError diretamente (já é dep do pgx, mas evitamos coupling).
+		msg := err.Error()
+		if strings.Contains(msg, "foreign key") || strings.Contains(msg, "23503") {
+			return errNotFoundComment
+		}
 		return fmt.Errorf("vote: %w", err)
 	}
-	_ = cmd
 	return nil
 }
 
@@ -181,6 +201,8 @@ func (r *pgxCommentsRepo) ListByStatus(ctx context.Context, status string, limit
 // Report — registra reporte. PK composta evita duplicata do mesmo user.
 // ON CONFLICT DO NOTHING = idempotente (segundo reporte do mesmo user = no-op).
 // Trigger auto-flag em ≥3 reports.
+//
+// FK error em commentID inexistente → ErrNotFound (igual Vote).
 func (r *pgxCommentsRepo) Report(ctx context.Context, commentID, reporterID, reason string) error {
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO comment_reports (comment_id, reporter_id, reason)
@@ -188,6 +210,10 @@ func (r *pgxCommentsRepo) Report(ctx context.Context, commentID, reporterID, rea
 		ON CONFLICT (comment_id, reporter_id) DO NOTHING
 	`, commentID, reporterID, reason)
 	if err != nil {
+		msg := err.Error()
+		if strings.Contains(msg, "foreign key") || strings.Contains(msg, "23503") {
+			return errNotFoundComment
+		}
 		return fmt.Errorf("report: %w", err)
 	}
 	return nil
@@ -196,6 +222,7 @@ func (r *pgxCommentsRepo) Report(ctx context.Context, commentID, reporterID, rea
 // Sentinels mapeados para os erros do domain shared — HandleDomainError no
 // handler entende e responde com o status HTTP correto.
 var (
-	errNotFoundComment  = fmt.Errorf("comment: %w", shared.ErrNotFound)
-	errForbiddenComment = fmt.Errorf("comment: %w", shared.ErrForbidden)
+	errNotFoundComment   = fmt.Errorf("comment: %w", shared.ErrNotFound)
+	errForbiddenComment  = fmt.Errorf("comment: %w", shared.ErrForbidden)
+	errValidationComment = fmt.Errorf("comment: %w", shared.ErrValidation)
 )

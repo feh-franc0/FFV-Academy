@@ -6,7 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -84,10 +84,11 @@ func (s *stubCommentsRepo) ListByTarget(_ context.Context, targetType, targetID 
 func (s *stubCommentsRepo) SoftDelete(_ context.Context, commentID, userID string, isAdmin bool) error {
 	c, ok := s.items[commentID]
 	if !ok {
-		return errors.New("comment: " + shared.ErrNotFound.Error())
+		// Importante: usar %w pra que errors.Is(err, shared.ErrNotFound) funcione.
+		return fmt.Errorf("comment: %w", shared.ErrNotFound)
 	}
 	if c.UserID != userID && !isAdmin {
-		return errors.New("comment: " + shared.ErrForbidden.Error())
+		return fmt.Errorf("comment: %w", shared.ErrForbidden)
 	}
 	c.Status = "deleted"
 	return nil
@@ -96,7 +97,13 @@ func (s *stubCommentsRepo) SoftDelete(_ context.Context, commentID, userID strin
 func (s *stubCommentsRepo) UpdateStatus(_ context.Context, commentID, status string) error {
 	c, ok := s.items[commentID]
 	if !ok {
-		return errors.New("comment: " + shared.ErrNotFound.Error())
+		return fmt.Errorf("comment: %w", shared.ErrNotFound)
+	}
+	// Mesma whitelist do adapter real — defense in depth.
+	switch status {
+	case "visible", "hidden", "flagged", "deleted":
+	default:
+		return fmt.Errorf("comment: %w", shared.ErrValidation)
 	}
 	c.Status = status
 	return nil
@@ -355,3 +362,251 @@ func Test_Comments_Report_Authenticated_Returns204(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, rec.Code)
 	assert.True(t, repo.rpts["c1:u-reporter"])
 }
+
+// ─── Delete (FIX5 — gaps de cobertura críticos) ───────────────────────────
+
+func Test_Comments_Delete_NoAuth_Returns401(t *testing.T) {
+	h := handlers.NewCommentsHandler(newStubCommentsRepo())
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/comments/c1", http.NoBody)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", "c1")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	rec := httptest.NewRecorder()
+	h.Delete(rec, req)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func Test_Comments_Delete_NonOwner_NonAdmin_Returns403(t *testing.T) {
+	repo := newStubCommentsRepo()
+	_, _ = repo.Create(context.Background(), handlers.CommentCreateInput{
+		UserID: "u-author", TargetType: "article", TargetID: "x", Content: "hi",
+	})
+	h := handlers.NewCommentsHandler(repo)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/comments/c-u-author-x", http.NoBody)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", "c-u-author-x")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	req = withAuthCtx(req, "u-other")
+	rec := httptest.NewRecorder()
+	h.Delete(rec, req)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+func Test_Comments_Delete_Owner_Returns204(t *testing.T) {
+	repo := newStubCommentsRepo()
+	_, _ = repo.Create(context.Background(), handlers.CommentCreateInput{
+		UserID: "u-author", TargetType: "article", TargetID: "x", Content: "hi",
+	})
+	h := handlers.NewCommentsHandler(repo)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/comments/c-u-author-x", http.NoBody)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", "c-u-author-x")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	req = withAuthCtx(req, "u-author")
+	rec := httptest.NewRecorder()
+	h.Delete(rec, req)
+	assert.Equal(t, http.StatusNoContent, rec.Code)
+	assert.Equal(t, "deleted", repo.items["c-u-author-x"].Status)
+}
+
+func Test_Comments_Delete_Admin_Returns204(t *testing.T) {
+	repo := newStubCommentsRepo()
+	_, _ = repo.Create(context.Background(), handlers.CommentCreateInput{
+		UserID: "u-author", TargetType: "article", TargetID: "x", Content: "hi",
+	})
+	h := handlers.NewCommentsHandler(repo)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/comments/c-u-author-x", http.NoBody)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", "c-u-author-x")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	// Injeta userID + role admin no contexto
+	ctx := context.WithValue(req.Context(), middleware.CtxKeyUserID, shared.UserID("u-admin"))
+	ctx = context.WithValue(ctx, middleware.CtxKeyRole, "admin")
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	h.Delete(rec, req)
+	assert.Equal(t, http.StatusNoContent, rec.Code)
+}
+
+func Test_Comments_Delete_NotFound_Returns404(t *testing.T) {
+	h := handlers.NewCommentsHandler(newStubCommentsRepo())
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/comments/c-fake", http.NoBody)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", "c-fake")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	req = withAuthCtx(req, "u1")
+	rec := httptest.NewRecorder()
+	h.Delete(rec, req)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+// ─── Vote toggle e unvote ──────────────────────────────────────────────────
+
+func Test_Comments_Vote_Toggle_UpdatesNotDuplicates(t *testing.T) {
+	repo := newStubCommentsRepo()
+	_, _ = repo.Create(context.Background(), handlers.CommentCreateInput{
+		UserID: "u-author", TargetType: "article", TargetID: "x", Content: "hi",
+	})
+	h := handlers.NewCommentsHandler(repo)
+
+	// Vote +1
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/comments/c-u-author-x/vote", bytes.NewReader([]byte(`{"vote":1}`)))
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", "c-u-author-x")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	req = withAuthCtx(req, "u-voter")
+	rec := httptest.NewRecorder()
+	h.Vote(rec, req)
+	require.Equal(t, http.StatusNoContent, rec.Code)
+	require.Equal(t, 1, repo.votes["c-u-author-x:u-voter"])
+
+	// Vote -1 (troca, não duplica)
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/comments/c-u-author-x/vote", bytes.NewReader([]byte(`{"vote":-1}`)))
+	req2 = req2.WithContext(context.WithValue(req2.Context(), chi.RouteCtxKey, rctx))
+	req2 = withAuthCtx(req2, "u-voter")
+	rec2 := httptest.NewRecorder()
+	h.Vote(rec2, req2)
+	require.Equal(t, http.StatusNoContent, rec2.Code)
+	require.Equal(t, -1, repo.votes["c-u-author-x:u-voter"], "toggle deve atualizar, não criar 2 entradas")
+	require.Len(t, repo.votes, 1, "1 voto único por par (commentID, userID)")
+}
+
+func Test_Comments_Vote_Zero_RemovesVote(t *testing.T) {
+	repo := newStubCommentsRepo()
+	_, _ = repo.Create(context.Background(), handlers.CommentCreateInput{
+		UserID: "u-author", TargetType: "article", TargetID: "x", Content: "hi",
+	})
+	h := handlers.NewCommentsHandler(repo)
+	repo.votes["c-u-author-x:u-voter"] = 1 // estado inicial: votou
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/comments/c-u-author-x/vote", bytes.NewReader([]byte(`{"vote":0}`)))
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", "c-u-author-x")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	req = withAuthCtx(req, "u-voter")
+	rec := httptest.NewRecorder()
+	h.Vote(rec, req)
+	require.Equal(t, http.StatusNoContent, rec.Code)
+	_, exists := repo.votes["c-u-author-x:u-voter"]
+	require.False(t, exists, "vote=0 deve remover do mapa")
+}
+
+// ─── Char limit boundary ──────────────────────────────────────────────────
+
+func Test_Comments_Create_ExactlyMaxChars_Accepted(t *testing.T) {
+	h := handlers.NewCommentsHandler(newStubCommentsRepo())
+	// 1000 chars exatos com texto realista (evita char-repeat)
+	piece := "lorem ipsum dolor sit amet "
+	content := strings.Repeat(piece, 50)[:1000]
+	require.Len(t, content, 1000)
+	body, _ := json.Marshal(map[string]string{
+		"targetType": "article", "targetId": "x", "content": content,
+	})
+	req := withAuthCtx(httptest.NewRequest(http.MethodPost, "/api/v1/comments", bytes.NewReader(body)), "u1")
+	rec := httptest.NewRecorder()
+	h.Create(rec, req)
+	assert.Equal(t, http.StatusCreated, rec.Code)
+}
+
+// ─── Admin: List, Hide, Restore ────────────────────────────────────────────
+
+func Test_Comments_AdminList_DefaultFlagged(t *testing.T) {
+	repo := newStubCommentsRepo()
+	c1, _ := repo.Create(context.Background(), handlers.CommentCreateInput{
+		UserID: "u1", TargetType: "article", TargetID: "x", Content: "ok",
+	})
+	repo.items[c1.ID].Status = "flagged"
+
+	h := handlers.NewCommentsHandler(repo)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/comments", http.NoBody)
+	rec := httptest.NewRecorder()
+	h.AdminList(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body struct {
+		Data  []handlers.Comment `json:"data"`
+		Total int64              `json:"total"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	assert.Equal(t, int64(1), body.Total)
+	assert.Equal(t, "flagged", body.Data[0].Status)
+}
+
+func Test_Comments_AdminList_InvalidStatus_Returns400(t *testing.T) {
+	h := handlers.NewCommentsHandler(newStubCommentsRepo())
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/comments?status=lixo", http.NoBody)
+	rec := httptest.NewRecorder()
+	h.AdminList(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func Test_Comments_Hide_AdminFlow(t *testing.T) {
+	repo := newStubCommentsRepo()
+	c, _ := repo.Create(context.Background(), handlers.CommentCreateInput{
+		UserID: "u1", TargetType: "article", TargetID: "x", Content: "ok",
+	})
+	h := handlers.NewCommentsHandler(repo)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/comments/"+c.ID+"/hide", http.NoBody)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", c.ID)
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	rec := httptest.NewRecorder()
+	h.Hide(rec, req)
+	require.Equal(t, http.StatusNoContent, rec.Code)
+	assert.Equal(t, "hidden", repo.items[c.ID].Status)
+}
+
+func Test_Comments_Restore_AdminFlow(t *testing.T) {
+	repo := newStubCommentsRepo()
+	c, _ := repo.Create(context.Background(), handlers.CommentCreateInput{
+		UserID: "u1", TargetType: "article", TargetID: "x", Content: "ok",
+	})
+	repo.items[c.ID].Status = "flagged"
+	h := handlers.NewCommentsHandler(repo)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/comments/"+c.ID+"/restore", http.NoBody)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", c.ID)
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	rec := httptest.NewRecorder()
+	h.Restore(rec, req)
+	require.Equal(t, http.StatusNoContent, rec.Code)
+	assert.Equal(t, "visible", repo.items[c.ID].Status)
+}
+
+// ─── Anti-spam: unicode bypass cobertura ───────────────────────────────────
+
+func Test_Comments_Create_CyrillicLookalike_Rejected(t *testing.T) {
+	h := handlers.NewCommentsHandler(newStubCommentsRepo())
+	// "сompre agora" com 'с' cirílico (U+0441) — atacante tentando bypass.
+	body, _ := json.Marshal(map[string]string{
+		"targetType": "article", "targetId": "x",
+		"content": "Promoção imperdível, сompre agora!",
+	})
+	req := withAuthCtx(httptest.NewRequest(http.MethodPost, "/api/v1/comments", bytes.NewReader(body)), "u1")
+	rec := httptest.NewRecorder()
+	h.Create(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "lookalike fold deve normalizar e detectar banned word")
+}
+
+func Test_Comments_Create_ZeroWidthInjection_Rejected(t *testing.T) {
+	h := handlers.NewCommentsHandler(newStubCommentsRepo())
+	// Zero-width joiner U+200B injetado entre 'c' e 'ompre' pra burlar
+	// substring match. Escape explícito (sem char invisível no source).
+	//nolint:staticcheck // ST1018: o ponto do teste é exatamente injetar U+200B
+	const sneaky = "Aviso: c​ompre agora antes que acabe!"
+	body, _ := json.Marshal(map[string]string{
+		"targetType": "article", "targetId": "x",
+		"content": sneaky,
+	})
+	req := withAuthCtx(httptest.NewRequest(http.MethodPost, "/api/v1/comments", bytes.NewReader(body)), "u1")
+	rec := httptest.NewRecorder()
+	h.Create(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "zero-width strip deve normalizar e detectar banned word")
+}
+
+// Helper pra evitar import cycle quando o fmt é só pra format dentro do test.
+var _ = fmt.Sprintf

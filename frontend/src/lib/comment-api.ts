@@ -231,5 +231,56 @@ export function validateCommentLocally(content: string): { ok: true } | { ok: fa
     }
   }
 
+  // Banned words — mesma lista do backend pra paridade.
+  // Normalização: NFKC + strip zero-width + lookalike fold + lowercase
+  // (espelho do normalizeForSpamCheck no Go).
+  const normalized = normalizeForBannedCheck(trimmed);
+  for (const w of BANNED_WORDS) {
+    if (normalized.includes(w)) {
+      return { ok: false, reason: 'linguagem ofensiva ou spam detectado' };
+    }
+  }
+
   return { ok: true };
+}
+
+// Lista espelhada de backend/internal/interfaces/http/handlers/comments_spam.go
+// Mantém-se em sincronia manualmente — vale extrair pra JSON compartilhado
+// no futuro.
+const BANNED_WORDS = [
+  'f*da-se', 'fdp', 'filho da puta',
+  'puta que pariu',
+  'vai se fuder', 'vai tomar no',
+  'compre agora', 'ganhe dinheiro fácil', 'ganhe dinheiro facil',
+  'clique aqui ganhe',
+  'hack grátis', 'hack gratis', 'hackeie',
+  'viagra', 'casino online',
+  'telegram t.me/',
+] as const;
+
+// Cirílico/grego → latino (mesma tabela do backend).
+const LOOKALIKE_MAP: Record<string, string> = {
+  'а': 'a', 'е': 'e', 'о': 'o', 'р': 'p', 'с': 'c', 'у': 'y', 'х': 'x',
+  'А': 'A', 'Е': 'E', 'О': 'O', 'Р': 'P', 'С': 'C', 'У': 'Y', 'Х': 'X',
+  'α': 'a', 'ο': 'o', 'ρ': 'p', 'ν': 'v', 'υ': 'y',
+  'Α': 'A', 'Ο': 'O', 'Ρ': 'P', 'Ν': 'V', 'Υ': 'Y',
+};
+
+const INVISIBLE_CODE_POINTS = new Set([0x200B, 0x200C, 0x200D, 0xFEFF, 0x2060]);
+
+function normalizeForBannedCheck(s: string): string {
+  // Strip invisible/zero-width chars.
+  let out = '';
+  for (const ch of s) {
+    const cp = ch.codePointAt(0)!;
+    if (!INVISIBLE_CODE_POINTS.has(cp)) out += ch;
+  }
+  // NFKC normalization (built-in no V8/Node moderno).
+  out = out.normalize('NFKC');
+  // Lookalike fold.
+  let folded = '';
+  for (const ch of out) {
+    folded += LOOKALIKE_MAP[ch] ?? ch;
+  }
+  return folded.toLowerCase();
 }

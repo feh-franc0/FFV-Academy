@@ -60,7 +60,8 @@ export function ArticleDiscussion({
     } catch (err) {
       if ((err as DOMException).name === 'AbortError') return;
       setLoadError(err instanceof CommentApiError ? err.message : 'Erro ao carregar comentários');
-      setComments([]);
+      // NOT seta comments=[] — manter null evita renderizar "sem comentários"
+      // junto com a mensagem de erro (contradição que confundia o usuário).
     }
   }, [slug, targetType]);
 
@@ -120,8 +121,15 @@ export function ArticleDiscussion({
   }
 
   async function handleVote(c: Comment, vote: -1 | 1) {
+    // Garante login ANTES do optimistic update. Antes: pisca o vote acionado
+    // enquanto modal de login abre, e se o user cancela, faz rollback feio.
+    // Agora: modal abre primeiro; só se autenticar, aplica optimistic.
+    if (!user) {
+      try { await requireLogin('votar'); } catch { return; /* cancelado */ }
+    }
     // Toggle: se já votou no mesmo, desfaz (vote=0). Senão, troca pro novo.
     const targetVote: -1 | 0 | 1 = c.userVote === vote ? 0 : vote;
+    const snapshot = c; // captura pro rollback
     // Optimistic update
     setComments(prev =>
       (prev ?? []).map(x => {
@@ -131,16 +139,15 @@ export function ArticleDiscussion({
       }),
     );
     try {
-      if (!user) await requireLogin('votar');
       await voteComment(c.id, targetVote);
     } catch (err) {
       // Rollback optimistic + mensagem.
       setComments(prev =>
-        (prev ?? []).map(x => (x.id === c.id ? c : x)),
+        (prev ?? []).map(x => (x.id === c.id ? snapshot : x)),
       );
       if (err instanceof CommentApiError && err.isRateLimited) {
         toast.error('Muitos votos seguidos. Aguarde um minuto.');
-      } else if (!(err instanceof Error && err.message === 'login cancelado')) {
+      } else {
         toast.error('Não foi possível registrar o voto.');
       }
     }
