@@ -131,7 +131,7 @@ export function ProgressoClient() {
           <Stat label="Artigos lidos" value={`${completed.length}`} sub={`de ${totalModules} · ${overallPct}%`} accent="var(--ffv-blue)" />
           <Stat label="XP total" value={state.xp.toLocaleString('pt-BR')} sub={`de ${totalXpPossible.toLocaleString('pt-BR')} disponíveis`} accent="var(--ffv-yellow)" />
           <Stat label="Streak atual" value={`${state.streak}d`} sub={state.freezes > 0 ? `🧊 ${state.freezes} freeze${state.freezes !== 1 ? 's' : ''}` : 'Volte amanhã'} accent="var(--ffv-orange)" />
-          <Stat label="Badges" value={`${state.badges.length}`} sub={`de ${BADGES_DEF.length} conquistas`} accent="var(--ffv-purple)" />
+          <Stat label="Badges" value={`${state.badges.length}`} sub={isActiveTech ? `de ${BADGES_DEF.length} conquistas` : 'conquistas'} accent="var(--ffv-purple)" />
           <Stat label="Cards devidos" value={`${baseDueCards.length}`} sub={baseDueCards.length > 0 ? 'revisar agora' : 'em dia'} accent="var(--ffv-green)" link={baseDueCards.length > 0 ? '/revisar' : undefined} />
         </div>
       </section>
@@ -400,7 +400,8 @@ export function ProgressoClient() {
         </section>
       )}
 
-      <section className="max-w-5xl mx-auto px-6 pb-20">
+      {isActiveTech && (
+        <section className="max-w-5xl mx-auto px-6 pb-20">
         <SectionLabel>BADGES</SectionLabel>
         <div className="grid gap-3 mt-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' }}>
           {BADGES_DEF.map(b => {
@@ -441,6 +442,7 @@ export function ProgressoClient() {
           })}
         </div>
       </section>
+      )}
 
       <section className="max-w-5xl mx-auto px-6 pb-20">
         <SectionLabel>DADOS</SectionLabel>
