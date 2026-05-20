@@ -13,8 +13,11 @@ import { LandingFooter } from '@/components/LandingFooter';
 import { SiteFooter } from '@/components/SiteFooter';
 import { BaseNavProvider } from '@/components/base/BaseNavContext';
 import { BaseThemeProvider } from '@/components/base/BaseThemeProvider';
+import { ActiveBaseProvider, useActiveBase } from '@/components/base/ActiveBaseContext';
 import { MARKETING_THEME } from '@/lib/bases/marketing-theme';
+import { DEFAULT_BASE_SLUG } from '@/lib/bases/registry';
 import { resolveBaseConfig } from '@/lib/bases/resolver';
+import type { BaseConfig } from '@/lib/bases/types';
 
 /**
  * AppChrome — decide qual header/chrome renderizar com base na rota.
@@ -25,22 +28,32 @@ import { resolveBaseConfig } from '@/lib/bases/resolver';
  * aqui.
  *
  * Marketing (/, /sobre, /comunidade, /newsletter, /bases):
- *   - LandingHeader minimal (logo + "Ver Tecnologia" + "Entrar")
- *   - Sem GameHUD, sem MobileNav, sem onboarding modal
+ *   - LandingHeader minimal
+ *   - MARKETING_THEME aplicado globalmente
  *
- * App (resto):
- *   - GameHUD (top bar com hubs/XP/ranking da base resolvida)
- *   - MobileNav, onboarding, banners, PWA install
- *   - SiteFooter parametrizado por `BaseConfig.footer`
+ * App dentro de uma base (/medicina-veterinaria/*, /tecnologia/*, /aprenda/*):
+ *   - GameHUD, footer e tema vêm da base resolvida pelo pathname
+ *
+ * App em rota global (/progresso, /ranking, /revisar, /perfil…):
+ *   - GameHUD, footer e tema vêm da BASE ATIVA (última base visitada pelo
+ *     usuário). Isso mantém o usuário "no mundinho dele" mesmo quando navega
+ *     pra rotas compartilhadas.
  */
 
 export function AppChrome({ children }: { children: React.ReactNode }) {
+  return (
+    <ActiveBaseProvider>
+      <AppChromeInner>{children}</AppChromeInner>
+    </ActiveBaseProvider>
+  );
+}
+
+function AppChromeInner({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() ?? '/';
   const resolved = resolveBaseConfig(pathname);
+  const { base: activeBase } = useActiveBase();
 
   if (resolved.isMarketing) {
-    // Marketing SEMPRE renderiza no tema editorial (cream + navy + amber),
-    // ignorando o dark mode global do usuário.
     return (
       <BaseThemeProvider theme={MARKETING_THEME}>
         <LandingHeader />
@@ -56,13 +69,16 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
     );
   }
 
-  const base = resolved.base;
-  // base é null só se nenhum config existir — defensivo. Em produção sempre
-  // cai no DEFAULT (tech) via resolver.
-  const navConfig = base?.nav ?? { hubNavItems: [], hideGlobalContentNav: false };
-  const footer = base?.footer;
+  // Em rotas globais (sem base no pathname), usamos a BASE ATIVA — última base
+  // visitada pelo usuário. Em rotas dentro de uma base, usamos a resolvida.
+  const baseForChrome: BaseConfig = resolved.isAppGlobal
+    ? activeBase
+    : (resolved.base ?? activeBase);
 
-  return (
+  const navConfig = baseForChrome.nav;
+  const footer = baseForChrome.footer;
+
+  const chrome = (
     <BaseNavProvider
       value={{
         hubNavItems: navConfig.hubNavItems,
@@ -92,4 +108,13 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
       <PWAInstallBanner />
     </BaseNavProvider>
   );
+
+  // Em rotas globais, aplicar o tema da base ativa SEMPRE que ela for ≠ default
+  // (tech). Tech mantém o styling global atual (dark/light do globals.css).
+  // Em rotas dentro de uma base, o layout da base aplica o tema próprio.
+  if (resolved.isAppGlobal && baseForChrome.slug !== DEFAULT_BASE_SLUG) {
+    return <BaseThemeProvider theme={baseForChrome.theme}>{chrome}</BaseThemeProvider>;
+  }
+
+  return chrome;
 }
