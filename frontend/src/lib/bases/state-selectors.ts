@@ -16,7 +16,7 @@
 
 import { getBaseSlugForModule, filterSlugsByBase } from './module-base-resolver';
 import { CURRICULUM } from '@/lib/curriculum';
-import { MEDVET_BASE } from '@/lib/bases/medvet';
+import { MEDVET_MODULES_LITE } from '@/lib/bases/medvet/slugs';
 import { DEFAULT_BASE_SLUG } from './registry';
 
 // ─── Tipos de slices (re-definidos sem importar o engine pra evitar ciclos) ──
@@ -108,7 +108,7 @@ export function selectTotalModulesForBase(baseSlug: string): number {
     return CURRICULUM.reduce((acc, t) => acc + t.modules.length, 0);
   }
   if (baseSlug === 'medicina-veterinaria') {
-    return MEDVET_BASE.trails.reduce((acc, t) => acc + t.modules.length, 0);
+    return MEDVET_MODULES_LITE.length;
   }
   return 0;
 }
@@ -212,21 +212,19 @@ export function selectRecommendationsForBase(
   }
 
   if (baseSlug === 'medicina-veterinaria') {
-    for (const trail of MEDVET_BASE.trails) {
-      for (const m of trail.modules) {
-        if (!completed.has(m.slug)) {
-          picks.push({
-            slug: m.slug,
-            title: m.title,
-            href: `/medicina-veterinaria/${m.slug}`,
-            xp: 0, // medvet modules sem XP — usar tempo estimado como proxy
-            readTime: m.estimatedMin ?? 10,
-            trailName: trail.title,
-            trailColor: '#8a9b7e', // sage accent default
-            trailIcon: trail.icon,
-          });
-          if (picks.length >= limit) return picks;
-        }
+    for (const m of MEDVET_MODULES_LITE) {
+      if (!completed.has(m.slug)) {
+        picks.push({
+          slug: m.slug,
+          title: m.title,
+          href: `/medicina-veterinaria/${m.slug}`,
+          xp: 0, // medvet modules sem XP — usar tempo estimado como proxy
+          readTime: m.estimatedMin,
+          trailName: 'Genética Veterinária',
+          trailColor: '#8a9b7e', // sage accent default
+          trailIcon: m.icon,
+        });
+        if (picks.length >= limit) return picks;
       }
     }
     return picks;

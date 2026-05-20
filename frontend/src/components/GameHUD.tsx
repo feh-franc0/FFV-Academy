@@ -247,6 +247,7 @@ function NavLink({ item, active }: { item: BaseNavItem; active: boolean }) {
   return (
     <Link
       href={item.href}
+      aria-current={active ? 'page' : undefined}
       className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium whitespace-nowrap transition-colors"
       style={{
         color: active ? 'var(--foreground)' : 'var(--ffv-muted)',

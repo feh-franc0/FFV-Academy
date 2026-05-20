@@ -17,7 +17,7 @@
  */
 
 import { CURRICULUM } from '@/lib/curriculum';
-import { MEDVET_BASE } from '@/lib/bases/medvet';
+import { MEDVET_MODULE_SLUGS } from '@/lib/bases/medvet/slugs';
 import { DEFAULT_BASE_SLUG } from './registry';
 
 const moduleToBase = new Map<string, string>();
@@ -30,18 +30,16 @@ function register(moduleSlug: string, baseSlug: string): void {
   baseToModules.set(baseSlug, set);
 }
 
-// Tech — CURRICULUM global
+// Tech — CURRICULUM global (já está no bundle por outros lugares).
 for (const trail of CURRICULUM) {
   for (const m of trail.modules) {
     register(m.slug, 'tecnologia');
   }
 }
 
-// Medvet
-for (const trail of MEDVET_BASE.trails) {
-  for (const m of trail.modules) {
-    register(m.slug, 'medicina-veterinaria');
-  }
+// Medvet — só slugs (não importa conteúdo pesado dos 12 módulos).
+for (const slug of MEDVET_MODULE_SLUGS) {
+  register(slug, 'medicina-veterinaria');
 }
 
 /**

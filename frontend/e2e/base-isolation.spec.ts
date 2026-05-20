@@ -47,12 +47,15 @@ test.describe('Base isolation E2E', () => {
     expect(mainText).not.toContain('AWS Solutions Architect');
   });
 
-  test('/progresso em medvet: mostra a trilha "Genética Veterinária"', async ({ page }) => {
+  test('/progresso em medvet sem atividade: mostra empty state ativador', async ({ page }) => {
     await setActiveBase(page, 'medicina-veterinaria');
     await page.goto(`/progresso${SKIP_PARAMS}`);
     await page.waitForLoadState('networkidle');
 
-    await expect(page.getByText(/genética veterinária/i).first()).toBeVisible();
+    // Como o usuário não tem progresso, vê o empty state ativador com
+    // nome da base — nada de "Redes & Web" ou trilhas tech.
+    await expect(page.getByText(/comece sua jornada em medicina veterinária/i)).toBeVisible();
+    await expect(page.getByText(/12 módulos esperam/i)).toBeVisible();
   });
 
   test('/revisar em medvet: empty state cita "Medicina Veterinária"', async ({ page }) => {

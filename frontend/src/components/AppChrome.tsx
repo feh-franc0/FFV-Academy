@@ -14,6 +14,7 @@ import { SiteFooter } from '@/components/SiteFooter';
 import { BaseNavProvider } from '@/components/base/BaseNavContext';
 import { BaseThemeProvider } from '@/components/base/BaseThemeProvider';
 import { ActiveBaseProvider, useActiveBase } from '@/components/base/ActiveBaseContext';
+import { BaseTour } from '@/components/base/BaseTour';
 import { MARKETING_THEME } from '@/lib/bases/marketing-theme';
 import { DEFAULT_BASE_SLUG } from '@/lib/bases/registry';
 import { resolveBaseConfig } from '@/lib/bases/resolver';
@@ -106,6 +107,7 @@ function AppChromeInner({ children }: { children: React.ReactNode }) {
       <div aria-hidden className="md:hidden" style={{ height: 72 }} />
       <MobileNav />
       <PWAInstallBanner />
+      <BaseTour />
     </BaseNavProvider>
   );
 
