@@ -38,6 +38,7 @@ const APP_GLOBAL_PREFIXES = [
   '/perfil',
   '/meu-aprendizado',
   '/diff-de-conhecimento',
+  '/trilhas-espelho',
   '/news',
   '/search',
   '/explorar',
