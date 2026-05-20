@@ -203,11 +203,13 @@ export function GameHUD() {
 /**
  * Chip ao lado do logo FFV que aponta pra home da base ativa.
  *
- * Adapta nome + ícone à base — usuário sabe sempre em qual "mundo" está e
- * tem 1 clique pra voltar pra home daquela base (não pra landing FFV).
+ * Adapta nome + ícone à base — funciona como indicador visual constante
+ * de "você está no mundinho X" + 1 clique pra voltar pra home da base
+ * (não pra landing FFV).
  *
- * Esconde quando o usuário JÁ está na home da base (não polui o chrome com
- * link redundante).
+ * Renderiza em todas as rotas autenticadas (não-marketing). Em rotas globais
+ * (/progresso, /ranking) reflete a base ativa persistida; em rotas dentro de
+ * uma base, reflete a base do pathname.
  */
 function BaseHomeChip({
   base,
@@ -216,21 +218,23 @@ function BaseHomeChip({
   base: ReturnType<typeof useActiveBase>['base'];
   pathname: string;
 }) {
-  // Está na home da base — esconde o chip.
-  if (pathname === base.basePath) return null;
+  // Está EXATAMENTE na home da base — destaca como "atual" mas mantém visível.
+  const isOnBaseHome = pathname === base.basePath;
 
-  // Short label — mantém o header compacto. Tech vira "Tecnologia",
-  // "Medicina Veterinária" vira "Med. Veterinária".
-  const shortName = base.name.length > 18 ? base.name.slice(0, 16) + '…' : base.name;
+  // Short label — mantém o header compacto.
+  const shortName = base.name.length > 16 ? base.name.slice(0, 14) + '…' : base.name;
 
   return (
     <Link
       href={base.basePath}
-      aria-label={`Voltar para a base ${base.name}`}
-      className="ml-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold whitespace-nowrap transition-all hover:opacity-90"
+      aria-label={`Home da base ${base.name}`}
+      aria-current={isOnBaseHome ? 'page' : undefined}
+      className="ml-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all hover:opacity-90"
       style={{
-        background: 'color-mix(in srgb, var(--ffv-blue) 12%, transparent)',
-        border: '1px solid color-mix(in srgb, var(--ffv-blue) 28%, transparent)',
+        background: isOnBaseHome
+          ? 'color-mix(in srgb, var(--ffv-blue) 22%, transparent)'
+          : 'color-mix(in srgb, var(--ffv-blue) 14%, transparent)',
+        border: '1px solid color-mix(in srgb, var(--ffv-blue) 38%, transparent)',
         color: 'var(--ffv-blue)',
         textDecoration: 'none',
       }}
