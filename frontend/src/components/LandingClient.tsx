@@ -97,31 +97,68 @@ export function LandingClient() {
   );
 }
 
-// ─── 1. Hero (compacto + mesh + mockup ao lado) ──────────────────────────────
+// ─── 1. Hero v6 — dark startup/executive · gradient mesh + asymmetric ───────
 
 function Hero() {
   return (
     <section
       className="relative px-6 lg:px-10 overflow-hidden"
-      style={{ paddingTop: 'clamp(96px, 12vw, 144px)', paddingBottom: 'clamp(48px, 6vw, 80px)' }}
+      style={{
+        background: '#0a0a14',
+        color: '#fff',
+        paddingTop: 'clamp(96px, 13vw, 152px)',
+        paddingBottom: 'clamp(80px, 11vw, 144px)',
+      }}
     >
-      <div aria-hidden className="ffv-landing-mesh">
-        <span />
-      </div>
+      {/* Camada 1: gradient mesh animado (blur grande) */}
+      <div
+        aria-hidden
+        style={{
+          position: 'absolute',
+          inset: -120,
+          background: `
+            radial-gradient(circle 640px at 18% 22%, rgba(124, 58, 237, 0.28), transparent 60%),
+            radial-gradient(circle 540px at 82% 78%, rgba(251, 191, 36, 0.20), transparent 60%),
+            radial-gradient(circle 480px at 50% 50%, rgba(56, 189, 248, 0.14), transparent 60%)
+          `,
+          filter: 'blur(48px)',
+          animation: 'ffv-mesh-drift 18s ease-in-out infinite',
+          pointerEvents: 'none',
+        }}
+      />
+      {/* Camada 2: grid sutil */}
+      <div
+        aria-hidden
+        style={{
+          position: 'absolute',
+          inset: 0,
+          backgroundImage: `
+            linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px)
+          `,
+          backgroundSize: '64px 64px',
+          maskImage: 'radial-gradient(ellipse 80% 60% at 50% 0%, black, transparent 75%)',
+          WebkitMaskImage: 'radial-gradient(ellipse 80% 60% at 50% 0%, black, transparent 75%)',
+          pointerEvents: 'none',
+        }}
+      />
 
-      <div className="relative max-w-7xl mx-auto grid lg:grid-cols-[1fr,1.1fr] gap-10 lg:gap-16 items-center">
+      <div className="relative max-w-7xl mx-auto grid lg:grid-cols-[1.05fr,1fr] gap-12 lg:gap-20 items-center">
         <div>
+          {/* Status pill com pulse dot */}
           <span
-            className="inline-flex items-center gap-2 px-3 py-1.5 mb-6"
+            className="inline-flex items-center gap-2 mb-7"
             style={{
-              background: 'rgba(255,255,255,0.7)',
-              border: '1px solid var(--ffv-border)',
+              padding: '6px 14px',
+              background: 'rgba(255,255,255,0.05)',
+              border: '1px solid rgba(255,255,255,0.10)',
               borderRadius: 999,
-              fontSize: 11,
-              fontWeight: 700,
-              color: 'var(--ffv-ink)',
-              letterSpacing: '0.04em',
-              backdropFilter: 'blur(8px)',
+              fontSize: 12,
+              fontWeight: 600,
+              color: 'rgba(255,255,255,0.86)',
+              letterSpacing: '0.005em',
+              backdropFilter: 'blur(12px)',
+              WebkitBackdropFilter: 'blur(12px)',
             }}
           >
             <span
@@ -130,115 +167,160 @@ function Hero() {
                 width: 7,
                 height: 7,
                 borderRadius: '50%',
-                background: 'var(--ffv-sage)',
-                boxShadow: '0 0 0 4px color-mix(in srgb, var(--ffv-sage) 22%, transparent)',
+                background: '#22c55e',
+                boxShadow: '0 0 0 4px rgba(34,197,94,0.18)',
+                animation: 'ffv-pulse-dot 2.4s ease-in-out infinite',
               }}
             />
-            Pronta em 24 horas · Grátis na V1
+            2 bases no ar · em produção contínua
           </span>
 
+          {/* HEADLINE bold sans-serif gigante */}
           <h1
             style={{
-              ...SERIF,
-              fontWeight: 700,
-              fontSize: 'clamp(2.4rem, 5.5vw, 4.8rem)',
-              lineHeight: 1.02,
-              letterSpacing: '-0.028em',
-              marginBottom: 22,
+              fontFamily: 'var(--font-inter, system-ui), sans-serif',
+              fontWeight: 800,
+              fontSize: 'clamp(2.8rem, 6.2vw, 5.6rem)',
+              lineHeight: 0.97,
+              letterSpacing: '-0.035em',
+              marginBottom: 24,
+              color: '#fff',
             }}
           >
-            Sua jornada de estudo,{' '}
-            <em
+            Educação que se{' '}
+            <span
               style={{
-                fontStyle: 'italic',
-                background: 'linear-gradient(135deg, var(--ffv-amber) 0%, #c2410c 100%)',
+                background:
+                  'linear-gradient(115deg, #a78bfa 0%, #38bdf8 45%, #fbbf24 100%)',
                 WebkitBackgroundClip: 'text',
                 WebkitTextFillColor: 'transparent',
                 backgroundClip: 'text',
-                fontWeight: 700,
+                color: 'transparent',
               }}
             >
-              pronta amanhã.
-            </em>
+              adapta a você
+            </span>
+            <br />
+            em 24 horas.
           </h1>
 
           <p
             style={{
-              ...LEAD,
-              fontSize: 'clamp(1.05rem, 1.25vw, 1.18rem)',
-              maxWidth: 520,
-              marginBottom: 32,
+              fontFamily: 'var(--font-inter, system-ui), sans-serif',
+              fontSize: 'clamp(1.05rem, 1.35vw, 1.2rem)',
+              lineHeight: 1.55,
+              color: 'rgba(255,255,255,0.68)',
+              maxWidth: 560,
+              marginBottom: 36,
+              fontWeight: 400,
             }}
           >
-            Envie o que precisa aprender. Em 24 horas, IA + curadoria entregam uma jornada
-            completa — trilhas, conteúdo, exercícios, revisão. No mesmo padrão da nossa base de
-            Tecnologia, que você pode visitar agora.
+            Você manda o material — PDFs, slides, edital. A FFV devolve uma escola
+            completa em 24h: trilha estruturada, revisão espaçada calibrada e
+            gamificação que retém. Curadoria humana, gratuito.
           </p>
 
-          <div className="flex flex-col sm:flex-row gap-3 mb-8">
+          {/* CTAs gradient + ghost */}
+          <div className="flex flex-col sm:flex-row gap-3 mb-10">
             <a
               href="#solicitar-base"
-              className="ffv-cta-glow inline-flex items-center justify-center gap-2 px-7 py-4 text-sm font-semibold"
+              className="inline-flex items-center justify-center gap-2"
               style={{
-                background: 'var(--ffv-ink)',
+                padding: '15px 30px',
+                background: 'linear-gradient(135deg, #a78bfa 0%, #38bdf8 100%)',
                 color: '#fff',
-                borderRadius: 10,
+                borderRadius: 12,
+                fontSize: 15,
+                fontWeight: 600,
                 letterSpacing: '-0.005em',
-                boxShadow: '0 10px 28px -8px rgba(28,25,23,0.4)',
+                boxShadow:
+                  '0 10px 32px -6px rgba(124,58,237,0.55), inset 0 1px 0 rgba(255,255,255,0.18)',
+                transition: 'transform 200ms ease, box-shadow 200ms ease',
+                textDecoration: 'none',
+              }}
+              onMouseOver={e => {
+                e.currentTarget.style.transform = 'translateY(-2px)';
+                e.currentTarget.style.boxShadow =
+                  '0 14px 38px -6px rgba(124,58,237,0.65), inset 0 1px 0 rgba(255,255,255,0.22)';
+              }}
+              onMouseOut={e => {
+                e.currentTarget.style.transform = '';
+                e.currentTarget.style.boxShadow =
+                  '0 10px 32px -6px rgba(124,58,237,0.55), inset 0 1px 0 rgba(255,255,255,0.18)';
               }}
             >
               Criar minha jornada
-              <span aria-hidden style={{ fontSize: 12 }}>→</span>
+              <span aria-hidden style={{ fontSize: 13 }}>→</span>
             </a>
             <Link
               href="/bases"
-              className="inline-flex items-center justify-center gap-2 px-7 py-4 text-sm font-semibold transition-colors"
+              className="inline-flex items-center justify-center gap-2"
               style={{
-                background: 'rgba(255,255,255,0.6)',
-                border: '1px solid var(--ffv-ink)',
-                color: 'var(--ffv-ink)',
-                borderRadius: 10,
-                backdropFilter: 'blur(8px)',
+                padding: '15px 30px',
+                background: 'rgba(255,255,255,0.06)',
+                border: '1px solid rgba(255,255,255,0.14)',
+                color: '#fff',
+                borderRadius: 12,
+                fontSize: 15,
+                fontWeight: 500,
+                letterSpacing: '-0.005em',
+                backdropFilter: 'blur(12px)',
+                WebkitBackdropFilter: 'blur(12px)',
+                textDecoration: 'none',
+                transition: 'background 180ms ease, border-color 180ms ease',
               }}
               onMouseOver={e => {
-                e.currentTarget.style.background = 'var(--ffv-ink)';
-                e.currentTarget.style.color = '#fff';
+                e.currentTarget.style.background = 'rgba(255,255,255,0.12)';
+                e.currentTarget.style.borderColor = 'rgba(255,255,255,0.24)';
               }}
               onMouseOut={e => {
-                e.currentTarget.style.background = 'rgba(255,255,255,0.6)';
-                e.currentTarget.style.color = 'var(--ffv-ink)';
+                e.currentTarget.style.background = 'rgba(255,255,255,0.06)';
+                e.currentTarget.style.borderColor = 'rgba(255,255,255,0.14)';
               }}
             >
-              Explorar bases existentes
+              Explorar bases
             </Link>
           </div>
 
+          {/* Stats em grid — números gigantes em sans bold */}
           <div
-            className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[12px]"
-            style={{ color: 'var(--ffv-muted)' }}
-          >
-            <span>✓ <strong style={{ color: 'var(--ffv-ink)' }}>157</strong> módulos de tech no ar</span>
-            <span>✓ <strong style={{ color: 'var(--ffv-ink)' }}>12</strong> de Medicina Veterinária</span>
-            <span>✓ Curadoria humana revisa cada trilha</span>
-            <span>✓ Sem cartão · sem trial</span>
-          </div>
-
-          {/* Honestidade radical: link discreto pras métricas públicas.
-              Ação #1 do EXECUTIVE_PLAN_2026-05.md (Open Admin radical). */}
-          <Link
-            href="/stats-publicas"
-            className="inline-flex items-center gap-1.5 mt-4 text-[11px] font-mono uppercase transition-opacity"
             style={{
-              color: 'var(--ffv-amber)',
-              letterSpacing: '0.08em',
-              textDecoration: 'underline',
-              textUnderlineOffset: 4,
-              textDecorationColor: 'color-mix(in srgb, var(--ffv-amber) 40%, transparent)',
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))',
+              gap: 24,
+              paddingTop: 28,
+              borderTop: '1px solid rgba(255,255,255,0.08)',
+              marginBottom: 16,
             }}
           >
-            <span aria-hidden>📊</span>
-            Ver nossas métricas públicas →
-          </Link>
+            <HeroStat n="157" l="módulos de tech" />
+            <HeroStat n="12" l="de Medicina Vet" />
+            <HeroStat n="24h" l="SLA de entrega" />
+            <HeroStat n="R$ 0" l="sem cartão" />
+          </div>
+
+          {/* Mini trust strip — preserva strings dos tests */}
+          <p
+            style={{
+              fontSize: 11.5,
+              color: 'rgba(255,255,255,0.45)',
+              letterSpacing: '0.01em',
+              lineHeight: 1.6,
+            }}
+          >
+            ✓ Curadoria humana revisa cada trilha · ✓ SRS científico ·{' '}
+            <Link
+              href="/stats-publicas"
+              style={{
+                color: 'rgba(255,255,255,0.7)',
+                textDecoration: 'underline',
+                textUnderlineOffset: 4,
+                textDecorationColor: 'rgba(255,255,255,0.3)',
+              }}
+            >
+              Ver nossas métricas públicas →
+            </Link>
+          </p>
         </div>
 
         <HeroMockup />
@@ -247,107 +329,199 @@ function Hero() {
   );
 }
 
+function HeroStat({ n, l }: { n: string; l: string }) {
+  return (
+    <div>
+      <p
+        style={{
+          fontFamily: 'var(--font-inter, system-ui), sans-serif',
+          fontSize: 'clamp(1.9rem, 2.6vw, 2.4rem)',
+          fontWeight: 800,
+          color: '#fff',
+          letterSpacing: '-0.025em',
+          lineHeight: 1,
+        }}
+      >
+        {n}
+      </p>
+      <p
+        style={{
+          fontSize: 10.5,
+          color: 'rgba(255,255,255,0.5)',
+          marginTop: 6,
+          textTransform: 'uppercase',
+          letterSpacing: '0.08em',
+          fontWeight: 600,
+          fontFamily: 'var(--font-inter, system-ui), sans-serif',
+        }}
+      >
+        {l}
+      </p>
+    </div>
+  );
+}
+
 function HeroMockup() {
   return (
     <div className="relative" aria-hidden>
+      {/* Glow behind dashboard */}
+      <div
+        style={{
+          position: 'absolute',
+          inset: -40,
+          background:
+            'radial-gradient(ellipse 70% 60% at 50% 50%, rgba(124,58,237,0.22), transparent 70%)',
+          filter: 'blur(40px)',
+          pointerEvents: 'none',
+        }}
+      />
+
       <div
         className="relative"
         style={{
-          background: '#ffffff',
-          borderRadius: 18,
-          border: '1px solid var(--ffv-border)',
+          background: 'linear-gradient(180deg, #18182a 0%, #0f0f1d 100%)',
+          borderRadius: 16,
+          border: '1px solid rgba(255,255,255,0.08)',
           boxShadow:
-            '0 1px 2px rgba(28,25,23,0.04), 0 24px 60px -16px rgba(28,25,23,0.18), 0 8px 24px -8px rgba(251,191,36,0.15)',
+            '0 0 0 1px rgba(255,255,255,0.04), 0 24px 64px -16px rgba(0,0,0,0.6), 0 0 80px -20px rgba(124,58,237,0.4)',
           overflow: 'hidden',
         }}
       >
+        {/* Browser chrome */}
         <div
           className="flex items-center gap-2 px-4 py-3"
-          style={{ borderBottom: '1px solid var(--ffv-border)', background: 'var(--ffv-cream)' }}
+          style={{
+            borderBottom: '1px solid rgba(255,255,255,0.06)',
+            background: 'rgba(255,255,255,0.02)',
+          }}
         >
-          <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#e7e0d0' }} />
-          <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#e7e0d0' }} />
-          <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#e7e0d0' }} />
+          <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#3f3f4a' }} />
+          <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#3f3f4a' }} />
+          <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#3f3f4a' }} />
           <span
             className="ml-3 font-mono text-[11px]"
-            style={{ color: 'var(--ffv-muted)' }}
+            style={{ color: 'rgba(255,255,255,0.4)', letterSpacing: '0.02em' }}
           >
-            ffvacademy.com/sua-jornada
+            ffvacademy.com/minha-trilha
+          </span>
+          <span
+            className="ml-auto text-[9px] font-mono uppercase px-2 py-0.5 rounded"
+            style={{
+              background: 'rgba(34,197,94,0.12)',
+              color: '#22c55e',
+              border: '1px solid rgba(34,197,94,0.25)',
+              letterSpacing: '0.1em',
+              fontWeight: 700,
+            }}
+          >
+            ● live
           </span>
         </div>
 
-        <div className="grid grid-cols-[150px,1fr]" style={{ minHeight: 400 }}>
+        <div className="grid grid-cols-[160px,1fr]" style={{ minHeight: 420 }}>
+          {/* Sidebar dark */}
           <aside
             className="p-4"
-            style={{ borderRight: '1px solid var(--ffv-border)', background: '#fdfbf6' }}
+            style={{
+              borderRight: '1px solid rgba(255,255,255,0.06)',
+              background: 'rgba(255,255,255,0.02)',
+            }}
           >
             <p
               className="text-[10px] font-mono uppercase mb-3"
-              style={{ color: 'var(--ffv-muted)', letterSpacing: '0.1em' }}
+              style={{ color: 'rgba(255,255,255,0.4)', letterSpacing: '0.1em', fontWeight: 700 }}
             >
               Suas trilhas
             </p>
-            <ul className="flex flex-col gap-2 text-xs">
+            <ul className="flex flex-col gap-1.5 text-xs list-none p-0 m-0">
               {[
-                { name: 'Fundamentos',         active: true,  pct: 25 },
-                { name: 'Aplicações práticas', active: false, pct: 0 },
-                { name: 'Aprofundamento',      active: false, pct: 0 },
-                { name: 'Exercícios guiados',  active: false, pct: 0 },
-                { name: 'Revisão pra prova',   active: false, pct: 0 },
+                { name: 'Fundamentos', active: true },
+                { name: 'Aplicações práticas', active: false },
+                { name: 'Aprofundamento', active: false },
+                { name: 'Exercícios guiados', active: false },
+                { name: 'Revisão pra prova', active: false },
               ].map(t => (
                 <li
                   key={t.name}
-                  className="px-2 py-1.5 rounded"
                   style={{
-                    background: t.active ? 'var(--ffv-cream)' : 'transparent',
-                    color: t.active ? 'var(--ffv-ink)' : 'var(--ffv-muted)',
+                    padding: '7px 10px',
+                    borderRadius: 6,
+                    background: t.active ? 'rgba(124,58,237,0.18)' : 'transparent',
+                    color: t.active ? '#fff' : 'rgba(255,255,255,0.55)',
                     fontWeight: t.active ? 600 : 400,
+                    fontSize: 12,
+                    borderLeft: t.active
+                      ? '2px solid #a78bfa'
+                      : '2px solid transparent',
                   }}
                 >
-                  <div className="flex items-center gap-2">
-                    <span
-                      style={{
-                        width: 3,
-                        height: 14,
-                        background: t.active ? 'var(--ffv-amber)' : 'transparent',
-                        borderRadius: 2,
-                      }}
-                    />
-                    {t.name}
-                  </div>
+                  {t.name}
                 </li>
               ))}
             </ul>
+
+            {/* Mini XP card */}
+            <div
+              className="mt-4 p-2.5 rounded-lg"
+              style={{
+                background: 'linear-gradient(135deg, rgba(167,139,250,0.12) 0%, rgba(56,189,248,0.08) 100%)',
+                border: '1px solid rgba(167,139,250,0.2)',
+              }}
+            >
+              <p
+                className="text-[9px] font-mono uppercase mb-1"
+                style={{ color: 'rgba(255,255,255,0.5)', letterSpacing: '0.1em', fontWeight: 700 }}
+              >
+                XP semana
+              </p>
+              <p
+                style={{
+                  fontFamily: 'var(--font-inter)',
+                  fontWeight: 800,
+                  fontSize: 22,
+                  color: '#fff',
+                  letterSpacing: '-0.02em',
+                  lineHeight: 1,
+                }}
+              >
+                +1240
+              </p>
+              <p style={{ fontSize: 10, color: '#22c55e', marginTop: 4, fontWeight: 600 }}>
+                ↑ 18% vs semana anterior
+              </p>
+            </div>
           </aside>
 
+          {/* Conteúdo principal */}
           <div className="p-5">
             <div className="flex items-center justify-between mb-3">
               <p
                 className="text-[10px] font-mono uppercase"
-                style={{ color: 'var(--ffv-muted)', letterSpacing: '0.1em' }}
+                style={{ color: 'rgba(255,255,255,0.45)', letterSpacing: '0.1em', fontWeight: 700 }}
               >
                 Fundamentos · Módulo 3 de 8
               </p>
               <span
-                className="text-[10px] font-bold uppercase px-2 py-0.5 rounded"
+                className="text-[9px] font-bold uppercase px-2 py-0.5 rounded"
                 style={{
-                  background: 'color-mix(in srgb, var(--ffv-sage) 12%, transparent)',
-                  color: 'var(--ffv-sage)',
-                  letterSpacing: '0.08em',
+                  background: 'rgba(56,189,248,0.14)',
+                  color: '#38bdf8',
+                  border: '1px solid rgba(56,189,248,0.25)',
+                  letterSpacing: '0.1em',
                 }}
               >
-                ● No ar
+                Em curso
               </span>
             </div>
 
             <h3
               style={{
-                ...SERIF,
-                fontSize: 23,
+                fontFamily: 'var(--font-inter)',
+                fontSize: 22,
                 fontWeight: 700,
-                letterSpacing: '-0.015em',
+                letterSpacing: '-0.025em',
                 lineHeight: 1.15,
-                color: 'var(--ffv-ink)',
+                color: '#fff',
                 marginBottom: 14,
               }}
             >
@@ -355,38 +529,40 @@ function HeroMockup() {
             </h3>
 
             <div
-              className="text-xs mb-4 px-3 py-2 rounded"
+              className="text-xs mb-4 px-3 py-2.5 rounded-lg"
               style={{
-                background: 'var(--ffv-cream)',
-                color: '#57534e',
+                background: 'rgba(255,255,255,0.04)',
+                color: 'rgba(255,255,255,0.75)',
                 lineHeight: 1.6,
+                borderLeft: '2px solid #a78bfa',
               }}
             >
-              <span style={{ ...SERIF, fontStyle: 'italic' }}>
-                &ldquo;A ideia central começa pela definição precisa do problema,
-                segue pela aplicação prática...&rdquo;
-              </span>
+              &ldquo;A ideia central começa pela definição precisa do problema,
+              segue pela aplicação prática&hellip;&rdquo;
             </div>
 
-            <ul className="flex flex-col gap-2 mb-4">
+            <ul className="flex flex-col gap-2 mb-4 list-none p-0">
               {[
-                { t: 'Definição e contexto',       done: true  },
-                { t: 'Exemplo prático comentado',   done: true  },
-                { t: 'Aplicação no seu caso real',  done: false },
-                { t: 'Mini-quiz · 8 questões',      done: false },
+                { t: 'Definição e contexto', done: true },
+                { t: 'Exemplo prático comentado', done: true },
+                { t: 'Aplicação no seu caso real', done: false },
+                { t: 'Mini-quiz · 8 questões', done: false },
               ].map((m, i) => (
                 <li
                   key={i}
                   className="flex items-center gap-2 text-xs"
-                  style={{ color: m.done ? 'var(--ffv-muted)' : 'var(--ffv-ink)' }}
+                  style={{
+                    color: m.done ? 'rgba(255,255,255,0.45)' : '#fff',
+                    fontWeight: m.done ? 400 : 500,
+                  }}
                 >
                   <span
                     style={{
-                      width: 15,
-                      height: 15,
-                      borderRadius: 4,
-                      background: m.done ? 'var(--ffv-sage)' : 'transparent',
-                      border: m.done ? 'none' : '1.5px solid var(--ffv-border)',
+                      width: 16,
+                      height: 16,
+                      borderRadius: 5,
+                      background: m.done ? '#22c55e' : 'rgba(255,255,255,0.04)',
+                      border: m.done ? 'none' : '1.5px solid rgba(255,255,255,0.12)',
                       position: 'relative',
                       flexShrink: 0,
                     }}
@@ -396,7 +572,7 @@ function HeroMockup() {
                         style={{
                           position: 'absolute',
                           top: -1,
-                          left: 3,
+                          left: 3.5,
                           color: '#fff',
                           fontSize: 11,
                           fontWeight: 800,
@@ -413,21 +589,25 @@ function HeroMockup() {
 
             <div
               className="flex items-center justify-between text-[11px] pt-3"
-              style={{ borderTop: '1px solid var(--ffv-border)', color: 'var(--ffv-muted)' }}
+              style={{
+                borderTop: '1px solid rgba(255,255,255,0.06)',
+                color: 'rgba(255,255,255,0.5)',
+              }}
             >
               <span>Progresso da trilha</span>
-              <span style={{ fontWeight: 600, color: 'var(--ffv-ink)' }}>2 de 8 · 25%</span>
+              <span style={{ fontWeight: 700, color: '#fff' }}>2 de 8 · 25%</span>
             </div>
             <div
-              className="mt-1.5 h-1 rounded-full overflow-hidden"
-              style={{ background: 'var(--ffv-cream)' }}
+              className="mt-1.5 h-1.5 rounded-full overflow-hidden"
+              style={{ background: 'rgba(255,255,255,0.06)' }}
             >
               <div
                 style={{
                   width: '25%',
                   height: '100%',
-                  background: 'linear-gradient(90deg, var(--ffv-amber), #c2410c)',
+                  background: 'linear-gradient(90deg, #a78bfa 0%, #38bdf8 100%)',
                   borderRadius: 999,
+                  boxShadow: '0 0 12px rgba(167,139,250,0.6)',
                 }}
               />
             </div>
@@ -435,23 +615,25 @@ function HeroMockup() {
         </div>
       </div>
 
+      {/* Floating badge — Pronta em 24h */}
       <div
         className="absolute hidden md:flex items-center gap-2"
         style={{
-          right: -16,
-          top: -18,
-          background: 'var(--ffv-ink)',
-          color: '#fbbf24',
-          padding: '10px 16px',
+          right: -18,
+          top: -20,
+          background: 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)',
+          color: '#0a0a14',
+          padding: '10px 18px',
           borderRadius: 999,
-          fontSize: 11,
-          fontWeight: 700,
-          letterSpacing: '0.04em',
-          boxShadow: '0 12px 24px -6px rgba(28,25,23,0.5)',
+          fontSize: 12,
+          fontWeight: 800,
+          letterSpacing: '-0.005em',
+          boxShadow:
+            '0 12px 32px -6px rgba(251,191,36,0.5), 0 0 0 1px rgba(255,255,255,0.18) inset',
           transform: 'rotate(3deg)',
         }}
       >
-        ✨ Pronta em 24h
+        <span aria-hidden>⚡</span> Pronta em 24h
       </div>
     </div>
   );
@@ -637,16 +819,7 @@ function ChatGPTBattle() {
   );
 }
 
-// ─── 3. Padrão FFV ───────────────────────────────────────────────────────────
-
-const PILLARS = [
-  { ic: '🧱', t: 'Trilhas ordenadas',             d: 'Do básico ao avançado. Cada módulo constrói no anterior.' },
-  { ic: '📖', t: 'Conteúdo explicado',             d: 'Não é texto solto. Explicações pensadas pra ensinar.' },
-  { ic: '✏️', t: 'Exercícios integrados',          d: 'Você testa o aprendizado na hora. Feedback imediato.' },
-  { ic: '🧠', t: 'Revisão espaçada',               d: 'SRS calibrado pelo seu material — traz de volta no tempo certo, com base no que você acertou e errou.' },
-  { ic: '🏆', t: 'Gamificação inteligente',        d: 'XP, badges, streak, ranking. Ritmo, não força de vontade.' },
-  { ic: '🌐', t: 'PT-BR · qualquer dispositivo',   d: 'Acessa do desktop, tablet, celular. Estuda quando dá.' },
-];
+// ─── 3. Bento Grid v6 — features defensáveis em layout asymmetric ──────────
 
 function PadraoFFV() {
   const ref = useReveal();
@@ -655,57 +828,325 @@ function PadraoFFV() {
       ref={ref}
       data-reveal
       className="px-6 lg:px-10"
-      style={{ ...SECTION, borderTop: '1px solid var(--ffv-border)' }}
+      style={{
+        ...SECTION,
+        background: '#0a0a14',
+        color: '#fff',
+        position: 'relative',
+        overflow: 'hidden',
+      }}
     >
-      <div className="max-w-6xl mx-auto">
-        <div className="max-w-2xl mx-auto text-center mb-12">
-          <p style={KICKER}>O padrão FFV</p>
+      {/* Subtle background gradient */}
+      <div
+        aria-hidden
+        style={{
+          position: 'absolute',
+          inset: 0,
+          background:
+            'radial-gradient(ellipse 60% 40% at 50% 0%, rgba(167,139,250,0.10), transparent 70%)',
+          pointerEvents: 'none',
+        }}
+      />
+
+      <div className="relative max-w-6xl mx-auto">
+        <div className="max-w-2xl mx-auto text-center mb-14">
+          <p
+            style={{
+              ...KICKER,
+              color: '#a78bfa',
+              fontWeight: 700,
+              letterSpacing: '0.18em',
+            }}
+          >
+            Padrão FFV
+          </p>
           <h2
             style={{
-              ...H_SECTION,
-              fontSize: 'clamp(1.8rem, 3.4vw, 2.8rem)',
-              marginTop: 14,
-              marginBottom: 14,
+              fontFamily: 'var(--font-inter, system-ui), sans-serif',
+              fontSize: 'clamp(2rem, 3.8vw, 3.2rem)',
+              fontWeight: 800,
+              letterSpacing: '-0.03em',
+              lineHeight: 1.05,
+              marginTop: 16,
+              marginBottom: 16,
+              color: '#fff',
             }}
           >
             Toda jornada nasce com os{' '}
-            <em style={{ ...SERIF, fontStyle: 'italic', color: 'var(--ffv-amber)', fontWeight: 600 }}>
-              mesmos seis pilares
-            </em>
+            <span
+              style={{
+                background:
+                  'linear-gradient(115deg, #a78bfa 0%, #38bdf8 100%)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                backgroundClip: 'text',
+              }}
+            >
+              mesmos 6 pilares
+            </span>
             .
           </h2>
-          <p style={{ ...LEAD, fontSize: 16 }}>
+          <p
+            style={{
+              fontSize: 16,
+              color: 'rgba(255,255,255,0.65)',
+              lineHeight: 1.6,
+            }}
+          >
             Direito, design, medicina, marketing — o conteúdo muda, o padrão não.
           </p>
         </div>
 
+        {/* Bento Grid: 4 colunas em desktop, asymmetric */}
         <div
-          className="grid sm:grid-cols-2 lg:grid-cols-3 gap-px"
+          className="grid gap-4"
           style={{
-            background: 'var(--ffv-border)',
-            borderRadius: 16,
-            overflow: 'hidden',
-            border: '1px solid var(--ffv-border)',
+            gridTemplateColumns: 'repeat(12, minmax(0, 1fr))',
+            gridAutoRows: 'minmax(200px, auto)',
           }}
         >
-          {PILLARS.map(p => (
-            <article
-              key={p.t}
-              className="p-7 transition-colors"
-              style={{ background: '#ffffff' }}
-              onMouseOver={e => (e.currentTarget.style.background = '#fdfbf6')}
-              onMouseOut={e => (e.currentTarget.style.background = '#ffffff')}
-            >
-              <div className="text-2xl mb-3">{p.ic}</div>
-              <h3 style={{ ...H_SECTION, fontSize: 16, marginBottom: 8 }}>{p.t}</h3>
-              <p className="text-[13.5px]" style={{ color: '#57534e', lineHeight: 1.6 }}>
-                {p.d}
-              </p>
-            </article>
-          ))}
+          {/* Card 1: Trilhas ordenadas — span 2 colunas */}
+          <BentoCard
+            span="md:col-span-7"
+            accent="#a78bfa"
+            title="Trilhas ordenadas"
+            subtitle="Do básico ao avançado. Cada módulo constrói no anterior — sem buracos pedagógicos."
+            visual={
+              <div className="flex flex-col gap-1.5 mt-4">
+                {['Fundamentos', 'Aplicações práticas', 'Aprofundamento'].map((t, i) => (
+                  <div
+                    key={t}
+                    style={{
+                      padding: '8px 12px',
+                      background: i === 0
+                        ? 'linear-gradient(90deg, rgba(167,139,250,0.18), transparent)'
+                        : 'rgba(255,255,255,0.03)',
+                      border: '1px solid rgba(255,255,255,0.06)',
+                      borderRadius: 8,
+                      fontSize: 12,
+                      color: i === 0 ? '#fff' : 'rgba(255,255,255,0.5)',
+                      borderLeft: i === 0 ? '2px solid #a78bfa' : '2px solid transparent',
+                    }}
+                  >
+                    <span className="font-mono text-[10px] mr-2" style={{ opacity: 0.6 }}>
+                      {String(i + 1).padStart(2, '0')}
+                    </span>
+                    {t}
+                  </div>
+                ))}
+              </div>
+            }
+          />
+
+          {/* Card 2: Revisão espaçada (SRS) — span 1 coluna */}
+          <BentoCard
+            span="md:col-span-5"
+            accent="#38bdf8"
+            title="Revisão espaçada"
+            subtitle="SRS calibrado pelo SEU material. Traz de volta no tempo certo, com base no que você errou."
+            visual={
+              <div className="mt-4 flex items-end gap-1 h-16">
+                {[40, 65, 30, 85, 55, 75, 95, 70].map((h, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      flex: 1,
+                      height: `${h}%`,
+                      background: 'linear-gradient(180deg, #38bdf8, rgba(56,189,248,0.3))',
+                      borderRadius: 2,
+                      opacity: 0.85,
+                    }}
+                  />
+                ))}
+              </div>
+            }
+          />
+
+          {/* Card 3: Exercícios integrados */}
+          <BentoCard
+            span="md:col-span-4"
+            accent="#fbbf24"
+            title="Exercícios integrados"
+            subtitle="Você testa o aprendizado na hora. Feedback imediato com explicação."
+            visual={
+              <div className="mt-4 space-y-1.5 text-[11px]">
+                <div className="flex items-center gap-2" style={{ color: '#22c55e' }}>
+                  <span>✓</span> Q1 correta · +10 XP
+                </div>
+                <div className="flex items-center gap-2" style={{ color: '#22c55e' }}>
+                  <span>✓</span> Q2 correta · +10 XP
+                </div>
+                <div className="flex items-center gap-2" style={{ color: 'rgba(255,255,255,0.4)' }}>
+                  <span>○</span> Q3 em revisão
+                </div>
+              </div>
+            }
+          />
+
+          {/* Card 4: Gamificação — span 2 cols */}
+          <BentoCard
+            span="md:col-span-5"
+            accent="#22c55e"
+            title="Gamificação inteligente"
+            subtitle="XP, badges, streak, ranking. Ritmo > força de vontade."
+            visual={
+              <div className="mt-4 flex gap-2 flex-wrap">
+                {[
+                  { i: '🔥', v: '14d streak' },
+                  { i: '⭐', v: 'Nível 7' },
+                  { i: '🏆', v: '24 badges' },
+                ].map(b => (
+                  <span
+                    key={b.v}
+                    className="px-3 py-1.5 rounded-full text-xs font-medium"
+                    style={{
+                      background: 'rgba(34,197,94,0.10)',
+                      border: '1px solid rgba(34,197,94,0.25)',
+                      color: '#fff',
+                    }}
+                  >
+                    {b.i} {b.v}
+                  </span>
+                ))}
+              </div>
+            }
+          />
+
+          {/* Card 5: Curadoria humana — span 3 cols (largo) */}
+          <BentoCard
+            span="md:col-span-3"
+            accent="#f472b6"
+            title="Curadoria humana"
+            subtitle="Engenheiro revisa cada trilha antes de ir ao ar. Não é cuspe de LLM."
+            visual={
+              <div
+                className="mt-4 text-[11px] flex items-center gap-2"
+                style={{ color: 'rgba(255,255,255,0.65)' }}
+              >
+                <div
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: '50%',
+                    background: 'linear-gradient(135deg, #f472b6, #ec4899)',
+                    color: '#fff',
+                    fontSize: 11,
+                    fontWeight: 800,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                  aria-hidden
+                >
+                  FFV
+                </div>
+                <span>Revisado por Fernando F. V.</span>
+              </div>
+            }
+          />
+
+          {/* Card 6: PT-BR mobile-first — span 9 cols (full) */}
+          <BentoCard
+            span="md:col-span-9"
+            accent="#fbbf24"
+            title="PT-BR nativo · qualquer dispositivo · zero cadastro pra começar"
+            subtitle="Sem trial, sem cartão, sem app pra baixar. Funciona como PWA — instala no celular como app nativo se quiser."
+            visual={
+              <div
+                className="mt-4 flex gap-2 text-[11px] flex-wrap"
+                style={{ color: 'rgba(255,255,255,0.7)' }}
+              >
+                {['🇧🇷 PT-BR nativo', '📱 PWA instalável', '⚡ Offline-first', '🔓 Sem cadastro'].map(
+                  t => (
+                    <span
+                      key={t}
+                      className="px-3 py-1.5 rounded-md"
+                      style={{
+                        background: 'rgba(255,255,255,0.04)',
+                        border: '1px solid rgba(255,255,255,0.08)',
+                      }}
+                    >
+                      {t}
+                    </span>
+                  ),
+                )}
+              </div>
+            }
+          />
         </div>
       </div>
     </section>
+  );
+}
+
+interface BentoCardProps {
+  span: string; // tailwind cols, ex: "md:col-span-7"
+  accent: string;
+  title: string;
+  subtitle: string;
+  visual?: React.ReactNode;
+}
+
+function BentoCard({ span, accent, title, subtitle, visual }: BentoCardProps) {
+  return (
+    <article
+      className={`col-span-12 ${span} p-6 lg:p-7 transition-all`}
+      style={{
+        background:
+          'linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.015) 100%)',
+        border: '1px solid rgba(255,255,255,0.08)',
+        borderRadius: 16,
+        position: 'relative',
+        overflow: 'hidden',
+      }}
+      onMouseOver={e => {
+        e.currentTarget.style.borderColor = `${accent}55`;
+        e.currentTarget.style.transform = 'translateY(-2px)';
+        e.currentTarget.style.boxShadow = `0 12px 32px -8px ${accent}25`;
+      }}
+      onMouseOut={e => {
+        e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)';
+        e.currentTarget.style.transform = '';
+        e.currentTarget.style.boxShadow = '';
+      }}
+    >
+      {/* Accent gradient corner */}
+      <div
+        aria-hidden
+        style={{
+          position: 'absolute',
+          top: -20,
+          right: -20,
+          width: 120,
+          height: 120,
+          background: `radial-gradient(circle, ${accent}25, transparent 70%)`,
+          pointerEvents: 'none',
+        }}
+      />
+      <h3
+        style={{
+          fontFamily: 'var(--font-inter, system-ui), sans-serif',
+          fontSize: 'clamp(1.05rem, 1.4vw, 1.25rem)',
+          fontWeight: 700,
+          color: '#fff',
+          letterSpacing: '-0.015em',
+          marginBottom: 8,
+          lineHeight: 1.3,
+        }}
+      >
+        {title}
+      </h3>
+      <p
+        style={{
+          fontSize: 13.5,
+          color: 'rgba(255,255,255,0.6)',
+          lineHeight: 1.55,
+        }}
+      >
+        {subtitle}
+      </p>
+      {visual}
+    </article>
   );
 }
 
