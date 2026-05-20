@@ -34,7 +34,7 @@ const KICKER: React.CSSProperties = {
   fontWeight: 700,
   letterSpacing: '0.16em',
   textTransform: 'uppercase',
-  color: 'var(--ffv-amber)',
+  color: '#5e8068', // SAGE_ACCENT — paleta sage warm
 };
 
 const H_SECTION: React.CSSProperties = {
@@ -75,6 +75,43 @@ function useReveal() {
   return ref;
 }
 
+// ─── Hook util: animated counter (count up quando entra em viewport) ─────────
+
+function useCountUp(target: number, duration = 1400) {
+  const [value, setValue] = useState(0);
+  const ref = useRef<HTMLElement | null>(null);
+  const started = useRef(false);
+
+  useEffect(() => {
+    if (!ref.current) return;
+    const el = ref.current;
+    const io = new IntersectionObserver(
+      entries => {
+        entries.forEach(e => {
+          if (e.isIntersecting && !started.current) {
+            started.current = true;
+            const t0 = performance.now();
+            const tick = (now: number) => {
+              const p = Math.min(1, (now - t0) / duration);
+              // ease-out cubic
+              const eased = 1 - Math.pow(1 - p, 3);
+              setValue(Math.round(target * eased));
+              if (p < 1) requestAnimationFrame(tick);
+            };
+            requestAnimationFrame(tick);
+            io.unobserve(e.target);
+          }
+        });
+      },
+      { threshold: 0.4 },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [target, duration]);
+
+  return { ref, value };
+}
+
 // ─── Export principal ────────────────────────────────────────────────────────
 
 export function LandingClient() {
@@ -87,6 +124,8 @@ export function LandingClient() {
       <HomeBaseRedirect />
 
       <Hero />
+      <ProcessoVisual />
+      <AntesDepois />
       <ChatGPTBattle />
       <PadraoFFV />
       <Steps />
@@ -97,44 +136,57 @@ export function LandingClient() {
   );
 }
 
-// ─── 1. Hero v6 — dark startup/executive · gradient mesh + asymmetric ───────
+// ─── Paleta — sage+cream+terracota (Aesop/Stripe/Notion DNA) ───────────────
+// Sóbria, profissional, vet-friendly. Tom de clínica veterinária high-end +
+// Apple-clean. Confortável pra todos os gêneros.
+
+const SAGE_INK = '#1f3a30';
+const SAGE_ACCENT = '#5e8068';
+const SAGE_SOFT = '#dde6dd';
+const PAPER = '#faf6ee';
+const TEXT_MUTED = '#5f6b62';
+const TERRACOTA = '#b8835a';
+
+// ─── 1. Hero v8 — narrativa do fluxo + demo animado embutido ───────────────
+// O Hero agora absorve o que era a section PlataformaEmAcao: kicker + headline
+// explicando o fluxo (envia PDF → 24h → email com link → portal completo) +
+// demo grande do browser auto-cyclando 4 telas (trilha · módulo · quiz · progresso).
 
 function Hero() {
   return (
     <section
       className="relative px-6 lg:px-10 overflow-hidden"
       style={{
-        background: '#0a0a14',
-        color: '#fff',
-        paddingTop: 'clamp(96px, 13vw, 152px)',
-        paddingBottom: 'clamp(80px, 11vw, 144px)',
+        background: PAPER,
+        color: SAGE_INK,
+        paddingTop: 'clamp(80px, 11vw, 128px)',
+        paddingBottom: 'clamp(64px, 9vw, 96px)',
       }}
     >
-      {/* Camada 1: gradient mesh animado (blur grande) */}
+      {/* Gradient mesh sage orgânico (light) */}
       <div
         aria-hidden
         style={{
           position: 'absolute',
           inset: -120,
           background: `
-            radial-gradient(circle 640px at 18% 22%, rgba(124, 58, 237, 0.28), transparent 60%),
-            radial-gradient(circle 540px at 82% 78%, rgba(251, 191, 36, 0.20), transparent 60%),
-            radial-gradient(circle 480px at 50% 50%, rgba(56, 189, 248, 0.14), transparent 60%)
+            radial-gradient(circle 700px at 15% 25%, rgba(94, 128, 104, 0.14), transparent 60%),
+            radial-gradient(circle 600px at 85% 80%, rgba(184, 131, 90, 0.10), transparent 60%),
+            radial-gradient(circle 500px at 50% 50%, rgba(212, 165, 116, 0.06), transparent 70%)
           `,
-          filter: 'blur(48px)',
-          animation: 'ffv-mesh-drift 18s ease-in-out infinite',
+          filter: 'blur(40px)',
           pointerEvents: 'none',
         }}
       />
-      {/* Camada 2: grid sutil */}
+      {/* Textura grid sutil */}
       <div
         aria-hidden
         style={{
           position: 'absolute',
           inset: 0,
           backgroundImage: `
-            linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px)
+            linear-gradient(rgba(31,58,48,0.025) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(31,58,48,0.025) 1px, transparent 1px)
           `,
           backgroundSize: '64px 64px',
           maskImage: 'radial-gradient(ellipse 80% 60% at 50% 0%, black, transparent 75%)',
@@ -143,214 +195,365 @@ function Hero() {
         }}
       />
 
-      <div className="relative max-w-7xl mx-auto grid lg:grid-cols-[1.05fr,1fr] gap-12 lg:gap-20 items-center">
-        <div>
-          {/* Status pill com pulse dot */}
+      <div className="relative max-w-5xl mx-auto text-center">
+        {/* Status pill sage */}
+        <span
+          className="inline-flex items-center gap-2 mb-7"
+          style={{
+            padding: '7px 14px',
+            background: '#ffffff',
+            border: `1px solid ${SAGE_SOFT}`,
+            borderRadius: 999,
+            fontSize: 12,
+            fontWeight: 600,
+            color: SAGE_INK,
+            letterSpacing: '0.005em',
+            boxShadow: '0 1px 2px rgba(31,58,48,0.04)',
+          }}
+        >
           <span
-            className="inline-flex items-center gap-2 mb-7"
+            aria-hidden
             style={{
-              padding: '6px 14px',
-              background: 'rgba(255,255,255,0.05)',
-              border: '1px solid rgba(255,255,255,0.10)',
-              borderRadius: 999,
-              fontSize: 12,
-              fontWeight: 600,
-              color: 'rgba(255,255,255,0.86)',
-              letterSpacing: '0.005em',
-              backdropFilter: 'blur(12px)',
-              WebkitBackdropFilter: 'blur(12px)',
+              width: 7,
+              height: 7,
+              borderRadius: '50%',
+              background: SAGE_ACCENT,
+              boxShadow: '0 0 0 4px rgba(94,128,104,0.18)',
+              animation: 'ffv-pulse-dot 2.4s ease-in-out infinite',
             }}
-          >
-            <span
-              aria-hidden
-              style={{
-                width: 7,
-                height: 7,
-                borderRadius: '50%',
-                background: '#22c55e',
-                boxShadow: '0 0 0 4px rgba(34,197,94,0.18)',
-                animation: 'ffv-pulse-dot 2.4s ease-in-out infinite',
-              }}
-            />
-            2 bases no ar · em produção contínua
+          />
+          Maio/2026: fila ativa de Medicina Vet e OAB
+        </span>
+
+        {/* HEADLINE */}
+        <h1
+          style={{
+            fontFamily: 'var(--font-inter, system-ui), sans-serif',
+            fontWeight: 700,
+            fontSize: 'clamp(2.4rem, 5.4vw, 4.4rem)',
+            lineHeight: 1.02,
+            letterSpacing: '-0.03em',
+            marginBottom: 22,
+            color: SAGE_INK,
+            maxWidth: 900,
+            marginLeft: 'auto',
+            marginRight: 'auto',
+          }}
+        >
+          Envie seu material. Em 24h, você recebe{' '}
+          <span style={{ color: SAGE_ACCENT, fontStyle: 'italic', fontWeight: 600 }}>
+            uma escola completa
           </span>
+          .
+        </h1>
 
-          {/* HEADLINE bold sans-serif gigante */}
-          <h1
+        <p
+          style={{
+            fontFamily: 'var(--font-inter, system-ui), sans-serif',
+            fontSize: 'clamp(1.05rem, 1.35vw, 1.2rem)',
+            lineHeight: 1.6,
+            color: TEXT_MUTED,
+            maxWidth: 680,
+            margin: '0 auto 28px',
+            fontWeight: 400,
+          }}
+        >
+          Manda PDF, slides, edital. A FFV transforma — e em até 24h chega um email
+          com link pro <strong style={{ color: SAGE_INK }}>portal completo</strong>:
+          trilha numerada, módulos, quizzes integrados e revisão espaçada calibrada
+          pelo SEU material. Curadoria humana, gratuito.
+        </p>
+
+        {/* Flow strip — 3 etapas claras do fluxo */}
+        <FlowStrip />
+
+        {/* CTAs */}
+        <div className="flex flex-col sm:flex-row gap-3 justify-center mb-10">
+          <a
+            href="#solicitar-base"
+            className="inline-flex items-center justify-center gap-2"
             style={{
-              fontFamily: 'var(--font-inter, system-ui), sans-serif',
-              fontWeight: 800,
-              fontSize: 'clamp(2.8rem, 6.2vw, 5.6rem)',
-              lineHeight: 0.97,
-              letterSpacing: '-0.035em',
-              marginBottom: 24,
-              color: '#fff',
+              padding: '14px 28px',
+              background: SAGE_INK,
+              color: PAPER,
+              borderRadius: 8,
+              fontSize: 15,
+              fontWeight: 600,
+              letterSpacing: '-0.005em',
+              boxShadow: '0 4px 14px -4px rgba(31,58,48,0.30)',
+              transition: 'transform 200ms ease, box-shadow 200ms ease, background 200ms ease',
+              textDecoration: 'none',
+            }}
+            onMouseOver={e => {
+              e.currentTarget.style.transform = 'translateY(-1px)';
+              e.currentTarget.style.boxShadow = '0 8px 22px -4px rgba(31,58,48,0.40)';
+              e.currentTarget.style.background = '#152821';
+            }}
+            onMouseOut={e => {
+              e.currentTarget.style.transform = '';
+              e.currentTarget.style.boxShadow = '0 4px 14px -4px rgba(31,58,48,0.30)';
+              e.currentTarget.style.background = SAGE_INK;
             }}
           >
-            Educação que se{' '}
-            <span
-              style={{
-                background:
-                  'linear-gradient(115deg, #a78bfa 0%, #38bdf8 45%, #fbbf24 100%)',
-                WebkitBackgroundClip: 'text',
-                WebkitTextFillColor: 'transparent',
-                backgroundClip: 'text',
-                color: 'transparent',
-              }}
-            >
-              adapta a você
-            </span>
-            <br />
-            em 24 horas.
-          </h1>
-
-          <p
+            Criar minha jornada
+            <span aria-hidden style={{ fontSize: 13 }}>→</span>
+          </a>
+          <Link
+            href="/bases"
+            className="inline-flex items-center justify-center gap-2"
             style={{
-              fontFamily: 'var(--font-inter, system-ui), sans-serif',
-              fontSize: 'clamp(1.05rem, 1.35vw, 1.2rem)',
-              lineHeight: 1.55,
-              color: 'rgba(255,255,255,0.68)',
-              maxWidth: 560,
-              marginBottom: 36,
-              fontWeight: 400,
+              padding: '14px 28px',
+              background: 'transparent',
+              border: `1px solid ${SAGE_INK}`,
+              color: SAGE_INK,
+              borderRadius: 8,
+              fontSize: 15,
+              fontWeight: 600,
+              letterSpacing: '-0.005em',
+              textDecoration: 'none',
+              transition: 'background 180ms ease, color 180ms ease',
+            }}
+            onMouseOver={e => {
+              e.currentTarget.style.background = SAGE_INK;
+              e.currentTarget.style.color = PAPER;
+            }}
+            onMouseOut={e => {
+              e.currentTarget.style.background = 'transparent';
+              e.currentTarget.style.color = SAGE_INK;
             }}
           >
-            Você manda o material — PDFs, slides, edital. A FFV devolve uma escola
-            completa em 24h: trilha estruturada, revisão espaçada calibrada e
-            gamificação que retém. Curadoria humana, gratuito.
-          </p>
+            Explorar bases
+          </Link>
+        </div>
 
-          {/* CTAs gradient + ghost */}
-          <div className="flex flex-col sm:flex-row gap-3 mb-10">
-            <a
-              href="#solicitar-base"
-              className="inline-flex items-center justify-center gap-2"
-              style={{
-                padding: '15px 30px',
-                background: 'linear-gradient(135deg, #a78bfa 0%, #38bdf8 100%)',
-                color: '#fff',
-                borderRadius: 12,
-                fontSize: 15,
-                fontWeight: 600,
-                letterSpacing: '-0.005em',
-                boxShadow:
-                  '0 10px 32px -6px rgba(124,58,237,0.55), inset 0 1px 0 rgba(255,255,255,0.18)',
-                transition: 'transform 200ms ease, box-shadow 200ms ease',
-                textDecoration: 'none',
-              }}
-              onMouseOver={e => {
-                e.currentTarget.style.transform = 'translateY(-2px)';
-                e.currentTarget.style.boxShadow =
-                  '0 14px 38px -6px rgba(124,58,237,0.65), inset 0 1px 0 rgba(255,255,255,0.22)';
-              }}
-              onMouseOut={e => {
-                e.currentTarget.style.transform = '';
-                e.currentTarget.style.boxShadow =
-                  '0 10px 32px -6px rgba(124,58,237,0.55), inset 0 1px 0 rgba(255,255,255,0.18)';
-              }}
-            >
-              Criar minha jornada
-              <span aria-hidden style={{ fontSize: 13 }}>→</span>
-            </a>
-            <Link
-              href="/bases"
-              className="inline-flex items-center justify-center gap-2"
-              style={{
-                padding: '15px 30px',
-                background: 'rgba(255,255,255,0.06)',
-                border: '1px solid rgba(255,255,255,0.14)',
-                color: '#fff',
-                borderRadius: 12,
-                fontSize: 15,
-                fontWeight: 500,
-                letterSpacing: '-0.005em',
-                backdropFilter: 'blur(12px)',
-                WebkitBackdropFilter: 'blur(12px)',
-                textDecoration: 'none',
-                transition: 'background 180ms ease, border-color 180ms ease',
-              }}
-              onMouseOver={e => {
-                e.currentTarget.style.background = 'rgba(255,255,255,0.12)';
-                e.currentTarget.style.borderColor = 'rgba(255,255,255,0.24)';
-              }}
-              onMouseOut={e => {
-                e.currentTarget.style.background = 'rgba(255,255,255,0.06)';
-                e.currentTarget.style.borderColor = 'rgba(255,255,255,0.14)';
-              }}
-            >
-              Explorar bases
-            </Link>
-          </div>
-
-          {/* Stats em grid — números gigantes em sans bold */}
-          <div
+        {/* Demo ao vivo — badge */}
+        <div className="flex items-center justify-center gap-2 mb-4">
+          <span
             style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))',
-              gap: 24,
-              paddingTop: 28,
-              borderTop: '1px solid rgba(255,255,255,0.08)',
-              marginBottom: 16,
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              background: TERRACOTA,
+              display: 'inline-block',
+              animation: 'ffv-live-pulse 2s ease-in-out infinite',
             }}
-          >
-            <HeroStat n="157" l="módulos de tech" />
-            <HeroStat n="12" l="de Medicina Vet" />
-            <HeroStat n="24h" l="SLA de entrega" />
-            <HeroStat n="R$ 0" l="sem cartão" />
-          </div>
-
-          {/* Mini trust strip — preserva strings dos tests */}
-          <p
-            style={{
-              fontSize: 11.5,
-              color: 'rgba(255,255,255,0.45)',
-              letterSpacing: '0.01em',
-              lineHeight: 1.6,
-            }}
-          >
-            ✓ Curadoria humana revisa cada trilha · ✓ SRS científico ·{' '}
-            <Link
-              href="/stats-publicas"
-              style={{
-                color: 'rgba(255,255,255,0.7)',
-                textDecoration: 'underline',
-                textUnderlineOffset: 4,
-                textDecorationColor: 'rgba(255,255,255,0.3)',
-              }}
-            >
-              Ver nossas métricas públicas →
-            </Link>
+            aria-hidden
+          />
+          <p style={{ ...KICKER, color: TERRACOTA, fontWeight: 700, margin: 0 }}>
+            Demo ao vivo · 4 telas em loop
           </p>
         </div>
 
-        <HeroMockup />
+        {/* BROWSER DEMO grande — o protagonista */}
+        <BrowserDemo />
+
+        {/* Step indicator chips sincronizado */}
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-2 lg:gap-3">
+          {PLATAFORMA_STEPS.map((s, i) => (
+            <div
+              key={s.label}
+              className="px-4 py-2.5 rounded-xl flex items-center gap-2.5 transition-all"
+              style={{
+                background: '#fff',
+                color: TEXT_MUTED,
+                border: `1px solid ${SAGE_SOFT}`,
+                animation: `ffv-step-active 16s linear ${i * 4}s infinite both`,
+                minWidth: 140,
+              }}
+            >
+              <span
+                className="font-mono text-[10px] font-bold"
+                style={{ letterSpacing: '0.1em', opacity: 0.7 }}
+              >
+                0{i + 1}
+              </span>
+              <span
+                style={{
+                  fontFamily: 'var(--font-inter)',
+                  fontSize: 14,
+                  fontWeight: 700,
+                  letterSpacing: '-0.01em',
+                }}
+              >
+                {s.label}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        {/* Caption sincronizado */}
+        <div
+          className="mt-5 mx-auto max-w-xl"
+          style={{ position: 'relative', minHeight: 48 }}
+        >
+          {PLATAFORMA_STEPS.map((s, i) => (
+            <p
+              key={s.label}
+              style={{
+                position: 'absolute',
+                inset: 0,
+                fontSize: 14,
+                color: SAGE_INK,
+                lineHeight: 1.55,
+                animation: `ffv-slide-cycle 16s linear ${i * 4}s infinite both`,
+              }}
+            >
+              <strong style={{ color: SAGE_ACCENT }}>{s.label}.</strong> {s.desc}
+            </p>
+          ))}
+        </div>
+
+        {/* Stats horizontal embaixo */}
+        <div
+          className="mt-12"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))',
+            gap: 24,
+            paddingTop: 28,
+            borderTop: `1px solid ${SAGE_SOFT}`,
+            marginBottom: 16,
+            textAlign: 'left',
+            maxWidth: 720,
+            marginLeft: 'auto',
+            marginRight: 'auto',
+          }}
+        >
+          <HeroStat n="157" l="módulos de tech" animate={157} />
+          <HeroStat n="12" l="de Medicina Vet" animate={12} />
+          <HeroStat n="24h" l="SLA de entrega" animate={24} />
+          <HeroStat n="R$ 0" l="sem cartão" />
+        </div>
+
+        {/* Trust strip — preserva strings dos tests */}
+        <p
+          style={{
+            fontSize: 12,
+            color: TEXT_MUTED,
+            letterSpacing: '0.01em',
+            lineHeight: 1.65,
+            textAlign: 'left',
+            maxWidth: 720,
+            margin: '0 auto',
+          }}
+        >
+          <span style={{ color: SAGE_ACCENT, fontWeight: 700 }}>✓</span> Curadoria humana revisa cada trilha
+          {'   '}
+          <span style={{ color: SAGE_ACCENT, fontWeight: 700 }}>✓</span> SRS científico
+          {'   '}
+          <Link
+            href="/stats-publicas"
+            style={{
+              color: SAGE_INK,
+              textDecoration: 'underline',
+              textUnderlineOffset: 4,
+              textDecorationColor: 'rgba(31,58,48,0.3)',
+              fontWeight: 600,
+            }}
+          >
+            Métricas públicas →
+          </Link>
+        </p>
       </div>
     </section>
   );
 }
 
-function HeroStat({ n, l }: { n: string; l: string }) {
+// ─── FlowStrip — 3 etapas do fluxo "envia → 24h → portal" ────────────────
+function FlowStrip() {
+  const steps = [
+    { i: '📄', l: 'Você envia', d: 'PDFs, slides, edital, anotações' },
+    { i: '⚡', l: 'A FFV transforma', d: 'IA + curadoria humana em 24h' },
+    { i: '✉️', l: 'Email com link', d: 'Portal completo, personalizado' },
+  ];
   return (
-    <div>
+    <div className="flex flex-wrap items-center justify-center gap-3 mb-9">
+      {steps.map((s, i) => (
+        <div key={s.l} className="flex items-center gap-3">
+          <div
+            className="flex items-center gap-3 px-4 py-3 rounded-xl"
+            style={{
+              background: '#ffffff',
+              border: `1px solid ${SAGE_SOFT}`,
+              boxShadow: '0 1px 2px rgba(31,58,48,0.04)',
+              textAlign: 'left',
+            }}
+          >
+            <span
+              aria-hidden
+              style={{
+                fontSize: 22,
+                width: 38,
+                height: 38,
+                borderRadius: 10,
+                background: i === 1 ? `${SAGE_ACCENT}1a` : '#fcf9f1',
+                border: `1px solid ${i === 1 ? `${SAGE_ACCENT}30` : SAGE_SOFT}`,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}
+            >
+              {s.i}
+            </span>
+            <div className="min-w-0">
+              <p
+                style={{
+                  fontFamily: 'var(--font-inter)',
+                  fontSize: 13,
+                  fontWeight: 700,
+                  color: SAGE_INK,
+                  letterSpacing: '-0.01em',
+                  lineHeight: 1.2,
+                }}
+              >
+                {s.l}
+              </p>
+              <p className="text-[11px]" style={{ color: TEXT_MUTED, lineHeight: 1.35, marginTop: 2 }}>
+                {s.d}
+              </p>
+            </div>
+          </div>
+          {i < steps.length - 1 && (
+            <span
+              aria-hidden
+              className="hidden sm:inline"
+              style={{ color: SAGE_ACCENT, fontSize: 18, fontWeight: 700 }}
+            >
+              →
+            </span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function HeroStat({ n, l, animate }: { n: string; l: string; animate?: number }) {
+  const { ref, value } = useCountUp(animate ?? 0);
+  const display = animate !== undefined ? `${value}${n.replace(/^\d+/, '')}` : n;
+  return (
+    <div ref={ref as React.RefObject<HTMLDivElement>}>
       <p
         style={{
           fontFamily: 'var(--font-inter, system-ui), sans-serif',
-          fontSize: 'clamp(1.9rem, 2.6vw, 2.4rem)',
-          fontWeight: 800,
-          color: '#fff',
+          fontSize: 'clamp(1.8rem, 2.4vw, 2.2rem)',
+          fontWeight: 700,
+          color: SAGE_INK,
           letterSpacing: '-0.025em',
           lineHeight: 1,
+          fontVariantNumeric: 'tabular-nums',
         }}
       >
-        {n}
+        {display}
       </p>
       <p
         style={{
-          fontSize: 10.5,
-          color: 'rgba(255,255,255,0.5)',
+          fontSize: 11,
+          color: TEXT_MUTED,
           marginTop: 6,
           textTransform: 'uppercase',
-          letterSpacing: '0.08em',
+          letterSpacing: '0.09em',
           fontWeight: 600,
           fontFamily: 'var(--font-inter, system-ui), sans-serif',
         }}
@@ -361,281 +564,1075 @@ function HeroStat({ n, l }: { n: string; l: string }) {
   );
 }
 
-function HeroMockup() {
-  return (
-    <div className="relative" aria-hidden>
-      {/* Glow behind dashboard */}
-      <div
-        style={{
-          position: 'absolute',
-          inset: -40,
-          background:
-            'radial-gradient(ellipse 70% 60% at 50% 50%, rgba(124,58,237,0.22), transparent 70%)',
-          filter: 'blur(40px)',
-          pointerEvents: 'none',
-        }}
-      />
 
+// ─── 1.2 ProcessoVisual — animação do fluxo PDF → trilha → exercício ──────
+// Section interativa que mostra a transformação em 3 colunas conectadas:
+//   1. Material que você envia (3 file cards animados)
+//   2. Processamento (loading orgânico)
+//   3. Saída (trilha + exercício gerados)
+// Animações CSS puras (zero JS), entram em loop sutil pra dar vida.
+
+function ProcessoVisual() {
+  const ref = useReveal();
+  return (
+    <section
+      ref={ref}
+      data-reveal
+      className="px-6 lg:px-10"
+      style={{
+        ...SECTION,
+        background: '#f6f1e6',
+        borderTop: `1px solid ${SAGE_SOFT}`,
+        overflow: 'hidden',
+      }}
+    >
+      <div className="max-w-6xl mx-auto">
+        <div className="max-w-2xl mx-auto text-center mb-14">
+          <p style={{ ...KICKER, color: SAGE_ACCENT, fontWeight: 700 }}>
+            Como funciona
+          </p>
+          <h2
+            style={{
+              fontFamily: 'var(--font-inter, system-ui), sans-serif',
+              fontSize: 'clamp(2rem, 3.8vw, 3rem)',
+              fontWeight: 700,
+              letterSpacing: '-0.03em',
+              lineHeight: 1.05,
+              marginTop: 16,
+              marginBottom: 16,
+              color: SAGE_INK,
+            }}
+          >
+            Você manda. A FFV{' '}
+            <span style={{ color: SAGE_ACCENT, fontStyle: 'italic', fontWeight: 600 }}>
+              transforma
+            </span>
+            .
+          </h2>
+          <p style={{ fontSize: 16, color: TEXT_MUTED, lineHeight: 1.6 }}>
+            Material espalhado em 3 colunas. Trilha pronta na quarta.
+          </p>
+        </div>
+
+        <div className="grid lg:grid-cols-[1fr_auto_1fr_auto_1fr] gap-6 lg:gap-4 items-stretch">
+          {/* COLUNA 1 — PDFs que você envia */}
+          <ProcessColumn
+            step="01"
+            label="Você envia"
+            description="PDFs, slides, anotações, edital"
+          >
+            <div className="flex flex-col gap-2.5">
+              {[
+                { name: 'Edital_OAB_41.pdf', size: '2.4 MB', delay: 0 },
+                { name: 'Slides_Genetica.pptx', size: '8.1 MB', delay: 0.3 },
+                { name: 'Apostila_Cap03.pdf', size: '1.2 MB', delay: 0.6 },
+              ].map(f => (
+                <FileCard key={f.name} name={f.name} size={f.size} delay={f.delay} />
+              ))}
+            </div>
+          </ProcessColumn>
+
+          <FlowArrow />
+
+          {/* COLUNA 2 — Processamento */}
+          <ProcessColumn
+            step="02"
+            label="IA + curadoria"
+            description="Em até 24h, com revisão humana"
+            highlight
+          >
+            <div
+              className="flex flex-col items-center justify-center gap-4"
+              style={{ minHeight: 200 }}
+            >
+              {/* Loading orgânico — 3 dots pulsando */}
+              <div className="flex gap-2">
+                {[0, 0.2, 0.4].map(d => (
+                  <span
+                    key={d}
+                    style={{
+                      width: 12,
+                      height: 12,
+                      borderRadius: '50%',
+                      background: SAGE_ACCENT,
+                      animation: `ffv-bounce-dot 1.4s ease-in-out ${d}s infinite`,
+                    }}
+                  />
+                ))}
+              </div>
+              <p
+                className="text-xs text-center"
+                style={{ color: TEXT_MUTED, lineHeight: 1.5, maxWidth: 180 }}
+              >
+                Lendo material<br />
+                Estruturando trilha<br />
+                Gerando exercícios
+              </p>
+              <div
+                style={{
+                  fontSize: 10,
+                  color: SAGE_ACCENT,
+                  fontFamily: 'var(--font-inter)',
+                  fontWeight: 700,
+                  letterSpacing: '0.1em',
+                  textTransform: 'uppercase',
+                  padding: '4px 10px',
+                  background: '#fff',
+                  border: `1px solid ${SAGE_ACCENT}40`,
+                  borderRadius: 999,
+                }}
+              >
+                ◐ Processando
+              </div>
+            </div>
+          </ProcessColumn>
+
+          <FlowArrow />
+
+          {/* COLUNA 3 — Saída: Trilha + Exercício */}
+          <ProcessColumn
+            step="03"
+            label="Você recebe"
+            description="Trilha pronta + exercícios + revisão"
+          >
+            <div className="flex flex-col gap-2.5">
+              {/* Trail card */}
+              <div
+                className="rounded-lg p-3"
+                style={{
+                  background: '#fff',
+                  border: `1px solid ${SAGE_SOFT}`,
+                  animation: 'ffv-slide-in 0.6s ease-out 0.4s both',
+                }}
+              >
+                <p
+                  className="text-[10px] font-mono uppercase mb-2"
+                  style={{ color: SAGE_ACCENT, letterSpacing: '0.12em', fontWeight: 700 }}
+                >
+                  ✓ Trilha gerada
+                </p>
+                <ul className="flex flex-col gap-1 list-none p-0 m-0 text-[11px]">
+                  {['01 · Direito Constitucional', '02 · Civil — Parte Geral', '03 · Penal'].map(
+                    (t, i) => (
+                      <li
+                        key={t}
+                        style={{
+                          padding: '4px 8px',
+                          borderRadius: 4,
+                          background: i === 0 ? `${SAGE_ACCENT}14` : 'transparent',
+                          color: i === 0 ? SAGE_INK : TEXT_MUTED,
+                          fontWeight: i === 0 ? 600 : 400,
+                          borderLeft:
+                            i === 0 ? `2px solid ${SAGE_ACCENT}` : '2px solid transparent',
+                          paddingLeft: 8,
+                        }}
+                      >
+                        {t}
+                      </li>
+                    ),
+                  )}
+                </ul>
+              </div>
+
+              {/* Quiz card */}
+              <div
+                className="rounded-lg p-3"
+                style={{
+                  background: '#fff',
+                  border: `1px solid ${SAGE_SOFT}`,
+                  animation: 'ffv-slide-in 0.6s ease-out 0.7s both',
+                }}
+              >
+                <p
+                  className="text-[10px] font-mono uppercase mb-2"
+                  style={{ color: TERRACOTA, letterSpacing: '0.12em', fontWeight: 700 }}
+                >
+                  ✓ Exercício gerado
+                </p>
+                <p
+                  className="text-xs mb-2"
+                  style={{ color: SAGE_INK, fontWeight: 600, lineHeight: 1.4 }}
+                >
+                  Quanto à ação direta de inconstitucionalidade…
+                </p>
+                <div className="flex flex-col gap-1">
+                  {['A', 'B', 'C', 'D'].map((opt, i) => (
+                    <div
+                      key={opt}
+                      className="text-[10px] px-2 py-1 rounded flex items-center gap-2"
+                      style={{
+                        background: i === 1 ? `${SAGE_ACCENT}14` : '#fcf9f1',
+                        border: i === 1 ? `1px solid ${SAGE_ACCENT}80` : `1px solid ${SAGE_SOFT}`,
+                        color: i === 1 ? SAGE_INK : TEXT_MUTED,
+                        fontWeight: i === 1 ? 600 : 400,
+                      }}
+                    >
+                      <span style={{ fontWeight: 700 }}>{opt}</span>
+                      <span>Alternativa {opt.toLowerCase()}</span>
+                      {i === 1 && (
+                        <span
+                          style={{ marginLeft: 'auto', color: SAGE_ACCENT, fontWeight: 700 }}
+                        >
+                          ✓
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* SRS card */}
+              <div
+                className="rounded-lg p-3 flex items-center gap-3"
+                style={{
+                  background: `linear-gradient(135deg, ${SAGE_ACCENT}14, ${TERRACOTA}10)`,
+                  border: `1px solid ${SAGE_ACCENT}30`,
+                  animation: 'ffv-slide-in 0.6s ease-out 1s both',
+                }}
+              >
+                <span
+                  aria-hidden
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: 6,
+                    background: SAGE_ACCENT,
+                    color: '#fff',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 14,
+                  }}
+                >
+                  🧠
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p
+                    className="text-[11px] font-semibold"
+                    style={{ color: SAGE_INK, lineHeight: 1.3 }}
+                  >
+                    SRS calibrado · 12 cards na fila
+                  </p>
+                  <p className="text-[10px]" style={{ color: TEXT_MUTED, marginTop: 1 }}>
+                    Próxima revisão amanhã às 8h
+                  </p>
+                </div>
+              </div>
+            </div>
+          </ProcessColumn>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+interface ProcessColumnProps {
+  step: string;
+  label: string;
+  description: string;
+  highlight?: boolean;
+  children: React.ReactNode;
+}
+
+function ProcessColumn({ step, label, description, highlight, children }: ProcessColumnProps) {
+  return (
+    <article
+      className="rounded-2xl p-5 lg:p-6"
+      style={{
+        background: highlight
+          ? `linear-gradient(180deg, #ffffff 0%, ${SAGE_ACCENT}08 100%)`
+          : '#ffffff',
+        border: highlight ? `2px solid ${SAGE_ACCENT}40` : `1px solid ${SAGE_SOFT}`,
+        boxShadow: highlight
+          ? `0 8px 24px -8px ${SAGE_ACCENT}30, 0 1px 2px rgba(31,58,48,0.04)`
+          : '0 1px 2px rgba(31,58,48,0.04)',
+        minHeight: 360,
+      }}
+    >
+      <div className="flex items-baseline gap-2 mb-3">
+        <span
+          style={{
+            fontFamily: 'var(--font-inter)',
+            fontSize: 11,
+            fontWeight: 700,
+            color: SAGE_ACCENT,
+            letterSpacing: '0.12em',
+            background: `${SAGE_ACCENT}14`,
+            padding: '3px 8px',
+            borderRadius: 4,
+          }}
+        >
+          {step}
+        </span>
+        <h3
+          style={{
+            fontFamily: 'var(--font-inter)',
+            fontSize: 16,
+            fontWeight: 700,
+            color: SAGE_INK,
+            letterSpacing: '-0.01em',
+          }}
+        >
+          {label}
+        </h3>
+      </div>
+      <p className="text-xs mb-4" style={{ color: TEXT_MUTED, lineHeight: 1.5 }}>
+        {description}
+      </p>
+      {children}
+    </article>
+  );
+}
+
+function FlowArrow() {
+  return (
+    <div
+      className="hidden lg:flex items-center justify-center"
+      style={{ minWidth: 32 }}
+      aria-hidden
+    >
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+        <path
+          d="M4 14 L24 14 M18 8 L24 14 L18 20"
+          stroke={SAGE_ACCENT}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </div>
+  );
+}
+
+function FileCard({ name, size, delay }: { name: string; size: string; delay: number }) {
+  return (
+    <div
+      className="flex items-center gap-2.5 p-2.5 rounded-lg"
+      style={{
+        background: '#fff',
+        border: `1px solid ${SAGE_SOFT}`,
+        animation: `ffv-fade-up 0.5s ease-out ${delay}s both`,
+      }}
+    >
+      {/* File icon */}
       <div
-        className="relative"
         style={{
-          background: 'linear-gradient(180deg, #18182a 0%, #0f0f1d 100%)',
-          borderRadius: 16,
-          border: '1px solid rgba(255,255,255,0.08)',
-          boxShadow:
-            '0 0 0 1px rgba(255,255,255,0.04), 0 24px 64px -16px rgba(0,0,0,0.6), 0 0 80px -20px rgba(124,58,237,0.4)',
+          width: 32,
+          height: 36,
+          background: `linear-gradient(135deg, ${TERRACOTA}, #9a6e44)`,
+          borderRadius: 4,
+          position: 'relative',
+          flexShrink: 0,
+          color: '#fff',
+          fontSize: 8,
+          fontWeight: 800,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          paddingTop: 4,
+        }}
+        aria-hidden
+      >
+        PDF
+      </div>
+      <div className="flex-1 min-w-0">
+        <p
+          className="text-xs font-medium truncate"
+          style={{ color: SAGE_INK, letterSpacing: '-0.005em' }}
+        >
+          {name}
+        </p>
+        <p className="text-[10px]" style={{ color: TEXT_MUTED }}>
+          {size} · enviado
+        </p>
+      </div>
+      <span
+        aria-hidden
+        style={{
+          width: 18,
+          height: 18,
+          borderRadius: '50%',
+          background: SAGE_ACCENT,
+          color: '#fff',
+          fontSize: 11,
+          fontWeight: 800,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+        }}
+      >
+        ✓
+      </span>
+    </div>
+  );
+}
+
+// ─── PLATAFORMA_STEPS — labels/descs do demo animado (usado pelo Hero) ───
+
+const PLATAFORMA_STEPS = [
+  {
+    label: 'Trilha',
+    desc: 'Módulos numerados, ordem pedagógica calibrada pelo seu objetivo.',
+  },
+  {
+    label: 'Módulo',
+    desc: 'Leitura + exemplo + quiz inline. Sem janela nova, sem fricção.',
+  },
+  {
+    label: 'Quiz',
+    desc: 'Feedback imediato com explicação. Alimenta a fila do SRS.',
+  },
+  {
+    label: 'Progresso',
+    desc: 'XP, streak, heatmap, ranking — ritmo que dura mais que motivação.',
+  },
+];
+
+function BrowserDemo() {
+  return (
+    <div
+      className="rounded-2xl overflow-hidden"
+      style={{
+        background: '#fff',
+        border: `1px solid ${SAGE_SOFT}`,
+        boxShadow: `
+          0 24px 48px -16px rgba(31,58,48,0.18),
+          0 8px 16px -8px rgba(31,58,48,0.10),
+          0 1px 0 rgba(31,58,48,0.04)
+        `,
+        animation: 'ffv-fade-up 0.8s ease-out both',
+      }}
+    >
+      {/* Browser chrome */}
+      <div
+        className="flex items-center gap-2 px-4 py-2.5"
+        style={{
+          background: '#f6f1e6',
+          borderBottom: `1px solid ${SAGE_SOFT}`,
+        }}
+      >
+        <div className="flex gap-1.5">
+          <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#e57373' }} />
+          <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#ffb74d' }} />
+          <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#81c784' }} />
+        </div>
+        <div
+          className="flex-1 mx-3 px-3 py-1 rounded text-[10px] flex items-center gap-1.5"
+          style={{
+            background: '#fff',
+            border: `1px solid ${SAGE_SOFT}`,
+            color: TEXT_MUTED,
+            fontFamily: 'var(--font-inter)',
+          }}
+        >
+          <span style={{ color: SAGE_ACCENT }}>🔒</span>
+          ffvacademy.com/minha-trilha-personalizada
+        </div>
+      </div>
+
+      {/* Slide stack — 4 telas absolute, cross-fading */}
+      <div
+        style={{
+          position: 'relative',
+          aspectRatio: '16 / 10',
+          background: '#fafaf7',
           overflow: 'hidden',
         }}
       >
-        {/* Browser chrome */}
-        <div
-          className="flex items-center gap-2 px-4 py-3"
-          style={{
-            borderBottom: '1px solid rgba(255,255,255,0.06)',
-            background: 'rgba(255,255,255,0.02)',
-          }}
-        >
-          <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#3f3f4a' }} />
-          <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#3f3f4a' }} />
-          <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#3f3f4a' }} />
-          <span
-            className="ml-3 font-mono text-[11px]"
-            style={{ color: 'rgba(255,255,255,0.4)', letterSpacing: '0.02em' }}
-          >
-            ffvacademy.com/minha-trilha
-          </span>
-          <span
-            className="ml-auto text-[9px] font-mono uppercase px-2 py-0.5 rounded"
-            style={{
-              background: 'rgba(34,197,94,0.12)',
-              color: '#22c55e',
-              border: '1px solid rgba(34,197,94,0.25)',
-              letterSpacing: '0.1em',
-              fontWeight: 700,
-            }}
-          >
-            ● live
-          </span>
-        </div>
+        <DemoSlideTrilha />
+        <DemoSlideModulo />
+        <DemoSlideQuiz />
+        <DemoSlideProgresso />
+      </div>
+    </div>
+  );
+}
 
-        <div className="grid grid-cols-[160px,1fr]" style={{ minHeight: 420 }}>
-          {/* Sidebar dark */}
-          <aside
-            className="p-4"
+function DemoSlide({
+  index,
+  children,
+}: {
+  index: number;
+  children: React.ReactNode;
+}) {
+  // 4 slides × 4s = 16s ciclo. Positive delay + fill backwards garante que
+  // o slide N só aparece no segmento dele, sem overlap com o anterior.
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        inset: 0,
+        opacity: 0,
+        animation: `ffv-slide-cycle 16s linear ${index * 4}s infinite both`,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function DemoSlideTrilha() {
+  const mods = [
+    'Anatomia comparada',
+    'Genética veterinária',
+    'Reprodução animal',
+    'Patologia clínica',
+    'Farmacologia',
+    'Microbiologia',
+    'Imunologia',
+    'Cirurgia I',
+  ];
+  return (
+    <DemoSlide index={0}>
+      <div className="h-full flex p-4 gap-3">
+        {/* Sidebar */}
+        <aside
+          className="w-1/3 rounded-lg p-3"
+          style={{ background: '#fff', border: `1px solid ${SAGE_SOFT}` }}
+        >
+          <p
+            className="text-[9px] font-mono uppercase mb-2"
+            style={{ color: SAGE_ACCENT, letterSpacing: '0.14em', fontWeight: 700 }}
+          >
+            Trilha Medvet
+          </p>
+          <ul className="flex flex-col gap-1 list-none p-0 m-0">
+            {mods.slice(0, 6).map((m, i) => (
+              <li
+                key={m}
+                className="text-[10px] px-2 py-1.5 rounded flex items-center gap-1.5"
+                style={{
+                  background: i === 1 ? `${SAGE_ACCENT}18` : 'transparent',
+                  borderLeft: i === 1 ? `2px solid ${SAGE_ACCENT}` : '2px solid transparent',
+                  color: i === 1 ? SAGE_INK : TEXT_MUTED,
+                  fontWeight: i === 1 ? 600 : 400,
+                  paddingLeft: 8,
+                }}
+              >
+                <span
+                  style={{
+                    width: 14,
+                    height: 14,
+                    borderRadius: 3,
+                    background: i < 1 ? SAGE_ACCENT : i === 1 ? `${SAGE_ACCENT}40` : '#ece6d8',
+                    color: '#fff',
+                    fontSize: 8,
+                    fontWeight: 800,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}
+                >
+                  {i < 1 ? '✓' : i + 1}
+                </span>
+                <span className="truncate">{m}</span>
+              </li>
+            ))}
+          </ul>
+        </aside>
+
+        {/* Main */}
+        <main className="flex-1 flex flex-col gap-3">
+          <div
+            className="rounded-lg p-4"
             style={{
-              borderRight: '1px solid rgba(255,255,255,0.06)',
-              background: 'rgba(255,255,255,0.02)',
+              background: `linear-gradient(135deg, ${SAGE_ACCENT}, #4a6b56)`,
+              color: '#fff',
             }}
           >
             <p
-              className="text-[10px] font-mono uppercase mb-3"
-              style={{ color: 'rgba(255,255,255,0.4)', letterSpacing: '0.1em', fontWeight: 700 }}
+              className="text-[9px] font-mono uppercase mb-2"
+              style={{ color: 'rgba(255,255,255,0.7)', letterSpacing: '0.14em' }}
             >
-              Suas trilhas
+              Próximo passo · 02 de 17
             </p>
-            <ul className="flex flex-col gap-1.5 text-xs list-none p-0 m-0">
-              {[
-                { name: 'Fundamentos', active: true },
-                { name: 'Aplicações práticas', active: false },
-                { name: 'Aprofundamento', active: false },
-                { name: 'Exercícios guiados', active: false },
-                { name: 'Revisão pra prova', active: false },
-              ].map(t => (
-                <li
-                  key={t.name}
-                  style={{
-                    padding: '7px 10px',
-                    borderRadius: 6,
-                    background: t.active ? 'rgba(124,58,237,0.18)' : 'transparent',
-                    color: t.active ? '#fff' : 'rgba(255,255,255,0.55)',
-                    fontWeight: t.active ? 600 : 400,
-                    fontSize: 12,
-                    borderLeft: t.active
-                      ? '2px solid #a78bfa'
-                      : '2px solid transparent',
-                  }}
-                >
-                  {t.name}
-                </li>
-              ))}
-            </ul>
-
-            {/* Mini XP card */}
-            <div
-              className="mt-4 p-2.5 rounded-lg"
-              style={{
-                background: 'linear-gradient(135deg, rgba(167,139,250,0.12) 0%, rgba(56,189,248,0.08) 100%)',
-                border: '1px solid rgba(167,139,250,0.2)',
-              }}
-            >
-              <p
-                className="text-[9px] font-mono uppercase mb-1"
-                style={{ color: 'rgba(255,255,255,0.5)', letterSpacing: '0.1em', fontWeight: 700 }}
-              >
-                XP semana
-              </p>
-              <p
-                style={{
-                  fontFamily: 'var(--font-inter)',
-                  fontWeight: 800,
-                  fontSize: 22,
-                  color: '#fff',
-                  letterSpacing: '-0.02em',
-                  lineHeight: 1,
-                }}
-              >
-                +1240
-              </p>
-              <p style={{ fontSize: 10, color: '#22c55e', marginTop: 4, fontWeight: 600 }}>
-                ↑ 18% vs semana anterior
-              </p>
-            </div>
-          </aside>
-
-          {/* Conteúdo principal */}
-          <div className="p-5">
-            <div className="flex items-center justify-between mb-3">
-              <p
-                className="text-[10px] font-mono uppercase"
-                style={{ color: 'rgba(255,255,255,0.45)', letterSpacing: '0.1em', fontWeight: 700 }}
-              >
-                Fundamentos · Módulo 3 de 8
-              </p>
-              <span
-                className="text-[9px] font-bold uppercase px-2 py-0.5 rounded"
-                style={{
-                  background: 'rgba(56,189,248,0.14)',
-                  color: '#38bdf8',
-                  border: '1px solid rgba(56,189,248,0.25)',
-                  letterSpacing: '0.1em',
-                }}
-              >
-                Em curso
-              </span>
-            </div>
-
             <h3
               style={{
                 fontFamily: 'var(--font-inter)',
-                fontSize: 22,
+                fontSize: 16,
                 fontWeight: 700,
-                letterSpacing: '-0.025em',
-                lineHeight: 1.15,
-                color: '#fff',
-                marginBottom: 14,
+                letterSpacing: '-0.015em',
+                marginBottom: 6,
               }}
             >
-              Conceito-chave do tópico, explicado com clareza
+              Genética veterinária
             </h3>
-
+            <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.85)', lineHeight: 1.5 }}>
+              Calibrada pelo edital do seu vestibular. 28 min · 4 questões · 1 caso clínico.
+            </p>
             <div
-              className="text-xs mb-4 px-3 py-2.5 rounded-lg"
-              style={{
-                background: 'rgba(255,255,255,0.04)',
-                color: 'rgba(255,255,255,0.75)',
-                lineHeight: 1.6,
-                borderLeft: '2px solid #a78bfa',
-              }}
+              className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 text-[10px] rounded"
+              style={{ background: '#fff', color: SAGE_INK, fontWeight: 700 }}
             >
-              &ldquo;A ideia central começa pela definição precisa do problema,
-              segue pela aplicação prática&hellip;&rdquo;
+              Continuar →
             </div>
+          </div>
 
-            <ul className="flex flex-col gap-2 mb-4 list-none p-0">
-              {[
-                { t: 'Definição e contexto', done: true },
-                { t: 'Exemplo prático comentado', done: true },
-                { t: 'Aplicação no seu caso real', done: false },
-                { t: 'Mini-quiz · 8 questões', done: false },
-              ].map((m, i) => (
-                <li
-                  key={i}
-                  className="flex items-center gap-2 text-xs"
+          <div className="grid grid-cols-3 gap-2">
+            {[
+              { l: 'Concluídos', v: '4', c: SAGE_ACCENT },
+              { l: 'Em fila', v: '13', c: TERRACOTA },
+              { l: 'XP ganho', v: '+820', c: SAGE_ACCENT },
+            ].map(s => (
+              <div
+                key={s.l}
+                className="rounded-md p-2.5"
+                style={{ background: '#fff', border: `1px solid ${SAGE_SOFT}` }}
+              >
+                <p className="text-[8px] uppercase font-mono" style={{ color: TEXT_MUTED, letterSpacing: '0.1em' }}>
+                  {s.l}
+                </p>
+                <p
                   style={{
-                    color: m.done ? 'rgba(255,255,255,0.45)' : '#fff',
-                    fontWeight: m.done ? 400 : 500,
+                    fontFamily: 'var(--font-inter)',
+                    fontSize: 18,
+                    fontWeight: 700,
+                    color: s.c,
+                    letterSpacing: '-0.02em',
+                    marginTop: 2,
                   }}
                 >
-                  <span
-                    style={{
-                      width: 16,
-                      height: 16,
-                      borderRadius: 5,
-                      background: m.done ? '#22c55e' : 'rgba(255,255,255,0.04)',
-                      border: m.done ? 'none' : '1.5px solid rgba(255,255,255,0.12)',
-                      position: 'relative',
-                      flexShrink: 0,
-                    }}
-                  >
-                    {m.done && (
-                      <span
-                        style={{
-                          position: 'absolute',
-                          top: -1,
-                          left: 3.5,
-                          color: '#fff',
-                          fontSize: 11,
-                          fontWeight: 800,
-                        }}
-                      >
-                        ✓
-                      </span>
-                    )}
-                  </span>
-                  <span style={{ textDecoration: m.done ? 'line-through' : 'none' }}>{m.t}</span>
+                  {s.v}
+                </p>
+              </div>
+            ))}
+          </div>
+        </main>
+      </div>
+    </DemoSlide>
+  );
+}
+
+function DemoSlideModulo() {
+  return (
+    <DemoSlide index={1}>
+      <div className="h-full p-5 flex flex-col gap-3 overflow-hidden">
+        <div className="flex items-center gap-2">
+          <span
+            className="text-[9px] font-mono uppercase px-2 py-0.5 rounded"
+            style={{
+              background: `${SAGE_ACCENT}1a`,
+              color: SAGE_ACCENT,
+              letterSpacing: '0.12em',
+              fontWeight: 700,
+            }}
+          >
+            Módulo 03
+          </span>
+          <span className="text-[9px]" style={{ color: TEXT_MUTED }}>
+            Reprodução animal · 32 min
+          </span>
+        </div>
+        <h3
+          style={{
+            fontFamily: 'var(--font-inter)',
+            fontSize: 18,
+            fontWeight: 700,
+            color: SAGE_INK,
+            letterSpacing: '-0.02em',
+            lineHeight: 1.2,
+          }}
+        >
+          Ciclo estral em cadelas — fases e hormônios
+        </h3>
+        <p className="text-[11px]" style={{ color: TEXT_MUTED, lineHeight: 1.55 }}>
+          O ciclo estral canino é monoéstrico não-sazonal, dividido em 4 fases. Cada fase tem um perfil hormonal próprio — entender esse perfil é o que permite saber quando inseminar.
+        </p>
+        <div
+          className="rounded-md p-3 text-[10px] font-mono"
+          style={{
+            background: SAGE_INK,
+            color: '#dde6dd',
+            lineHeight: 1.5,
+          }}
+        >
+          <span style={{ color: TERRACOTA }}>{'// Fases do ciclo'}</span>
+          <br />
+          <span style={{ color: '#fbbf24' }}>proestro</span>:{' '}
+          <span style={{ color: '#a3e635' }}>9 dias</span> · ↑ estrógeno
+          <br />
+          <span style={{ color: '#fbbf24' }}>estro</span>:{' '}
+          <span style={{ color: '#a3e635' }}>9 dias</span> · ↑ LH · ovulação
+          <br />
+          <span style={{ color: '#fbbf24' }}>diestro</span>:{' '}
+          <span style={{ color: '#a3e635' }}>60 dias</span> · ↑ progesterona
+          <br />
+          <span style={{ color: '#fbbf24' }}>anestro</span>:{' '}
+          <span style={{ color: '#a3e635' }}>~150 dias</span> · repouso
+        </div>
+        <div
+          className="rounded-md p-3 flex items-start gap-2"
+          style={{
+            background: `${TERRACOTA}10`,
+            border: `1px solid ${TERRACOTA}30`,
+          }}
+        >
+          <span style={{ fontSize: 14 }}>💡</span>
+          <p className="text-[10px]" style={{ color: SAGE_INK, lineHeight: 1.55 }}>
+            <strong>Quiz inline:</strong> Em qual fase ocorre o pico de LH e ovulação?
+          </p>
+        </div>
+      </div>
+    </DemoSlide>
+  );
+}
+
+function DemoSlideQuiz() {
+  return (
+    <DemoSlide index={2}>
+      <div className="h-full p-6 flex flex-col gap-4 max-w-xl mx-auto">
+        <div className="flex items-center justify-between">
+          <span
+            className="text-[10px] font-mono uppercase"
+            style={{ color: TERRACOTA, letterSpacing: '0.14em', fontWeight: 700 }}
+          >
+            Quiz · pergunta 3 de 4
+          </span>
+          <div className="flex gap-1">
+            {[1, 1, 0, 0].map((s, i) => (
+              <span
+                key={i}
+                style={{
+                  width: 20,
+                  height: 3,
+                  borderRadius: 2,
+                  background: s ? SAGE_ACCENT : SAGE_SOFT,
+                }}
+              />
+            ))}
+          </div>
+        </div>
+        <h3
+          style={{
+            fontFamily: 'var(--font-inter)',
+            fontSize: 17,
+            fontWeight: 700,
+            color: SAGE_INK,
+            letterSpacing: '-0.02em',
+            lineHeight: 1.25,
+          }}
+        >
+          Em qual fase do ciclo estral canino ocorre o pico de LH e a ovulação?
+        </h3>
+        <div className="flex flex-col gap-2">
+          {[
+            { l: 'A', t: 'Proestro', correct: false },
+            { l: 'B', t: 'Estro', correct: true },
+            { l: 'C', t: 'Diestro', correct: false },
+            { l: 'D', t: 'Anestro', correct: false },
+          ].map(o => (
+            <div
+              key={o.l}
+              className="px-3 py-2.5 rounded-md flex items-center gap-3 text-[11px]"
+              style={{
+                background: o.correct ? `${SAGE_ACCENT}14` : '#fff',
+                border: o.correct
+                  ? `2px solid ${SAGE_ACCENT}`
+                  : `1px solid ${SAGE_SOFT}`,
+                color: o.correct ? SAGE_INK : TEXT_MUTED,
+                fontWeight: o.correct ? 600 : 400,
+              }}
+            >
+              <span
+                style={{
+                  width: 22,
+                  height: 22,
+                  borderRadius: 4,
+                  background: o.correct ? SAGE_ACCENT : 'transparent',
+                  border: o.correct ? 'none' : `1px solid ${SAGE_SOFT}`,
+                  color: o.correct ? '#fff' : TEXT_MUTED,
+                  fontSize: 11,
+                  fontWeight: 800,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                {o.l}
+              </span>
+              <span className="flex-1">{o.t}</span>
+              {o.correct && (
+                <span style={{ color: SAGE_ACCENT, fontWeight: 700, fontSize: 14 }}>✓</span>
+              )}
+            </div>
+          ))}
+        </div>
+        <div
+          className="rounded-md p-3 flex items-center gap-2"
+          style={{
+            background: `linear-gradient(90deg, ${SAGE_ACCENT}1a, ${SAGE_ACCENT}06)`,
+            border: `1px solid ${SAGE_ACCENT}40`,
+          }}
+        >
+          <span style={{ fontSize: 16 }}>🎯</span>
+          <p className="text-[10px]" style={{ color: SAGE_INK, lineHeight: 1.5 }}>
+            <strong>Correto!</strong> +25 XP · próxima revisão em 4 dias (SRS).
+          </p>
+        </div>
+      </div>
+    </DemoSlide>
+  );
+}
+
+function DemoSlideProgresso() {
+  return (
+    <DemoSlide index={3}>
+      <div className="h-full p-5 grid grid-cols-2 gap-3">
+        {/* XP / Streak / Level */}
+        <div
+          className="rounded-lg p-4 flex flex-col justify-between"
+          style={{
+            background: `linear-gradient(135deg, ${SAGE_ACCENT}, #4a6b56)`,
+            color: '#fff',
+          }}
+        >
+          <p
+            className="text-[9px] font-mono uppercase"
+            style={{ color: 'rgba(255,255,255,0.75)', letterSpacing: '0.14em' }}
+          >
+            Seu progresso
+          </p>
+          <div>
+            <p style={{ fontFamily: 'var(--font-inter)', fontSize: 36, fontWeight: 800, lineHeight: 1, letterSpacing: '-0.03em' }}>
+              1.240
+            </p>
+            <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.85)', marginTop: 4 }}>
+              XP · nível 4 · 78% pra nível 5
+            </p>
+          </div>
+          <div className="flex gap-2 text-[10px]">
+            <span
+              className="px-2 py-1 rounded"
+              style={{ background: 'rgba(255,255,255,0.18)', fontWeight: 600 }}
+            >
+              🔥 12 dias
+            </span>
+            <span
+              className="px-2 py-1 rounded"
+              style={{ background: 'rgba(255,255,255,0.18)', fontWeight: 600 }}
+            >
+              ⭐ 8 badges
+            </span>
+          </div>
+        </div>
+
+        {/* Heatmap */}
+        <div
+          className="rounded-lg p-3"
+          style={{ background: '#fff', border: `1px solid ${SAGE_SOFT}` }}
+        >
+          <p
+            className="text-[9px] font-mono uppercase mb-2"
+            style={{ color: TEXT_MUTED, letterSpacing: '0.12em', fontWeight: 700 }}
+          >
+            Heatmap · 12 semanas
+          </p>
+          <div
+            className="grid gap-[2px]"
+            style={{ gridTemplateColumns: 'repeat(12, 1fr)' }}
+          >
+            {Array.from({ length: 84 }).map((_, i) => {
+              const intensity = [0, 0, 1, 2, 3, 2, 4, 3, 4, 3, 2, 4][i % 12] / 4;
+              return (
+                <span
+                  key={i}
+                  style={{
+                    aspectRatio: 1,
+                    borderRadius: 2,
+                    background:
+                      intensity === 0
+                        ? '#ece6d8'
+                        : `rgba(94, 128, 104, ${0.2 + intensity * 0.8})`,
+                  }}
+                />
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Ranking */}
+        <div
+          className="col-span-2 rounded-lg p-3"
+          style={{ background: '#fff', border: `1px solid ${SAGE_SOFT}` }}
+        >
+          <div className="flex items-center justify-between mb-2">
+            <p
+              className="text-[9px] font-mono uppercase"
+              style={{ color: TERRACOTA, letterSpacing: '0.14em', fontWeight: 700 }}
+            >
+              Ranking semanal · Medvet
+            </p>
+            <span className="text-[9px]" style={{ color: TEXT_MUTED, fontFamily: 'var(--font-inter)' }}>
+              top 50
+            </span>
+          </div>
+          <ul className="flex flex-col gap-1 list-none p-0 m-0">
+            {[
+              { p: '01', n: 'Mariana V.', xp: '4.820', me: false },
+              { p: '02', n: 'Você', xp: '4.310', me: true },
+              { p: '03', n: 'Bruno P.', xp: '3.940', me: false },
+              { p: '04', n: 'Larissa S.', xp: '3.620', me: false },
+            ].map(r => (
+              <li
+                key={r.p}
+                className="flex items-center gap-3 px-2 py-1.5 rounded text-[10px]"
+                style={{
+                  background: r.me ? `${SAGE_ACCENT}14` : 'transparent',
+                  border: r.me ? `1px solid ${SAGE_ACCENT}40` : '1px solid transparent',
+                  fontWeight: r.me ? 700 : 500,
+                  color: r.me ? SAGE_INK : TEXT_MUTED,
+                }}
+              >
+                <span
+                  className="font-mono"
+                  style={{ color: r.me ? SAGE_ACCENT : TEXT_MUTED, fontWeight: 700, width: 18 }}
+                >
+                  {r.p}
+                </span>
+                <span className="flex-1">{r.n}</span>
+                <span style={{ color: r.me ? SAGE_ACCENT : TEXT_MUTED, fontWeight: 700 }}>
+                  {r.xp} XP
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </DemoSlide>
+  );
+}
+
+// ─── 1.5 AntesDepois — storytelling visual da transformação ───────────────
+// Conversão padrão Maven/Headspace: mostra o "estado caótico ANTES" vs
+// "estado calmo DEPOIS". Cria identificação imediata com o aluno.
+
+function AntesDepois() {
+  const ref = useReveal();
+  return (
+    <section
+      ref={ref}
+      data-reveal
+      className="px-6 lg:px-10"
+      style={{
+        ...SECTION,
+        background: PAPER,
+        borderTop: `1px solid ${SAGE_SOFT}`,
+      }}
+    >
+      <div className="max-w-6xl mx-auto">
+        <div className="max-w-2xl mx-auto text-center mb-12">
+          <p style={{ ...KICKER, color: TERRACOTA, fontWeight: 700 }}>
+            A transformação
+          </p>
+          <h2
+            style={{
+              fontFamily: 'var(--font-inter, system-ui), sans-serif',
+              fontSize: 'clamp(1.8rem, 3.4vw, 2.8rem)',
+              fontWeight: 700,
+              letterSpacing: '-0.03em',
+              lineHeight: 1.1,
+              marginTop: 16,
+              marginBottom: 14,
+              color: SAGE_INK,
+            }}
+          >
+            De PDFs soltos a uma{' '}
+            <span style={{ color: SAGE_ACCENT, fontStyle: 'italic', fontWeight: 600 }}>
+              escola estruturada
+            </span>
+            .
+          </h2>
+          <p style={{ fontSize: 16, color: TEXT_MUTED, lineHeight: 1.6 }}>
+            Você manda o caos. A FFV devolve o método. Em 24h.
+          </p>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-6 max-w-5xl mx-auto">
+          {/* ANTES */}
+          <article
+            className="p-7 lg:p-8 rounded-2xl"
+            style={{
+              background: '#ffffff',
+              border: `1px solid ${SAGE_SOFT}`,
+              boxShadow: '0 1px 2px rgba(31,58,48,0.04)',
+            }}
+          >
+            <p
+              className="text-[11px] font-mono uppercase mb-4"
+              style={{
+                color: '#9a6e44',
+                letterSpacing: '0.16em',
+                fontWeight: 700,
+              }}
+            >
+              😩 Antes da FFV
+            </p>
+            <ul className="flex flex-col gap-3 list-none p-0 m-0">
+              {[
+                'Material da faculdade espalhado em 12 pastas diferentes',
+                'Slides do cursinho com 400 lâminas sem ordem',
+                'Anotações no caderno, no Notion, no Notes do iPhone',
+                'Você tenta ChatGPT — recebe parágrafos soltos',
+                'Sem trilha. Sem revisão. Sem prática.',
+              ].map(t => (
+                <li
+                  key={t}
+                  className="text-sm flex items-start gap-2.5"
+                  style={{ color: TEXT_MUTED, lineHeight: 1.55 }}
+                >
+                  <span aria-hidden style={{ color: TERRACOTA, marginTop: 1 }}>×</span>
+                  <span>{t}</span>
                 </li>
               ))}
             </ul>
+          </article>
 
-            <div
-              className="flex items-center justify-between text-[11px] pt-3"
+          {/* DEPOIS */}
+          <article
+            className="p-7 lg:p-8 rounded-2xl"
+            style={{
+              background: 'linear-gradient(180deg, #ffffff 0%, #f8f4ea 100%)',
+              border: `2px solid ${SAGE_ACCENT}40`,
+              boxShadow: `0 8px 24px -8px ${SAGE_ACCENT}30, 0 1px 2px rgba(31,58,48,0.04)`,
+            }}
+          >
+            <p
+              className="text-[11px] font-mono uppercase mb-4"
               style={{
-                borderTop: '1px solid rgba(255,255,255,0.06)',
-                color: 'rgba(255,255,255,0.5)',
+                color: SAGE_ACCENT,
+                letterSpacing: '0.16em',
+                fontWeight: 700,
               }}
             >
-              <span>Progresso da trilha</span>
-              <span style={{ fontWeight: 700, color: '#fff' }}>2 de 8 · 25%</span>
-            </div>
-            <div
-              className="mt-1.5 h-1.5 rounded-full overflow-hidden"
-              style={{ background: 'rgba(255,255,255,0.06)' }}
-            >
-              <div
-                style={{
-                  width: '25%',
-                  height: '100%',
-                  background: 'linear-gradient(90deg, #a78bfa 0%, #38bdf8 100%)',
-                  borderRadius: 999,
-                  boxShadow: '0 0 12px rgba(167,139,250,0.6)',
-                }}
-              />
-            </div>
-          </div>
+              ✨ Depois da FFV (em 24h)
+            </p>
+            <ul className="flex flex-col gap-3 list-none p-0 m-0">
+              {[
+                'Trilha com 12-17 módulos numerados, ordem pedagógica',
+                'Cada módulo: leitura + exemplo + quiz com explicação',
+                'SRS científico calibrado pelo SEU material — revisa no tempo certo',
+                'XP, badges, streak — ritmo, não força de vontade',
+                'Revisão humana valida toda trilha antes de entregar',
+              ].map(t => (
+                <li
+                  key={t}
+                  className="text-sm flex items-start gap-2.5"
+                  style={{ color: SAGE_INK, lineHeight: 1.55 }}
+                >
+                  <span aria-hidden style={{ color: SAGE_ACCENT, marginTop: 1, fontWeight: 700 }}>
+                    ✓
+                  </span>
+                  <span>{t}</span>
+                </li>
+              ))}
+            </ul>
+          </article>
         </div>
       </div>
-
-      {/* Floating badge — Pronta em 24h */}
-      <div
-        className="absolute hidden md:flex items-center gap-2"
-        style={{
-          right: -18,
-          top: -20,
-          background: 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)',
-          color: '#0a0a14',
-          padding: '10px 18px',
-          borderRadius: 999,
-          fontSize: 12,
-          fontWeight: 800,
-          letterSpacing: '-0.005em',
-          boxShadow:
-            '0 12px 32px -6px rgba(251,191,36,0.5), 0 0 0 1px rgba(255,255,255,0.18) inset',
-          transform: 'rotate(3deg)',
-        }}
-      >
-        <span aria-hidden>⚡</span> Pronta em 24h
-      </div>
-    </div>
+    </section>
   );
 }
 
@@ -819,7 +1816,7 @@ function ChatGPTBattle() {
   );
 }
 
-// ─── 3. Bento Grid v6 — features defensáveis em layout asymmetric ──────────
+// ─── 3. Bento Grid v7 — light editorial sage warm ──────────────────────────
 
 function PadraoFFV() {
   const ref = useReveal();
@@ -830,30 +1827,19 @@ function PadraoFFV() {
       className="px-6 lg:px-10"
       style={{
         ...SECTION,
-        background: '#0a0a14',
-        color: '#fff',
+        background: '#f6f1e6', // cream levemente mais escuro pra contraste
+        color: SAGE_INK,
         position: 'relative',
         overflow: 'hidden',
+        borderTop: `1px solid ${SAGE_SOFT}`,
       }}
     >
-      {/* Subtle background gradient */}
-      <div
-        aria-hidden
-        style={{
-          position: 'absolute',
-          inset: 0,
-          background:
-            'radial-gradient(ellipse 60% 40% at 50% 0%, rgba(167,139,250,0.10), transparent 70%)',
-          pointerEvents: 'none',
-        }}
-      />
-
       <div className="relative max-w-6xl mx-auto">
         <div className="max-w-2xl mx-auto text-center mb-14">
           <p
             style={{
               ...KICKER,
-              color: '#a78bfa',
+              color: SAGE_ACCENT,
               fontWeight: 700,
               letterSpacing: '0.18em',
             }}
@@ -864,24 +1850,16 @@ function PadraoFFV() {
             style={{
               fontFamily: 'var(--font-inter, system-ui), sans-serif',
               fontSize: 'clamp(2rem, 3.8vw, 3.2rem)',
-              fontWeight: 800,
+              fontWeight: 700,
               letterSpacing: '-0.03em',
               lineHeight: 1.05,
               marginTop: 16,
               marginBottom: 16,
-              color: '#fff',
+              color: SAGE_INK,
             }}
           >
             Toda jornada nasce com os{' '}
-            <span
-              style={{
-                background:
-                  'linear-gradient(115deg, #a78bfa 0%, #38bdf8 100%)',
-                WebkitBackgroundClip: 'text',
-                WebkitTextFillColor: 'transparent',
-                backgroundClip: 'text',
-              }}
-            >
+            <span style={{ color: SAGE_ACCENT, fontStyle: 'italic', fontWeight: 600 }}>
               mesmos 6 pilares
             </span>
             .
@@ -889,7 +1867,7 @@ function PadraoFFV() {
           <p
             style={{
               fontSize: 16,
-              color: 'rgba(255,255,255,0.65)',
+              color: TEXT_MUTED,
               lineHeight: 1.6,
             }}
           >
@@ -905,142 +1883,341 @@ function PadraoFFV() {
             gridAutoRows: 'minmax(200px, auto)',
           }}
         >
-          {/* Card 1: Trilhas ordenadas — span 2 colunas */}
+          {/* Card 1: Trilhas ordenadas — span 7 cols */}
           <BentoCard
             span="md:col-span-7"
-            accent="#a78bfa"
+            accent={SAGE_ACCENT}
             title="Trilhas ordenadas"
             subtitle="Do básico ao avançado. Cada módulo constrói no anterior — sem buracos pedagógicos."
             visual={
-              <div className="flex flex-col gap-1.5 mt-4">
-                {['Fundamentos', 'Aplicações práticas', 'Aprofundamento'].map((t, i) => (
+              <div className="mt-5 flex flex-col gap-1.5">
+                {[
+                  { n: 1, t: 'Fundamentos · célula e tecidos', d: '18 min', s: 'done' },
+                  { n: 2, t: 'Genética veterinária básica', d: '24 min', s: 'done' },
+                  { n: 3, t: 'Reprodução · ciclo estral', d: '32 min', s: 'active' },
+                  { n: 4, t: 'Patologia clínica aplicada', d: '28 min', s: 'next' },
+                  { n: 5, t: 'Farmacologia veterinária', d: '36 min', s: 'next' },
+                ].map(m => (
                   <div
-                    key={t}
+                    key={m.n}
+                    className="flex items-center gap-3 px-3 py-2 rounded-md"
                     style={{
-                      padding: '8px 12px',
-                      background: i === 0
-                        ? 'linear-gradient(90deg, rgba(167,139,250,0.18), transparent)'
-                        : 'rgba(255,255,255,0.03)',
-                      border: '1px solid rgba(255,255,255,0.06)',
-                      borderRadius: 8,
-                      fontSize: 12,
-                      color: i === 0 ? '#fff' : 'rgba(255,255,255,0.5)',
-                      borderLeft: i === 0 ? '2px solid #a78bfa' : '2px solid transparent',
+                      background: m.s === 'active' ? `${SAGE_ACCENT}14` : '#fcf9f1',
+                      border: `1px solid ${m.s === 'active' ? `${SAGE_ACCENT}50` : SAGE_SOFT}`,
+                      borderLeft:
+                        m.s === 'active'
+                          ? `3px solid ${SAGE_ACCENT}`
+                          : `1px solid ${SAGE_SOFT}`,
                     }}
                   >
-                    <span className="font-mono text-[10px] mr-2" style={{ opacity: 0.6 }}>
-                      {String(i + 1).padStart(2, '0')}
+                    <span
+                      style={{
+                        width: 22,
+                        height: 22,
+                        borderRadius: 5,
+                        background:
+                          m.s === 'done'
+                            ? SAGE_ACCENT
+                            : m.s === 'active'
+                              ? `${SAGE_ACCENT}30`
+                              : '#ece6d8',
+                        color: m.s === 'done' ? '#fff' : SAGE_INK,
+                        fontSize: 10,
+                        fontWeight: 800,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                        fontFamily: 'var(--font-inter)',
+                      }}
+                      aria-hidden
+                    >
+                      {m.s === 'done' ? '✓' : m.n}
                     </span>
-                    {t}
+                    <span
+                      className="text-[12px] flex-1 truncate"
+                      style={{
+                        color: m.s === 'next' ? TEXT_MUTED : SAGE_INK,
+                        fontWeight: m.s === 'active' ? 600 : 500,
+                      }}
+                    >
+                      {m.t}
+                    </span>
+                    <span
+                      className="text-[10px] font-mono"
+                      style={{ color: TEXT_MUTED, letterSpacing: '0.04em' }}
+                    >
+                      {m.d}
+                    </span>
                   </div>
                 ))}
               </div>
             }
           />
 
-          {/* Card 2: Revisão espaçada (SRS) — span 1 coluna */}
+          {/* Card 2: Revisão espaçada (SRS) — span 5 cols */}
           <BentoCard
             span="md:col-span-5"
-            accent="#38bdf8"
+            accent={SAGE_ACCENT}
             title="Revisão espaçada"
             subtitle="SRS calibrado pelo SEU material. Traz de volta no tempo certo, com base no que você errou."
             visual={
-              <div className="mt-4 flex items-end gap-1 h-16">
-                {[40, 65, 30, 85, 55, 75, 95, 70].map((h, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      flex: 1,
-                      height: `${h}%`,
-                      background: 'linear-gradient(180deg, #38bdf8, rgba(56,189,248,0.3))',
-                      borderRadius: 2,
-                      opacity: 0.85,
-                    }}
-                  />
-                ))}
+              <div className="mt-5">
+                {/* Próximas revisões */}
+                <p
+                  className="text-[10px] font-mono uppercase mb-2"
+                  style={{ color: TEXT_MUTED, letterSpacing: '0.12em', fontWeight: 700 }}
+                >
+                  Próximas 7 sessões
+                </p>
+                <div className="flex items-end gap-1 h-20 mb-3">
+                  {[
+                    { h: 60, l: 'Seg', n: 8 },
+                    { h: 85, l: 'Ter', n: 11, today: true },
+                    { h: 40, l: 'Qua', n: 5 },
+                    { h: 70, l: 'Qui', n: 9 },
+                    { h: 95, l: 'Sex', n: 13 },
+                    { h: 50, l: 'Sáb', n: 6 },
+                    { h: 30, l: 'Dom', n: 4 },
+                  ].map((d, i) => (
+                    <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                      <div
+                        style={{
+                          width: '100%',
+                          height: `${d.h}%`,
+                          background: d.today
+                            ? `linear-gradient(180deg, ${TERRACOTA}, ${TERRACOTA}99)`
+                            : `linear-gradient(180deg, ${SAGE_ACCENT}, ${SAGE_ACCENT}66)`,
+                          borderRadius: '3px 3px 1px 1px',
+                          position: 'relative',
+                        }}
+                      >
+                        <span
+                          className="absolute -top-4 left-1/2 -translate-x-1/2 text-[9px] font-mono"
+                          style={{ color: d.today ? TERRACOTA : SAGE_INK, fontWeight: 700 }}
+                        >
+                          {d.n}
+                        </span>
+                      </div>
+                      <span
+                        className="text-[9px] font-mono"
+                        style={{
+                          color: d.today ? TERRACOTA : TEXT_MUTED,
+                          fontWeight: d.today ? 700 : 500,
+                          letterSpacing: '0.04em',
+                        }}
+                      >
+                        {d.l}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div
+                  className="px-3 py-2 rounded-md flex items-center gap-2 text-[11px]"
+                  style={{
+                    background: `${TERRACOTA}10`,
+                    border: `1px solid ${TERRACOTA}30`,
+                  }}
+                >
+                  <span aria-hidden>🧠</span>
+                  <span style={{ color: SAGE_INK, fontWeight: 500 }}>
+                    <strong>11 cards hoje</strong> · próximo em 8 min
+                  </span>
+                </div>
               </div>
             }
           />
 
-          {/* Card 3: Exercícios integrados */}
+          {/* Card 3: Exercícios integrados — span 4 cols */}
           <BentoCard
             span="md:col-span-4"
-            accent="#fbbf24"
+            accent={TERRACOTA}
             title="Exercícios integrados"
             subtitle="Você testa o aprendizado na hora. Feedback imediato com explicação."
             visual={
-              <div className="mt-4 space-y-1.5 text-[11px]">
-                <div className="flex items-center gap-2" style={{ color: '#22c55e' }}>
-                  <span>✓</span> Q1 correta · +10 XP
-                </div>
-                <div className="flex items-center gap-2" style={{ color: '#22c55e' }}>
-                  <span>✓</span> Q2 correta · +10 XP
-                </div>
-                <div className="flex items-center gap-2" style={{ color: 'rgba(255,255,255,0.4)' }}>
-                  <span>○</span> Q3 em revisão
-                </div>
+              <div className="mt-5 flex flex-col gap-2">
+                {[
+                  { l: 'Q1', t: 'Fase de pico do LH?', s: 'right', xp: '+10' },
+                  { l: 'Q2', t: 'Duração média do estro?', s: 'right', xp: '+10' },
+                  { l: 'Q3', t: 'Hormônio do diestro?', s: 'wrong', xp: 'revisar' },
+                  { l: 'Q4', t: 'Inseminação ideal em…', s: 'pending', xp: '—' },
+                ].map(q => {
+                  const colorMap = { right: SAGE_ACCENT, wrong: TERRACOTA, pending: TEXT_MUTED };
+                  const c = colorMap[q.s as keyof typeof colorMap];
+                  return (
+                    <div
+                      key={q.l}
+                      className="flex items-center gap-2 px-2.5 py-2 rounded-md text-[11px]"
+                      style={{
+                        background: q.s === 'pending' ? '#fcf9f1' : `${c}10`,
+                        border: `1px solid ${q.s === 'pending' ? SAGE_SOFT : `${c}40`}`,
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: 18,
+                          height: 18,
+                          borderRadius: '50%',
+                          background: q.s === 'right' ? c : 'transparent',
+                          border: q.s === 'right' ? 'none' : `1.5px solid ${c}`,
+                          color: q.s === 'right' ? '#fff' : c,
+                          fontSize: 10,
+                          fontWeight: 800,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flexShrink: 0,
+                        }}
+                        aria-hidden
+                      >
+                        {q.s === 'right' ? '✓' : q.s === 'wrong' ? '×' : '○'}
+                      </span>
+                      <span
+                        className="font-mono"
+                        style={{ color: SAGE_INK, fontWeight: 600, fontSize: 10 }}
+                      >
+                        {q.l}
+                      </span>
+                      <span className="flex-1 truncate" style={{ color: TEXT_MUTED }}>
+                        {q.t}
+                      </span>
+                      <span
+                        className="text-[9px] font-mono"
+                        style={{ color: c, fontWeight: 700, letterSpacing: '0.04em' }}
+                      >
+                        {q.xp}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             }
           />
 
-          {/* Card 4: Gamificação — span 2 cols */}
+          {/* Card 4: Gamificação — span 5 cols */}
           <BentoCard
             span="md:col-span-5"
-            accent="#22c55e"
+            accent={SAGE_ACCENT}
             title="Gamificação inteligente"
             subtitle="XP, badges, streak, ranking. Ritmo > força de vontade."
             visual={
-              <div className="mt-4 flex gap-2 flex-wrap">
-                {[
-                  { i: '🔥', v: '14d streak' },
-                  { i: '⭐', v: 'Nível 7' },
-                  { i: '🏆', v: '24 badges' },
-                ].map(b => (
+              <div className="mt-5">
+                {/* XP bar */}
+                <div className="flex items-center justify-between mb-1.5">
                   <span
-                    key={b.v}
-                    className="px-3 py-1.5 rounded-full text-xs font-medium"
-                    style={{
-                      background: 'rgba(34,197,94,0.10)',
-                      border: '1px solid rgba(34,197,94,0.25)',
-                      color: '#fff',
-                    }}
+                    className="text-[10px] font-mono uppercase"
+                    style={{ color: SAGE_ACCENT, letterSpacing: '0.12em', fontWeight: 700 }}
                   >
-                    {b.i} {b.v}
+                    Nível 4 → 5
                   </span>
-                ))}
+                  <span
+                    className="text-[10px] font-mono"
+                    style={{ color: TEXT_MUTED, fontWeight: 600 }}
+                  >
+                    1.240 / 1.600 XP
+                  </span>
+                </div>
+                <div
+                  className="h-2 rounded-full overflow-hidden mb-4"
+                  style={{ background: '#ece6d8' }}
+                >
+                  <div
+                    style={{
+                      width: '78%',
+                      height: '100%',
+                      background: `linear-gradient(90deg, ${SAGE_ACCENT}, #4a6b56)`,
+                      borderRadius: 999,
+                    }}
+                  />
+                </div>
+                {/* Stats em grid */}
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { i: '🔥', v: '14', l: 'dias streak', c: TERRACOTA },
+                    { i: '⭐', v: '7', l: 'badges raros', c: SAGE_ACCENT },
+                    { i: '🏆', v: '#23', l: 'no ranking', c: SAGE_ACCENT },
+                  ].map(b => (
+                    <div
+                      key={b.l}
+                      className="px-2.5 py-2 rounded-md text-center"
+                      style={{
+                        background: '#fcf9f1',
+                        border: `1px solid ${SAGE_SOFT}`,
+                      }}
+                    >
+                      <div style={{ fontSize: 16, marginBottom: 2 }}>{b.i}</div>
+                      <p
+                        style={{
+                          fontFamily: 'var(--font-inter)',
+                          fontSize: 15,
+                          fontWeight: 800,
+                          color: b.c,
+                          letterSpacing: '-0.02em',
+                          lineHeight: 1,
+                        }}
+                      >
+                        {b.v}
+                      </p>
+                      <p
+                        className="text-[9px] font-mono uppercase mt-0.5"
+                        style={{ color: TEXT_MUTED, letterSpacing: '0.08em' }}
+                      >
+                        {b.l}
+                      </p>
+                    </div>
+                  ))}
+                </div>
               </div>
             }
           />
 
-          {/* Card 5: Curadoria humana — span 3 cols (largo) */}
+          {/* Card 5: Curadoria humana — span 3 cols */}
           <BentoCard
             span="md:col-span-3"
-            accent="#f472b6"
+            accent={TERRACOTA}
             title="Curadoria humana"
-            subtitle="Engenheiro revisa cada trilha antes de ir ao ar. Não é cuspe de LLM."
+            subtitle="Toda trilha passa pelo crivo de um engenheiro antes de ir ao ar."
             visual={
-              <div
-                className="mt-4 text-[11px] flex items-center gap-2"
-                style={{ color: 'rgba(255,255,255,0.65)' }}
-              >
+              <div className="mt-5 flex flex-col gap-2">
                 <div
+                  className="flex items-center gap-2 p-2 rounded-md"
                   style={{
-                    width: 28,
-                    height: 28,
-                    borderRadius: '50%',
-                    background: 'linear-gradient(135deg, #f472b6, #ec4899)',
-                    color: '#fff',
-                    fontSize: 11,
-                    fontWeight: 800,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
+                    background: `${SAGE_ACCENT}10`,
+                    border: `1px solid ${SAGE_ACCENT}30`,
                   }}
-                  aria-hidden
                 >
-                  FFV
+                  <span
+                    style={{
+                      width: 28,
+                      height: 28,
+                      borderRadius: '50%',
+                      background: `linear-gradient(135deg, ${TERRACOTA}, #9a6e44)`,
+                      color: '#fff',
+                      fontSize: 10,
+                      fontWeight: 800,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0,
+                      fontFamily: 'var(--font-inter)',
+                    }}
+                    aria-hidden
+                  >
+                    FFV
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[11px]" style={{ color: SAGE_INK, fontWeight: 700 }}>
+                      Fernando F. V.
+                    </p>
+                    <p className="text-[9px]" style={{ color: TEXT_MUTED }}>
+                      Revisou · há 2h
+                    </p>
+                  </div>
+                  <span style={{ color: SAGE_ACCENT, fontSize: 12, fontWeight: 700 }}>✓</span>
                 </div>
-                <span>Revisado por Fernando F. V.</span>
+                <p className="text-[10px]" style={{ color: TEXT_MUTED, lineHeight: 1.5 }}>
+                  <strong style={{ color: SAGE_INK }}>0%</strong> das trilhas vão ao ar sem revisão humana.
+                </p>
               </div>
             }
           />
@@ -1048,13 +2225,13 @@ function PadraoFFV() {
           {/* Card 6: PT-BR mobile-first — span 9 cols (full) */}
           <BentoCard
             span="md:col-span-9"
-            accent="#fbbf24"
+            accent={TERRACOTA}
             title="PT-BR nativo · qualquer dispositivo · zero cadastro pra começar"
             subtitle="Sem trial, sem cartão, sem app pra baixar. Funciona como PWA — instala no celular como app nativo se quiser."
             visual={
               <div
                 className="mt-4 flex gap-2 text-[11px] flex-wrap"
-                style={{ color: 'rgba(255,255,255,0.7)' }}
+                style={{ color: TEXT_MUTED }}
               >
                 {['🇧🇷 PT-BR nativo', '📱 PWA instalável', '⚡ Offline-first', '🔓 Sem cadastro'].map(
                   t => (
@@ -1062,8 +2239,10 @@ function PadraoFFV() {
                       key={t}
                       className="px-3 py-1.5 rounded-md"
                       style={{
-                        background: 'rgba(255,255,255,0.04)',
-                        border: '1px solid rgba(255,255,255,0.08)',
+                        background: '#fcf9f1',
+                        border: `1px solid ${SAGE_SOFT}`,
+                        color: SAGE_INK,
+                        fontWeight: 500,
                       }}
                     >
                       {t}
@@ -1092,43 +2271,43 @@ function BentoCard({ span, accent, title, subtitle, visual }: BentoCardProps) {
     <article
       className={`col-span-12 ${span} p-6 lg:p-7 transition-all`}
       style={{
-        background:
-          'linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.015) 100%)',
-        border: '1px solid rgba(255,255,255,0.08)',
-        borderRadius: 16,
+        background: '#ffffff',
+        border: `1px solid ${SAGE_SOFT}`,
+        borderRadius: 14,
         position: 'relative',
         overflow: 'hidden',
+        boxShadow: '0 1px 2px rgba(31,58,48,0.04)',
       }}
       onMouseOver={e => {
-        e.currentTarget.style.borderColor = `${accent}55`;
+        e.currentTarget.style.borderColor = `${accent}88`;
         e.currentTarget.style.transform = 'translateY(-2px)';
-        e.currentTarget.style.boxShadow = `0 12px 32px -8px ${accent}25`;
+        e.currentTarget.style.boxShadow = `0 8px 24px -6px ${accent}30`;
       }}
       onMouseOut={e => {
-        e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)';
+        e.currentTarget.style.borderColor = SAGE_SOFT;
         e.currentTarget.style.transform = '';
-        e.currentTarget.style.boxShadow = '';
+        e.currentTarget.style.boxShadow = '0 1px 2px rgba(31,58,48,0.04)';
       }}
     >
-      {/* Accent gradient corner */}
+      {/* Accent gradient corner — sutil */}
       <div
         aria-hidden
         style={{
           position: 'absolute',
-          top: -20,
-          right: -20,
-          width: 120,
-          height: 120,
-          background: `radial-gradient(circle, ${accent}25, transparent 70%)`,
+          top: -30,
+          right: -30,
+          width: 130,
+          height: 130,
+          background: `radial-gradient(circle, ${accent}22, transparent 65%)`,
           pointerEvents: 'none',
         }}
       />
       <h3
         style={{
           fontFamily: 'var(--font-inter, system-ui), sans-serif',
-          fontSize: 'clamp(1.05rem, 1.4vw, 1.25rem)',
+          fontSize: 'clamp(1.05rem, 1.4vw, 1.2rem)',
           fontWeight: 700,
-          color: '#fff',
+          color: SAGE_INK,
           letterSpacing: '-0.015em',
           marginBottom: 8,
           lineHeight: 1.3,
@@ -1139,7 +2318,7 @@ function BentoCard({ span, accent, title, subtitle, visual }: BentoCardProps) {
       <p
         style={{
           fontSize: 13.5,
-          color: 'rgba(255,255,255,0.6)',
+          color: TEXT_MUTED,
           lineHeight: 1.55,
         }}
       >
@@ -1214,6 +2393,7 @@ function Steps() {
     </section>
   );
 }
+
 
 // ─── 5. Prova Viva ───────────────────────────────────────────────────────────
 
