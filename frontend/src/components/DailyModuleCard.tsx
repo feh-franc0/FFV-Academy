@@ -4,18 +4,23 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { getDailyModule, type DailyModule } from '@/lib/dailyModule';
 import { useGameState } from '@/hooks/useGameState';
+import { useActiveBase } from '@/components/base/ActiveBaseContext';
 
 /**
- * Card "Módulo do Dia" — desafio compartilhado por todos os usuários.
+ * Card "Módulo do Dia" — desafio compartilhado por todos os usuários DA MESMA
+ * base. Não é cross-base: usuário em medvet não vê módulo AWS como desafio
+ * do dia (regressão reportada 2026-05-21).
+ *
  * Aparece quando o usuário NÃO já completou esse módulo hoje.
  */
 export function DailyModuleCard() {
   const [daily, setDaily] = useState<DailyModule | null>(null);
   const { state } = useGameState();
+  const { base: activeBase } = useActiveBase();
 
   useEffect(() => {
-    setDaily(getDailyModule({ onlyBeginnerOrIntermediate: true }));
-  }, []);
+    setDaily(getDailyModule({ onlyBeginnerOrIntermediate: true, baseSlug: activeBase.slug }));
+  }, [activeBase.slug]);
 
   if (!daily) return null;
 

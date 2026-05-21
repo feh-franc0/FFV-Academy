@@ -14,9 +14,10 @@
  * - Usuário com cards SRS → DailyChallenge SRS (revisa com 3x XP)
  */
 
-import { CURRICULUM, type Module } from './curriculum';
 import { STORAGE_KEYS } from './constants';
 import { getJSON, setJSON } from './storage';
+import { DEFAULT_BASE_SLUG } from './bases/registry';
+import { getAllModulesForBase, type BaseModuleSummary } from './bases/all-modules';
 
 export interface DailyModule {
   date: string;          // YYYY-MM-DD
@@ -46,37 +47,31 @@ function dateKey(d: Date = new Date()): string {
   return d.toISOString().slice(0, 10);
 }
 
-/** Lista plana de todos os módulos do currículo (para indexação). */
-function getAllModules(): Array<Module & { trailName: string; trailColor: string; trailHref?: string }> {
-  const all: Array<Module & { trailName: string; trailColor: string; trailHref?: string }> = [];
-  for (const trail of CURRICULUM) {
-    for (const mod of trail.modules) {
-      all.push({
-        ...mod,
-        trailName: trail.name,
-        trailColor: trail.color,
-        trailHref: trail.href,
-      });
-    }
-  }
-  return all;
-}
-
 /**
- * Pega o "módulo do dia". Sempre o mesmo pra todo mundo no mesmo dia.
- * Filtra módulos beginner/intermediate por padrão (módulos avançados não fazem sentido como "do dia").
+ * Pega o "módulo do dia" para a base ativa. Mesmo módulo pra todo mundo no
+ * mesmo dia DENTRO da mesma base. Antes da correção (2026-05-21), medvet
+ * via "AWS Cloud Practitioner" porque o pool era global; agora o pool vem
+ * de `getAllModulesForBase`, que sabe medvet+tech+futuras.
+ *
+ * Filtra módulos beginner/intermediate por padrão — bases sem `level`
+ * (medvet hoje) caem no pool inteiro.
+ *
+ * Retorna `null` se a base não tem módulos cadastrados (queued bases).
  */
-export function getDailyModule(opts?: { onlyBeginnerOrIntermediate?: boolean }): DailyModule | null {
-  const all = getAllModules();
-  if (all.length === 0) return null;
+export function getDailyModule(opts?: { onlyBeginnerOrIntermediate?: boolean; baseSlug?: string }): DailyModule | null {
+  const baseSlug = opts?.baseSlug ?? DEFAULT_BASE_SLUG;
+  const inBase: BaseModuleSummary[] = getAllModulesForBase(baseSlug);
+  if (inBase.length === 0) return null;
 
   const filtered = opts?.onlyBeginnerOrIntermediate
-    ? all.filter(m => m.level !== 'advanced')
-    : all;
+    ? inBase.filter(m => m.level !== 'advanced')
+    : inBase;
 
-  const pool = filtered.length > 0 ? filtered : all;
+  const pool = filtered.length > 0 ? filtered : inBase;
   const today = dateKey();
-  const idx = hashString(today) % pool.length;
+  // Hash inclui o baseSlug pra cada base ter seu próprio "módulo do dia"
+  // (não compartilhamos índice entre bases — slugs diferentes, pools diferentes).
+  const idx = hashString(`${today}:${baseSlug}`) % pool.length;
   const mod = pool[idx];
 
   const stored = getJSON<{ date: string; slug: string } | null>(STORAGE_KEYS.DAILY_MODULE, null);
@@ -88,7 +83,8 @@ export function getDailyModule(opts?: { onlyBeginnerOrIntermediate?: boolean }):
     title: mod.title,
     trailName: mod.trailName,
     trailColor: mod.trailColor,
-    trailHref: mod.trailHref,
+    // trailHref descontinuado nesta refatoração — DailyModuleCard usa
+    // /aprenda/<slug> ou /{base}/<slug> direto via mod.href quando precisar.
     xp: mod.xp,
     readTime: mod.readTime,
     bonusXp: 25, // bônus fixo por completar no dia

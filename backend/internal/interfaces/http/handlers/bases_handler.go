@@ -1,42 +1,59 @@
-// Package handlers — BasesHandler expõe a lista pública de "bases de
+// Package handlers — BasesHandler expõe o catálogo público de "bases de
 // conhecimento" da plataforma.
 //
 // Uma "base" é uma área temática completa (ex.: /tecnologia). A FFV Academy
 // gera novas bases por demanda: o estudante envia uma solicitação, e em até
 // 24h uma nova base nasce com o mesmo padrão da Tecnologia.
 //
-// Este endpoint é público (sem auth) e usado pela landing `/bases` no frontend.
-// Retorna lista estática curada + contagem dinâmica de demanda agregada das
-// study_requests (sem expor dados pessoais).
+// A partir da migration 48+ o catálogo vive em Postgres (tabela `bases`).
+// Antes, era hardcoded aqui em `buildBases()`. O hardcode fica como
+// FALLBACK quando o repo não está disponível (testes legacy ou primeira
+// inicialização antes do seed).
+//
+// Endpoints:
+//   - GET /api/v1/bases               → lista resumida (compat backward)
+//   - GET /api/v1/bases/{slug}/page   → descritor completo de página (Fase 3)
+//
+// Ambos são públicos (sem auth) e usados pelo frontend.
 package handlers
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
+
+	"github.com/go-chi/chi/v5"
+
+	dombase "github.com/fernandofv/api/internal/domain/base"
+	"github.com/fernandofv/api/internal/domain/shared"
 )
 
-// BaseAreaCounter é o port para contar quantas solicitações ativas existem
-// por área. Implementado por postgres.StudyRequestRepo.CountActiveByArea.
-//
-// Opcional: se nil, o handler retorna a lista sem demand counts (todos zero).
+// BaseAreaCounter — port para contar solicitações ativas por área (demand
+// counts). Implementado por postgres.StudyRequestRepo.CountActiveByArea.
 type BaseAreaCounter interface {
 	CountActiveByArea(ctx context.Context) (map[string]int, error)
 }
 
-// BasesHandler serve GET /api/v1/bases.
+// BasesHandler serve os endpoints públicos de bases.
 type BasesHandler struct {
 	counter BaseAreaCounter
+	repo    dombase.Repository // opcional: se nil, cai no fallback hardcoded
 }
 
-// NewBasesHandler aceita counter nil (caso queira servir só a lista estática).
+// NewBasesHandler aceita counter e repo opcionais. Quando repo == nil, a
+// listagem retorna a tabela hardcoded (preserva testes antigos).
 func NewBasesHandler(counter BaseAreaCounter) *BasesHandler {
 	return &BasesHandler{counter: counter}
 }
 
-// BaseNavItemDTO — item de nav do header por base. Frontend hidrata os
-// links da top bar (GameHUD) a partir desses itens. Cada base configura os
-// seus; o que não vier aqui não aparece no header.
+// NewBasesHandlerWithRepo é o construtor preferencial em produção.
+func NewBasesHandlerWithRepo(counter BaseAreaCounter, repo dombase.Repository) *BasesHandler {
+	return &BasesHandler{counter: counter, repo: repo}
+}
+
+// BaseNavItemDTO — item de nav do header por base.
 type BaseNavItemDTO struct {
 	Href     string `json:"href"`
 	Label    string `json:"label"`
@@ -47,8 +64,7 @@ type BaseNavItemDTO struct {
 	IsNew    bool   `json:"isNew,omitempty"`
 }
 
-// BaseThemeDTO — paleta de cores da base. Frontend usa para tematizar
-// o header, footer e o conteúdo via CSS vars (--ffv-*). Cores em hex.
+// BaseThemeDTO — paleta de cores. Cores em hex.
 type BaseThemeDTO struct {
 	Ink         string   `json:"ink"`
 	Paper       string   `json:"paper"`
@@ -61,42 +77,33 @@ type BaseThemeDTO struct {
 	HubColors   []string `json:"hubColors"`
 }
 
-// BaseDTO é o payload de uma base na resposta.
-//
-//   - Status: "live" (no ar agora), "queued" (placeholder aguardando demanda),
-//     "in_production" (sendo gerada por curadoria).
-//   - URL: preenchido apenas se status == live (ex.: "/tecnologia").
-//   - DemandCount: quantas solicitações ativas existem nessa área (anonimizado).
-//   - NavItems / Theme: config visual da base — frontend tem fallback hardcoded
-//     pra cada base; este endpoint serve como single source of truth quando
-//     bases novas forem criadas dinamicamente (sem deploy).
+// BaseDTO é o payload de uma base na resposta de /api/v1/bases (lista
+// resumida — wire format inalterado vs. v1).
 type BaseDTO struct {
-	Slug        string           `json:"slug"`
-	Name        string           `json:"name"`
-	AreaLabel   string           `json:"areaLabel"`
-	Description string           `json:"description"`
-	Icon        string           `json:"icon"`
-	Status      string           `json:"status"`
-	URL         string           `json:"url,omitempty"`
-	Modules     int              `json:"modules,omitempty"`
-	Trails      int              `json:"trails,omitempty"`
-	Hubs        int              `json:"hubs,omitempty"`
-	DemandCount int              `json:"demandCount"`
-	NavItems    []BaseNavItemDTO `json:"navItems,omitempty"`
-	Theme       *BaseThemeDTO    `json:"theme,omitempty"`
-	// HideGlobalContentNav esconde os itens GLOBAIS de conteúdo (News, /simulados
-	// de tech) no header dessa base. Útil quando a base tem seus próprios links
-	// e não faz sentido vazar pro tech.
-	HideGlobalContentNav bool `json:"hideGlobalContentNav,omitempty"`
+	Slug                 string           `json:"slug"`
+	Name                 string           `json:"name"`
+	AreaLabel            string           `json:"areaLabel"`
+	Description          string           `json:"description"`
+	Icon                 string           `json:"icon"`
+	Status               string           `json:"status"`
+	URL                  string           `json:"url,omitempty"`
+	Modules              int              `json:"modules,omitempty"`
+	Trails               int              `json:"trails,omitempty"`
+	Hubs                 int              `json:"hubs,omitempty"`
+	DemandCount          int              `json:"demandCount"`
+	NavItems             []BaseNavItemDTO `json:"navItems,omitempty"`
+	Theme                *BaseThemeDTO    `json:"theme,omitempty"`
+	HideGlobalContentNav bool             `json:"hideGlobalContentNav,omitempty"`
 }
 
-// BasesResponse é o envelope. `lastUpdated` ajuda clientes a fazer cache local.
+// BasesResponse é o envelope de /api/v1/bases.
 type BasesResponse struct {
 	Bases       []BaseDTO `json:"bases"`
 	TotalLive   int       `json:"totalLive"`
 	TotalQueued int       `json:"totalQueued"`
 }
 
+// List serve GET /api/v1/bases.
 func (h *BasesHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
@@ -106,36 +113,207 @@ func (h *BasesHandler) List(w http.ResponseWriter, r *http.Request) {
 		if c, err := h.counter.CountActiveByArea(ctx); err == nil {
 			counts = c
 		}
-		// Erro do counter não derruba o endpoint — a lista estática ainda é útil.
 	}
 
-	bases := buildBases(counts)
+	bases := h.loadList(ctx, counts)
 
 	resp := BasesResponse{Bases: bases}
 	for _, b := range bases {
 		switch b.Status {
-		case "live":
+		case dombase.StatusLive:
 			resp.TotalLive++
-		case "queued":
+		case dombase.StatusQueued:
 			resp.TotalQueued++
 		}
 	}
 
-	// Cache curto: a lista é praticamente estática + demand muda devagar.
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	WriteJSON(w, http.StatusOK, resp)
 }
 
-// buildBases retorna a lista curada de bases.
+// loadList tenta primeiro o repo; em qualquer erro cai pro hardcoded.
+func (h *BasesHandler) loadList(ctx context.Context, counts map[string]int) []BaseDTO {
+	if h.repo != nil {
+		if bases, err := h.repo.List(ctx); err == nil && len(bases) > 0 {
+			out := make([]BaseDTO, 0, len(bases))
+			for _, b := range bases {
+				out = append(out, baseToListDTO(b, counts))
+			}
+			return out
+		}
+	}
+	return buildHardcodedBases(counts)
+}
+
+func baseToListDTO(b *dombase.Base, counts map[string]int) BaseDTO {
+	d := BaseDTO{
+		Slug:                 b.Slug,
+		Name:                 b.Name,
+		AreaLabel:            b.AreaLabel,
+		Description:          b.Description,
+		Icon:                 b.Icon,
+		Status:               b.Status,
+		URL:                  b.URL,
+		Modules:              b.Modules,
+		Trails:               b.Trails,
+		Hubs:                 b.Hubs,
+		HideGlobalContentNav: b.HideGlobalContentNav,
+	}
+	if len(b.NavItems) > 0 {
+		d.NavItems = make([]BaseNavItemDTO, 0, len(b.NavItems))
+		for _, n := range b.NavItems {
+			d.NavItems = append(d.NavItems, BaseNavItemDTO{
+				Href: n.Href, Label: n.Label, Color: n.Color,
+				IconName: n.IconName, LgOnly: n.LgOnly, XlOnly: n.XlOnly, IsNew: n.IsNew,
+			})
+		}
+	}
+	if b.Theme.Ink != "" || len(b.Theme.HubColors) > 0 {
+		d.Theme = &BaseThemeDTO{
+			Ink: b.Theme.Ink, Paper: b.Theme.Paper, Cream: b.Theme.Cream,
+			Border: b.Theme.Border, Muted: b.Theme.Muted, Accent: b.Theme.Accent,
+			AccentLight: b.Theme.AccentLight, Success: b.Theme.Success,
+			HubColors: b.Theme.HubColors,
+		}
+	}
+	if counts != nil {
+		d.DemandCount = counts[b.Slug]
+	}
+	return d
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Fase 3 — GET /api/v1/bases/{slug}/page
 //
-// V1: apenas Tecnologia está "live". As demais são placeholders mostrando
-// áreas possíveis ("queued") — quanto mais solicitações chegam pra uma área,
-// mais relevante ela fica no UI (frontend ordena por DemandCount desc).
-//
-// Slugs aqui DEVEM bater com o select `studyArea` do StudyRequestForm —
-// é a chave que une demanda do form às bases no /bases.
-// Tema da Tecnologia — navy + cream + amber editorial.
-var techTheme = &BaseThemeDTO{
+// Descritor completo de página: theme + hero + paths + hubs + playlists +
+// finalCta + microcopy + features. Frontend consome via getBasePage(slug)
+// e renderiza <KnowledgeBaseHome />.
+// ─────────────────────────────────────────────────────────────────────────
+
+// BasePageDTO — descritor completo. Campos opcionais ficam vazios quando a
+// base não os preenche (frontend tem defaults internos).
+type BasePageDTO struct {
+	Slug      string            `json:"slug"`
+	Name      string            `json:"name"`
+	Status    string            `json:"status"`
+	URL       string            `json:"url,omitempty"`
+	Theme     *BaseThemeDTO     `json:"theme,omitempty"`
+	Hero      json.RawMessage   `json:"hero,omitempty"`
+	Paths     json.RawMessage   `json:"paths,omitempty"`
+	Hubs      json.RawMessage   `json:"hubs,omitempty"`
+	Playlists json.RawMessage   `json:"playlists,omitempty"`
+	FinalCta  json.RawMessage   `json:"finalCta,omitempty"`
+	Stats     map[string]int    `json:"stats"`
+	Microcopy map[string]string `json:"microcopy,omitempty"`
+	Slogans   map[string]string `json:"slogans,omitempty"`
+	Features  *dombase.Features `json:"features,omitempty"`
+	Flags     BasePageFlagsDTO  `json:"flags"`
+}
+
+// BasePageFlagsDTO — toggles de exibição da home.
+type BasePageFlagsDTO struct {
+	HideRanking          bool `json:"hideRanking"`
+	HideComunidade       bool `json:"hideComunidade"`
+	HideGlobalContentNav bool `json:"hideGlobalContentNav"`
+}
+
+// GetPage serve GET /api/v1/bases/{slug}/page.
+func (h *BasesHandler) GetPage(w http.ResponseWriter, r *http.Request) {
+	slug := chi.URLParam(r, "slug")
+	if slug == "" {
+		WriteError(w, http.StatusBadRequest, "slug obrigatório", "")
+		return
+	}
+
+	if h.repo == nil {
+		WriteError(w, http.StatusServiceUnavailable, "catálogo de bases indisponível", "")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+
+	b, err := h.repo.GetBySlug(ctx, slug)
+	if err != nil {
+		if errors.Is(err, shared.ErrNotFound) {
+			WriteError(w, http.StatusNotFound, "base não encontrada", "")
+			return
+		}
+		WriteError(w, http.StatusInternalServerError, "falha ao carregar base", "")
+		return
+	}
+
+	dto := basePageDTOFromDomain(b)
+
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	WriteJSON(w, http.StatusOK, dto)
+}
+
+func basePageDTOFromDomain(b *dombase.Base) BasePageDTO {
+	dto := BasePageDTO{
+		Slug:   b.Slug,
+		Name:   b.Name,
+		Status: b.Status,
+		URL:    b.URL,
+		Stats: map[string]int{
+			"modules": b.Modules,
+			"trails":  b.Trails,
+			"hubs":    b.Hubs,
+		},
+		Microcopy: b.Microcopy,
+		Slogans:   b.Slogans,
+		Flags: BasePageFlagsDTO{
+			HideRanking:          b.HideRanking,
+			HideComunidade:       b.HideComunidade,
+			HideGlobalContentNav: b.HideGlobalContentNav,
+		},
+	}
+	if b.Theme.Ink != "" || len(b.Theme.HubColors) > 0 {
+		dto.Theme = &BaseThemeDTO{
+			Ink: b.Theme.Ink, Paper: b.Theme.Paper, Cream: b.Theme.Cream,
+			Border: b.Theme.Border, Muted: b.Theme.Muted, Accent: b.Theme.Accent,
+			AccentLight: b.Theme.AccentLight, Success: b.Theme.Success,
+			HubColors: b.Theme.HubColors,
+		}
+	}
+	if f := b.Features; f != (dombase.Features{}) {
+		dto.Features = &f
+	}
+	// Re-marshal os blocos pra json.RawMessage e omitir os vazios.
+	if raw, err := json.Marshal(b.Hero); err == nil && !isEmptyJSON(raw) {
+		dto.Hero = raw
+	}
+	if raw, err := json.Marshal(b.Paths); err == nil && !isEmptyArray(raw) {
+		dto.Paths = raw
+	}
+	if raw, err := json.Marshal(b.HubCards); err == nil && !isEmptyArray(raw) {
+		dto.Hubs = raw
+	}
+	if raw, err := json.Marshal(b.Playlists); err == nil && !isEmptyArray(raw) {
+		dto.Playlists = raw
+	}
+	if raw, err := json.Marshal(b.FinalCta); err == nil && !isEmptyJSON(raw) {
+		dto.FinalCta = raw
+	}
+	return dto
+}
+
+func isEmptyJSON(b []byte) bool {
+	s := string(b)
+	return s == "" || s == "{}" || s == "null"
+}
+
+func isEmptyArray(b []byte) bool {
+	s := string(b)
+	return s == "" || s == "[]" || s == "null"
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// FALLBACK HARDCODED — preservado pra testes legacy e ambientes sem o seed
+// das migrations 48-49 aplicado. NÃO é mais a fonte de verdade.
+// ─────────────────────────────────────────────────────────────────────────
+
+var techThemeFallback = &BaseThemeDTO{
 	Ink:         "#1c1917",
 	Paper:       "#faf7f2",
 	Cream:       "#ffffff",
@@ -147,8 +325,7 @@ var techTheme = &BaseThemeDTO{
 	HubColors:   []string{"#1e3a8a", "#0e7490", "#15803d", "#b45309"},
 }
 
-// Tema da Medvet — sage + ivory + terracota + mel (calmante, neutro de gênero).
-var medvetTheme = &BaseThemeDTO{
+var medvetThemeFallback = &BaseThemeDTO{
 	Ink:         "#2d4a3e",
 	Paper:       "#fbf7f0",
 	Cream:       "#fdfbf6",
@@ -160,17 +337,14 @@ var medvetTheme = &BaseThemeDTO{
 	HubColors:   []string{"#8a9b7e", "#b08968", "#a07775", "#c19a78"},
 }
 
-// Nav items globais por base (mesma config que o frontend tem em
-// `lib/bases/<slug>/nav.ts`). Mantido aqui pra preparar bases dinâmicas
-// (criadas via study requests sem deploy de código).
-var techNav = []BaseNavItemDTO{
+var techNavFallback = []BaseNavItemDTO{
 	{Href: "/ia", Label: "IA", Color: "#58a6ff", IconName: "brain"},
 	{Href: "/aws", Label: "AWS", Color: "#ff9900", IconName: "cloud"},
 	{Href: "/engenharia", Label: "Engenharia", Color: "#e3b341", IconName: "wrench"},
 	{Href: "/claude-anthropic", Label: "Claude", Color: "#cc785c", IconName: "bot"},
 }
 
-func buildBases(counts map[string]int) []BaseDTO {
+func buildHardcodedBases(counts map[string]int) []BaseDTO {
 	bases := []BaseDTO{
 		{
 			Slug:        "tecnologia",
@@ -183,8 +357,8 @@ func buildBases(counts map[string]int) []BaseDTO {
 			Modules:     157,
 			Trails:      16,
 			Hubs:        8,
-			NavItems:    techNav,
-			Theme:       techTheme,
+			NavItems:    techNavFallback,
+			Theme:       techThemeFallback,
 		},
 		{
 			Slug:        "medicina-veterinaria",
@@ -200,7 +374,7 @@ func buildBases(counts map[string]int) []BaseDTO {
 			NavItems: []BaseNavItemDTO{
 				{Href: "/medicina-veterinaria/simulado-genetica", Label: "Simulado", Color: "#b08968", IconName: "target"},
 			},
-			Theme:                medvetTheme,
+			Theme:                medvetThemeFallback,
 			HideGlobalContentNav: true,
 		},
 		{Slug: "medicina", Name: "Medicina", AreaLabel: "Residência · Disciplinas básicas · Especialidades", Description: "Aguardando demanda. Pode ser a próxima base no ar.", Status: "queued", Icon: "🩺"},
@@ -213,7 +387,6 @@ func buildBases(counts map[string]int) []BaseDTO {
 		{Slug: "faculdade-geral", Name: "Faculdade em geral", AreaLabel: "Qualquer curso superior", Description: "Aguardando demanda. Pode ser a próxima base no ar.", Status: "queued", Icon: "🏛️"},
 		{Slug: "curso-livre", Name: "Curso livre / Aperfeiçoamento", AreaLabel: "Especializações · Workshops · MBAs", Description: "Aguardando demanda. Pode ser a próxima base no ar.", Status: "queued", Icon: "📈"},
 	}
-
 	if counts != nil {
 		for i := range bases {
 			if c, ok := counts[bases[i].Slug]; ok {

@@ -15,7 +15,7 @@ import { loadState } from '@/lib/engine';
  * Como funciona:
  * 1. Toda vez que `loadState()` é chamado, o engine detecta perda de streak
  *    (em `checkStreak`) e zera `state.streak`. Não temos hook ali — então
- *    o `detectStreakBreak()` deste módulo é chamado pelo HomeClient via
+ *    o `detectStreakBreak()` deste módulo é chamado pelo KnowledgeBaseHome via
  *    `useStreakRepair` 1x por sessão, comparando o snapshot persistido aqui
  *    com o `state.streak` atual.
  * 2. Quando detecta `previousStreak > 0 && currentStreak === 0` e o usuário

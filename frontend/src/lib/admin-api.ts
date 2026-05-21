@@ -141,6 +141,94 @@ export async function fetchAuditLog(params: {
   }
 }
 
+// ─── Admin Views (feed "quem acessou o quê") ───────────────────────────────
+
+export type ViewKind = 'module' | 'page' | 'simulado' | 'admin' | 'other';
+
+export interface ViewEntry {
+  id: number;
+  viewedAt: string;
+  baseSlug?: string;
+  kind: ViewKind;
+  slug?: string;
+  path?: string;
+  hubId?: string;
+  trailId?: string;
+  userId?: string;
+  userEmail?: string;
+  userDisplayName?: string;
+  anonId?: string;
+  sessionId?: string;
+  displayLabel: string;
+}
+
+export interface ListViewsResponse {
+  views: ViewEntry[];
+  count: number;
+}
+
+export async function fetchAdminViews(params: {
+  base?: string;
+  kind?: ViewKind;
+  user?: string;
+  slug?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+} = {}): Promise<ListViewsResponse | null> {
+  const q = new URLSearchParams();
+  if (params.base) q.set('base', params.base);
+  if (params.kind) q.set('kind', params.kind);
+  if (params.user) q.set('user', params.user);
+  if (params.slug) q.set('slug', params.slug);
+  if (params.since) q.set('since', params.since);
+  if (params.until) q.set('until', params.until);
+  q.set('limit', String(params.limit ?? 50));
+  try {
+    return await apiFetch(`/api/v1/admin/views?${q.toString()}`, {}, true);
+  } catch {
+    return null;
+  }
+}
+
+// ─── Admin Metrics Overview (KPIs por base) ────────────────────────────────
+
+export interface BaseMetrics {
+  baseSlug: string;
+  viewsTotal: number;
+  viewsLogged: number;
+  viewsAnon: number;
+  uniqueUsers: number;
+  uniqueVisitors: number;
+  uniqueSessions: number;
+  topModule?: string;
+  topModuleViews?: number;
+}
+
+export interface KindCount {
+  kind: string;
+  count: number;
+}
+
+export interface MetricsOverview {
+  since: string;
+  until: string;
+  viewsTotal: number;
+  viewsLogged: number;
+  viewsAnon: number;
+  byBase: BaseMetrics[];
+  byKind: KindCount[];
+  generatedAt: string;
+}
+
+export async function fetchAdminMetricsOverview(days = 7): Promise<MetricsOverview | null> {
+  try {
+    return await apiFetch(`/api/v1/admin/metrics/overview?days=${days}`, {}, true);
+  } catch {
+    return null;
+  }
+}
+
 // ─── Study Requests (solicitações de experiência personalizada) ────────────
 
 export type StudyRequestStatus =

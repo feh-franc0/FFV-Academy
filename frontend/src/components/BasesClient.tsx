@@ -16,6 +16,8 @@ import { fetchBases, type KnowledgeBase, type BasesResponse } from '@/lib/bases-
 import { useUserPreferences } from '@/hooks/useUserPreferences';
 import { rankItemsSimple } from '@/lib/personalization/rank';
 import { loadEngagement } from '@/lib/personalization/engagement-store';
+import { TiltCard } from '@/components/ui/motion';
+import { useReveal } from '@/lib/use-reveal';
 
 const SERIF: React.CSSProperties = { fontFamily: 'var(--font-serif)' };
 
@@ -54,6 +56,12 @@ export function BasesClient() {
   // grupo "live". Sem prefs, o ordenamento default (live + demandCount +
   // alfabética) prevalece.
   const { prefs, hydrated } = useUserPreferences();
+
+  // Refs de scroll-reveal — declarados no topo pra obedecer rules-of-hooks
+  // (não podem ser chamados dentro de condicionais).
+  const heroRef = useReveal<HTMLHeadingElement>();
+  const listRef = useReveal<HTMLUListElement>();
+  const ctaRef = useReveal<HTMLHeadingElement>();
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -122,14 +130,16 @@ export function BasesClient() {
 
   return (
     <div style={{ background: 'var(--ffv-paper)', color: 'var(--ffv-ink)' }}>
-      {/* Hero */}
+      {/* Hero — aurora + noise + particles + headline cinematográfico.
+          Mesmo pattern de motion da landing e /sobre. */}
       <section
-        className="px-6 lg:px-10 relative overflow-hidden"
+        className="px-6 lg:px-10 relative overflow-hidden ffv-aurora ffv-noise"
         style={{
           paddingTop: 'clamp(120px, 14vw, 168px)',
           paddingBottom: 'clamp(48px, 6vw, 72px)',
         }}
       >
+        <div className="ffv-particles" aria-hidden />
         <div
           aria-hidden
           className="absolute inset-0 pointer-events-none"
@@ -139,27 +149,32 @@ export function BasesClient() {
           }}
         />
         <div className="relative max-w-5xl mx-auto">
+          {/* Kicker com pulse-dot ao invés de line estática */}
           <div className="flex items-center gap-3 mb-6">
             <span
-              style={{
-                height: 1,
-                width: 32,
-                background: 'var(--ffv-amber)',
-                display: 'inline-block',
-              }}
+              className="ffv-pulse-dot"
+              style={{ background: 'var(--ffv-amber)', width: 8, height: 8 }}
+              aria-hidden
             />
             <span style={KICKER}>Áreas de conhecimento · Geradas por demanda</span>
           </div>
 
+          {/* Headline com word-by-word reveal + highlight sweep em "no ar" */}
           <h1
+            ref={heroRef}
+            data-reveal
+            data-reveal-words
             style={{
               ...H_SECTION,
               fontSize: 'clamp(2.2rem, 4.6vw, 3.8rem)',
               marginBottom: 22,
             }}
           >
-            Bases de conhecimento{' '}
-            <em
+            <span className="ffv-word-reveal">Bases</span>{' '}
+            <span className="ffv-word-reveal">de</span>{' '}
+            <span className="ffv-word-reveal">conhecimento</span>{' '}
+            <span
+              className="ffv-word-reveal ffv-highlight"
               style={{
                 fontStyle: 'italic',
                 color: 'var(--ffv-amber)',
@@ -167,8 +182,10 @@ export function BasesClient() {
               }}
             >
               no ar
-            </em>{' '}
-            e em fila.
+            </span>{' '}
+            <span className="ffv-word-reveal">e</span>{' '}
+            <span className="ffv-word-reveal">em</span>{' '}
+            <span className="ffv-word-reveal">fila.</span>
           </h1>
 
           <p style={{ ...LEAD, fontSize: '1.1rem', maxWidth: 680, marginBottom: 36 }}>
@@ -244,7 +261,16 @@ export function BasesClient() {
           )}
 
           {resp && filteredBases.length > 0 && (
-            <ul className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
+            // Stagger cinema nos cards de base — entram um por vez (220ms)
+            // com slide + scale + spring. Cada BaseCard ganha ffv-cinema-item
+            // internamente. Total ~1.5s pra revelar 7+ cards.
+            <ul
+              ref={listRef}
+              data-reveal
+              data-reveal-stagger-cinema
+              className="grid gap-4"
+              style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}
+            >
               {filteredBases.map(b => (
                 <BaseCard key={b.slug} base={b} />
               ))}
@@ -253,9 +279,9 @@ export function BasesClient() {
         </div>
       </section>
 
-      {/* CTA final */}
+      {/* CTA final — aurora discreta + headline word-by-word + shimmer no CTA */}
       <section
-        className="px-6 lg:px-10"
+        className="px-6 lg:px-10 ffv-aurora"
         style={{
           background: 'var(--ffv-ink)',
           color: '#faf7f2',
@@ -264,8 +290,18 @@ export function BasesClient() {
         }}
       >
         <div className="max-w-3xl mx-auto text-center">
-          <p style={{ ...KICKER, color: '#fbbf24' }}>Sua área não está aqui?</p>
+          <p style={{ ...KICKER, color: '#fbbf24' }}>
+            <span
+              className="ffv-pulse-dot mr-2"
+              style={{ background: '#fbbf24', width: 7, height: 7 }}
+              aria-hidden
+            />
+            Sua área não está aqui?
+          </p>
           <h2
+            ref={ctaRef}
+            data-reveal
+            data-reveal-words
             style={{
               ...H_SECTION,
               color: '#faf7f2',
@@ -274,8 +310,16 @@ export function BasesClient() {
               marginBottom: 18,
             }}
           >
-            Não temos catálogo fechado.{' '}
-            <em style={{ fontStyle: 'italic', color: '#fbbf24' }}>Sua área pode ser a próxima.</em>
+            <span className="ffv-word-reveal">Não</span>{' '}
+            <span className="ffv-word-reveal">temos</span>{' '}
+            <span className="ffv-word-reveal">catálogo</span>{' '}
+            <span className="ffv-word-reveal">fechado.</span>{' '}
+            <span
+              className="ffv-word-reveal ffv-highlight"
+              style={{ fontStyle: 'italic', color: '#fbbf24' }}
+            >
+              Sua área pode ser a próxima.
+            </span>
           </h2>
           <p style={{ fontFamily: 'var(--font-inter)', fontSize: '1.05rem', color: '#d6d3d1', maxWidth: 520, margin: '0 auto 32px', lineHeight: 1.65 }}>
             Solicite a sua. Em até 24 horas a sua jornada está no ar — com a mesma estrutura,
@@ -283,7 +327,8 @@ export function BasesClient() {
           </p>
           <Link
             href="/#solicitar-base"
-            className="inline-flex items-center gap-2 px-8 py-4 text-sm font-semibold transition-all"
+            // Shimmer sweep — luz diagonal a cada 4s no CTA amarelo.
+            className="inline-flex items-center gap-2 px-8 py-4 text-sm font-semibold transition-all ffv-shimmer"
             style={{
               background: '#fbbf24',
               color: 'var(--ffv-ink)',
@@ -293,8 +338,10 @@ export function BasesClient() {
             onMouseOver={e => (e.currentTarget.style.transform = 'translateY(-1px)')}
             onMouseOut={e => (e.currentTarget.style.transform = '')}
           >
-            Solicitar minha base agora
-            <span aria-hidden style={{ fontSize: 12 }}>→</span>
+            <span style={{ position: 'relative', zIndex: 2 }}>
+              Solicitar minha base agora
+              <span aria-hidden style={{ fontSize: 12, marginLeft: 8 }}>→</span>
+            </span>
           </Link>
         </div>
       </section>
@@ -349,14 +396,21 @@ function BaseCard({ base }: { base: KnowledgeBase }) {
       ? 'var(--ffv-amber)'
       : '#a8a29e';
 
+  // Card ganha tilt 3D no hover (desktop) + ffv-cinema-item pra entrar em
+  // cascata dentro do <ul data-reveal-stagger-cinema>.
   return (
-    <li
-      className="flex flex-col p-6 transition-all"
+    <TiltCard
+      as="article"
+      maxTilt={4}
+      scale={1.015}
+      className="flex flex-col p-6 transition-all ffv-cinema-item"
       style={{
         background: '#ffffff',
         borderRadius: 12,
         border: '1px solid var(--ffv-border)',
         boxShadow: isLive ? 'var(--ffv-shadow-soft)' : 'none',
+        display: 'list-item',          // mantém o item em <ul>
+        listStyle: 'none',
       }}
     >
       <div className="flex items-start justify-between mb-4">
@@ -462,7 +516,7 @@ function BaseCard({ base }: { base: KnowledgeBase }) {
           <span aria-hidden style={{ fontSize: 11 }}>→</span>
         </Link>
       )}
-    </li>
+    </TiltCard>
   );
 }
 

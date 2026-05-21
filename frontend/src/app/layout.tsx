@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next';
+import { Suspense } from 'react';
 import { Inter, Poppins, Roboto_Mono, Source_Serif_4 } from 'next/font/google';
 import './globals.css';
 import { WebVitalsInit } from '@/components/WebVitalsInit';
@@ -10,6 +11,7 @@ import { PWARegister } from '@/components/PWARegister';
 import { AuthProvider } from '@/components/auth/AuthProvider';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { RootStructuredData } from '@/components/seo/StructuredData';
+import { PageTracker } from '@/components/PageTracker';
 
 // Inter — corpo do texto (máxima legibilidade)
 const inter = Inter({
@@ -230,6 +232,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <AuthProvider>
             <TooltipProvider>
               <WebVitalsInit />
+              {/* PageTracker — registra cada navegação no backend pra admin
+                  ver quem acessou o quê. Identidade via X-FFV-* headers
+                  (lib/tracking.ts). Dedupe por sessão. */}
+              <Suspense fallback={null}>
+                <PageTracker />
+              </Suspense>
               <AppChrome>{children}</AppChrome>
               <Toaster
                 position="top-center"

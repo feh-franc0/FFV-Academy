@@ -10,6 +10,7 @@ import {
 } from '@/lib/bases/medvet/adapters';
 import { KnowledgeBaseHome } from '@/components/base/KnowledgeBaseHome';
 import { BaseStructuredData } from '@/components/seo/StructuredData';
+import { fetchBasePage } from '@/lib/bases-api';
 
 export const metadata: Metadata = {
   title: 'Medicina Veterinária — Genética Animal · 12 módulos gratuitos',
@@ -42,7 +43,14 @@ export const metadata: Metadata = {
 const firstModule = MEDVET_BASE.trails[0]?.modules[0];
 const firstModuleHref = firstModule ? `/medicina-veterinaria/${firstModule.slug}` : '/medicina-veterinaria';
 
-export default function MedicinaVeterinariaPage() {
+// Como /tecnologia: tenta GET /api/v1/bases/medicina-veterinaria/page para
+// puxar tema/flags do banco; cai no MEDVET_THEME estático se falhar.
+// Ver UNIFICATION_PLAN.md.
+export default async function MedicinaVeterinariaPage() {
+  const dto = await fetchBasePage('medicina-veterinaria');
+  const theme = dto?.theme
+    ? { ...MEDVET_THEME, ...dto.theme, hubColors: dto.theme.hubColors as [string, string, string, string] }
+    : MEDVET_THEME;
   return (
     <>
       <BaseStructuredData
@@ -55,7 +63,7 @@ export default function MedicinaVeterinariaPage() {
         teaches="Genética Veterinária · Leis de Mendel · Hardy-Weinberg · Melhoramento Animal"
       />
       <KnowledgeBaseHome
-      theme={MEDVET_THEME}
+      theme={theme}
       hero={{
         kicker: 'Medicina Veterinária · Base de conhecimento',
         badgeText: 'BASE DE MEDICINA VETERINÁRIA · NO AR',

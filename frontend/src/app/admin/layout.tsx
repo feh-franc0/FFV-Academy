@@ -14,6 +14,8 @@ import { useCallback } from 'react';
 
 const NAV = [
   { href: '/admin', label: 'Dashboard' },
+  { href: '/admin/bases', label: 'Bases' },
+  { href: '/admin/views', label: 'Acessos' },
   { href: '/admin/study-requests', label: 'Solicitações' },
   { href: '/admin/users', label: 'Usuários' },
   { href: '/admin/questions', label: 'Questões CLF' },

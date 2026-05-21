@@ -17,6 +17,7 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { StudyRequestForm } from '@/components/home/StudyRequestForm';
 import { HomeBaseRedirect } from '@/components/HomeBaseRedirect';
+import { TiltCard, Spotlight } from '@/components/ui/motion';
 
 // ─── Design tokens locais ────────────────────────────────────────────────────
 
@@ -53,8 +54,8 @@ const LEAD: React.CSSProperties = {
 
 // ─── Hook util: scroll-triggered reveal ──────────────────────────────────────
 
-function useReveal() {
-  const ref = useRef<HTMLElement | null>(null);
+function useReveal<T extends HTMLElement = HTMLElement>() {
+  const ref = useRef<T | null>(null);
   useEffect(() => {
     if (!ref.current) return;
     const el = ref.current;
@@ -155,7 +156,7 @@ const TERRACOTA = '#b8835a';
 function Hero() {
   return (
     <section
-      className="relative px-6 lg:px-10 overflow-hidden"
+      className="relative px-6 lg:px-10 overflow-hidden ffv-aurora ffv-noise"
       style={{
         background: PAPER,
         color: SAGE_INK,
@@ -163,6 +164,8 @@ function Hero() {
         paddingBottom: 'clamp(64px, 9vw, 96px)',
       }}
     >
+      {/* Partículas decorativas no fundo — pontos coloridos que pairam */}
+      <div className="ffv-particles" aria-hidden />
       {/* Gradient mesh sage orgânico (light) */}
       <div
         aria-hidden
@@ -241,7 +244,14 @@ function Hero() {
           }}
         >
           IA que vira seus PDFs em{' '}
-          <span style={{ color: SAGE_ACCENT, fontStyle: 'italic', fontWeight: 600 }}>
+          {/* Highlight sweep — underline amarelo cresce 0→100% quando entra
+              em viewport (efeito Linear / Stripe). */}
+          <span
+            className="ffv-highlight"
+            data-reveal
+            ref={useReveal<HTMLSpanElement>()}
+            style={{ color: SAGE_ACCENT, fontStyle: 'italic', fontWeight: 600 }}
+          >
             uma escola completa
           </span>
           {' '}em 24h.
@@ -272,7 +282,8 @@ function Hero() {
         <div className="flex flex-col sm:flex-row gap-3 justify-center mb-10">
           <a
             href="#solicitar-base"
-            className="inline-flex items-center justify-center gap-2"
+            // ffv-shimmer: sweep diagonal sutil a cada 4s — chama atenção sem ser brega
+            className="inline-flex items-center justify-center gap-2 ffv-shimmer"
             style={{
               padding: '14px 28px',
               background: SAGE_INK,
@@ -296,8 +307,10 @@ function Hero() {
               e.currentTarget.style.background = SAGE_INK;
             }}
           >
-            Criar minha jornada
-            <span aria-hidden style={{ fontSize: 13 }}>→</span>
+            <span style={{ position: 'relative', zIndex: 2, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              Criar minha jornada
+              <span aria-hidden style={{ fontSize: 13 }}>→</span>
+            </span>
           </a>
           <Link
             href="/bases"
@@ -467,10 +480,18 @@ function FlowStrip() {
     { i: '⚡', l: 'A FFV transforma', d: 'IA + curadoria humana em 24h' },
     { i: '✉️', l: 'Email com link', d: 'Portal completo, personalizado' },
   ];
+  // 3 pills entram em cascata cinematográfica (220ms cada). Conta a narrativa
+  // do fluxo: envia → transforma → recebe.
+  const ref = useReveal<HTMLDivElement>();
   return (
-    <div className="flex flex-wrap items-center justify-center gap-3 mb-9">
+    <div
+      ref={ref}
+      data-reveal
+      data-reveal-stagger-cinema
+      className="flex flex-wrap items-center justify-center gap-3 mb-9"
+    >
       {steps.map((s, i) => (
-        <div key={s.l} className="flex items-center gap-3">
+        <div key={s.l} className="flex items-center gap-3 ffv-cinema-item">
           <div
             className="flex items-center gap-3 px-4 py-3 rounded-xl"
             style={{
@@ -1552,10 +1573,18 @@ function AntesDepois() {
           </p>
         </div>
 
-        <div className="grid md:grid-cols-2 gap-6 max-w-5xl mx-auto">
-          {/* ANTES */}
-          <article
-            className="p-7 lg:p-8 rounded-2xl"
+        <div
+          className="grid md:grid-cols-2 gap-6 max-w-5xl mx-auto"
+          data-reveal
+          data-reveal-stagger
+          ref={useReveal<HTMLDivElement>()}
+        >
+          {/* ANTES — tilt 3D suave (4°) + stagger entrance */}
+          <TiltCard
+            as="article"
+            maxTilt={4}
+            scale={1.01}
+            className="p-7 lg:p-8 rounded-2xl ffv-stagger-item"
             style={{
               background: '#ffffff',
               border: `1px solid ${SAGE_SOFT}`,
@@ -1590,11 +1619,15 @@ function AntesDepois() {
                 </li>
               ))}
             </ul>
-          </article>
+          </TiltCard>
 
-          {/* DEPOIS */}
-          <article
-            className="p-7 lg:p-8 rounded-2xl"
+          {/* DEPOIS — entra 80ms depois do ANTES + tilt 3D no hover (WOW factor).
+              Em mobile/touch o tilt vira no-op automaticamente. */}
+          <TiltCard
+            as="article"
+            maxTilt={5}
+            scale={1.015}
+            className="p-7 lg:p-8 rounded-2xl ffv-stagger-item"
             style={{
               background: 'linear-gradient(180deg, #ffffff 0%, #f8f4ea 100%)',
               border: `2px solid ${SAGE_ACCENT}40`,
@@ -1631,7 +1664,7 @@ function AntesDepois() {
                 </li>
               ))}
             </ul>
-          </article>
+          </TiltCard>
         </div>
       </div>
     </section>
@@ -1779,16 +1812,22 @@ function ChatGPTBattle() {
           ))}
         </div>
 
-        {/* 3 punchlines diretas nomeando cada concorrente — desarmam dúvida na hora. */}
-        <div className="grid md:grid-cols-3 gap-5 mt-10">
+        {/* 3 punchlines diretas nomeando cada concorrente — desarmam dúvida na hora.
+            Stagger reveal: cards entram em cascata (80ms cada) quando a section
+            entra na viewport — aprofunda a percepção de "vivo" sem distrair. */}
+        <div className="grid md:grid-cols-3 gap-5 mt-10" data-reveal data-reveal-stagger ref={useReveal<HTMLDivElement>()}>
           {[
             { rival: 'NotebookLM', eles: 'te dá um resumo do PDF.', nos: 'te dá uma escola.' },
             { rival: 'ChatGPT', eles: 'te responde uma vez.', nos: 'te treina toda semana.' },
             { rival: 'Anki', eles: 'te memoriza um card.', nos: 'te ensina antes.' },
           ].map(p => (
-            <article
+            // Spotlight — uma luz radial âmbar acompanha o cursor nesses cards.
+            // Visualmente impactante mas ZERO ruído sem hover.
+            <Spotlight
               key={p.rival}
-              className="p-5 rounded-xl"
+              as="article"
+              color="var(--ffv-amber, #fbbf24)"
+              className="p-5 rounded-xl ffv-stagger-item ffv-hover-lift"
               style={{
                 background: '#ffffff',
                 border: '1px solid var(--ffv-border)',
@@ -1810,7 +1849,7 @@ function ChatGPTBattle() {
               >
                 A FFV {p.nos}
               </p>
-            </article>
+            </Spotlight>
           ))}
         </div>
       </div>
@@ -1877,9 +1916,15 @@ function PadraoFFV() {
           </p>
         </div>
 
-        {/* Bento Grid: 4 colunas em desktop, asymmetric */}
+        {/* Bento Grid: 4 colunas em desktop, asymmetric.
+            Stagger cinema: cards aparecem 1 por vez (220ms entre cada),
+            com fade + slide-up + scale 0.92→1 + spring easing.
+            Total ~1.3s pro 6º card aparecer — efeito wow, intencional. */}
         <div
           className="grid gap-4"
+          data-reveal
+          data-reveal-stagger-cinema
+          ref={useReveal<HTMLDivElement>()}
           style={{
             gridTemplateColumns: 'repeat(12, minmax(0, 1fr))',
             gridAutoRows: 'minmax(200px, auto)',
@@ -1887,6 +1932,7 @@ function PadraoFFV() {
         >
           {/* Card 1: Trilhas ordenadas — span 7 cols */}
           <BentoCard
+            className="ffv-cinema-item"
             span="md:col-span-7"
             accent={SAGE_ACCENT}
             title="Trilhas ordenadas"
@@ -1959,6 +2005,7 @@ function PadraoFFV() {
 
           {/* Card 2: Revisão espaçada (SRS) — span 5 cols */}
           <BentoCard
+            className="ffv-cinema-item"
             span="md:col-span-5"
             accent={SAGE_ACCENT}
             title="Revisão espaçada"
@@ -2032,6 +2079,7 @@ function PadraoFFV() {
 
           {/* Card 3: Exercícios integrados — span 4 cols */}
           <BentoCard
+            className="ffv-cinema-item"
             span="md:col-span-4"
             accent={TERRACOTA}
             title="Exercícios integrados"
@@ -2098,6 +2146,7 @@ function PadraoFFV() {
 
           {/* Card 4: Gamificação — span 5 cols */}
           <BentoCard
+            className="ffv-cinema-item"
             span="md:col-span-5"
             accent={SAGE_ACCENT}
             title="Gamificação inteligente"
@@ -2175,6 +2224,7 @@ function PadraoFFV() {
 
           {/* Card 5: Curadoria humana — span 3 cols */}
           <BentoCard
+            className="ffv-cinema-item"
             span="md:col-span-3"
             accent={TERRACOTA}
             title="Curadoria humana"
@@ -2226,6 +2276,7 @@ function PadraoFFV() {
 
           {/* Card 6: PT-BR mobile-first — span 9 cols (full) */}
           <BentoCard
+            className="ffv-cinema-item"
             span="md:col-span-9"
             accent={TERRACOTA}
             title="PT-BR nativo · qualquer dispositivo · zero cadastro pra começar"
@@ -2266,12 +2317,14 @@ interface BentoCardProps {
   title: string;
   subtitle: string;
   visual?: React.ReactNode;
+  /** Permite o pai aplicar classes extras (ex.: ffv-stagger-cinema-item). */
+  className?: string;
 }
 
-function BentoCard({ span, accent, title, subtitle, visual }: BentoCardProps) {
+function BentoCard({ span, accent, title, subtitle, visual, className }: BentoCardProps) {
   return (
     <article
-      className={`col-span-12 ${span} p-6 lg:p-7 transition-all`}
+      className={`col-span-12 ${span} p-6 lg:p-7 transition-all ${className ?? ''}`}
       style={{
         background: '#ffffff',
         border: `1px solid ${SAGE_SOFT}`,
@@ -2334,11 +2387,14 @@ function BentoCard({ span, accent, title, subtitle, visual }: BentoCardProps) {
 // ─── 4. Steps (3 passos compactos) ───────────────────────────────────────────
 
 function Steps() {
-  const ref = useReveal();
+  // Section ganha stagger automático — cards "Em 3 passos" entram em cascata
+  // (80ms cada) quando a section entra na viewport. Sub-300ms de delay total.
+  const ref = useReveal<HTMLElement>();
   return (
     <section
       ref={ref}
       data-reveal
+      data-reveal-stagger
       className="px-6 lg:px-10"
       style={{ ...SECTION, borderTop: '1px solid var(--ffv-border)', background: '#fdfbf6' }}
     >
@@ -2367,7 +2423,7 @@ function Steps() {
             { n: '2', t: 'Envia seus materiais',      d: 'PDFs, slides, anotações. Opcional, mas potente.' },
             { n: '3', t: 'Recebe em 24h',             d: 'IA + curadoria entregam a jornada. Você começa a estudar.' },
           ].map(s => (
-            <div key={s.n}>
+            <div key={s.n} className="ffv-stagger-item">
               <div className="flex items-center gap-3 mb-4">
                 <span
                   style={{
@@ -2430,7 +2486,13 @@ function ProvaViva() {
             A sua nasce com a mesma profundidade.
           </p>
 
-          <div className="grid grid-cols-3 gap-6 mb-8">
+          {/* Stats com stagger cinema — 3 números entram em sequência. */}
+          <div
+            ref={useReveal<HTMLDivElement>()}
+            data-reveal
+            data-reveal-stagger-cinema
+            className="grid grid-cols-3 gap-6 mb-8"
+          >
             <Stat n="157" l="conteúdos" />
             <Stat n="16"  l="trilhas" />
             <Stat n="24h" l="entrega" />
@@ -2529,7 +2591,7 @@ function ProvaViva() {
 
 function Stat({ n, l }: { n: string; l: string }) {
   return (
-    <div>
+    <div className="ffv-cinema-item">
       <p
         style={{
           ...SERIF,
@@ -2611,7 +2673,14 @@ function Faq() {
           Antes de você perguntar.
         </h2>
 
-        <div style={{ borderTop: '1px solid var(--ffv-border)' }}>
+        {/* Stagger reveal nas 8 perguntas — entram com 80ms de cascata,
+            menos dramático que cinema porque são muitas (8). */}
+        <div
+          ref={useReveal<HTMLDivElement>()}
+          data-reveal
+          data-reveal-stagger
+          style={{ borderTop: '1px solid var(--ffv-border)' }}
+        >
           {FAQ_ITEMS.map((item, i) => (
             <FaqRow key={i} q={item.q} a={item.a} />
           ))}
@@ -2624,7 +2693,7 @@ function Faq() {
 function FaqRow({ q, a }: { q: string; a: string }) {
   const [open, setOpen] = useState(false);
   return (
-    <div style={{ borderBottom: '1px solid var(--ffv-border)' }}>
+    <div className="ffv-stagger-item" style={{ borderBottom: '1px solid var(--ffv-border)' }}>
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
@@ -2659,11 +2728,30 @@ function FaqRow({ q, a }: { q: string; a: string }) {
           +
         </span>
       </button>
-      {open && (
-        <p className="text-sm pb-6 pr-10" style={{ color: '#57534e', lineHeight: 1.65 }}>
-          {a}
-        </p>
-      )}
+      {/* Resposta com slide-down animado em vez de aparecer instantâneo.
+          Wrapper grid + grid-template-rows é o truque pra animar height. */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateRows: open ? '1fr' : '0fr',
+          transition: 'grid-template-rows 320ms cubic-bezier(0.25, 1, 0.5, 1)',
+        }}
+      >
+        <div style={{ overflow: 'hidden' }}>
+          <p
+            className="text-sm pb-6 pr-10"
+            style={{
+              color: '#57534e',
+              lineHeight: 1.65,
+              opacity: open ? 1 : 0,
+              transform: open ? 'translateY(0)' : 'translateY(-4px)',
+              transition: 'opacity 280ms ease 80ms, transform 280ms ease 80ms',
+            }}
+          >
+            {a}
+          </p>
+        </div>
+      </div>
     </div>
   );
 }

@@ -16,8 +16,14 @@ import { unlockAudio } from '@/lib/sounds';
 import { toast } from '@/lib/toast';
 import { useBaseNav, type BaseNavItem } from '@/components/base/BaseNavContext';
 import { useActiveBase } from '@/components/base/ActiveBaseContext';
+import { DEFAULT_BASE_SLUG } from '@/lib/bases/registry';
 import { BaseSwitcher } from '@/components/base/BaseSwitcher';
-import { selectDueCardsForBase, getBaseReviewCountToday, selectBookmarksForBase } from '@/lib/bases/state-selectors';
+import {
+  getBaseXPTotal,
+  selectDueCardsForBase,
+  getBaseReviewCountToday,
+  selectBookmarksForBase,
+} from '@/lib/bases/state-selectors';
 import type { ComponentType, SVGProps } from 'react';
 
 type LucideIcon = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
@@ -276,10 +282,31 @@ function HUDStats({
   state: NonNullable<ReturnType<typeof useGameState>['state']>;
   levelInfo: ReturnType<typeof useGameState>['levelInfo'];
 }) {
+  const { base: activeBase } = useActiveBase();
   const nextLevel = LEVELS.find(l => l.level === state.level + 1);
   const xpInLevel = state.xp - (levelInfo?.xpMin ?? 0);
   const xpNeeded = (nextLevel?.xpMin ?? 9999) - (levelInfo?.xpMin ?? 0);
   const levelPct = Math.min(100, Math.round((xpInLevel / xpNeeded) * 100));
+
+  // ─── XP relativo à base ativa ────────────────────────────────────────
+  // - Conta lifetime de XP ganho NESTA base via bumpBaseXPEarned (chamado
+  //   por useGameState.markComplete quando o módulo tem base).
+  // - Fallback pra tech: usuários antes de 2026-05-21 acumularam tudo em
+  //   tech sem o counter; nesse caso usa state.xp pra não exibir "0 nesta
+  //   base" pra quem já tem progresso histórico. Outras bases começam do
+  //   zero (correto — não havia atividade lá antes).
+  const [xpInBase, setXpInBase] = useState<number>(() => {
+    const raw = getBaseXPTotal(activeBase.slug);
+    if (raw > 0) return raw;
+    return activeBase.slug === DEFAULT_BASE_SLUG ? state.xp : 0;
+  });
+  // Refaz a leitura toda vez que XP global muda OU a base muda — assim o
+  // chip atualiza junto com o bump de XP global após markComplete.
+  useEffect(() => {
+    const raw = getBaseXPTotal(activeBase.slug);
+    const next = raw > 0 ? raw : activeBase.slug === DEFAULT_BASE_SLUG ? state.xp : 0;
+    setXpInBase(next);
+  }, [state.xp, activeBase.slug]);
 
   // Animate XP number when it changes
   const prevXp = useRef(state.xp);
@@ -298,7 +325,7 @@ function HUDStats({
       {/* Mobile-only: ícone compacto de nível linkando pra /progresso */}
       <Link
         href="/progresso"
-        aria-label={`Nível ${state.level} — ${state.xp} XP`}
+        aria-label={`Nível ${state.level} — ${state.xp} XP totais · ${xpInBase} XP em ${activeBase.name}`}
         className="sm:hidden flex items-center justify-center"
         style={{
           width: 32,
@@ -360,19 +387,24 @@ function HUDStats({
         );
       })()}
 
-      {/* Level + XP bar — sm+ apenas (mobile usa o link compacto acima) */}
+      {/* Level + XP bar — sm+ apenas (mobile usa o link compacto acima).
+          Mostra DOIS números:
+          - linha 1: "{state.xp} XP" → XP global (cross-base, identidade do usuário)
+          - linha 2: "{xpInBase} · {baseName}" → XP cumulado NESTA base
+          Mantém os dois mostra claramente que XP é compartilhado entre bases
+          mas a contribuição por base é rastreada (decisão de produto 2026-05-21). */}
       <Tooltip>
         <TooltipTrigger>
           <div className="hidden sm:flex items-center gap-2 cursor-default">
             <span className="text-sm">{levelInfo?.icon ?? '🌱'}</span>
-            <div className="flex flex-col justify-center" style={{ width: 72 }}>
+            <div className="flex flex-col justify-center" style={{ width: 92 }}>
               <Progress
                 value={levelPct}
                 className="h-1.5"
                 style={{ transition: 'all 0.6s cubic-bezier(0.4,0,0.2,1)' }}
               />
               <span
-                className="text-xs mt-0.5 tabular-nums"
+                className="text-xs mt-0.5 tabular-nums leading-tight"
                 style={{
                   color: xpBump ? levelInfo?.color ?? 'var(--ffv-green)' : 'var(--ffv-muted)',
                   fontWeight: xpBump ? 700 : undefined,
@@ -380,6 +412,19 @@ function HUDStats({
                 }}
               >
                 {state.xp} XP
+              </span>
+              <span
+                className="text-[10px] tabular-nums leading-tight"
+                style={{ color: 'var(--ffv-muted)', opacity: 0.85 }}
+              >
+                <span aria-hidden>·</span>{' '}
+                <span
+                  style={{ color: 'var(--ffv-blue)', fontWeight: 600 }}
+                  aria-label={`${xpInBase} XP nesta base de ${activeBase.name}`}
+                >
+                  {xpInBase}
+                </span>{' '}
+                nesta base
               </span>
             </div>
             <span className="text-xs font-semibold" style={{ color: levelInfo?.color }}>
@@ -390,6 +435,14 @@ function HUDStats({
         <TooltipContent side="bottom">
           <p className="font-semibold">{levelInfo?.name}</p>
           <p className="text-xs opacity-70">{xpInLevel}/{xpNeeded} XP para o próximo nível</p>
+          <p className="text-xs mt-1.5">
+            <span className="font-semibold">{state.xp} XP global</span>
+            <span className="opacity-70"> · soma de todas as bases</span>
+          </p>
+          <p className="text-xs">
+            <span className="font-semibold" style={{ color: 'var(--ffv-blue)' }}>{xpInBase} XP</span>
+            <span className="opacity-70"> em {activeBase.name}</span>
+          </p>
         </TooltipContent>
       </Tooltip>
 

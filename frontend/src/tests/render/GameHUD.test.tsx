@@ -159,6 +159,15 @@ describe('<GameHUD> com state preenchido', () => {
     expect(await screen.findByText(/🎯 1\/3/)).toBeInTheDocument();
   });
 
+  it('mostra XP global + chip "X nesta base" — dois indicadores distintos', async () => {
+    // 2026-05-21: HUD passa a exibir XP global (cross-base, identidade) E
+    // XP por base ativa (counter por slug). Sem bump explícito, base default
+    // (tecnologia) cai em state.xp como fallback de retrocompat.
+    renderGameHUD();
+    expect(await screen.findByText(/750 XP/)).toBeInTheDocument();
+    expect(await screen.findByText(/nesta base/i)).toBeInTheDocument();
+  });
+
   it('mostra nível e XP', async () => {
     renderGameHUD();
     expect(await screen.findByText(/750 XP/)).toBeInTheDocument();

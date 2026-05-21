@@ -134,6 +134,7 @@ func run() error {
 	progressExportAdapter := postgresinfra.NewProgressExportAdapter(pool)
 	purchaseExportAdapter := postgresinfra.NewPurchaseExportAdapter(pool)
 	studyRequestRepo := postgresinfra.NewStudyRequestRepo(pool)
+	baseRepo := postgresinfra.NewBaseRepo(pool)
 
 	// Repositório de audit log HTTP (TASK-18).
 	auditLogRepo := postgresinfra.NewAuditLogRepo(pool)
@@ -335,6 +336,10 @@ func run() error {
 		WithAdminGrowth(&pgxAdminGrowthRepo{pool: pool})
 	curriculumH := handlers.NewCurriculumHandler(getArticleUC, listCurriculumUC, searchCurriculumUC, curriculumRepo)
 	moduleViewH := handlers.NewModuleViewHandler(&pgxModuleViewRepo{pool: pool})
+	adminViewsH := handlers.NewAdminViewsHandler(&pgxAdminViewsRepo{pool: pool})
+	adminMetricsH := handlers.NewAdminMetricsHandler(&pgxAdminMetricsRepo{pool: pool})
+	userEventsH := handlers.NewUserEventsHandler(&pgxUserEventsRepo{pool: pool})
+	adminEventsH := handlers.NewAdminEventsHandler(&pgxAdminEventsRepo{pool: pool})
 	commentsH := handlers.NewCommentsHandler(&pgxCommentsRepo{pool: pool})
 	trendingH := handlers.NewTrendingHandler(&pgxTrendingRepo{pool: pool})
 	trailLbH := handlers.NewTrailLeaderboardHandler(&pgxTrailLeaderboardRepo{pool: pool})
@@ -375,6 +380,10 @@ func run() error {
 		Leaderboard:       leaderboardH,
 		Stats:             statsH,
 		Admin:             adminH,
+		AdminViews:        adminViewsH,
+		AdminMetrics:      adminMetricsH,
+		AdminEvents:       adminEventsH,
+		UserEvents:        userEventsH,
 		ModuleView:        moduleViewH,
 		Comments:          commentsH,
 		Trending:          trendingH,
@@ -390,7 +399,7 @@ func run() error {
 		AdminQuestions:    adminQuestionsH,
 		StudyRequest:      studyRequestH,
 		StudyRequestAdmin: studyRequestAdminH,
-		Bases:             handlers.NewBasesHandler(studyRequestRepo),
+		Bases:             handlers.NewBasesHandlerWithRepo(studyRequestRepo, baseRepo),
 	}
 	router := httpserver.NewRouter(routerCfg)
 

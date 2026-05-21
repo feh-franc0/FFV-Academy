@@ -2,9 +2,11 @@
 
 import Link from 'next/link';
 import { useGameState } from '@/hooks/useGameState';
-import { CURRICULUM, HUBS, getHubBySlug, getHubTrails, type Module, type Trail } from '@/lib/curriculum';
+import { HUBS, getHubBySlug, getHubTrails } from '@/lib/curriculum';
 import { useActiveBase } from '@/components/base/ActiveBaseContext';
 import { selectLastArticleForBase, selectCompletedForBase } from '@/lib/bases/state-selectors';
+import { getAllModulesForBase } from '@/lib/bases/all-modules';
+import { DEFAULT_BASE_SLUG } from '@/lib/bases/registry';
 
 type Suggestion = {
   kind: 'resume' | 'next-in-trail' | 'start-preferred' | 'start-fresh';
@@ -18,22 +20,26 @@ type Suggestion = {
   trailName: string;
 };
 
-function allPosts(): Array<{ mod: Module; trail: Trail }> {
-  return CURRICULUM.flatMap(t => t.modules.map(m => ({ mod: m, trail: t })));
-}
-
+/**
+ * Sugere o próximo passo SEMPRE dentro da base ativa.
+ *
+ * Antes da correção (2026-05-21), a estratégia "start-fresh" caía em
+ * `CURRICULUM.flatMap(...)`, que é só tech — então um usuário em medvet
+ * sem progresso via "Fundamentos da IA" sugerido na home. Agora a fonte
+ * de verdade é `getAllModulesForBase(slug)` que devolve módulos da base
+ * ativa (ou [] se a base ainda não tem conteúdo, fazendo o card sumir).
+ */
 function buildSuggestion(
   state: ReturnType<typeof useGameState>['state'],
   activeBaseSlug: string,
 ): Suggestion | null {
   if (!state) return null;
-  // Filtra slices por base — Hero/ContinueCard sem filtro vazava "Postgres
-  // MVCC" pra usuário medvet (audit de integridade do frontend).
   const completed = selectCompletedForBase(state.completedModules, activeBaseSlug);
   const baseLastArticle = selectLastArticleForBase(state.lastArticle, activeBaseSlug);
-  const all = allPosts();
+  const all = getAllModulesForBase(activeBaseSlug);
+  if (all.length === 0) return null; // base sem conteúdo — esconde o card
 
-  // 1. Active article not finished yet
+  // 1. Artigo em andamento que ainda não foi finalizado
   if (baseLastArticle && !completed.includes(baseLastArticle.slug)) {
     const la = baseLastArticle;
     const progressPct = Math.round(la.progress * 100);
@@ -50,29 +56,31 @@ function buildSuggestion(
     };
   }
 
-  // 2. Next unfinished in the last-seen trail
+  // 2. Próximo da trilha do último artigo aberto (busca dentro do universo da base)
   if (baseLastArticle) {
-    const la = baseLastArticle;
-    const trail = CURRICULUM.find(t => t.modules.some(m => m.slug === la.slug));
-    if (trail) {
-      const nextMod = trail.modules.find(m => !completed.includes(m.slug));
+    const lastMod = all.find(m => m.slug === baseLastArticle.slug);
+    if (lastMod) {
+      const nextMod = all.find(m => m.trailSlug === lastMod.trailSlug && !completed.includes(m.slug));
       if (nextMod) {
         return {
           kind: 'next-in-trail',
           label: 'PRÓXIMO NA TRILHA',
           title: nextMod.title,
           icon: nextMod.icon,
-          accent: trail.color,
-          href: `/aprenda/${nextMod.slug}`,
-          meta: `${nextMod.readTime} min · +${nextMod.xp} XP`,
-          trailName: trail.name,
+          accent: nextMod.trailColor,
+          href: nextMod.href,
+          meta: nextMod.xp > 0
+            ? `${nextMod.readTime} min · +${nextMod.xp} XP`
+            : `${nextMod.readTime} min`,
+          trailName: nextMod.trailName,
         };
       }
     }
   }
 
-  // 3. First article of preferred hub (from onboarding)
-  if (state.preferredHub) {
+  // 3. Primeiro artigo do hub preferido — só faz sentido na base default
+  //    (HUBS é catálogo do tech). Em outras bases pulamos esta heurística.
+  if (state.preferredHub && activeBaseSlug === DEFAULT_BASE_SLUG) {
     const hub = getHubBySlug(state.preferredHub);
     if (hub) {
       const trails = getHubTrails(hub);
@@ -94,18 +102,20 @@ function buildSuggestion(
     }
   }
 
-  // 4. Brand new user: suggest first unread article anywhere
-  const firstUnread = all.find(({ mod }) => !completed.includes(mod.slug));
+  // 4. Usuário novo na base: primeiro módulo não-completo no universo da base
+  const firstUnread = all.find(m => !completed.includes(m.slug));
   if (firstUnread) {
     return {
       kind: 'start-fresh',
       label: 'RECOMENDADO PARA COMEÇAR',
-      title: firstUnread.mod.title,
-      icon: firstUnread.mod.icon,
-      accent: firstUnread.trail.color,
-      href: `/aprenda/${firstUnread.mod.slug}`,
-      meta: `${firstUnread.mod.readTime} min · +${firstUnread.mod.xp} XP`,
-      trailName: firstUnread.trail.name,
+      title: firstUnread.title,
+      icon: firstUnread.icon,
+      accent: firstUnread.trailColor,
+      href: firstUnread.href,
+      meta: firstUnread.xp > 0
+        ? `${firstUnread.readTime} min · +${firstUnread.xp} XP`
+        : `${firstUnread.readTime} min`,
+      trailName: firstUnread.trailName,
     };
   }
 

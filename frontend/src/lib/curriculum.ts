@@ -30,7 +30,7 @@ export interface Trail {
   prerequisites?: string[];
   /** Nível da trilha como um todo. */
   level?: Level;
-  /** Rota da trilha (ex: "/fundamentos-da-ia"). Usado por HomeClient/CommandPalette. */
+  /** Rota da trilha (ex: "/fundamentos-da-ia"). Usado por KnowledgeBaseHome/CommandPalette. */
   href?: string;
 }
 

@@ -40,6 +40,10 @@ type RouterConfig struct {
 	Leaderboard       *handlers.LeaderboardHandler
 	Stats             *handlers.StatsHandler
 	Admin             *handlers.AdminHandler
+	AdminViews        *handlers.AdminViewsHandler        // opcional — feed admin de pageviews
+	AdminMetrics      *handlers.AdminMetricsHandler      // opcional — overview KPIs por base
+	AdminEvents       *handlers.AdminEventsHandler       // opcional — feed admin de interações
+	UserEvents        *handlers.UserEventsHandler        // opcional — ingest público de eventos (POST /events/track)
 	ModuleView        *handlers.ModuleViewHandler        // opcional — registra views de módulos (public)
 	Comments          *handlers.CommentsHandler          // opcional — comentários por artigo/trilha/bloco
 	Trending          *handlers.TrendingHandler          // opcional — top módulos por views recentes
@@ -83,6 +87,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	if cfg.MetricsMW != nil {
 		r.Use(cfg.MetricsMW)
 	}
+	// IdentityHeaders — captura X-FFV-User-Email/Id/Name/Anon-Id/Session-Id em
+	// TODA request. Permite ao admin saber "quem acessou cada módulo" mesmo em
+	// endpoints públicos sem JWT. NÃO substitui autorização (Authenticate
+	// middleware continua sendo source of truth). Ver identity_headers.go.
+	r.Use(middleware.IdentityHeadersMiddleware)
 	// OpenTelemetry: instrumenta todas as rotas com spans HTTP.
 	// Posicionado após Logger para que spans incluam o request_id do middleware.
 	r.Use(func(next http.Handler) http.Handler {
@@ -120,8 +129,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	}
 
 	// Lista pública de bases de conhecimento — frontend usa em /bases.
+	// /api/v1/bases/{slug}/page — descritor completo para renderizar a home
+	// da base via KnowledgeBaseHome (template universal). Ver UNIFICATION_PLAN.md.
 	if cfg.Bases != nil {
 		r.Get("/api/v1/bases", cfg.Bases.List)
+		r.Get("/api/v1/bases/{slug}/page", cfg.Bases.GetPage)
 	}
 
 	// Top-10 do ranking semanal — público, anonimizado para visitantes.
@@ -203,6 +215,14 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.With(viewLimit.Middleware()).
 			With(middleware.BodyLimit(2*1024)).
 			Post("/api/v1/events/view", cfg.ModuleView.Record)
+	}
+
+	// Ingest de interações deliberadas (CTAs, search, quiz, login). Mesma
+	// rate-limit envelope (240/min/IP) e body bem maior (4KB metadata).
+	if cfg.UserEvents != nil {
+		r.With(viewLimit.Middleware()).
+			With(middleware.BodyLimit(8*1024)).
+			Post("/api/v1/events/track", cfg.UserEvents.Track)
 	}
 
 	// News, cheatsheets, playlists — leitura pública com rate-limit.
@@ -335,6 +355,20 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			r.Get("/api/v1/admin/audit", cfg.Admin.GetAuditLog)
 			r.Get("/api/v1/admin/users", cfg.Admin.ListUsers)
 			r.Get("/api/v1/admin/growth", cfg.Admin.GetGrowth)
+
+			// Métricas profissionais: feed de pageviews + overview por base.
+			// Adicionados em 2026-05-21 pra que admin veja "quem acessou o quê"
+			// e tenha breakdown por base de conhecimento. Ver migration 51 e
+			// docs em UNIFICATION_PLAN.md.
+			if cfg.AdminViews != nil {
+				r.Get("/api/v1/admin/views", cfg.AdminViews.List)
+			}
+			if cfg.AdminMetrics != nil {
+				r.Get("/api/v1/admin/metrics/overview", cfg.AdminMetrics.GetOverview)
+			}
+			if cfg.AdminEvents != nil {
+				r.Get("/api/v1/admin/events", cfg.AdminEvents.List)
+			}
 
 			// Endpoints admin do currículo.
 			if cfg.Curriculum != nil {

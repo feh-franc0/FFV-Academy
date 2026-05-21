@@ -126,42 +126,159 @@ export function selectTotalXpForBase(baseSlug: string): number {
   return 0;
 }
 
-// ─── Daily review counter per base (localStorage-based, sem mudar schema) ───
+// ─── Counters por base (localStorage-based, sem mudar schema do GameState) ──
 //
-// O GameState.studyDays é flat e cross-base. Pra que a pílula "0/3" no GameHUD
-// e o todayReviewCount em /progresso reflitam só a base ativa, mantemos um
-// contador transient em localStorage chaveado por dia + base.
-
-const REVIEW_COUNT_KEY_PREFIX = 'ffv_review_count';
+// O GameState.studyDays é flat e cross-base. Para que os widgets DENTRO de
+// uma base (QuestPanel, pill "X/3" no HUD, /progresso) reflitam só a base
+// ativa, mantemos contadores transient em localStorage chaveados por:
+//
+//     ffv_<metric>:<dateISO>:<baseSlug>      (counters diários)
+//     ffv_<metric>:week-<weekStartISO>:<baseSlug>  (counters semanais)
+//
+// Métricas suportadas:
+//   - review_count      → cards SRS revisados
+//   - modules_completed → módulos marcados como completos
+//   - xp_earned         → XP somado por completions/revisões
+//
+// Quem incrementa: useGameState.markComplete() e reviewOne()/rate().
+//
+// Por que localStorage e não banco: V1 de gamificação cliente-first. Quando
+// migrarmos GameState pra Postgres, esses counters viram colunas em
+// progress_per_base ou similar. Hoje localStorage é suficiente.
 
 function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-function reviewCountKey(baseSlug: string, dateISO: string = todayISO()): string {
-  return `${REVIEW_COUNT_KEY_PREFIX}:${dateISO}:${baseSlug}`;
+/** YYYY-MM-DD da segunda-feira da semana atual (UTC). */
+function weekStartISO(): string {
+  const d = new Date();
+  const day = d.getUTCDay(); // 0=Sun
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setUTCDate(d.getUTCDate() + diff);
+  return d.toISOString().slice(0, 10);
 }
 
-/** Incrementa o contador de revisões de hoje pra base. Chama quando o usuário rateia um card. */
-export function bumpBaseReviewCount(baseSlug: string): void {
+function readCount(key: string): number {
+  if (typeof window === 'undefined') return 0;
+  try {
+    return Number(window.localStorage.getItem(key) ?? 0);
+  } catch {
+    return 0;
+  }
+}
+
+function writeCount(key: string, value: number): void {
   if (typeof window === 'undefined') return;
   try {
-    const key = reviewCountKey(baseSlug);
-    const current = Number(window.localStorage.getItem(key) ?? 0);
-    window.localStorage.setItem(key, String(current + 1));
+    window.localStorage.setItem(key, String(value));
   } catch {
     /* storage bloqueado */
   }
 }
 
+function bumpCount(key: string, by = 1): void {
+  writeCount(key, readCount(key) + by);
+}
+
+// ─── Cards SRS revisados ─────────────────────────────────────────────────
+
+const REVIEW_COUNT_KEY_PREFIX = 'ffv_review_count';
+
+function reviewCountKey(baseSlug: string, dateISO: string = todayISO()): string {
+  return `${REVIEW_COUNT_KEY_PREFIX}:${dateISO}:${baseSlug}`;
+}
+
+/** Incrementa o contador de revisões de hoje pra base + marca atividade. */
+export function bumpBaseReviewCount(baseSlug: string): void {
+  bumpCount(reviewCountKey(baseSlug));
+  // Espelha no contador semanal pra alimentar quest "Revise 15 cards essa semana".
+  bumpCount(`ffv_review_count_week:${weekStartISO()}:${baseSlug}`);
+  // Revisão conta como atividade do dia pra "Estude hoje pra manter streak".
+  bumpBaseActivityToday(baseSlug);
+}
+
 /** Lê o contador de revisões de hoje pra base. */
 export function getBaseReviewCountToday(baseSlug: string): number {
-  if (typeof window === 'undefined') return 0;
-  try {
-    return Number(window.localStorage.getItem(reviewCountKey(baseSlug)) ?? 0);
-  } catch {
-    return 0;
-  }
+  return readCount(reviewCountKey(baseSlug));
+}
+
+/** Lê o contador de revisões da semana atual pra base. */
+export function getBaseReviewCountThisWeek(baseSlug: string): number {
+  return readCount(`ffv_review_count_week:${weekStartISO()}:${baseSlug}`);
+}
+
+// ─── Módulos completados por base+dia/semana ─────────────────────────────
+
+const MODULES_DAY_KEY_PREFIX = 'ffv_modules_completed';
+const MODULES_WEEK_KEY_PREFIX = 'ffv_modules_completed_week';
+
+/**
+ * Incrementa o contador de módulos completados hoje + nesta semana pra base.
+ * Chamado por `useGameState.markComplete` quando o módulo pertence a uma base
+ * identificável (via `getBaseSlugForModule`).
+ */
+export function bumpBaseModulesCompleted(baseSlug: string): void {
+  bumpCount(`${MODULES_DAY_KEY_PREFIX}:${todayISO()}:${baseSlug}`);
+  bumpCount(`${MODULES_WEEK_KEY_PREFIX}:${weekStartISO()}:${baseSlug}`);
+}
+
+export function getBaseModulesCompletedToday(baseSlug: string): number {
+  return readCount(`${MODULES_DAY_KEY_PREFIX}:${todayISO()}:${baseSlug}`);
+}
+
+export function getBaseModulesCompletedThisWeek(baseSlug: string): number {
+  return readCount(`${MODULES_WEEK_KEY_PREFIX}:${weekStartISO()}:${baseSlug}`);
+}
+
+// ─── XP ganho por base+semana (quest "Ganhe 500 XP esta semana") ────────
+
+const XP_WEEK_KEY_PREFIX = 'ffv_xp_earned_week';
+const XP_TOTAL_KEY_PREFIX = 'ffv_xp_total';
+
+/**
+ * Bump XP ganho na base. Atualiza simultaneamente:
+ *   - bucket SEMANAL  (zera a cada segunda) → quest "Ganhe 500 XP esta semana"
+ *   - bucket TOTAL    (cumulativo) → exibição "X XP nesta base" no HUD
+ */
+export function bumpBaseXPEarned(baseSlug: string, xp: number): void {
+  if (xp <= 0) return;
+  bumpCount(`${XP_WEEK_KEY_PREFIX}:${weekStartISO()}:${baseSlug}`, xp);
+  bumpCount(`${XP_TOTAL_KEY_PREFIX}:${baseSlug}`, xp);
+}
+
+export function getBaseXPEarnedThisWeek(baseSlug: string): number {
+  return readCount(`${XP_WEEK_KEY_PREFIX}:${weekStartISO()}:${baseSlug}`);
+}
+
+/**
+ * XP total cumulativo (lifetime) na base.
+ *
+ * Fallback pra tech: usuários antes de 2026-05-21 acumularam tudo em tech
+ * (única base até então) mas não tinham o counter. Se o counter está zero
+ * e `baseSlug === DEFAULT_BASE_SLUG`, o caller pode preferir cair em
+ * `state.xp` para preservar continuidade da exibição — esse fallback fica
+ * no caller (HUD) porque precisa do GameState em mãos.
+ */
+export function getBaseXPTotal(baseSlug: string): number {
+  return readCount(`${XP_TOTAL_KEY_PREFIX}:${baseSlug}`);
+}
+
+// ─── Streak por base (anti-vazamento) ────────────────────────────────────
+//
+// streak hoje é GLOBAL no GameState — decisão de produto pendente. Pra quest
+// "Estude hoje pra manter a streak" DENTRO da base, criamos um proxy
+// transiente: marcou-se atividade hoje (módulo completo OU card revisado)
+// nesta base.
+
+const ACTIVITY_DAY_KEY_PREFIX = 'ffv_activity';
+
+export function bumpBaseActivityToday(baseSlug: string): void {
+  writeCount(`${ACTIVITY_DAY_KEY_PREFIX}:${todayISO()}:${baseSlug}`, 1);
+}
+
+export function hasBaseActivityToday(baseSlug: string): boolean {
+  return readCount(`${ACTIVITY_DAY_KEY_PREFIX}:${todayISO()}:${baseSlug}`) > 0;
 }
 
 // ─── Recommendations base-aware ─────────────────────────────────────────────
