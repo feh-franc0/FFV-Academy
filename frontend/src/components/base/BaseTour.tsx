@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useActiveBase } from '@/components/base/ActiveBaseContext';
 
 /**
@@ -19,24 +19,35 @@ import { useActiveBase } from '@/components/base/ActiveBaseContext';
  *
  * Estilo: overlay com spotlight em cada elemento. Skip/dismiss salva o flag
  * pra nunca aparecer de novo nessa máquina.
+ *
+ * Posicionamento (2026-05-21): mede altura REAL do tooltip via ref +
+ * auto-FLIP entre top/bottom quando não couber no placement preferido.
+ * Antes assumia altura fixa de 200px → tooltip cobria o alvo.
  */
 
 const TOUR_STORAGE_KEY = 'ffv_tour_seen';
+const TIP_GAP = 16; // gap entre tooltip e alvo
+const VIEWPORT_PAD = 16; // distância mínima das bordas
 
 interface TourStep {
   /** CSS selector do elemento alvo. */
   target: string;
   title: string;
   body: string;
-  /** Posição do tooltip relativa ao alvo. */
+  /** Posição preferida do tooltip relativa ao alvo. Pode FLIPar em runtime. */
   placement: 'bottom' | 'top';
 }
+
+type ComputedPlacement = 'top' | 'bottom';
 
 export function BaseTour() {
   const { base: activeBase, isPathnameDerived } = useActiveBase();
   const [stepIndex, setStepIndex] = useState(0);
   const [active, setActive] = useState(false);
   const [targetRect, setTargetRect] = useState<DOMRect | null>(null);
+  const [computedPlacement, setComputedPlacement] = useState<ComputedPlacement>('bottom');
+
+  const tipRef = useRef<HTMLDivElement | null>(null);
 
   const steps: TourStep[] = [
     {
@@ -64,10 +75,8 @@ export function BaseTour() {
     if (typeof window === 'undefined') return;
     if (window.localStorage.getItem(TOUR_STORAGE_KEY) === '1') return;
     if (!isPathnameDerived) return; // só dispara dentro de uma base
-    // Skip flags da URL (Playwright, etc.)
     const params = new URLSearchParams(window.location.search);
     if (params.get('skipTour') === '1' || params.get('skipOnboarding') === '1') return;
-    // Pequeno delay pra DOM estar pronto.
     const t = setTimeout(() => setActive(true), 1200);
     return () => clearTimeout(t);
   }, [isPathnameDerived]);
@@ -80,13 +89,11 @@ export function BaseTour() {
       if (!step) return;
       const el = document.querySelector<HTMLElement>(step.target);
       if (!el) {
-        // Alvo não existe nessa página — avança automaticamente.
         setStepIndex(i => i + 1);
         return;
       }
       const rect = el.getBoundingClientRect();
       setTargetRect(rect);
-      // Garante que o alvo esteja visível na viewport.
       if (rect.top < 80 || rect.bottom > window.innerHeight - 80) {
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
@@ -100,6 +107,33 @@ export function BaseTour() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, stepIndex]);
+
+  // Decide placement REAL (com flip) medindo altura do tooltip + espaço
+  // disponível acima/abaixo do alvo. Roda em useLayoutEffect pra evitar
+  // flash visual de "cobre o alvo → ajusta posição".
+  useLayoutEffect(() => {
+    if (!active || !targetRect || !tipRef.current) return;
+    const tipH = tipRef.current.offsetHeight;
+    const step = steps[stepIndex];
+    if (!step) return;
+
+    const spaceAbove = targetRect.top - TIP_GAP - VIEWPORT_PAD;
+    const spaceBelow = window.innerHeight - targetRect.bottom - TIP_GAP - VIEWPORT_PAD;
+    const fitsAbove = spaceAbove >= tipH;
+    const fitsBelow = spaceBelow >= tipH;
+
+    // Preferência do step se couber; senão FLIP; senão fica do lado com
+    // mais espaço.
+    let next: ComputedPlacement;
+    if (step.placement === 'top' && fitsAbove) next = 'top';
+    else if (step.placement === 'bottom' && fitsBelow) next = 'bottom';
+    else if (fitsAbove) next = 'top';
+    else if (fitsBelow) next = 'bottom';
+    else next = spaceAbove > spaceBelow ? 'top' : 'bottom';
+
+    setComputedPlacement(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, stepIndex, targetRect]);
 
   function finish() {
     try { window.localStorage.setItem(TOUR_STORAGE_KEY, '1'); } catch { /* */ }
@@ -123,18 +157,33 @@ export function BaseTour() {
   const currentStep = steps[stepIndex];
   if (!currentStep) return null;
 
-  // Posição do tooltip — abaixo ou acima do alvo, centralizado.
+  // Posição do tooltip — usa altura medida + gap fixo. Quando não couber
+  // de jeito nenhum (alvo gigante), cai centralizado na tela.
+  const tipH = tipRef.current?.offsetHeight ?? 240;
+  const TIP_WIDTH = 320;
+
+  // Centraliza horizontalmente acima do alvo, com clamp pras bordas.
+  const horizontalLeft = targetRect
+    ? Math.max(
+        VIEWPORT_PAD,
+        Math.min(
+          window.innerWidth - TIP_WIDTH - VIEWPORT_PAD,
+          targetRect.left + targetRect.width / 2 - TIP_WIDTH / 2,
+        ),
+      )
+    : window.innerWidth / 2 - TIP_WIDTH / 2;
+
   const tipStyle: React.CSSProperties = targetRect
-    ? currentStep.placement === 'bottom'
+    ? computedPlacement === 'bottom'
       ? {
           position: 'fixed',
-          top: targetRect.bottom + 16,
-          left: Math.max(16, Math.min(window.innerWidth - 360, targetRect.left + targetRect.width / 2 - 160)),
+          top: targetRect.bottom + TIP_GAP,
+          left: horizontalLeft,
         }
       : {
           position: 'fixed',
-          top: Math.max(16, targetRect.top - 200),
-          left: Math.max(16, Math.min(window.innerWidth - 360, targetRect.left + targetRect.width / 2 - 160)),
+          top: Math.max(VIEWPORT_PAD, targetRect.top - tipH - TIP_GAP),
+          left: horizontalLeft,
         }
     : {
         position: 'fixed',
@@ -143,13 +192,35 @@ export function BaseTour() {
         transform: 'translate(-50%, -50%)',
       };
 
+  // Posição da seta (aponta pro alvo).
+  const arrowStyle: React.CSSProperties | null = targetRect
+    ? {
+        position: 'absolute',
+        left: Math.max(
+          16,
+          Math.min(
+            TIP_WIDTH - 16,
+            targetRect.left + targetRect.width / 2 - horizontalLeft,
+          ),
+        ) - 6,
+        width: 12,
+        height: 12,
+        background: 'var(--ffv-bg2)',
+        border: '1px solid var(--ffv-border)',
+        transform: 'rotate(45deg)',
+        ...(computedPlacement === 'bottom'
+          ? { top: -7, borderRight: 'none', borderBottom: 'none' }
+          : { bottom: -7, borderLeft: 'none', borderTop: 'none' }),
+      }
+    : null;
+
   return (
     <div
       role="dialog"
       aria-label={`Tour de boas-vindas — passo ${stepIndex + 1} de ${steps.length}`}
       style={{ position: 'fixed', inset: 0, zIndex: 9999, pointerEvents: 'none' }}
     >
-      {/* Overlay escurecido — só não cobre o alvo (efeito "spotlight"). */}
+      {/* Overlay escurecido */}
       <div
         aria-hidden
         onClick={skip}
@@ -175,7 +246,8 @@ export function BaseTour() {
             width: targetRect.width + 16,
             height: targetRect.height + 16,
             borderRadius: 12,
-            boxShadow: '0 0 0 9999px rgba(15, 23, 42, 0.55), 0 0 0 4px color-mix(in srgb, var(--ffv-blue) 60%, transparent)',
+            boxShadow:
+              '0 0 0 9999px rgba(15, 23, 42, 0.55), 0 0 0 4px color-mix(in srgb, var(--ffv-blue) 60%, transparent)',
             pointerEvents: 'none',
             transition: 'top 200ms ease, left 200ms ease, width 200ms ease, height 200ms ease',
           }}
@@ -184,9 +256,10 @@ export function BaseTour() {
 
       {/* Tooltip card */}
       <div
+        ref={tipRef}
         style={{
           ...tipStyle,
-          width: 320,
+          width: TIP_WIDTH,
           maxWidth: 'calc(100vw - 32px)',
           padding: '20px 22px',
           borderRadius: 14,
@@ -197,6 +270,8 @@ export function BaseTour() {
           color: 'var(--foreground)',
         }}
       >
+        {arrowStyle && <span aria-hidden style={arrowStyle} />}
+
         <p
           className="font-mono uppercase"
           style={{
