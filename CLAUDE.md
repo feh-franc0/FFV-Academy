@@ -143,6 +143,45 @@ A plataforma evoluiu de "portal de IA + engenharia" para **escola completa do Pr
 
 ---
 
+## 🚀 PROTOCOLO DE COMMIT + PUSH + CI (regra fixa do PO)
+
+Sempre que o usuário pedir "commit e push" (ou variantes: "manda pra main", "sobe pra prod",
+"deploy"), seguir EXATAMENTE este fluxo, sem improvisar:
+
+### 1. Antes do commit
+- `git status --short` + `git diff --stat HEAD` pra mapear o que muda.
+- Verificar que não há `.env`, credenciais ou tokens no diff.
+- Sanity: `go build ./...` + `npx tsc --noEmit` + `npm run lint`. Se houver pre-commit hook
+  exigindo `gofmt -w .` (atual padrão deste repo), rodar ANTES do commit.
+
+### 2. Commit
+- Mensagem **em português**, no estilo do `git log` recente (`feat:`, `fix:`, `chore:`).
+- HEREDOC com seções claras quando o commit cobre múltiplas áreas.
+- SEMPRE incluir `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>`.
+
+### 3. Push + acompanhamento de CI (OBRIGATÓRIO desde 2026-05-21)
+- `git push origin main`.
+- Imediatamente: `gh run list --limit 3 --branch main` pra capturar o run ID.
+- Acompanhar com `gh run watch <run-id>` OU `gh run view <run-id> --log-failed` quando ele
+  terminar.
+- **Reportar para o usuário**: status final (✅ passou / ❌ falhou), e SE falhou, os logs do
+  job que quebrou já filtrados em `--log-failed`. O usuário NÃO deve precisar tirar print
+  do GitHub Actions — tudo via gh CLI.
+- Se `gh` não estiver autenticado, pedir `! gh auth login` UMA vez e prosseguir.
+
+### 4. Se CI quebrar
+- Diagnosticar pelo log (`gh run view <id> --log-failed`).
+- Corrigir localmente, rodar mesmo teste/lint que quebrou, commitar novo `fix:` e repushar.
+- Repetir até CI verde. Nunca usar `--no-verify` para escapar de hook.
+
+### 5. Anti-padrões proibidos
+- ❌ Push sem watch (deixa o usuário descobrir por print).
+- ❌ Force push (`--force`, `--force-with-lease`) sem autorização explícita.
+- ❌ `git commit --amend` em commit já pushed.
+- ❌ Skipar pre-commit hooks com `--no-verify`.
+
+---
+
 ## 📚 DOCUMENTOS DE REFERÊNCIA
 
 | Doc | Quando consultar |
