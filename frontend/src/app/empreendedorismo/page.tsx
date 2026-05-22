@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { HubPageClient } from '@/components/HubPageClient';
+import { ProfissionalBaseHome } from '@/components/base/ProfissionalBaseHome';
 import { BaseStructuredData } from '@/components/seo/StructuredData';
 import { getHubBySlug, getHubTrails } from '@/lib/curriculum';
 
@@ -13,7 +13,7 @@ const workloadHours = Math.round(
 export const metadata: Metadata = {
   title: `${hub.name} — FFV Academy`,
   description:
-    'Hub de Empreendedorismo Digital: Empreendedorismo Digital (validação, MVP, infoprodutos, freelance) e Solo SaaS / Indie Hacker Stack (Stripe, multi-tenancy, CAC/LTV, pricing).',
+    'Empreendedorismo Digital (validação, MVP, infoprodutos, freelance) e Solo SaaS / Indie Hacker Stack (Stripe, multi-tenancy, CAC/LTV, pricing).',
   keywords:
     'empreendedorismo digital, solo saas, indie hacker, stripe, mvp, infoproduto, freelance, founder, side project',
   alternates: { canonical: 'https://fernandofrancovalle.com/empreendedorismo' },
@@ -38,7 +38,7 @@ export default function Page() {
         workloadHours={workloadHours}
         teaches="MVP · Solo SaaS · Indie Hacker · Stripe billing · Multi-tenancy · CAC/LTV · Pricing"
       />
-      <HubPageClient hub={hub} />
+      <ProfissionalBaseHome hub={hub} heroHighlight="virando founder" />
     </>
   );
 }

@@ -20,6 +20,7 @@ import { NextSteps } from '@/components/article/NextSteps';
 import { TrailLeaderboard } from '@/components/ranking/TrailLeaderboard';
 import { AnkiExport } from '@/components/article/AnkiExport';
 import { TrailCertificateBanner } from '@/components/TrailCertificateBanner';
+import { TrailSidebar } from '@/components/article/TrailSidebar';
 import { safeJsonLd } from '@/lib/safe-json';
 
 interface PageProps {
@@ -142,38 +143,41 @@ export default async function ModulePage({ params }: PageProps) {
 
     if (meta) {
       return (
-        <main className="max-w-3xl mx-auto px-6 py-12">
-          <header className="mb-8 pb-6" style={{ borderBottom: '1px solid var(--ffv-border)' }}>
-            <div className="flex gap-2 mb-2 text-xs font-mono uppercase tracking-wider" style={{ color: 'var(--ffv-muted)' }}>
-              <span style={{ color: meta.trailColor }}>{meta.trailName}</span>
+        <main className="base-module-grid max-w-7xl mx-auto px-6 lg:px-10 py-12">
+          <TrailSidebar currentSlug={slug} trailId={meta.trailId} />
+          <article>
+            <header className="mb-8 pb-6" style={{ borderBottom: '1px solid var(--ffv-border)' }}>
+              <div className="flex gap-2 mb-2 text-xs font-mono uppercase tracking-wider" style={{ color: 'var(--ffv-muted)' }}>
+                <span style={{ color: meta.trailColor }}>{meta.trailName}</span>
+              </div>
+              <h1 className="text-3xl md:text-4xl font-bold mb-3">{meta.title}</h1>
+              <div className="flex gap-4 text-sm" style={{ color: 'var(--ffv-muted)' }}>
+                <span>⏱ {meta.readTime ?? 5} min</span>
+                <span>·</span>
+                <span>⭐ {meta.xp ?? 10} XP</span>
+                {meta.level && (
+                  <>
+                    <span>·</span>
+                    <span style={{ textTransform: 'capitalize' }}>{meta.level}</span>
+                  </>
+                )}
+              </div>
+            </header>
+            <div
+              className="p-5 rounded-xl mb-6"
+              style={{
+                background: 'color-mix(in srgb, var(--ffv-amber) 8%, transparent)',
+                border: '1px solid color-mix(in srgb, var(--ffv-amber) 30%, transparent)',
+              }}
+            >
+              <p className="text-sm font-semibold mb-1.5">Conteúdo carregando…</p>
+              <p className="text-sm" style={{ color: 'var(--ffv-muted)', lineHeight: 1.55 }}>
+                Esse módulo está sendo gerado/atualizado pela curadoria. Volte em alguns
+                minutos — o ISR regenera o cache automaticamente a cada 60 segundos.
+              </p>
             </div>
-            <h1 className="text-3xl md:text-4xl font-bold mb-3">{meta.title}</h1>
-            <div className="flex gap-4 text-sm" style={{ color: 'var(--ffv-muted)' }}>
-              <span>⏱ {meta.readTime ?? 5} min</span>
-              <span>·</span>
-              <span>⭐ {meta.xp ?? 10} XP</span>
-              {meta.level && (
-                <>
-                  <span>·</span>
-                  <span style={{ textTransform: 'capitalize' }}>{meta.level}</span>
-                </>
-              )}
-            </div>
-          </header>
-          <div
-            className="p-5 rounded-xl mb-6"
-            style={{
-              background: 'color-mix(in srgb, var(--ffv-amber) 8%, transparent)',
-              border: '1px solid color-mix(in srgb, var(--ffv-amber) 30%, transparent)',
-            }}
-          >
-            <p className="text-sm font-semibold mb-1.5">Conteúdo carregando…</p>
-            <p className="text-sm" style={{ color: 'var(--ffv-muted)', lineHeight: 1.55 }}>
-              Esse módulo está sendo gerado/atualizado pela curadoria. Volte em alguns
-              minutos — o ISR regenera o cache automaticamente a cada 60 segundos.
-            </p>
-          </div>
-          <ViewTracker slug={slug} hubId={undefined} trailId={meta.trailId} />
+            <ViewTracker slug={slug} hubId={undefined} trailId={meta.trailId} />
+          </article>
         </main>
       );
     }
@@ -208,48 +212,52 @@ export default async function ModulePage({ params }: PageProps) {
   };
 
   return (
-    <main className="max-w-3xl mx-auto px-6 py-12">
+    <main className="base-module-grid max-w-7xl mx-auto px-6 lg:px-10 py-12">
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: safeJsonLd(jsonLd) }}
       />
-      <header className="mb-8 pb-6" style={{ borderBottom: '1px solid var(--ffv-border)' }}>
-        <div className="flex gap-2 mb-2 text-xs font-mono uppercase tracking-wider" style={{ color: 'var(--ffv-muted)' }}>
-          <span>{article.hub_id}</span>
-          <span>·</span>
-          <span>{article.trail_id}</span>
-          <span>·</span>
-          <span>{article.difficulty}</span>
-        </div>
-        <h1 className="text-3xl md:text-4xl font-bold mb-3">{article.title}</h1>
-        <div className="flex gap-4 text-sm" style={{ color: 'var(--ffv-muted)' }}>
-          <span>⏱ {article.read_time} min</span>
-          <span>·</span>
-          <span>⭐ {article.xp} XP</span>
-        </div>
-      </header>
+      <TrailSidebar currentSlug={slug} trailId={article.trail_id} />
 
-      <article className="prose prose-invert max-w-none">
-        <BlockTree blocks={article.blocks} />
+      <article>
+        <header className="mb-8 pb-6" style={{ borderBottom: '1px solid var(--ffv-border)' }}>
+          <div className="flex gap-2 mb-2 text-xs font-mono uppercase tracking-wider" style={{ color: 'var(--ffv-muted)' }}>
+            <span>{article.hub_id}</span>
+            <span>·</span>
+            <span>{article.trail_id}</span>
+            <span>·</span>
+            <span>{article.difficulty}</span>
+          </div>
+          <h1 className="text-3xl md:text-4xl font-bold mb-3">{article.title}</h1>
+          <div className="flex gap-4 text-sm" style={{ color: 'var(--ffv-muted)' }}>
+            <span>⏱ {article.read_time} min</span>
+            <span>·</span>
+            <span>⭐ {article.xp} XP</span>
+          </div>
+        </header>
+
+        <div className="prose prose-invert max-w-none">
+          <BlockTree blocks={article.blocks} />
+        </div>
+
+        <ViewTracker slug={slug} hubId={article.hub_id} trailId={article.trail_id} />
+
+        <TrailCertificateBanner trailId={article.trail_id} />
+
+        <div className="mt-8 flex justify-end">
+          <AnkiExport slug={slug} title={article.title} blocks={article.blocks} />
+        </div>
+
+        <NextSteps slug={slug} />
+
+        <section className="mt-12">
+          <TrailLeaderboard trailId={article.trail_id} />
+        </section>
+
+        <section className="mt-12">
+          <ArticleDiscussion targetType="article" slug={slug} title={article.title} />
+        </section>
       </article>
-
-      <ViewTracker slug={slug} hubId={article.hub_id} trailId={article.trail_id} />
-
-      <TrailCertificateBanner trailId={article.trail_id} />
-
-      <div className="mt-8 flex justify-end">
-        <AnkiExport slug={slug} title={article.title} blocks={article.blocks} />
-      </div>
-
-      <NextSteps slug={slug} />
-
-      <section className="mt-12">
-        <TrailLeaderboard trailId={article.trail_id} />
-      </section>
-
-      <section className="mt-12">
-        <ArticleDiscussion targetType="article" slug={slug} title={article.title} />
-      </section>
     </main>
   );
 }

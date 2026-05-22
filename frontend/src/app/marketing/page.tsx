@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { HubPageClient } from '@/components/HubPageClient';
+import { ProfissionalBaseHome } from '@/components/base/ProfissionalBaseHome';
 import { BaseStructuredData } from '@/components/seo/StructuredData';
 import { getHubBySlug, getHubTrails } from '@/lib/curriculum';
 
@@ -13,7 +13,7 @@ const workloadHours = Math.round(
 export const metadata: Metadata = {
   title: `${hub.name} — FFV Academy`,
   description:
-    'Hub de Marketing Digital: posicionamento, branding, SEO técnico, conteúdo estratégico, métricas que importam (CAC, LTV, conversão), funil end-to-end.',
+    'Marketing digital sem hype: posicionamento, branding, SEO técnico, conteúdo estratégico, métricas que importam (CAC, LTV, conversão), funil end-to-end.',
   keywords:
     'marketing digital, seo, branding, conteudo estrategico, cac, ltv, funil, conversao, growth, marketing para devs',
   alternates: { canonical: 'https://fernandofrancovalle.com/marketing' },
@@ -38,7 +38,7 @@ export default function Page() {
         workloadHours={workloadHours}
         teaches="Posicionamento · Branding · SEO · CAC · LTV · Funil · Conversão"
       />
-      <HubPageClient hub={hub} />
+      <ProfissionalBaseHome hub={hub} heroHighlight="não como achismo" />
     </>
   );
 }

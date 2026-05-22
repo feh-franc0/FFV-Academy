@@ -71,9 +71,7 @@ export function TrailBlogClient({ trail }: Props) {
         </div>
 
         <p className="text-sm leading-7 mb-6" style={{ color: 'var(--ffv-muted)' }}>
-          {trail.id === 'trail1'
-            ? 'O ponto de partida. Aqui você vai entender o que a IA realmente é — sem buzzwords, sem exagero. Cada artigo constrói sobre o anterior, do conceito até a arquitetura que move o mundo hoje.'
-            : 'Para quem já sabe o básico e quer ir fundo. Aqui o assunto é como os modelos funcionam em produção: memória, roteamento, ferramentas, agentes. O lado técnico que pouca gente explica direito.'}
+          {trail.desc}
         </p>
 
         {/* Stats row */}

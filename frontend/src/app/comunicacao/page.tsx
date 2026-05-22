@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { HubPageClient } from '@/components/HubPageClient';
+import { ProfissionalBaseHome } from '@/components/base/ProfissionalBaseHome';
 import { BaseStructuredData } from '@/components/seo/StructuredData';
 import { getHubBySlug, getHubTrails } from '@/lib/curriculum';
 
@@ -13,7 +13,7 @@ const workloadHours = Math.round(
 export const metadata: Metadata = {
   title: `${hub.name} — FFV Academy`,
   description:
-    'Hub de Comunicação: Comunicação Humana (falar em público, reuniões, storytelling, feedback) e Technical Writing & RFCs (design docs, RFCs, ADRs, postmortems, READMEs).',
+    'Comunicação Humana (falar em público, reuniões, storytelling, feedback) e Technical Writing & RFCs (design docs, RFCs, ADRs, postmortems, READMEs).',
   keywords:
     'comunicacao profissional, falar em publico, storytelling, technical writing, rfc, adr, design doc, postmortem, escrita tecnica',
   alternates: { canonical: 'https://fernandofrancovalle.com/comunicacao' },
@@ -38,7 +38,7 @@ export default function Page() {
         workloadHours={workloadHours}
         teaches="Falar em público · Reuniões · Storytelling · Feedback · Technical Writing · RFCs · ADRs"
       />
-      <HubPageClient hub={hub} />
+      <ProfissionalBaseHome hub={hub} heroHighlight="multiplica engenheiros" />
     </>
   );
 }

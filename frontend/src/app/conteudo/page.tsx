@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { HubPageClient } from '@/components/HubPageClient';
+import { ProfissionalBaseHome } from '@/components/base/ProfissionalBaseHome';
 import { BaseStructuredData } from '@/components/seo/StructuredData';
 import { getHubBySlug, getHubTrails } from '@/lib/curriculum';
 
@@ -13,7 +13,7 @@ const workloadHours = Math.round(
 export const metadata: Metadata = {
   title: `${hub.name} — FFV Academy`,
   description:
-    'Hub de Criação de Conteúdo: estratégia editorial, gravação áudio+vídeo, edição, publicação multi-plataforma (YouTube, LinkedIn, X, Instagram), métricas e monetização.',
+    'Criação de conteúdo digital ponta-a-ponta: estratégia editorial, gravação áudio+vídeo, edição, publicação multi-plataforma, métricas e monetização.',
   keywords:
     'criacao de conteudo, youtube, linkedin, gravacao, edicao, audiencia, monetizacao, personal brand, dev content',
   alternates: { canonical: 'https://fernandofrancovalle.com/conteudo' },
@@ -38,7 +38,7 @@ export default function Page() {
         workloadHours={workloadHours}
         teaches="Estratégia editorial · Gravação · Edição · Publicação · Monetização de audiência"
       />
-      <HubPageClient hub={hub} />
+      <ProfissionalBaseHome hub={hub} heroHighlight="como engineer" />
     </>
   );
 }

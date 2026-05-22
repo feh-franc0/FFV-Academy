@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { HubPageClient } from '@/components/HubPageClient';
+import { ProfissionalBaseHome } from '@/components/base/ProfissionalBaseHome';
 import { BaseStructuredData } from '@/components/seo/StructuredData';
 import { getHubBySlug, getHubTrails } from '@/lib/curriculum';
 
@@ -13,7 +13,7 @@ const workloadHours = Math.round(
 export const metadata: Metadata = {
   title: `${hub.name} — FFV Academy`,
   description:
-    'Hub de Carreira & Liderança: Carreira Digital BR (portfólio, vagas, remoto, freelance) e Career Engineering (resume, LinkedIn, behavioral interview, negotiation, promo docs).',
+    'Carreira como sistema: Carreira Digital BR (portfólio, vagas, remoto, freelance) e Career Engineering (resume, LinkedIn, behavioral interview, negotiation, promo docs).',
   keywords:
     'carreira tech, carreira digital, career engineering, resume tech, linkedin dev, behavioral interview, negotiation, promotion, staff engineer',
   alternates: { canonical: 'https://fernandofrancovalle.com/carreira' },
@@ -38,7 +38,7 @@ export default function Page() {
         workloadHours={workloadHours}
         teaches="Portfólio · Vagas · Behavioral Interview · Negotiation · Promoção"
       />
-      <HubPageClient hub={hub} />
+      <ProfissionalBaseHome hub={hub} heroHighlight="se posicionar" />
     </>
   );
 }
