@@ -245,3 +245,35 @@ describe('Module routing — /aprenda/<slug> resolve para a base do módulo', ()
     expect(r.base?.slug).toBe('tecnologia');
   });
 });
+
+// Regra crítica (mai/2026): URLs de TRILHA (ex.: /carreira-digital,
+// /technical-writing, /solo-saas) precisam resolver para a base do hub
+// dono da trilha, não cair em 'tecnologia' como default. Antes dessa
+// regra, abrir /carreira-digital mostrava chrome de IA/AWS/Engenharia.
+describe('Trail URL routing — /<trail-href> resolve para a base do hub da trilha', () => {
+  const TRAIL_CASES: Array<{ url: string; expectedBase: string; reason: string }> = [
+    // Hub Carreira
+    { url: '/carreira-digital',          expectedBase: 'carreira',         reason: 'trail-carreira-digital' },
+    { url: '/career-engineering',        expectedBase: 'carreira',         reason: 'trail65 → hub-carreira' },
+    // Hub Comunicação
+    { url: '/comunicacao-humana',        expectedBase: 'comunicacao',      reason: 'trail-comunicacao-humana' },
+    { url: '/technical-writing',         expectedBase: 'comunicacao',      reason: 'trail53 → hub-comunicacao' },
+    // Hub Marketing
+    { url: '/marketing-digital',         expectedBase: 'marketing',        reason: 'trail-marketing-digital' },
+    // Hub Conteúdo
+    { url: '/criacao-conteudo',          expectedBase: 'conteudo',         reason: 'trail-criacao-conteudo' },
+    // Hub Empreendedorismo
+    { url: '/empreendedorismo-digital',  expectedBase: 'empreendedorismo', reason: 'trail-empreendedorismo-digital' },
+    { url: '/solo-saas',                 expectedBase: 'empreendedorismo', reason: 'trail-solo-saas' },
+    // Tech — algumas trilhas pra checar que continuam em tecnologia
+    { url: '/deploy-fullstack-vps',      expectedBase: 'tecnologia',       reason: 'trail-deploy-fullstack → hub-engenharia' },
+    { url: '/search-trilha',             expectedBase: 'tecnologia',       reason: 'trail39 → hub-dados' },
+  ];
+
+  for (const { url, expectedBase, reason } of TRAIL_CASES) {
+    it(`${url} → base "${expectedBase}" (${reason})`, () => {
+      const r = resolveBaseConfig(url);
+      expect(r.base?.slug, `${url} deveria resolver para "${expectedBase}", veio "${r.base?.slug}"`).toBe(expectedBase);
+    });
+  }
+});

@@ -5641,7 +5641,7 @@ export const HUBS: Hub[] = [
     icon: '🏗️',
     tagline: 'DevOps, engenharia moderna, distribuídos e SRE — sair do coder, virar engenheiro de sistemas.',
     desc: 'Trilhas para virar engenheiro de sistemas de verdade: Docker + Kubernetes + CI/CD profissional, engenharia na era dos agents, API Design & Contratos, Security Engineering (OAuth2/OIDC, OWASP, pentest), Testing Engineering (TDD, property-based, mutation, Pact), Accessibility & Inclusive Engineering (WCAG, ARIA, screen readers), Tech Leadership & Staff Engineering, System Design Interview Prep, sistemas distribuídos (CAP, Raft, sagas, event sourcing), observabilidade + SRE (OpenTelemetry, SLOs, incident response) e Product Engineering com experimentação rigorosa.',
-    trailIds: ['trail7', 'trail8', 'trail21', 'trail22', 'trail33', 'trail34', 'trail10', 'trail11', 'trail32', 'trail40', 'trail52', 'trail58', 'trail59', 'trail60', 'trail61', 'trail62', 'trail63', 'trail64', 'trail66', 'trail-privacy-compliance', 'trail-streaming-messaging', 'trail-authorization', 'trail-devtools-productivity', 'trail-web3-pragmatico'],
+    trailIds: ['trail7', 'trail-deploy-fullstack', 'trail8', 'trail21', 'trail22', 'trail33', 'trail34', 'trail10', 'trail11', 'trail32', 'trail40', 'trail52', 'trail58', 'trail59', 'trail60', 'trail61', 'trail62', 'trail63', 'trail64', 'trail66', 'trail-privacy-compliance', 'trail-streaming-messaging', 'trail-authorization', 'trail-devtools-productivity', 'trail-web3-pragmatico'],
   },
   {
     id: 'hub-claude-anthropic',
@@ -5689,7 +5689,7 @@ export const HUBS: Hub[] = [
     icon: '🏭',
     tagline: 'Postgres deep, data engineering moderna, analytics como engenharia — além do CRUD.',
     desc: 'Duas trilhas avançadas que consolidam a camada de dados moderna: Postgres Internals profundo (MVCC, query planner, índices avançados, vacuum, replication, partitioning) e Data Engineering Moderna (batch vs stream, dbt, orchestração, DuckDB/Polars, Iceberg, Kafka, CDC, qualidade de dados).',
-    trailIds: ['trail38', 'trail24', 'trail54', 'trail-search-ir-deep'],
+    trailIds: ['trail38', 'trail24', 'trail54', 'trail39', 'trail-search-ir-deep'],
   },
   {
     id: 'hub-construcao',

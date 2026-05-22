@@ -3,7 +3,6 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { Mail, ExternalLink, ChevronDown } from 'lucide-react';
-import { HUBS } from '@/lib/curriculum';
 import { FfvLogo } from '@/components/ui/ffv-logo';
 
 export interface FooterLinkItem {
@@ -13,9 +12,18 @@ export interface FooterLinkItem {
 }
 
 interface SiteFooterProps {
-  /** Substitui a coluna "Hubs". Default: HUBS de tecnologia. */
+  /**
+   * Coluna "Hubs" do footer. SEMPRE deve ser passada pelo caller
+   * (`AppChrome` injeta a partir do BaseConfig da base ativa). Se ausente,
+   * o footer renderiza coluna vazia — antigamente havia fallback para
+   * `HUBS` cru do curriculum, mas isso vazava links de tech em bases
+   * não-tech. Ver CLAUDE.md → "Isolamento de base".
+   */
   hubLinks?: FooterLinkItem[];
-  /** Substitui a coluna "Conteúdo". Default: News/Simulados/Progresso/etc (tech). */
+  /**
+   * Coluna "Conteúdo" do footer. Mesma regra: o caller passa do BaseConfig.
+   * Se ausente, renderiza coluna vazia.
+   */
   contentLinks?: FooterLinkItem[];
   /** Override do título da coluna de hubs (medvet usa "Hubs temáticos", etc). */
   hubColumnTitle?: string;
@@ -27,15 +35,10 @@ interface SiteFooterProps {
   mobilePrimary?: FooterLinkItem[];
 }
 
-const DEFAULT_CONTENT_LINKS: FooterLinkItem[] = [
-  { label: 'News', href: '/news' },
-  { label: 'Simulados', href: '/simulados' },
-  { label: 'Progresso', href: '/progresso' },
-  { label: 'Revisar (SRS)', href: '/revisar' },
-  { label: 'Glossário', href: '/glossario' },
-  { label: 'Playlists', href: '/playlists' },
-  { label: 'Roadmaps', href: '/roadmaps' },
-];
+// Sem default de hubLinks/contentLinks: o footer só renderiza o que a base
+// ativa fornece via BaseConfig (AppChrome → SiteFooter). Antes havia
+// defaults com /news, /simulados etc. — links que SÓ existem em /tecnologia.
+// Em bases não-tech isso vazava chrome de outra base.
 
 // Sem fallback default — se a base não passou mobilePrimary, o footer
 // mobile compacto não renderiza (cai direto pro layout completo). Isso evita
@@ -71,9 +74,10 @@ export function SiteFooter({
   hubColumnTitle = 'Hubs',
   mobilePrimary,
 }: SiteFooterProps = {}) {
-  const finalHubLinks: FooterLinkItem[] =
-    hubLinks ?? HUBS.map(h => ({ label: h.name, href: h.href }));
-  const finalContentLinks: FooterLinkItem[] = contentLinks ?? DEFAULT_CONTENT_LINKS;
+  // Sem fallback para HUBS cru: se o caller não passou, renderiza array
+  // vazio. Ver SiteFooterProps acima (regra de isolamento de base).
+  const finalHubLinks: FooterLinkItem[] = hubLinks ?? [];
+  const finalContentLinks: FooterLinkItem[] = contentLinks ?? [];
   const finalMobilePrimary: FooterLinkItem[] | null = mobilePrimary ?? null;
 
   // Mobile: começa colapsado mostrando só os links primários da base. "Ver

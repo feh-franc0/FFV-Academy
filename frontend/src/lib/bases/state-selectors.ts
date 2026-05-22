@@ -14,7 +14,7 @@
  *   continua vendo tudo.
  */
 
-import { getBaseSlugForModule, filterSlugsByBase } from './module-base-resolver';
+import { getBaseSlugForModule, filterSlugsByBase, getModuleSlugSetForBase } from './module-base-resolver';
 import { CURRICULUM } from '@/lib/curriculum';
 import { MEDVET_MODULES_LITE } from '@/lib/bases/medvet/slugs';
 import { DEFAULT_BASE_SLUG } from './registry';
@@ -102,28 +102,40 @@ export function selectQuizScoresForBase<V>(
 // Retornam totais (denominadores) da base — quantos módulos totais existem,
 // XP máximo, etc. Usado pra "X de Y" stats.
 
-/** Total de módulos cadastrados numa base. */
+/**
+ * Total de módulos cadastrados numa base.
+ *
+ * Fonte de verdade: o `moduleToBase` em module-base-resolver.ts, que é
+ * construído a partir do CURRICULUM + HUBS + MEDVET_MODULE_SLUGS. Assim,
+ * basta uma base ter trilhas registradas em algum hub para o total
+ * aparecer aqui — sem switch hardcoded por slug.
+ *
+ * Bases não-tech (carreira, comunicacao, marketing, conteudo,
+ * empreendedorismo, ingles) entram automaticamente via essa mesma
+ * derivação. Adicionar uma base nova não exige tocar este arquivo.
+ */
 export function selectTotalModulesForBase(baseSlug: string): number {
-  if (baseSlug === 'tecnologia') {
-    return CURRICULUM.reduce((acc, t) => acc + t.modules.length, 0);
-  }
-  if (baseSlug === 'medicina-veterinaria') {
-    return MEDVET_MODULES_LITE.length;
-  }
-  return 0;
+  return getModuleSlugSetForBase(baseSlug).size;
 }
 
 /** XP máximo possível somando todos os módulos de uma base. */
 export function selectTotalXpForBase(baseSlug: string): number {
-  if (baseSlug === 'tecnologia') {
-    return CURRICULUM.reduce(
-      (acc, t) => acc + t.modules.reduce((a, m) => a + m.xp, 0),
-      0
-    );
+  if (baseSlug === 'medicina-veterinaria') {
+    // Medvet modules don't have XP yet — estimar via tempo estimado * fator
+    // ou retornar 0. Por ora 0, pra não mostrar denominador errado.
+    return 0;
   }
-  // Medvet modules don't have XP yet — estimar via tempo estimado * fator
-  // ou retornar 0. Por ora 0, pra não mostrar denominador errado.
-  return 0;
+  // Para qualquer base com módulos no CURRICULUM (tecnologia + 6 novas
+  // bases profissionais), soma XP de cada módulo que pertence a ela.
+  const baseSlugs = getModuleSlugSetForBase(baseSlug);
+  if (baseSlugs.size === 0) return 0;
+  let total = 0;
+  for (const trail of CURRICULUM) {
+    for (const m of trail.modules) {
+      if (baseSlugs.has(m.slug)) total += m.xp;
+    }
+  }
+  return total;
 }
 
 // ─── Counters por base (localStorage-based, sem mudar schema do GameState) ──

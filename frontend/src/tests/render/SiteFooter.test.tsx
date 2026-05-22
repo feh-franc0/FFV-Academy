@@ -14,12 +14,17 @@ import { SiteFooter } from '@/components/SiteFooter';
 describe('<SiteFooter>', () => {
   afterEach(() => cleanup());
 
-  it('default (tech): mostra HUBS de tecnologia + Conteúdo global', () => {
+  it('sem props: NÃO renderiza links cross-base (isolamento estrito)', () => {
+    // Regra de isolamento de base: o footer sem props NÃO deve cair em
+    // fallback de tech (HUBS cru + DEFAULT_CONTENT). Caller é obrigado a
+    // passar hubLinks/contentLinks via AppChrome a partir do BaseConfig
+    // ativo. Antes, o fallback vazava links de tech (/ia, /aws, /news,
+    // /simulados) em bases não-tech.
     render(<SiteFooter />);
-    expect(screen.getByText('Inteligência Artificial')).toBeInTheDocument();
-    expect(screen.getByText('AWS Cloud')).toBeInTheDocument();
-    expect(screen.getByText('Simulados')).toBeInTheDocument();
-    expect(screen.getByText('News')).toBeInTheDocument();
+    expect(screen.queryByText('Inteligência Artificial')).not.toBeInTheDocument();
+    expect(screen.queryByText('AWS Cloud')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Simulados' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'News' })).not.toBeInTheDocument();
   });
 
   it('com hubLinks custom: substitui a coluna de hubs', () => {

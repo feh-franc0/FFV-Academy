@@ -22,6 +22,13 @@ import { DEFAULT_BASE_SLUG } from './registry';
 
 const moduleToBase = new Map<string, string>();
 const baseToModules = new Map<string, Set<string>>();
+/**
+ * trail.href → base slug. Permite o resolver descobrir qual base é dona
+ * de URLs de trilha como /carreira-digital, /technical-writing, /solo-saas
+ * — sem essa tabela, essas URLs caíam em 'tecnologia' por default e o
+ * chrome ficava errado.
+ */
+const trailHrefToBase = new Map<string, string>();
 
 function register(moduleSlug: string, baseSlug: string): void {
   moduleToBase.set(moduleSlug, baseSlug);
@@ -57,9 +64,13 @@ for (const hub of HUBS) {
 
 // Itera CURRICULUM e registra cada módulo na base correspondente do hub
 // da sua trilha. Trilhas sem hub (raro, mas possível durante refatorações)
-// caem em 'tecnologia' como default.
+// caem em 'tecnologia' como default. Aproveita pra registrar também
+// trail.href → base no trailHrefToBase (usado pelo resolver de rota).
 for (const trail of CURRICULUM) {
   const base = trailToBase.get(trail.id) ?? 'tecnologia';
+  if (trail.href && !trailHrefToBase.has(trail.href)) {
+    trailHrefToBase.set(trail.href, base);
+  }
   for (const m of trail.modules) {
     register(m.slug, base);
   }
@@ -76,6 +87,16 @@ for (const slug of MEDVET_MODULE_SLUGS) {
 export function getBaseSlugForModule(moduleSlug: string | null | undefined): string | null {
   if (!moduleSlug) return null;
   return moduleToBase.get(moduleSlug) ?? null;
+}
+
+/**
+ * Retorna o slug da base dona de um href de trilha (ex.: '/carreira-digital'
+ * → 'carreira'). Usado pelo resolver para que URLs de trilha legadas
+ * renderizem o chrome da base correta, e não o default 'tecnologia'.
+ */
+export function getBaseSlugForTrailHref(href: string | null | undefined): string | null {
+  if (!href) return null;
+  return trailHrefToBase.get(href) ?? null;
 }
 
 /**

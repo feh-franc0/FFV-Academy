@@ -109,6 +109,20 @@ describe('selectTotalModulesForBase', () => {
   it('base desconhecida → 0', () => {
     expect(selectTotalModulesForBase('fantasma')).toBe(0);
   });
+
+  // Regra crítica: as 6 novas bases profissionais precisam ter total > 0
+  // (caso contrário, dashboards mostram "0 de 0" e parecem quebradas).
+  // O contador é derivado do moduleToBase em module-base-resolver.ts.
+  it.each([
+    ['carreira',         13],
+    ['comunicacao',      14],
+    ['marketing',         5],
+    ['conteudo',          6],
+    ['empreendedorismo', 15],
+    ['ingles',           19],
+  ])('%s retorna %d módulos', (slug, expected) => {
+    expect(selectTotalModulesForBase(slug)).toBe(expected);
+  });
 });
 
 describe('selectRecommendationsForBase', () => {

@@ -18,7 +18,7 @@
  */
 
 import { BASE_REGISTRY, DEFAULT_BASE_SLUG } from './registry';
-import { getBaseSlugForModule } from './module-base-resolver';
+import { getBaseSlugForModule, getBaseSlugForTrailHref } from './module-base-resolver';
 import type { BaseConfig } from './types';
 
 const MARKETING_PATHS = new Set([
@@ -89,6 +89,13 @@ function detectBaseSlug(pathname: string): string | null {
     if (baseFromModule) return baseFromModule;
     return 'tecnologia';
   }
+
+  // URLs de trilha (ex.: /carreira-digital, /technical-writing, /solo-saas).
+  // O `getBaseSlugForTrailHref` derivado do CURRICULUM aponta cada href de
+  // trilha para a base do hub dono. Sem essa etapa, essas URLs caíam em
+  // 'tecnologia' por default e renderizavam chrome errado.
+  const trailBase = getBaseSlugForTrailHref(trimmed);
+  if (trailBase) return trailBase;
 
   // Rotas legadas tech — convivem fora de /tecnologia mas pertencem à base.
   // /aprenda fica DE FORA aqui porque o slug do módulo determina a base
