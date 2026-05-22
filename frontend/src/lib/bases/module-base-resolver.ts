@@ -16,7 +16,7 @@
  *   atribuir ao default? mostrar mesmo assim?).
  */
 
-import { CURRICULUM } from '@/lib/curriculum';
+import { CURRICULUM, HUBS } from '@/lib/curriculum';
 import { MEDVET_MODULE_SLUGS } from '@/lib/bases/medvet/slugs';
 import { DEFAULT_BASE_SLUG } from './registry';
 
@@ -30,10 +30,38 @@ function register(moduleSlug: string, baseSlug: string): void {
   baseToModules.set(baseSlug, set);
 }
 
-// Tech — CURRICULUM global (já está no bundle por outros lugares).
+// Mapeamento hub slug → base slug. Slugs dos hubs da família Profissional
+// Digital (carreira, comunicacao, marketing, conteudo, empreendedorismo,
+// ingles) coincidem com os slugs das bases — cada um é uma base própria.
+// Os demais hubs (ia, aws, engenharia, claude-anthropic, fundamentos,
+// programacao, dados, construcao, seguranca-hardware-hacking) pertencem
+// à base 'tecnologia'.
+const PROFISSIONAL_BASE_SLUGS = new Set([
+  'carreira', 'comunicacao', 'marketing', 'conteudo',
+  'empreendedorismo', 'ingles',
+]);
+
+function baseSlugForHub(hubSlug: string): string {
+  return PROFISSIONAL_BASE_SLUGS.has(hubSlug) ? hubSlug : 'tecnologia';
+}
+
+// Constrói trailId → baseSlug a partir do HUBS array. Cada trilha aparece
+// em exatamente UM hub; o hub determina a base.
+const trailToBase = new Map<string, string>();
+for (const hub of HUBS) {
+  const base = baseSlugForHub(hub.slug);
+  for (const trailId of hub.trailIds) {
+    trailToBase.set(trailId, base);
+  }
+}
+
+// Itera CURRICULUM e registra cada módulo na base correspondente do hub
+// da sua trilha. Trilhas sem hub (raro, mas possível durante refatorações)
+// caem em 'tecnologia' como default.
 for (const trail of CURRICULUM) {
+  const base = trailToBase.get(trail.id) ?? 'tecnologia';
   for (const m of trail.modules) {
-    register(m.slug, 'tecnologia');
+    register(m.slug, base);
   }
 }
 

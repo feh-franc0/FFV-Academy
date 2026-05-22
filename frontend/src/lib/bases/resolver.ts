@@ -18,6 +18,7 @@
  */
 
 import { BASE_REGISTRY, DEFAULT_BASE_SLUG } from './registry';
+import { getBaseSlugForModule } from './module-base-resolver';
 import type { BaseConfig } from './types';
 
 const MARKETING_PATHS = new Set([
@@ -77,7 +78,22 @@ function detectBaseSlug(pathname: string): string | null {
     }
   }
 
+  // Rota de módulo: /aprenda/<slug> resolve para a base do módulo. Cada
+  // módulo pertence a uma trilha, cada trilha a um hub, cada hub a uma base.
+  // Vide module-base-resolver.ts — fonte de verdade do mapeamento.
+  // Sem isso, módulos de Comunicação/Marketing/etc. herdavam o chrome de
+  // /tecnologia (bug reportado pelo PO: chrome vazando entre bases).
+  if (trimmed.startsWith('/aprenda/')) {
+    const slug = trimmed.slice('/aprenda/'.length).split('/')[0];
+    const baseFromModule = getBaseSlugForModule(slug);
+    if (baseFromModule) return baseFromModule;
+    return 'tecnologia';
+  }
+
   // Rotas legadas tech — convivem fora de /tecnologia mas pertencem à base.
+  // /aprenda fica DE FORA aqui porque o slug do módulo determina a base
+  // (tratado acima). Mantemos /aprenda como root para fallback se o módulo
+  // for desconhecido.
   const TECH_LEGACY = ['/aprenda', '/simulados', '/ia', '/aws', '/engenharia', '/claude-anthropic',
     '/fundamentos', '/programacao', '/dados', '/construcao', '/seguranca-hardware-hacking'];
   if (TECH_LEGACY.some(p => trimmed === p || trimmed.startsWith(p + '/'))) {

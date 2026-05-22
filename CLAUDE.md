@@ -217,6 +217,29 @@ próprios (e referenciando SÓ a própria base):
 - ❌ Tradição "eu já registrei como /xxx-legacy em resolver, então pode
   ficar dentro de tecnologia" — se é base nova, ela tem que ter
   identidade própria.
+- ❌ **Módulos em `/aprenda/<slug>` herdando chrome de `tecnologia` por
+  default.** Cada módulo PERTENCE a uma trilha → hub → base. O resolver
+  tem que consultar `getBaseSlugForModule(slug)` em `lib/bases/module-base-resolver.ts`
+  ANTES de cair em "tecnologia". Sem isso, ler um artigo de Comunicação
+  mostra header com IA/AWS/Engenharia/Claude (bug reportado pelo PO,
+  mai/2026). Testes em `isolation.test.ts` travam essa regra com casos
+  canônicos — não remova.
+
+### Como o resolver decide a base de uma rota
+
+Ordem de precedência em `lib/bases/resolver.ts → detectBaseSlug()`:
+
+1. **Match exato com `BASE_REGISTRY[*].basePath`** — ex.: `/comunicacao`
+   resolve para a base `comunicacao` (basePath dela).
+2. **`/aprenda/<slug>` → módulo → trilha → hub → base** via
+   `getBaseSlugForModule(slug)`. Esta é a etapa CRÍTICA pra módulos
+   nunca herdarem chrome errado. Módulo desconhecido cai em `tecnologia`
+   como último recurso (preserva URLs antigas).
+3. **Legacy tech prefixes** (`/ia`, `/aws`, `/simulados`, `/engenharia`…)
+   resolvem para `tecnologia`. Não adicione nada não-técnico aqui.
+4. **Marketing paths** (`/`, `/sobre`, `/bases`…) → `null` + `isMarketing=true`.
+5. **App-global** (`/progresso`, `/ranking`, `/revisar`…) → base default
+   mas `isAppGlobal=true` (componentes ignoram microcopy da base).
 
 ### Se descumprir, o que acontece
 

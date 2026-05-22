@@ -206,3 +206,42 @@ describe('Cross-base isolation — resolver behavior', () => {
     }
   });
 });
+
+// Regra crítica reportada pelo PO (mai/2026): ao entrar em
+// /aprenda/<modulo-de-comunicacao>, o chrome estava puxando a base
+// 'tecnologia' (porque /aprenda era hardcoded em TECH_LEGACY). Cada
+// MÓDULO tem que resolver para a base do seu HUB, não para o default.
+//
+// Este describe trava a regra com casos canônicos. Se algum dia alguém
+// remover `getBaseSlugForModule` do resolver.ts, esses testes quebram
+// imediatamente. NÃO REMOVA.
+describe('Module routing — /aprenda/<slug> resolve para a base do módulo', () => {
+  // Mapeamento canônico: módulo → base esperada. Cobre as 8 bases live.
+  // Slugs reais retirados do CURRICULUM e MEDVET_MODULE_SLUGS.
+  const CASES: Array<{ slug: string; expectedBase: string; reason: string }> = [
+    // Tech — módulos dos 9 hubs técnicos
+    { slug: 'fundamentos-da-ia',                expectedBase: 'tecnologia',           reason: 'hub-ia → tecnologia' },
+    { slug: 'aws-cloud-practitioner-overview',  expectedBase: 'tecnologia',           reason: 'hub-aws → tecnologia' },
+    { slug: 'docker-essencial',                 expectedBase: 'tecnologia',           reason: 'hub-engenharia → tecnologia' },
+    { slug: 'claude-code-instalacao',           expectedBase: 'tecnologia',           reason: 'hub-claude-anthropic → tecnologia' },
+    // Profissional Digital — cada um vai pra sua base própria
+    { slug: 'comunicacao-feedback',             expectedBase: 'comunicacao',          reason: 'trail-comunicacao-humana → comunicacao' },
+    { slug: 'tw-rfcs-como-escrever',            expectedBase: 'comunicacao',          reason: 'trail53 → hub-comunicacao → comunicacao' },
+    { slug: 'carreira-portfolio-digital',       expectedBase: 'carreira',             reason: 'trail-carreira-digital → carreira' },
+    { slug: 'career-mental-model-sr-staff',     expectedBase: 'carreira',             reason: 'trail65 → hub-carreira → carreira' },
+    { slug: 'ingles-fase1-pronomes-to-be',      expectedBase: 'ingles',               reason: 'trail-ingles → ingles' },
+    { slug: 'stripe-billing-patterns',          expectedBase: 'empreendedorismo',     reason: 'trail-solo-saas → empreendedorismo' },
+  ];
+
+  for (const { slug, expectedBase, reason } of CASES) {
+    it(`/aprenda/${slug} → base "${expectedBase}" (${reason})`, () => {
+      const r = resolveBaseConfig(`/aprenda/${slug}`);
+      expect(r.base?.slug, `/aprenda/${slug} deveria resolver para "${expectedBase}", veio "${r.base?.slug}"`).toBe(expectedBase);
+    });
+  }
+
+  it('módulo desconhecido cai em "tecnologia" como fallback', () => {
+    const r = resolveBaseConfig('/aprenda/modulo-que-nao-existe-12345');
+    expect(r.base?.slug).toBe('tecnologia');
+  });
+});
