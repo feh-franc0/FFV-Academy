@@ -42,7 +42,11 @@ const EXTRA_BASE_PREFIXES: Record<string, string[]> = {
   tecnologia: [
     '/aprenda', '/simulados', '/ia', '/aws', '/engenharia',
     '/claude-anthropic', '/fundamentos', '/programacao', '/dados',
-    '/profissional-digital',
+    '/construcao', '/seguranca-hardware-hacking',
+    // Hubs do Profissional Digital — saíram do listing de /tecnologia mas
+    // continuam compartilhando chrome/gamificação com a base default.
+    '/carreira', '/comunicacao', '/marketing', '/conteudo',
+    '/empreendedorismo', '/ingles',
   ],
 };
 

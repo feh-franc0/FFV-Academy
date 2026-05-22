@@ -145,14 +145,19 @@ export interface HubOption {
 }
 
 export const HUB_OPTIONS: readonly HubOption[] = [
-  { id: 'ia',                   label: 'Inteligência Artificial', icon: '🧠', description: 'Transformers, LLMs, RAG, agents, fine-tuning' },
-  { id: 'aws',                  label: 'AWS',                     icon: '☁️', description: 'EC2, S3, Lambda, certificações Cloud Practitioner/Developer' },
-  { id: 'engenharia',           label: 'Engenharia de Software',  icon: '⚙️', description: 'Arquitetura, sistemas distribuídos, SRE, testing' },
-  { id: 'claude',               label: 'Claude & Anthropic',      icon: '🪶', description: 'Claude Code, MCP, context engineering, safety' },
-  { id: 'fundamentos',          label: 'Fundamentos',             icon: '📐', description: 'CS, redes, banco de dados, algoritmos' },
-  { id: 'programacao',          label: 'Programação',             icon: '💻', description: 'TypeScript, Go, Python, frameworks' },
-  { id: 'dados',                label: 'Dados',                   icon: '📊', description: 'ETL, data warehouse, analytics, ML ops' },
-  { id: 'profissional-digital', label: 'Profissional Digital',    icon: '🚀', description: 'Carreira, comunicação, conteúdo, empreendedorismo' },
+  { id: 'ia',               label: 'Inteligência Artificial', icon: '🧠', description: 'Transformers, LLMs, RAG, agents, fine-tuning' },
+  { id: 'aws',              label: 'AWS',                     icon: '☁️', description: 'EC2, S3, Lambda, certificações Cloud Practitioner/Developer' },
+  { id: 'engenharia',       label: 'Engenharia de Software',  icon: '⚙️', description: 'Arquitetura, sistemas distribuídos, SRE, testing' },
+  { id: 'claude',           label: 'Claude & Anthropic',      icon: '🪶', description: 'Claude Code, MCP, context engineering, safety' },
+  { id: 'fundamentos',      label: 'Fundamentos',             icon: '📐', description: 'CS, redes, banco de dados, algoritmos' },
+  { id: 'programacao',      label: 'Programação',             icon: '💻', description: 'TypeScript, Go, Python, frameworks' },
+  { id: 'dados',            label: 'Dados',                   icon: '📊', description: 'ETL, data warehouse, analytics, ML ops' },
+  { id: 'carreira',         label: 'Carreira & Liderança',    icon: '🎯', description: 'Portfólio, vagas, promoção, behavioral interview, negotiation' },
+  { id: 'comunicacao',      label: 'Comunicação',             icon: '💬', description: 'Falar em público, technical writing, RFCs, design docs' },
+  { id: 'marketing',        label: 'Marketing Digital',       icon: '📣', description: 'SEO, branding, CAC/LTV, funil, growth' },
+  { id: 'conteudo',         label: 'Criação de Conteúdo',     icon: '🎬', description: 'YouTube, LinkedIn, gravação, edição, monetização' },
+  { id: 'empreendedorismo', label: 'Empreendedorismo',        icon: '🚀', description: 'Solo SaaS, indie hacker, MVP, freelance, founder' },
+  { id: 'ingles',           label: 'Inglês',                  icon: '🌎', description: 'Inglês para devs e profissionais — gramática + 10 cenários reais' },
 ] as const;
 
 export interface CertificationOption {

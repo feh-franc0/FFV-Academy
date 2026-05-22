@@ -7,16 +7,41 @@
  * essas adapters — mesma estrutura visual que a /medicina-veterinaria usa.
  */
 
-import { CURRICULUM, HUBS, getHubStats } from '@/lib/curriculum';
+import { CURRICULUM, HUBS, getHubStats, getHubTrails } from '@/lib/curriculum';
 import { PLAYLISTS } from '@/lib/playlists';
 import type { HubCardData, PlaylistCardData } from '@/components/home/Explorar';
 import type { ComecarPath } from '@/components/home/ComecarAqui';
 
-export const TECH_TOTAL_MODULES = CURRICULUM.flatMap(t => t.modules).length;
-export const TECH_TOTAL_TRAILS = CURRICULUM.length;
-export const TECH_TOTAL_HUBS = HUBS.length;
+/**
+ * Slugs dos hubs que pertencem à base /tecnologia. Hubs de carreira,
+ * comunicação, marketing, conteúdo, empreendedorismo e inglês vivem em
+ * rotas próprias (/carreira, /comunicacao, etc.) e NÃO aparecem aqui —
+ * a base /tecnologia só lista conteúdo técnico.
+ */
+const TECH_HUB_SLUGS = new Set([
+  'ia',
+  'aws',
+  'engenharia',
+  'claude-anthropic',
+  'fundamentos',
+  'programacao',
+  'dados',
+  'construcao',
+  'seguranca-hardware-hacking',
+]);
 
-export const TECH_HUBS: HubCardData[] = HUBS.map(hub => {
+const TECH_HUB_LIST = HUBS.filter(h => TECH_HUB_SLUGS.has(h.slug));
+
+export const TECH_TOTAL_HUBS = TECH_HUB_LIST.length;
+export const TECH_TOTAL_TRAILS = TECH_HUB_LIST.flatMap(h => getHubTrails(h)).length;
+export const TECH_TOTAL_MODULES = TECH_HUB_LIST
+  .flatMap(h => getHubTrails(h))
+  .flatMap(t => t.modules).length;
+
+// Mantém alias para retrocompatibilidade com componentes que querem o total bruto do CURRICULUM.
+export const TOTAL_CURRICULUM_MODULES = CURRICULUM.flatMap(t => t.modules).length;
+
+export const TECH_HUBS: HubCardData[] = TECH_HUB_LIST.map(hub => {
   const stats = getHubStats(hub);
   return {
     id: hub.id,
@@ -82,11 +107,11 @@ export const TECH_PATHS: ComecarPath[] = [
     color: '#e3b341',
   },
   {
-    icon: '🎤',
-    title: 'Quero crescer no digital',
-    desc: 'Comunicação, carreira, conteúdo, marketing, empreendedorismo.',
-    href: '/aprenda/comunicacao-falar-em-publico',
-    cta: 'Profissional Digital',
-    color: '#f472b6',
+    icon: '🛡️',
+    title: 'Quero hardware hacking',
+    desc: 'Flipper Zero, Sub-GHz, RFID, NFC, BadUSB — pentest ético com base legal.',
+    href: '/seguranca-hardware-hacking',
+    cta: 'Hardware & Segurança',
+    color: '#22c55e',
   },
 ];

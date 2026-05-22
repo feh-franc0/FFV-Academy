@@ -79,8 +79,16 @@ function detectBaseSlug(pathname: string): string | null {
 
   // Rotas legadas tech — convivem fora de /tecnologia mas pertencem à base.
   const TECH_LEGACY = ['/aprenda', '/simulados', '/ia', '/aws', '/engenharia', '/claude-anthropic',
-    '/fundamentos', '/programacao', '/dados', '/profissional-digital'];
+    '/fundamentos', '/programacao', '/dados', '/construcao', '/seguranca-hardware-hacking'];
   if (TECH_LEGACY.some(p => trimmed === p || trimmed.startsWith(p + '/'))) {
+    return 'tecnologia';
+  }
+
+  // Hubs do Profissional Digital — saíram da base /tecnologia mas continuam
+  // usando o mesmo chrome (mesmo usuário, mesma gamificação).
+  const PROFISSIONAL_HUBS = ['/carreira', '/comunicacao', '/marketing', '/conteudo',
+    '/empreendedorismo', '/ingles'];
+  if (PROFISSIONAL_HUBS.some(p => trimmed === p || trimmed.startsWith(p + '/'))) {
     return 'tecnologia';
   }
 
