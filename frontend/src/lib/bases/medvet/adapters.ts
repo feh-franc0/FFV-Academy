@@ -27,7 +27,7 @@ export const MEDVET_HUBS: HubCardData[] =
     icon: hub.icon,
     color: MEDVET_THEME.hubColors[hub.colorIndex],
     tagline: hub.description,
-    href: `${BASE_PATH}#${hub.slug}`,
+    href: `${BASE_PATH}/hub/${hub.slug}/`,
     trailCount: 1,
     moduleCount: hub.moduleSlugs.length,
   })) ?? [];
