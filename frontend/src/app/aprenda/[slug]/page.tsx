@@ -21,6 +21,7 @@ import { TrailLeaderboard } from '@/components/ranking/TrailLeaderboard';
 import { AnkiExport } from '@/components/article/AnkiExport';
 import { TrailCertificateBanner } from '@/components/TrailCertificateBanner';
 import { TrailSidebar } from '@/components/article/TrailSidebar';
+import { AutoRefresh } from '@/components/article/AutoRefresh';
 import { safeJsonLd } from '@/lib/safe-json';
 
 interface PageProps {
@@ -175,6 +176,7 @@ export default async function ModulePage({ params }: PageProps) {
                 Esse módulo está sendo gerado/atualizado pela curadoria. Volte em alguns
                 minutos — o ISR regenera o cache automaticamente a cada 60 segundos.
               </p>
+              <AutoRefresh delaySeconds={8} />
             </div>
             <ViewTracker slug={slug} hubId={undefined} trailId={meta.trailId} />
           </article>
