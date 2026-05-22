@@ -254,6 +254,65 @@ mostram conteúdo da própria base.** Se não confirmou, não está pronto.
 
 ---
 
+## 🔭 PONTOS DE ATENÇÃO OPERACIONAIS (revisado mai/2026)
+
+> Coisas conhecidas que podem morder em desenvolvimento. Lê antes de tocar
+> em base/hub/módulo. Atualize aqui quando descobrir mais uma.
+
+### Estado atual do isolamento de bases (mai/2026)
+
+8 bases live em produção: `tecnologia`, `medicina-veterinaria`, `carreira`,
+`comunicacao`, `marketing`, `conteudo`, `empreendedorismo`, `ingles`.
+Cada uma com `BaseConfig` próprio, chrome isolado e endpoint backend
+`/api/v1/bases/<slug>/page` retornando 200.
+
+### Como o chrome certo é escolhido (precedência)
+
+Para cada pathname o resolver de `lib/bases/resolver.ts` faz, nesta ordem:
+
+1. Match exato com `BaseConfig.basePath` (ex.: `/comunicacao` → base comunicacao).
+2. `/aprenda/<slug>` → consulta `getBaseSlugForModule(slug)` (módulo → trilha → hub → base via `module-base-resolver.ts`).
+3. Href de trilha (ex.: `/carreira-digital`, `/technical-writing`) → consulta `getBaseSlugForTrailHref(path)` derivado do CURRICULUM.
+4. Rota legacy tech (`/ia`, `/aws`, `/simulados`, `/engenharia`…) → `tecnologia`.
+5. Marketing (`/`, `/sobre`, `/bases`…) → `null` + `isMarketing=true`.
+6. App-global (`/progresso`, `/ranking`, `/revisar`…) → base default + `isAppGlobal=true`.
+
+**Se alguém ver chrome errado**, em 99% dos casos o erro está em uma destas 6 etapas — começa investigando por #1.
+
+### Componentes de chrome SEM fallback default (NÃO recriar)
+
+- `SiteFooter` antes tinha `hubLinks ?? HUBS.map(...)` que vazava tech em qualquer base que não passasse props. **Hoje é `?? []`**. NÃO recolocar fallback baseado em `HUBS` cru. O caller (`AppChrome`) é obrigado a injetar do `BaseConfig` ativo.
+- `MobileNav` e `GameHUD` só renderizam itens globais (`/simulados`, `/news`, `/playlists`) quando `BaseConfig.nav.hideGlobalContentNav === false`. Tecnologia é a única base com isso `false` hoje.
+
+### Pendências conhecidas (low priority)
+
+| Item | Onde | Por que adiar |
+|------|------|---------------|
+| `OnboardingModal` só sugere 4 hubs tech (`ia`, `aws`, `engenharia`, `claude`) | `src/components/OnboardingModal.tsx:11` | UX flow só para devs iniciantes; expandir quando tiver dados sobre uso das novas bases |
+| `StudyRequestForm` lista 11 áreas "queued" hardcoded sem incluir as 6 profissionais | `src/components/home/StudyRequestForm.tsx:35-45` | Form é pra pedir bases que **não existem**; as 6 já são live, então não precisam estar lá. Avaliar incluir "Marketing", "Inglês" etc. caso usuários pedirem expansão dentro dessas bases |
+| Módulos das 6 bases não têm JSONs em `scripts/seeds/articles/` | check-curriculum-seed-drift.mjs | Trilhas servidas pelo frontend; produção de conteúdo em ondas. Já está na allowlist via slugs de hub |
+
+### Testes que travam regressões (NÃO REMOVER)
+
+- `frontend/src/lib/bases/__tests__/isolation.test.ts`:
+  - `Module routing — /aprenda/<slug> resolve para a base do módulo` (11 casos canônicos)
+  - `Trail URL routing — /<trail-href> resolve para a base do hub da trilha` (10 casos)
+  - `selectTotalModulesForBase` (6 casos das bases profissionais)
+- `frontend/src/lib/bases/__tests__/state-selectors.test.ts`:
+  - `selectRecommendationsForBase NUNCA vaza tech recs em medvet` e variantes
+- `frontend/src/tests/render/SiteFooter.test.tsx`:
+  - `sem props: NÃO renderiza links cross-base`
+
+### Checklist rápido antes de mexer em base/hub/módulo
+
+1. **Mudou hub em curriculum.ts?** Mirror em `scripts/seeds/hubs.json` SEMPRE.
+2. **Adicionou base nova?** Migration SQL (`backend/migrations/`) + `BASE_REGISTRY` (frontend) + `buildHardcodedBases()` fallback (backend) + page em `src/app/<slug>/page.tsx` com `<BaseStructuredData />` + canonical.
+3. **Adicionou trilha nova?** Coloca em `HUBS[*].trailIds` (caso contrário órfã). Adiciona o `href` da trilha pra que o resolver capte (deriva auto via `getBaseSlugForTrailHref`).
+4. **Adicionou módulo novo?** Vai pra trilha → vai pra hub → vai pra base via mapping. Verifica `getBaseSlugForModule(slug)` resolve certo.
+5. **Antes de fechar PR**: testa cada URL afetada com `curl | grep href` para confirmar que só linka pra base correta. CI tem isolation tests, mas teste visual no browser também (header certo, cores, mascote).
+
+---
+
 ## 🚀 PROTOCOLO DE COMMIT + PUSH + CI (regra fixa do PO)
 
 Sempre que o usuário pedir "commit e push" (ou variantes: "manda pra main", "sobe pra prod",
