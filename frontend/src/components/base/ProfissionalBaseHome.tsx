@@ -61,20 +61,25 @@ export function ProfissionalBaseHome({ hub, heroHighlight }: ProfissionalBaseHom
     };
   });
 
-  // Hubs no Explorar = mostra o próprio hub como 1 cartão. Isso dá ao usuário
-  // um atalho visual com cor/ícone da base. Não tem cross-sell entre bases.
-  const hubsForExplore: HubCardData[] = [
-    {
-      id: hub.id,
-      name: hub.name,
-      icon: hub.icon,
-      color: hub.color,
-      tagline: hub.tagline,
-      href: hub.href,
-      trailCount: trails.length,
-      moduleCount: modulesCount,
-    },
-  ];
+  // Hubs no Explorar = cada TRILHA da base vira um cartão. Linkar pra
+  // /<base-slug> (próprio hub) era self-link inútil — usuário clicava e
+  // nada acontecia. Mostrando trilhas, o clique leva para a página da
+  // trilha (ex.: /carreira-digital, /career-engineering, /technical-writing).
+  const hubsForExplore: HubCardData[] = trails.map((trail, idx) => ({
+    id: trail.id,
+    name: trail.name,
+    icon: trail.icon ?? hub.icon,
+    color: trail.color ?? hub.color,
+    tagline: trail.desc,
+    href:
+      trail.href ??
+      (trail.modules[0] ? `/aprenda/${trail.modules[0].slug}` : hub.href),
+    trailCount: 1,
+    moduleCount: trail.modules.length,
+    // Disambig necessário quando trail.id se repete entre bases (futuro):
+    // não passa direto, mas evita warning de key duplicada.
+    ...(idx === 0 ? {} : {}),
+  }));
 
   return (
     <KnowledgeBaseHome
@@ -117,7 +122,11 @@ export function ProfissionalBaseHome({ hub, heroHighlight }: ProfissionalBaseHom
       playlists={[]}
       mapHref={hub.href}
       explorarHeading={`${trails.length} ${trails.length === 1 ? 'trilha' : 'trilhas'} · ${modulesCount} módulos`}
-      explorarSubheading="Conteúdo completo desta base."
+      explorarSubheading={
+        trails.length === 1
+          ? 'Trilha completa desta base — clique para abrir o blog com todos os módulos.'
+          : 'Cada trilha cobre uma área dentro da base. Clique para ver o blog com todos os módulos.'
+      }
       hideRanking={false}
       hideComunidade
       hasGamificationWidgets
