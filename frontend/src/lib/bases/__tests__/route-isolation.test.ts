@@ -34,8 +34,6 @@ const EXTRA_BASE_PREFIXES: Record<string, string[]> = {
     '/aprenda', '/simulados', '/ia', '/aws', '/engenharia',
     '/claude-anthropic', '/fundamentos', '/programacao', '/dados',
     '/construcao', '/seguranca-hardware-hacking',
-    '/carreira', '/comunicacao', '/marketing', '/conteudo',
-    '/empreendedorismo', '/ingles',
   ],
 };
 

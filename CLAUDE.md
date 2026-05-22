@@ -143,6 +143,94 @@ A plataforma evoluiu de "portal de IA + engenharia" para **escola completa do Pr
 
 ---
 
+## 🧱 REGRA FIXA — ISOLAMENTO DE BASE DE CONHECIMENTO
+
+> **Cada base de conhecimento é uma ilha. O usuário NUNCA pode ver chrome,
+> hub, simulado, nav ou link de outra base enquanto estiver dentro de uma.**
+
+A plataforma é multi-base (Tecnologia, Medicina Veterinária, Carreira,
+Comunicação, Marketing, Conteúdo, Empreendedorismo, Inglês — e futuras
+como Direito, Design, Medicina, etc). Cada base tem seu próprio mundo
+visual e de navegação.
+
+### O que TEM que ser isolado por base
+
+Quando você cria/edita uma base, GARANTA que tem todos esses elementos
+próprios (e referenciando SÓ a própria base):
+
+| Elemento | Onde vive | O que tem que ser próprio |
+|----------|-----------|--------------------------|
+| **Base home** | `src/app/<base-slug>/page.tsx` | Hero, descrição, paths, hubs, playlists só da base |
+| **Header / nav** | `BaseConfig.nav.hubNavItems` | Links dos hubs DESSA base — nunca tech hubs em base não-tech |
+| **Footer** | `BaseConfig.footer` | hubLinks, contentLinks, mobilePrimary — todos da própria base |
+| **Mascot** | `BaseConfig.mascot` | Emoji + nome + greeting contextualizados |
+| **Microcopy** | `BaseConfig.microcopy` | CTAs, placeholder de busca, ranking title, moduleNoun |
+| **Slogans** | `BaseConfig.slogans` | Hero, sub, cta da própria área |
+| **Tema** | `BaseConfig.theme` | accent, accentLight, hubColors da paleta da base |
+| **Simulados** | `BaseConfig.simulados[]` | Só os simulados da base (nunca cross-base) |
+| **Trilhas e módulos** | `CURRICULUM` + filtro por base | Aprenda/<slug>/ resolve só pra módulos da base |
+| **Hubs** | Filtrados em `lib/bases/<base>/index.ts` | Lista de hubs filtrada — nunca importa `HUBS` cru |
+| **Questões / banco de questões** | DB com `base_slug` | Cada questão pertence a uma base |
+| **Ranking / leaderboard** | Pode ser global, mas filtrado por base se a base quiser | `features.gamification: 'global'` ou `'scoped'` |
+| **News / cheatsheets / playlists** | Globais OU filtrados por base se relevante | A base decide o que mostrar |
+| **basePath** | `BaseConfig.basePath` | `/<base-slug>` — uso exclusivo |
+| **resolver.ts** | `lib/bases/resolver.ts` | Cada rota volta para SUA base, nunca para "tecnologia" como atalho |
+
+### O que CONTINUA global (não isolar)
+
+| Elemento | Por quê |
+|----------|---------|
+| Perfil único do usuário | `/perfil`, `/preferencias` — um login só |
+| Gamificação cross-base | XP/streak/level — global por padrão (`gamification: 'global'`) |
+| Marketing (`/`, `/sobre`, `/comunidade`, `/bases`, `/newsletter`) | Vendem a plataforma toda |
+| Dashboards globais | `/progresso`, `/ranking`, `/revisar` — agregam todas as bases |
+| Verificação de certificados | `/verificar` |
+
+### Checklist obrigatório ao adicionar uma base nova
+
+1. **Backend**: migration SQL inserindo na tabela `bases` com `status='live'`,
+   `url`, `modules`, `trails`, `hubs`, `theme` JSONB, `nav_items` JSONB,
+   `sort_order`. Mirror em `buildHardcodedBases()` de `bases_handler.go`
+   pro fallback.
+2. **Frontend `BASE_REGISTRY`**: nova entrada com BaseConfig **completo**
+   (theme, mascot, microcopy, slogans, nav, footer, features). NÃO copia
+   nav de tecnologia — cria a nav própria.
+3. **Frontend resolver**: pathname `/<base-slug>` → resolve pra ESSA base,
+   NÃO pra tecnologia.
+4. **Frontend page**: `src/app/<base-slug>/page.tsx` renderiza
+   `KnowledgeBaseHome` com hubs/paths/playlists da base.
+5. **Isolation tests**: `lib/bases/__tests__/isolation.test.ts` e
+   `route-isolation.test.ts` passam automaticamente pra qualquer base
+   registrada — só registrar é suficiente.
+
+### Anti-padrões proibidos
+
+- ❌ Hub não-tech apontando para `basePath: '/tecnologia'` ou
+  resolvendo para `'tecnologia'` no resolver (chrome vaza).
+- ❌ Footer ou nav de uma base com `href` de outra base.
+- ❌ Importar `HUBS` cru em uma base (sempre filtrar pelo slug
+  da base — ver `TECH_HUB_SLUGS` em `lib/bases/tecnologia/index.ts`).
+- ❌ Reusar `TECH_PATHS`, `TECH_HUBS`, `TECH_PLAYLISTS` em outra base.
+- ❌ Página `/<base-slug>` renderizando `HubPageClient` quando deveria
+  renderizar `KnowledgeBaseHome` (a primeira é pra hubs dentro de tech;
+  a segunda é a home oficial de qualquer base).
+- ❌ Tradição "eu já registrei como /xxx-legacy em resolver, então pode
+  ficar dentro de tecnologia" — se é base nova, ela tem que ter
+  identidade própria.
+
+### Se descumprir, o que acontece
+
+- Usuário entra em /carreira e vê header "IA / AWS / Engenharia / Claude" → quebra de confiança.
+- Footer com links de outra base → confusão de navegação.
+- Métricas e gamificação misturadas → impossível medir tração por área.
+- A promessa "cada base é uma jornada completa de estudo" da `/bases` vira mentira.
+
+**Antes de fechar PR que envolve base nova ou mudança em base existente,
+abre o app, navega para a rota e CONFIRMA que header + footer + nav só
+mostram conteúdo da própria base.** Se não confirmou, não está pronto.
+
+---
+
 ## 🚀 PROTOCOLO DE COMMIT + PUSH + CI (regra fixa do PO)
 
 Sempre que o usuário pedir "commit e push" (ou variantes: "manda pra main", "sobe pra prod",

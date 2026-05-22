@@ -84,14 +84,6 @@ function detectBaseSlug(pathname: string): string | null {
     return 'tecnologia';
   }
 
-  // Hubs do Profissional Digital — saíram da base /tecnologia mas continuam
-  // usando o mesmo chrome (mesmo usuário, mesma gamificação).
-  const PROFISSIONAL_HUBS = ['/carreira', '/comunicacao', '/marketing', '/conteudo',
-    '/empreendedorismo', '/ingles'];
-  if (PROFISSIONAL_HUBS.some(p => trimmed === p || trimmed.startsWith(p + '/'))) {
-    return 'tecnologia';
-  }
-
   return null;
 }
 
