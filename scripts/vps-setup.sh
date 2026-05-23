@@ -88,6 +88,10 @@ systemctl enable fail2ban && systemctl start fail2ban
 log "Criando template do arquivo .env..."
 cat > /opt/ffv/.env.template << 'EOF'
 # ─── App ──────────────────────────────────────────────────────────────────────
+# APP_ENV=production é OBRIGATÓRIO. Sem isso o backend assume "development",
+# usa MailHog em vez do Resend (emails não saem) e habilita bypass "000000"
+# no magic link (qualquer um loga como qualquer email). NÃO trocar por
+# ENVIRONMENT, ENV, NODE_ENV — o código (config.go) lê APP_ENV literalmente.
 APP_ENV=production
 HTTP_PORT=8080
 

@@ -184,25 +184,26 @@ func (uc *RequestMagicLinkUseCase) Execute(ctx context.Context, cmd RequestMagic
 	}
 
 	// Em dev, loga o token para facilitar testes sem abrir o MailHog.
+	// Em prod (devMode=false), o token nunca aparece em log.
 	if uc.devMode {
 		uc.logger.InfoContext(ctx, "DEV MODE — token gerado",
 			"use_case", "RequestMagicLink",
 			"request_id", middleware.RequestIDFromContext(ctx),
 			"email_hash", hashEmail(cmd.Email),
 			"token", token.Value(),
-			"hint", "verifique o email no MailHog (localhost:8025) ou use 000000 como bypass",
+			"hint", "verifique o email no MailHog (localhost:8025) ou use o token logado",
 		)
 	}
 
 	if err := uc.emailer.SendMagicLink(ctx, email, token.Value(), uc.tokenTTL); err != nil {
 		if uc.devMode {
 			// Em dev, falha no envio de email não bloqueia o fluxo — o token já
-			// está logado acima e o bypass 000000 funciona sem SMTP.
+			// está logado acima e pode ser copiado direto pro frontend.
 			uc.logger.WarnContext(ctx, "DEV MODE — falha ao enviar email (não crítico)",
 				"use_case", "RequestMagicLink",
 				"request_id", middleware.RequestIDFromContext(ctx),
 				"error", err.Error(),
-				"hint", "use 000000 para autenticar sem precisar do email",
+				"hint", "use o token logado acima para autenticar",
 			)
 		} else {
 			uc.logger.ErrorContext(ctx, "falha ao enviar email",
