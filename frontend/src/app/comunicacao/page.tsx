@@ -13,9 +13,9 @@ const workloadHours = Math.round(
 export const metadata: Metadata = {
   title: `${hub.name} — FFV Academy`,
   description:
-    'Comunicação Humana (falar em público, reuniões, storytelling, feedback) e Technical Writing & RFCs (design docs, RFCs, ADRs, postmortems, READMEs).',
+    'Comunicação humana e escrita profissional: falar em público, conduzir reuniões, storytelling, dar e receber feedback, escuta ativa e documentos que convencem (propostas, atas, relatórios).',
   keywords:
-    'comunicacao profissional, falar em publico, storytelling, technical writing, rfc, adr, design doc, postmortem, escrita tecnica',
+    'comunicação profissional, falar em público, storytelling, dar feedback, escuta ativa, reuniões, escrita profissional, redação corporativa, oratória',
   alternates: { canonical: 'https://fernandofrancovalle.com/comunicacao' },
   openGraph: {
     title: `${hub.name} — FFV Academy`,
@@ -38,7 +38,7 @@ export default function Page() {
         workloadHours={workloadHours}
         teaches="Falar em público · Reuniões · Storytelling · Feedback · Technical Writing · RFCs · ADRs"
       />
-      <ProfissionalBaseHome hub={hub} heroHighlight="multiplica engenheiros" />
+      <ProfissionalBaseHome hub={hub} heroHighlight="em qualquer profissão" />
     </>
   );
 }

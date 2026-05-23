@@ -13,9 +13,9 @@ const workloadHours = Math.round(
 export const metadata: Metadata = {
   title: `${hub.name} — FFV Academy`,
   description:
-    'Inglês para Brasileiros na Gringa — gramática essencial + 10 cenários reais (entrevista, daily, code review, design discussion, negociação, conference talk) com 100 trocas cada.',
+    'Inglês para Brasileiros na Gringa: gramática essencial + 10 cenários reais do dia a dia (aeroporto, moradia, supermercado, restaurante, trabalho, médico, banco, transporte, situações sociais, telefone) com 100 trocas cada.',
   keywords:
-    'ingles para devs, ingles na gringa, ingles tecnico, entrevista em ingles, code review em ingles, daily em ingles, negotiation',
+    'inglês para brasileiros, inglês na gringa, inglês conversação, gramática inglês, aprender inglês, inglês para viagem, inglês para morar no exterior',
   alternates: { canonical: 'https://fernandofrancovalle.com/ingles' },
   openGraph: {
     title: `${hub.name} — FFV Academy`,

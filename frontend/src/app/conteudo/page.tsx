@@ -13,9 +13,9 @@ const workloadHours = Math.round(
 export const metadata: Metadata = {
   title: `${hub.name} — FFV Academy`,
   description:
-    'Criação de conteúdo digital ponta-a-ponta: estratégia editorial, gravação áudio+vídeo, edição, publicação multi-plataforma, métricas e monetização.',
+    'Criação de conteúdo digital ponta-a-ponta: estratégia editorial, ideação, roteiro, gravação áudio+vídeo, edição, publicação multi-plataforma (YouTube, LinkedIn, Instagram, TikTok, podcast), métricas e monetização.',
   keywords:
-    'criacao de conteudo, youtube, linkedin, gravacao, edicao, audiencia, monetizacao, personal brand, dev content',
+    'criação de conteúdo, youtube, linkedin, instagram, tiktok, podcast, gravação, edição, audiência, marca pessoal, monetização, criador digital',
   alternates: { canonical: 'https://fernandofrancovalle.com/conteudo' },
   openGraph: {
     title: `${hub.name} — FFV Academy`,
@@ -38,7 +38,7 @@ export default function Page() {
         workloadHours={workloadHours}
         teaches="Estratégia editorial · Gravação · Edição · Publicação · Monetização de audiência"
       />
-      <ProfissionalBaseHome hub={hub} heroHighlight="como engineer" />
+      <ProfissionalBaseHome hub={hub} heroHighlight="de verdade" />
     </>
   );
 }

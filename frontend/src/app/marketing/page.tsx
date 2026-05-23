@@ -13,9 +13,9 @@ const workloadHours = Math.round(
 export const metadata: Metadata = {
   title: `${hub.name} — FFV Academy`,
   description:
-    'Marketing digital sem hype: posicionamento, branding, SEO técnico, conteúdo estratégico, métricas que importam (CAC, LTV, conversão), funil end-to-end.',
+    'Marketing digital com método: posicionamento de marca, branding, SEO orgânico, copywriting que vende, funil de aquisição, métricas que importam (CAC, LTV, conversão, retenção).',
   keywords:
-    'marketing digital, seo, branding, conteudo estrategico, cac, ltv, funil, conversao, growth, marketing para devs',
+    'marketing digital, seo orgânico, branding, copywriting, posicionamento, marca pessoal, funil de vendas, cac, ltv, conversão, tráfego, growth',
   alternates: { canonical: 'https://fernandofrancovalle.com/marketing' },
   openGraph: {
     title: `${hub.name} — FFV Academy`,
@@ -38,7 +38,7 @@ export default function Page() {
         workloadHours={workloadHours}
         teaches="Posicionamento · Branding · SEO · CAC · LTV · Funil · Conversão"
       />
-      <ProfissionalBaseHome hub={hub} heroHighlight="não como achismo" />
+      <ProfissionalBaseHome hub={hub} heroHighlight="sem achismo" />
     </>
   );
 }

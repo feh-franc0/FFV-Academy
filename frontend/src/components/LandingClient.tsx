@@ -243,7 +243,7 @@ function Hero() {
             marginRight: 'auto',
           }}
         >
-          IA que vira seus PDFs em{' '}
+          IA que transforma seus PDFs em{' '}
           {/* Highlight sweep — underline amarelo cresce 0→100% quando entra
               em viewport (efeito Linear / Stripe). */}
           <span

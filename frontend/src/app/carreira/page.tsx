@@ -13,9 +13,9 @@ const workloadHours = Math.round(
 export const metadata: Metadata = {
   title: `${hub.name} — FFV Academy`,
   description:
-    'Carreira como sistema: Carreira Digital BR (portfólio, vagas, remoto, freelance) e Career Engineering (resume, LinkedIn, behavioral interview, negotiation, promo docs).',
+    'Carreira profissional como sistema: portfólio, busca de vagas no Brasil e exterior, entrevista comportamental, negociação salarial, promoção e mental model de quem cresce de sênior para liderança.',
   keywords:
-    'carreira tech, carreira digital, career engineering, resume tech, linkedin dev, behavioral interview, negotiation, promotion, staff engineer',
+    'carreira profissional, carreira digital, busca de vagas, portfólio, entrevista comportamental, negociação salarial, promoção, linkedin, trabalho remoto, freelance',
   alternates: { canonical: 'https://fernandofrancovalle.com/carreira' },
   openGraph: {
     title: `${hub.name} — FFV Academy`,
@@ -38,7 +38,7 @@ export default function Page() {
         workloadHours={workloadHours}
         teaches="Portfólio · Vagas · Behavioral Interview · Negotiation · Promoção"
       />
-      <ProfissionalBaseHome hub={hub} heroHighlight="se posicionar" />
+      <ProfissionalBaseHome hub={hub} heroHighlight="se posicionar profissionalmente" />
     </>
   );
 }

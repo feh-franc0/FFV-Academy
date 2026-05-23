@@ -1,7 +1,7 @@
 import { ImageResponse } from 'next/og';
 
 export const dynamic = 'force-static';
-export const alt = 'FFV Academy — IA que vira seus PDFs em uma escola completa em 24h';
+export const alt = 'FFV Academy — IA que transforma seus PDFs em uma escola completa em 24h';
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
 
@@ -87,7 +87,7 @@ export default function OGImage() {
             letterSpacing: '-2px',
           }}
         >
-          IA que vira seus PDFs em <span style={{ color: '#b8835a', fontStyle: 'italic' }}>uma escola completa</span> em 24h.
+          IA que transforma seus PDFs em <span style={{ color: '#b8835a', fontStyle: 'italic' }}>uma escola completa</span> em 24h.
         </h1>
 
         {/* Subtitle */}

@@ -13,9 +13,9 @@ const workloadHours = Math.round(
 export const metadata: Metadata = {
   title: `${hub.name} — FFV Academy`,
   description:
-    'Empreendedorismo Digital (validação, MVP, infoprodutos, freelance) e Solo SaaS / Indie Hacker Stack (Stripe, multi-tenancy, CAC/LTV, pricing).',
+    'Empreendedorismo Digital ponta-a-ponta: validação de ideia, MVP, produtos digitais, infoprodutos, freelance, formalização MEI, primeiras vendas, modelo de assinatura, distribuição internacional.',
   keywords:
-    'empreendedorismo digital, solo saas, indie hacker, stripe, mvp, infoproduto, freelance, founder, side project',
+    'empreendedorismo digital, produto digital, infoproduto, freelance, mei, validação de ideia, mvp, modelo de assinatura, distribuição, primeiras vendas, indie',
   alternates: { canonical: 'https://fernandofrancovalle.com/empreendedorismo' },
   openGraph: {
     title: `${hub.name} — FFV Academy`,
@@ -38,7 +38,7 @@ export default function Page() {
         workloadHours={workloadHours}
         teaches="MVP · Solo SaaS · Indie Hacker · Stripe billing · Multi-tenancy · CAC/LTV · Pricing"
       />
-      <ProfissionalBaseHome hub={hub} heroHighlight="virando founder" />
+      <ProfissionalBaseHome hub={hub} heroHighlight="virando dono" />
     </>
   );
 }

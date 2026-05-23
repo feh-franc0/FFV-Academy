@@ -261,9 +261,9 @@ const CARREIRA_CONFIG = makeProfissionalBase({
   name: 'Carreira & Liderança',
   shortLabel: 'Carreira',
   basePath: '/carreira',
-  area: 'Portfólio · Vagas · Interview · Promoção',
+  area: 'Portfólio · Vagas · Entrevista · Promoção',
   description:
-    'Carreira como sistema: portfólio, vagas BR e gringa, behavioral interview, negotiation, promo docs.',
+    'Carreira profissional como sistema: portfólio, busca de vagas no Brasil e fora, entrevista comportamental, negociação salarial e promoção.',
   icon: '🎯',
   iconName: 'target',
   accent: '#f472b6',
@@ -272,7 +272,7 @@ const CARREIRA_CONFIG = makeProfissionalBase({
   mascotGreeting: 'Oi! Bora dirigir a tua carreira em vez de torcer pela sorte?',
   slogans: {
     hero: 'Carreira como sistema, não como sorte',
-    sub: 'Portfólio, busca de vagas, interview e promoção — passo a passo de quem chega em staff.',
+    sub: 'Portfólio, busca de vagas, entrevista e promoção — o passo a passo de quem cresce de propósito.',
     cta: 'Começar pela base da carreira',
   },
   microcopy: {
@@ -288,9 +288,9 @@ const COMUNICACAO_CONFIG = makeProfissionalBase({
   name: 'Comunicação',
   shortLabel: 'Comunicação',
   basePath: '/comunicacao',
-  area: 'Falar em público · Technical Writing · RFCs',
+  area: 'Falar em público · Escrita profissional · Reuniões · Feedback',
   description:
-    'Comunicação humana e escrita técnica que multiplica engenheiros — RFCs, ADRs, postmortems, public speaking.',
+    'Comunicação humana e escrita profissional: falar em público, conduzir reuniões, storytelling, feedback, escuta ativa e documentos que convencem.',
   icon: '💬',
   iconName: 'message-circle',
   accent: '#fb7185',
@@ -298,8 +298,8 @@ const COMUNICACAO_CONFIG = makeProfissionalBase({
   mascotName: 'Vox',
   mascotGreeting: 'Bora destravar tua comunicação — falada e escrita.',
   slogans: {
-    hero: 'Comunicar bem multiplica engenheiros',
-    sub: 'Falar em público, technical writing, RFCs, design docs e postmortems blameless — templates reais.',
+    hero: 'Comunicar bem abre todas as portas',
+    sub: 'Falar em público, conduzir reuniões, dar feedback, contar histórias e escrever documentos que respondem.',
     cta: 'Começar agora',
   },
   microcopy: {
@@ -315,9 +315,9 @@ const MARKETING_CONFIG = makeProfissionalBase({
   name: 'Marketing Digital',
   shortLabel: 'Marketing',
   basePath: '/marketing',
-  area: 'SEO · Branding · CAC/LTV · Funil',
+  area: 'SEO · Branding · CAC/LTV · Funil · Copy',
   description:
-    'Marketing como engenharia: posicionamento, SEO técnico, métricas (CAC, LTV) e funil ponta-a-ponta.',
+    'Marketing digital com método: posicionamento, branding, SEO orgânico, copywriting, funil de aquisição e métricas que importam.',
   icon: '📣',
   iconName: 'megaphone',
   accent: '#ef4444',
@@ -325,8 +325,8 @@ const MARKETING_CONFIG = makeProfissionalBase({
   mascotName: 'Mark',
   mascotGreeting: 'Marketing sem achismo. Bora?',
   slogans: {
-    hero: 'Marketing como engenharia, não como achismo',
-    sub: 'Posicionamento, SEO técnico, CAC/LTV, funil. Para devs que querem vender o próprio trabalho.',
+    hero: 'Marketing com método, sem achismo',
+    sub: 'Posicionamento, branding, SEO orgânico, copy, funil e métricas — para vender o próprio trabalho ou o de uma marca.',
     cta: 'Começar pelos fundamentos',
   },
   microcopy: {
@@ -342,18 +342,18 @@ const CONTEUDO_CONFIG = makeProfissionalBase({
   name: 'Criação de Conteúdo',
   shortLabel: 'Conteúdo',
   basePath: '/conteudo',
-  area: 'YouTube · LinkedIn · Gravação · Monetização',
+  area: 'YouTube · LinkedIn · Instagram · Podcast · Edição · Monetização',
   description:
-    'Estratégia, gravação áudio+vídeo, edição, publicação multi-plataforma, métricas e monetização.',
+    'Estratégia editorial, gravação de áudio e vídeo, edição, publicação multi-plataforma, métricas e monetização — para qualquer profissional virar referência pública.',
   icon: '🎬',
   iconName: 'film',
   accent: '#ec4899',
   accentLight: '#f9a8d4',
   mascotName: 'Cliq',
-  mascotGreeting: 'Bora construir audiência como engineer?',
+  mascotGreeting: 'Bora construir audiência?',
   slogans: {
-    hero: 'Construir audiência como engineer',
-    sub: 'Da estratégia editorial à monetização: YouTube, LinkedIn, gravação, edição, publicação.',
+    hero: 'Construir audiência de verdade',
+    sub: 'Da estratégia editorial à monetização: YouTube, LinkedIn, Instagram, podcast, edição e métricas.',
     cta: 'Começar a criar',
   },
   microcopy: {
@@ -369,9 +369,9 @@ const EMPREENDEDORISMO_CONFIG = makeProfissionalBase({
   name: 'Empreendedorismo Digital',
   shortLabel: 'Empreendedorismo',
   basePath: '/empreendedorismo',
-  area: 'Solo SaaS · Indie Hacker · MVP · Freelance',
+  area: 'Produtos digitais · Infoprodutos · Freelance · SaaS · MEI',
   description:
-    'Sair do CLT virando founder. Validação, MVP, Solo SaaS, Stripe billing, multi-tenancy, CAC/LTV.',
+    'Sair do CLT virando dono: validação de ideia, MVP, produtos digitais, infoprodutos, freelance, formalização, primeiras vendas e escala.',
   icon: '🚀',
   iconName: 'rocket',
   accent: '#eab308',
@@ -379,15 +379,15 @@ const EMPREENDEDORISMO_CONFIG = makeProfissionalBase({
   mascotName: 'Indie',
   mascotGreeting: 'Pronto pra parar de trabalhar pros outros?',
   slogans: {
-    hero: 'Do CLT ao founder solo',
-    sub: 'Indie hacker stack, Solo SaaS, validação, MVP, Stripe billing — passo a passo real.',
+    hero: 'Do CLT ao próprio negócio',
+    sub: 'Validação, MVP, produtos digitais, freelance, infoprodutos, MEI e modelo de assinatura — passo a passo real.',
     cta: 'Começar a construir',
   },
   microcopy: {
     moduleNoun: 'módulo',
     trailNoun: 'trilha',
     searchPlaceholder: 'Buscar tópicos de empreendedorismo…',
-    rankingTitle: 'Top Founders da semana',
+    rankingTitle: 'Top Empreendedores da semana',
   },
 });
 
@@ -396,9 +396,9 @@ const INGLES_CONFIG = makeProfissionalBase({
   name: 'Inglês',
   shortLabel: 'Inglês',
   basePath: '/ingles',
-  area: 'Gramática · 10 cenários reais · Trabalho na gringa',
+  area: 'Gramática · Vocabulário · 10 cenários do dia a dia',
   description:
-    'Inglês para brasileiros que vão trabalhar com a gringa: gramática essencial + 10 cenários reais com 100 trocas cada.',
+    'Inglês para brasileiros que vão morar, trabalhar ou viajar no exterior: gramática essencial + 10 cenários reais com 100 trocas cada.',
   icon: '🌎',
   iconName: 'globe',
   accent: '#06b6d4',
@@ -407,7 +407,7 @@ const INGLES_CONFIG = makeProfissionalBase({
   mascotGreeting: "Let's go — inglês de verdade, sem decoreba.",
   slogans: {
     hero: 'Inglês para brasileiros que vão pra gringa',
-    sub: 'Gramática essencial + 10 cenários reais (entrevista, daily, code review, negociação).',
+    sub: 'Gramática essencial + 10 cenários reais do dia a dia (aeroporto, moradia, trabalho, médico, banco, transporte e mais).',
     cta: 'Start learning',
   },
   microcopy: {
