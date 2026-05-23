@@ -87,21 +87,36 @@ func run() error {
 		return fmt.Errorf("config: %w", err)
 	}
 
+	// Validação estrita do APP_ENV — só 3 valores aceitos. Qualquer typo
+	// (ex.: "prod", "dev", "Production") aborta startup em vez de cair em
+	// default permissivo de "development".
+	switch cfg.App.Env {
+	case "production", "development", "test":
+		// ok
+	default:
+		return fmt.Errorf("APP_ENV inválido: %q (aceito: production|development|test)", cfg.App.Env)
+	}
+
 	// ─── Logger ────────────────────────────────────────────────────────────────
 	log := logger.New(cfg.App.Env)
 	log.Info("starting ffv-api", "version", cfg.App.Version, "env", cfg.App.Env)
 
-	// Guard contra rodar em DEV MODE numa VPS de produção. Heurística: hostname
-	// começando com "srv" (padrão Hostinger) ou variável FFV_PROD_GUARD=1 setada
-	// pelo docker-compose.prod.yml. Loga ALERT alto — não falha startup pra não
-	// quebrar deploy de emergência, mas o operador é avisado em todo log scrape.
+	// Guard fail-fast contra rodar fora de "production" em host de produção.
+	// Heurística:
+	//   - FFV_PROD_GUARD=1   → setado pelo docker-compose.prod.yml (autoritativo)
+	//   - hostname srv*      → padrão de hospedagem Hostinger (fallback)
+	// Se qualquer um casar e APP_ENV != production, startup ABORTA. Defesa em
+	// profundidade: somado ao build sem tag devbypass, faz com que o bypass
+	// magic-link "000000" não tenha como ser ativado em prod por nenhuma rota.
 	if cfg.App.Env != "production" {
 		host, _ := os.Hostname()
 		if strings.HasPrefix(host, "srv") || os.Getenv("FFV_PROD_GUARD") == "1" {
-			log.Error("ALERTA SEGURANÇA: APP_ENV != production em hospedagem de prod",
-				"app_env", cfg.App.Env,
-				"hostname", host,
-				"consequencias", "emails desabilitados (MailHog) + bypass magic-link 000000 ativo")
+			return fmt.Errorf(
+				"SEGURANÇA: detectado host de produção (hostname=%q FFV_PROD_GUARD=%q) "+
+					"mas APP_ENV=%q — em prod APP_ENV deve ser production; startup abortado "+
+					"para impedir emails silenciados e (com -tags devbypass) bypass de auth",
+				host, os.Getenv("FFV_PROD_GUARD"), cfg.App.Env,
+			)
 		}
 	}
 

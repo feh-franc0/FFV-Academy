@@ -116,8 +116,11 @@ func (uc *VerifyMagicLinkUseCase) Execute(ctx context.Context, cmd VerifyMagicLi
 
 	now := uc.clock.Now()
 
-	// Dev bypass: em desenvolvimento, o código 000000 autentica qualquer email sem Redis.
-	if !uc.devMode || strings.TrimSpace(cmd.Token) != "000000" {
+	// Dev bypass condicionado a build tag `devbypass` + devMode runtime.
+	// Em builds de produção (sem a tag) isDevBypassRequest sempre retorna false,
+	// então o flow normal de validação via Redis sempre executa. Veja
+	// devbypass_off.go / devbypass_on.go.
+	if !isDevBypassRequest(cmd.Token, uc.devMode) {
 		// Consome token do Redis (atômico: GETDEL — garante uso único).
 		storedToken, err := uc.tokenStore.Consume(ctx, email)
 		if err != nil {
