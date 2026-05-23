@@ -81,11 +81,13 @@ export function LandingHeader() {
           <FfvLogo size="md" accentColor="var(--ffv-amber)" textColor="var(--ffv-ink)" />
         </Link>
 
-        <nav className="flex items-center gap-1 sm:gap-6">
+        <nav className="flex items-center gap-2 sm:gap-6">
+          {/* "Bases" SEMPRE visível (era hidden sm:) — mobile precisa de hit-target ≥44px.
+              Padding lateral compacto pra não brigar com o CTA dark no celular pequeno. */}
           <Link
             href="/bases"
-            className="hidden sm:inline-flex items-center text-sm transition-colors"
-            style={{ color: 'var(--ffv-muted)', fontWeight: 500 }}
+            className="inline-flex items-center text-sm font-medium transition-colors min-h-[44px] px-3 sm:px-0 rounded"
+            style={{ color: 'var(--ffv-muted)' }}
             onMouseOver={e => (e.currentTarget.style.color = 'var(--ffv-ink)')}
             onMouseOut={e => (e.currentTarget.style.color = 'var(--ffv-muted)')}
           >

@@ -28,7 +28,7 @@ export function RootStructuredData() {
         url: 'https://fernandofrancovalle.com',
         logo: 'https://fernandofrancovalle.com/icons/icon-512.png',
         description:
-          'Plataforma de educação personalizada por IA. Transforma PDFs, slides e anotações em uma base de estudo completa (trilhas, módulos, exercícios, revisão espaçada) em até 24 horas.',
+          'FFV — Formação Focada em Você. Plataforma de educação personalizada por IA. Transforma PDFs, slides e anotações em uma base de estudo completa (trilhas, módulos, exercícios, revisão espaçada) no mesmo dia.',
         founder: {
           '@type': 'Person',
           name: 'Fernando Franco Valle',
@@ -56,7 +56,7 @@ export function RootStructuredData() {
         url: 'https://fernandofrancovalle.com',
         name: 'FFV Academy',
         description:
-          'IA + curadoria humana que transforma seus arquivos em uma escola completa em 24 horas. Tecnologia e Medicina Veterinária já no ar.',
+          'FFV — Formação Focada em Você. IA + curadoria humana que transforma seus arquivos em uma escola completa no mesmo dia. Tecnologia e Medicina Veterinária já no ar.',
         publisher: { '@id': ORG_ID },
         inLanguage: 'pt-BR',
         potentialAction: {

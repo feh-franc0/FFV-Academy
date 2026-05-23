@@ -199,6 +199,22 @@ function Hero() {
       />
 
       <div className="relative max-w-5xl mx-auto text-center">
+        {/* Brand tagline — backronym FFV ressignificado como slogan */}
+        <div
+          style={{
+            fontFamily: 'var(--font-inter, system-ui), sans-serif',
+            fontSize: 14,
+            fontWeight: 500,
+            color: TEXT_MUTED,
+            marginBottom: 14,
+            letterSpacing: '0.01em',
+          }}
+        >
+          <strong style={{ fontWeight: 800, color: SAGE_INK, letterSpacing: '0.04em' }}>FFV</strong>
+          <span style={{ margin: '0 8px', opacity: 0.5 }}>·</span>
+          <span style={{ fontStyle: 'italic' }}>Formação Focada em Você</span>
+        </div>
+
         {/* Status pill sage */}
         <span
           className="inline-flex items-center gap-2 mb-7"
@@ -254,7 +270,7 @@ function Hero() {
           >
             uma escola completa
           </span>
-          {' '}em 24h.
+          {' '}no mesmo dia.
         </h1>
 
         <p
@@ -271,21 +287,22 @@ function Hero() {
           Manda os <strong style={{ color: SAGE_INK }}>PDFs, slides e anotações</strong> do que
           você precisa estudar. Nossa IA + curadoria humana montam <strong style={{ color: SAGE_INK }}>trilhas
           sequenciais, módulos com teoria, questões e revisão espaçada (SM-2)</strong> calibradas
-          pelo SEU material. Em até 24h o email chega com o link pra sua base completa.
+          pelo SEU material. No mesmo dia o email chega com o link pra sua base completa.
           Não é chatbot. É a sua escola. Gratuito na V1.
         </p>
 
         {/* Flow strip — 3 etapas claras do fluxo */}
         <FlowStrip />
 
-        {/* CTAs */}
-        <div className="flex flex-col sm:flex-row gap-3 justify-center mb-10">
+        {/* CTAs — mobile: full-width stacked, hit-target ≥48px. Desktop: inline. */}
+        <div className="flex flex-col sm:flex-row gap-3 justify-center mb-10 px-4 sm:px-0">
           <a
             href="#solicitar-base"
             // ffv-shimmer: sweep diagonal sutil a cada 4s — chama atenção sem ser brega
-            className="inline-flex items-center justify-center gap-2 ffv-shimmer"
+            className="inline-flex items-center justify-center gap-2 ffv-shimmer w-full sm:w-auto"
             style={{
-              padding: '14px 28px',
+              padding: '16px 28px',
+              minHeight: 48,
               background: SAGE_INK,
               color: PAPER,
               borderRadius: 8,
@@ -314,9 +331,10 @@ function Hero() {
           </a>
           <Link
             href="/bases"
-            className="inline-flex items-center justify-center gap-2"
+            className="inline-flex items-center justify-center gap-2 w-full sm:w-auto"
             style={{
-              padding: '14px 28px',
+              padding: '16px 28px',
+              minHeight: 48,
               background: 'transparent',
               border: `1px solid ${SAGE_INK}`,
               color: SAGE_INK,
@@ -337,6 +355,7 @@ function Hero() {
             }}
           >
             Explorar bases
+            <span aria-hidden style={{ fontSize: 13 }}>↗</span>
           </Link>
         </div>
 
@@ -421,7 +440,7 @@ function Hero() {
 function FlowStrip() {
   const steps = [
     { i: '📄', l: 'Você envia', d: 'PDFs, slides, edital, anotações' },
-    { i: '⚡', l: 'A FFV transforma', d: 'IA + curadoria humana em 24h' },
+    { i: '⚡', l: 'A FFV transforma', d: 'IA + curadoria humana no mesmo dia' },
     { i: '✉️', l: 'Email com link', d: 'Portal completo, personalizado' },
   ];
   // 3 pills entram em cascata cinematográfica (220ms cada). Conta a narrativa
@@ -1693,7 +1712,7 @@ function AntesDepois() {
                 fontWeight: 700,
               }}
             >
-              ✨ Depois da FFV (em 24h)
+              ✨ Depois da FFV (no mesmo dia)
             </p>
             <ul className="flex flex-col gap-3 list-none p-0 m-0">
               {[
@@ -2472,7 +2491,7 @@ function Steps() {
           {[
             { n: '1', t: 'Você conta o que estuda',  d: 'Área, matéria, objetivo. Leva 2 minutos.' },
             { n: '2', t: 'Envia seus materiais',      d: 'PDFs, slides, anotações. Opcional, mas potente.' },
-            { n: '3', t: 'Recebe em 24h',             d: 'IA + curadoria entregam a jornada. Você começa a estudar.' },
+            { n: '3', t: 'Recebe no mesmo dia',       d: 'IA + curadoria entregam a jornada. Você começa a estudar.' },
           ].map(s => (
             <div key={s.n} className="ffv-stagger-item">
               <div className="flex items-center gap-3 mb-4">
@@ -2853,7 +2872,7 @@ function FormSection() {
               lineHeight: 1.6,
             }}
           >
-            Leva 2 minutos. Você descreve, envia os materiais, e em até 24 horas sua jornada está no ar.
+            Leva 2 minutos. Você descreve, envia os materiais, e no mesmo dia sua jornada está no ar.
           </p>
 
           <ul className="flex flex-col gap-4 mb-8">

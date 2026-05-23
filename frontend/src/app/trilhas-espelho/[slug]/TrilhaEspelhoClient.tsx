@@ -132,7 +132,7 @@ export function TrilhaEspelhoClient({ trilha }: Props) {
               marginBottom: 14,
             }}
           >
-            Esta é a trilha <em style={{ fontStyle: 'italic', color: '#fbbf24' }}>consolidada</em>. A sua nasce em 24h.
+            Esta é a trilha <em style={{ fontStyle: 'italic', color: '#fbbf24' }}>consolidada</em>. A sua nasce no mesmo dia.
           </h2>
           <p style={{ color: '#d6d3d1', fontSize: 14, lineHeight: 1.6, marginBottom: 20 }}>
             Mande seu material (PDFs da faculdade, anotações, edital específico) e a FFV monta uma trilha calibrada pelo SEU contexto. Curadoria humana revisa antes de entregar.

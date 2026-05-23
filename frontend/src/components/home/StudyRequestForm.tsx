@@ -376,7 +376,7 @@ export function StudyRequestForm() {
           </p>
           <p className="text-sm mb-3" style={{ lineHeight: 1.5 }}>
             <strong>Conheça nossa base de Tecnologia</strong> — mesmo padrão, mesma estrutura.
-            157 módulos prontos no ar, igual ao que vai chegar pra você em 24h.
+            157 módulos prontos no ar, igual ao que vai chegar pra você no mesmo dia.
           </p>
           <a
             href="/tecnologia"
