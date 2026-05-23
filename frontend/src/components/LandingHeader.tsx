@@ -121,7 +121,8 @@ export function LandingHeader() {
               e.currentTarget.style.boxShadow = '0 4px 14px -4px rgba(28, 25, 23, 0.4)';
             }}
           >
-            Criar minha jornada
+            <span className="sm:hidden">Gerar jornada</span>
+            <span className="hidden sm:inline">Criar minha jornada</span>
             <span aria-hidden style={{ fontSize: 12 }}>→</span>
           </Link>
         </nav>
