@@ -359,63 +359,7 @@ function Hero() {
         </div>
 
         {/* BROWSER DEMO grande — o protagonista */}
-        <BrowserDemo />
-
-        {/* Step indicator chips sincronizado */}
-        <div className="mt-6 flex flex-wrap items-center justify-center gap-2 lg:gap-3">
-          {PLATAFORMA_STEPS.map((s, i) => (
-            <div
-              key={s.label}
-              className="px-4 py-2.5 rounded-xl flex items-center gap-2.5 transition-all"
-              style={{
-                background: '#fff',
-                color: TEXT_MUTED,
-                border: `1px solid ${SAGE_SOFT}`,
-                animation: `ffv-step-active 16s linear ${i * 4}s infinite both`,
-                minWidth: 140,
-              }}
-            >
-              <span
-                className="font-mono text-[10px] font-bold"
-                style={{ letterSpacing: '0.1em', opacity: 0.7 }}
-              >
-                0{i + 1}
-              </span>
-              <span
-                style={{
-                  fontFamily: 'var(--font-inter)',
-                  fontSize: 14,
-                  fontWeight: 700,
-                  letterSpacing: '-0.01em',
-                }}
-              >
-                {s.label}
-              </span>
-            </div>
-          ))}
-        </div>
-
-        {/* Caption sincronizado */}
-        <div
-          className="mt-5 mx-auto max-w-xl"
-          style={{ position: 'relative', minHeight: 48 }}
-        >
-          {PLATAFORMA_STEPS.map((s, i) => (
-            <p
-              key={s.label}
-              style={{
-                position: 'absolute',
-                inset: 0,
-                fontSize: 14,
-                color: SAGE_INK,
-                lineHeight: 1.55,
-                animation: `ffv-slide-cycle 16s linear ${i * 4}s infinite both`,
-              }}
-            >
-              <strong style={{ color: SAGE_ACCENT }}>{s.label}.</strong> {s.desc}
-            </p>
-          ))}
-        </div>
+        <PlatformDemoSection />
 
         {/* Stats horizontal embaixo */}
         <div
@@ -1011,7 +955,114 @@ const PLATAFORMA_STEPS = [
   },
 ];
 
-function BrowserDemo() {
+function PlatformDemoSection() {
+  const [active, setActive] = useState(0);
+  const [fillKey, setFillKey] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const startAutoAdvance = () => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = setInterval(() => {
+      setActive(prev => (prev + 1) % PLATAFORMA_STEPS.length);
+      setFillKey(k => k + 1);
+    }, 4000);
+  };
+
+  useEffect(() => {
+    startAutoAdvance();
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, []); // startAutoAdvance é estável: só usa refs e setState sem deps externas
+
+  const goTo = (i: number) => {
+    setActive(i);
+    setFillKey(k => k + 1);
+    startAutoAdvance();
+  };
+
+  return (
+    <>
+      <BrowserDemo activeStep={active} />
+
+      <div className="mt-6 flex flex-wrap items-center justify-center gap-2 lg:gap-3">
+        {PLATAFORMA_STEPS.map((s, i) => (
+          <button
+            key={s.label}
+            onClick={() => goTo(i)}
+            className="px-4 py-2.5 rounded-xl flex items-center gap-2.5"
+            style={{
+              position: 'relative',
+              overflow: 'hidden',
+              background: active === i ? '#5e8068' : '#fff',
+              color: active === i ? '#ffffff' : TEXT_MUTED,
+              border: `1px solid ${active === i ? '#5e8068' : SAGE_SOFT}`,
+              transform: active === i ? 'scale(1.05)' : 'scale(1)',
+              minWidth: 140,
+              cursor: 'pointer',
+              transition: 'background 200ms ease, color 200ms ease, border-color 200ms ease, transform 200ms ease',
+            }}
+          >
+            {active === i && (
+              <span
+                key={fillKey}
+                style={{
+                  position: 'absolute',
+                  bottom: 0,
+                  left: 0,
+                  height: 3,
+                  width: '100%',
+                  background: 'rgba(255,255,255,0.22)',
+                  transformOrigin: 'left',
+                  animation: 'ffv-timer-fill 4s linear forwards',
+                }}
+              />
+            )}
+            <span
+              className="font-mono text-[10px] font-bold"
+              style={{ letterSpacing: '0.1em', opacity: 0.7, position: 'relative', zIndex: 1 }}
+            >
+              0{i + 1}
+            </span>
+            <span
+              style={{
+                fontFamily: 'var(--font-inter)',
+                fontSize: 14,
+                fontWeight: 700,
+                letterSpacing: '-0.01em',
+                position: 'relative',
+                zIndex: 1,
+              }}
+            >
+              {s.label}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-5 mx-auto max-w-xl" style={{ position: 'relative', minHeight: 48 }}>
+        {PLATAFORMA_STEPS.map((s, i) => (
+          <p
+            key={s.label}
+            style={{
+              position: 'absolute',
+              inset: 0,
+              fontSize: 14,
+              color: SAGE_INK,
+              lineHeight: 1.55,
+              opacity: active === i ? 1 : 0,
+              transform: active === i ? 'translateY(0)' : 'translateY(6px)',
+              transition: 'opacity 300ms ease, transform 300ms ease',
+              pointerEvents: active === i ? 'auto' : 'none',
+            }}
+          >
+            <strong style={{ color: SAGE_ACCENT }}>{s.label}.</strong> {s.desc}
+          </p>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function BrowserDemo({ activeStep }: { activeStep: number }) {
   return (
     <div
       className="rounded-2xl overflow-hidden"
@@ -1063,31 +1114,31 @@ function BrowserDemo() {
         className="relative aspect-[4/5] sm:aspect-[5/4] md:aspect-[16/10] overflow-hidden"
         style={{ background: '#fafaf7' }}
       >
-        <DemoSlideTrilha />
-        <DemoSlideModulo />
-        <DemoSlideQuiz />
-        <DemoSlideProgresso />
+        <DemoSlideTrilha isActive={activeStep === 0} />
+        <DemoSlideModulo isActive={activeStep === 1} />
+        <DemoSlideQuiz isActive={activeStep === 2} />
+        <DemoSlideProgresso isActive={activeStep === 3} />
       </div>
     </div>
   );
 }
 
 function DemoSlide({
-  index,
+  isActive,
   children,
 }: {
-  index: number;
+  isActive: boolean;
   children: React.ReactNode;
 }) {
-  // 4 slides × 4s = 16s ciclo. Positive delay + fill backwards garante que
-  // o slide N só aparece no segmento dele, sem overlap com o anterior.
   return (
     <div
       style={{
         position: 'absolute',
         inset: 0,
-        opacity: 0,
-        animation: `ffv-slide-cycle 16s linear ${index * 4}s infinite both`,
+        opacity: isActive ? 1 : 0,
+        transform: isActive ? 'translateY(0)' : 'translateY(6px)',
+        transition: 'opacity 350ms ease, transform 350ms ease',
+        pointerEvents: isActive ? 'auto' : 'none',
       }}
     >
       {children}
@@ -1095,7 +1146,7 @@ function DemoSlide({
   );
 }
 
-function DemoSlideTrilha() {
+function DemoSlideTrilha({ isActive }: { isActive: boolean }) {
   const mods = [
     'Anatomia comparada',
     'Genética veterinária',
@@ -1107,7 +1158,7 @@ function DemoSlideTrilha() {
     'Cirurgia I',
   ];
   return (
-    <DemoSlide index={0}>
+    <DemoSlide isActive={isActive}>
       <div className="h-full flex p-4 gap-3">
         {/* Sidebar */}
         <aside
@@ -1228,9 +1279,9 @@ function DemoSlideTrilha() {
   );
 }
 
-function DemoSlideModulo() {
+function DemoSlideModulo({ isActive }: { isActive: boolean }) {
   return (
-    <DemoSlide index={1}>
+    <DemoSlide isActive={isActive}>
       <div className="h-full p-5 flex flex-col gap-3 overflow-hidden">
         <div className="flex items-center gap-2">
           <span
@@ -1302,9 +1353,9 @@ function DemoSlideModulo() {
   );
 }
 
-function DemoSlideQuiz() {
+function DemoSlideQuiz({ isActive }: { isActive: boolean }) {
   return (
-    <DemoSlide index={2}>
+    <DemoSlide isActive={isActive}>
       <div className="h-full p-6 flex flex-col gap-4 max-w-xl mx-auto">
         <div className="flex items-center justify-between">
           <span
@@ -1400,9 +1451,9 @@ function DemoSlideQuiz() {
   );
 }
 
-function DemoSlideProgresso() {
+function DemoSlideProgresso({ isActive }: { isActive: boolean }) {
   return (
-    <DemoSlide index={3}>
+    <DemoSlide isActive={isActive}>
       <div className="h-full p-5 grid grid-cols-2 gap-3">
         {/* XP / Streak / Level */}
         <div
