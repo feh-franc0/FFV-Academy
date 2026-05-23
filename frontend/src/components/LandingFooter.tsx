@@ -89,7 +89,7 @@ export function LandingFooter() {
                 marginBottom: 24,
               }}
             >
-              Plataforma de estudo personalizada — qualquer área, em 24 horas. No mesmo padrão da
+              Plataforma de estudo personalizada — qualquer área, no mesmo dia. No mesmo padrão da
               nossa base de Tecnologia, com curadoria humana e revisão espaçada.
             </p>
 

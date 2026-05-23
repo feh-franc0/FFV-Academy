@@ -85,7 +85,7 @@ export default function PublicStatsPage() {
                 SLA cumprido
               </dt>
               <dd>
-                % das últimas 30 bases entregues em até 24h depois do submit. Se a média subir, a gente para de aceitar pedidos novos até estabilizar.
+                % das últimas 30 bases entregues no mesmo dia do submit. Se a média subir, a gente para de aceitar pedidos novos até estabilizar.
               </dd>
             </div>
 

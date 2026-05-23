@@ -575,7 +575,7 @@ function EmptyState({ query }: { query: string }) {
         className="text-sm mb-6"
         style={{ color: '#57534e', maxWidth: 420, margin: '0 auto 24px', lineHeight: 1.6 }}
       >
-        Boa notícia: a gente cria sob demanda. Conte o que você precisa estudar — em até 24 horas,
+        Boa notícia: a gente cria sob demanda. Conte o que você precisa estudar — no mesmo dia,
         a sua jornada está no ar.
       </p>
       <Link

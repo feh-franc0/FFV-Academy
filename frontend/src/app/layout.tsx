@@ -47,11 +47,11 @@ const sourceSerif = Source_Serif_4({
 export const metadata: Metadata = {
   metadataBase: new URL('https://fernandofrancovalle.com'),
   title: {
-    default: 'FFV Academy — IA que transforma seus arquivos em uma escola completa em 24h',
+    default: 'FFV Academy — IA que transforma seus arquivos em uma escola completa no mesmo dia',
     template: '%s — FFV Academy',
   },
   description:
-    'Envie seus PDFs, slides ou anotações — IA + curadoria humana montam em 24h uma base completa de estudo: trilhas sequenciais, módulos, exercícios e revisão espaçada (SM-2). Não é chatbot. É a sua escola personalizada. Já no ar: Tecnologia (157 módulos) e Medicina Veterinária — Genética (12 módulos). Pode pedir Medicina, Engenharia, Direito, Administração, Design e mais. Grátis na V1.',
+    'FFV — Formação Focada em Você. Envie seus PDFs, slides ou anotações — IA + curadoria humana montam no mesmo dia uma base completa de estudo: trilhas sequenciais, módulos, exercícios e revisão espaçada (SM-2). Não é chatbot. É a sua escola personalizada. Já no ar: Tecnologia (157 módulos) e Medicina Veterinária — Genética (12 módulos). Pode pedir Medicina, Engenharia, Direito, Administração, Design e mais. Grátis na V1.',
   keywords: [
     // Hero search intent — pivot de produto
     'IA que gera base de conhecimento',
@@ -61,7 +61,7 @@ export const metadata: Metadata = {
     'IA monta trilha de estudo do meu material',
     'gerar curso a partir de arquivos',
     'aprender com PDF da faculdade',
-    'estudo personalizado em 24 horas',
+    'estudo personalizado no mesmo dia',
     'base de conhecimento sob demanda',
     // Long-tail por área (cobre bases existentes + queued)
     'medicina veterinária genética estudos',
@@ -89,9 +89,9 @@ export const metadata: Metadata = {
     languages: { 'pt-BR': 'https://fernandofrancovalle.com' },
   },
   openGraph: {
-    title: 'FFV Academy — IA que transforma seus arquivos em uma escola completa em 24h',
+    title: 'FFV Academy — IA que transforma seus arquivos em uma escola completa no mesmo dia',
     description:
-      'Mande seus PDFs, slides e anotações. IA + curadoria humana entregam trilhas, módulos, exercícios e revisão espaçada em 24h. Já no ar: Tecnologia e Medicina Veterinária — Genética. Grátis na V1.',
+      'FFV — Formação Focada em Você. Mande seus PDFs, slides e anotações. IA + curadoria humana entregam trilhas, módulos, exercícios e revisão espaçada no mesmo dia. Já no ar: Tecnologia e Medicina Veterinária — Genética. Grátis na V1.',
     type: 'website',
     url: 'https://fernandofrancovalle.com',
     siteName: 'FFV Academy',
@@ -101,13 +101,13 @@ export const metadata: Metadata = {
         url: '/opengraph-image',
         width: 1200,
         height: 630,
-        alt: 'FFV Academy — IA que vira PDF em escola completa em 24h',
+        alt: 'FFV Academy — IA que vira PDF em escola completa no mesmo dia',
       },
     ],
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'FFV Academy — IA transforma seu PDF em escola completa em 24h',
+    title: 'FFV Academy — IA transforma seu PDF em escola completa no mesmo dia',
     description:
       'Envie arquivos, receba trilhas + módulos + exercícios + revisão espaçada. Tecnologia e Medicina Veterinária já no ar. Grátis.',
     images: ['/opengraph-image'],
