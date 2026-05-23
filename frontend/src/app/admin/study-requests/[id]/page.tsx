@@ -13,6 +13,7 @@ import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 
 import {
+  downloadAuthenticatedFile,
   fetchStudyRequest,
   studyRequestDownloadUrl,
   studyRequestZipUrl,
@@ -40,6 +41,8 @@ export default function AdminStudyRequestDetailPage() {
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [finalizing, setFinalizing] = useState(false);
+  const [downloadingZip, setDownloadingZip] = useState(false);
+  const [downloadingAttId, setDownloadingAttId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -287,16 +290,29 @@ export default function AdminStudyRequestDetailPage() {
               <Muted>Estudante não enviou arquivos.</Muted>
             ) : (
               <>
-                <a
-                  href={studyRequestZipUrl(data.id)}
+                <button
+                  type="button"
+                  disabled={downloadingZip}
+                  onClick={async () => {
+                    setDownloadingZip(true);
+                    setError(null);
+                    const result = await downloadAuthenticatedFile(
+                      studyRequestZipUrl(data.id),
+                      `solicitacao-${data.id.slice(0, 8)}.zip`,
+                    );
+                    setDownloadingZip(false);
+                    if (!result.ok) setError(result.error);
+                  }}
                   className="self-start inline-flex items-center gap-2 px-3 py-2 rounded-md text-xs font-bold mb-3"
                   style={{
                     background: 'linear-gradient(90deg, var(--ffv-blue), var(--ffv-purple))',
                     color: '#fff',
+                    cursor: downloadingZip ? 'wait' : 'pointer',
+                    opacity: downloadingZip ? 0.6 : 1,
                   }}
                 >
-                  ⬇ Baixar tudo (.zip)
-                </a>
+                  {downloadingZip ? '⏳ Baixando…' : '⬇ Baixar tudo (.zip)'}
+                </button>
               <ul className="flex flex-col gap-2">
                 {data.attachments.map(a => (
                   <li
@@ -314,18 +330,29 @@ export default function AdminStudyRequestDetailPage() {
                         {a.contentType} · {formatBytes(a.sizeBytes)}
                       </p>
                     </div>
-                    <a
-                      href={studyRequestDownloadUrl(a.downloadUrl)}
-                      target="_blank"
-                      rel="noreferrer"
+                    <button
+                      type="button"
+                      disabled={downloadingAttId === a.id}
+                      onClick={async () => {
+                        setDownloadingAttId(a.id);
+                        setError(null);
+                        const result = await downloadAuthenticatedFile(
+                          studyRequestDownloadUrl(a.downloadUrl),
+                          a.fileName,
+                        );
+                        setDownloadingAttId(null);
+                        if (!result.ok) setError(result.error);
+                      }}
                       className="text-xs font-semibold px-3 py-1.5 rounded-md"
                       style={{
                         background: 'var(--ffv-blue)',
                         color: '#fff',
+                        cursor: downloadingAttId === a.id ? 'wait' : 'pointer',
+                        opacity: downloadingAttId === a.id ? 0.6 : 1,
                       }}
                     >
-                      Baixar
-                    </a>
+                      {downloadingAttId === a.id ? '⏳' : 'Baixar'}
+                    </button>
                   </li>
                 ))}
               </ul>

@@ -57,9 +57,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Tenta restaurar sessão via refresh token (cookie HttpOnly) ou localStorage.
+  //
+  // ⚠️ EXCEÇÃO: se o usuário acabou de clicar em "Sair", a flag
+  // `ffv_just_logged_out` está em sessionStorage. Nesse caso pulamos a
+  // restauração — senão o cookie HttpOnly (que pode não ter sido limpo se o
+  // POST /auth/logout falhou) recriaria a sessão imediatamente. Bug que
+  // motivou: race condition entre logout() e window.location.replace().
   useEffect(() => {
     let cancelled = false;
     async function restoreSession() {
+      try {
+        if (sessionStorage.getItem('ffv_just_logged_out') === '1') {
+          sessionStorage.removeItem('ffv_just_logged_out');
+          if (!cancelled) setUser(null);
+          return;
+        }
+      } catch { /* modo privado pode bloquear sessionStorage */ }
       const restored = await refreshSession();
       if (!cancelled) setUser(restored);
     }

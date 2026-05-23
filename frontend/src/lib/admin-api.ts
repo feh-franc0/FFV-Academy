@@ -4,7 +4,7 @@
  * Todos os endpoints aqui requerem JWT com role=admin. O api-client.ts já
  * anexa o Authorization: Bearer automaticamente quando há sessão ativa.
  */
-import { apiFetch } from './api-client';
+import { apiFetch, getAccessToken } from './api-client';
 
 // ─── Stats ──────────────────────────────────────────────────────────────────
 
@@ -365,4 +365,62 @@ export function studyRequestZipUrl(id: string): string {
   const base =
     (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_API_BASE_URL) || '';
   return `${base}/api/v1/admin/study-requests/${id}/download-all`;
+}
+
+/**
+ * downloadAuthenticatedFile — baixa um arquivo de endpoint protegido por JWT.
+ *
+ * Por quê não usar &lt;a href&gt;: o token JWT vive em memória (não em cookie),
+ * então links diretos abrem nova aba SEM o header Authorization → backend
+ * retorna 401. Esta função faz fetch com Bearer, converte resposta em Blob
+ * e dispara download via &lt;a&gt; dinâmico com object URL.
+ *
+ * Trade-off: o arquivo inteiro carrega em memória do browser antes do
+ * download começar. Aceitável pra arquivos ≤ 50 MiB (limite do form é
+ * 10 anexos × 25 MiB = 250 MiB; raro um ZIP passar disso, mas vigiar).
+ *
+ * Retorna {ok: true} em sucesso, {ok: false, error: msg} em falha.
+ */
+export async function downloadAuthenticatedFile(
+  url: string,
+  filename: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const token = getAccessToken();
+  if (!token) {
+    return { ok: false, error: 'Sessão expirada. Faça login novamente.' };
+  }
+  try {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+      credentials: 'include',
+    });
+    if (res.status === 401) {
+      return { ok: false, error: 'Sessão expirada. Faça login novamente.' };
+    }
+    if (res.status === 403) {
+      return { ok: false, error: 'Sem permissão pra baixar este arquivo.' };
+    }
+    if (res.status === 410) {
+      return { ok: false, error: 'Arquivo não disponível no storage (foi removido?).' };
+    }
+    if (!res.ok) {
+      return { ok: false, error: `Falha no download (HTTP ${res.status}).` };
+    }
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = filename;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    // Cleanup após o browser processar o click.
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(objectUrl);
+    }, 100);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: `Erro de rede: ${(e as Error).message}` };
+  }
 }
