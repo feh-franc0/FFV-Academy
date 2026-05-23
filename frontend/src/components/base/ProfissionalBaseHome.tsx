@@ -65,21 +65,24 @@ export function ProfissionalBaseHome({ hub, heroHighlight }: ProfissionalBaseHom
   // /<base-slug> (próprio hub) era self-link inútil — usuário clicava e
   // nada acontecia. Mostrando trilhas, o clique leva para a página da
   // trilha (ex.: /carreira-digital, /career-engineering, /technical-writing).
-  const hubsForExplore: HubCardData[] = trails.map((trail, idx) => ({
-    id: trail.id,
-    name: trail.name,
-    icon: trail.icon ?? hub.icon,
-    color: trail.color ?? hub.color,
-    tagline: trail.desc,
-    href:
-      trail.href ??
-      (trail.modules[0] ? `/aprenda/${trail.modules[0].slug}` : hub.href),
-    trailCount: 1,
-    moduleCount: trail.modules.length,
-    // Disambig necessário quando trail.id se repete entre bases (futuro):
-    // não passa direto, mas evita warning de key duplicada.
-    ...(idx === 0 ? {} : {}),
-  }));
+  //
+  // Cuidado especial: se `trail.href === hub.href` (caso /ingles, onde a
+  // única trilha usa o mesmo path da base), cair no fallback `/aprenda/<slug>`
+  // pra não criar self-link.
+  const hubsForExplore: HubCardData[] = trails.map((trail) => {
+    const trailHref = trail.href && trail.href !== hub.href ? trail.href : null;
+    const fallback = trail.modules[0] ? `/aprenda/${trail.modules[0].slug}` : hub.href;
+    return {
+      id: trail.id,
+      name: trail.name,
+      icon: trail.icon ?? hub.icon,
+      color: trail.color ?? hub.color,
+      tagline: trail.desc,
+      href: trailHref ?? fallback,
+      trailCount: 1,
+      moduleCount: trail.modules.length,
+    };
+  });
 
   return (
     <KnowledgeBaseHome
@@ -97,12 +100,18 @@ export function ProfissionalBaseHome({ hub, heroHighlight }: ProfissionalBaseHom
           hub.tagline
         ),
         description: hub.desc,
+        // CTA secundário: aponta para o blog da PRIMEIRA trilha (em vez de
+        // `hub.href` que é self-link na home da base). Pular o secundário
+        // se a trilha não tem href OU se coincide com basePath (caso /ingles,
+        // onde trail.href === hub.href — viraria self-link).
         ctas: firstModule
-          ? [
-              { href: firstModuleHref, label: `Começar pelo módulo 01 →`, variant: 'primary' as const },
-              { href: hub.href, label: 'Ver todos os módulos', variant: 'secondary' as const },
-            ]
-          : [{ href: hub.href, label: 'Explorar', variant: 'primary' as const }],
+          ? trails[0]?.href && trails[0].href !== hub.href
+            ? [
+                { href: firstModuleHref, label: `Começar pelo módulo 01 →`, variant: 'primary' as const },
+                { href: trails[0].href, label: `Ver todos os módulos de ${trails[0].name}`, variant: 'secondary' as const },
+              ]
+            : [{ href: firstModuleHref, label: `Começar pelo módulo 01 →`, variant: 'primary' as const }]
+          : [{ href: '/explorar', label: 'Explorar todo o catálogo', variant: 'primary' as const }],
         stats: [
           { value: `${modulesCount}`, label: modulesCount === 1 ? 'módulo' : 'módulos' },
           { value: `${trails.length}`, label: trails.length === 1 ? 'trilha' : 'trilhas' },
@@ -120,7 +129,7 @@ export function ProfissionalBaseHome({ hub, heroHighlight }: ProfissionalBaseHom
       }
       hubs={hubsForExplore}
       playlists={[]}
-      mapHref={hub.href}
+      mapHref="/mapa"
       explorarHeading={`${trails.length} ${trails.length === 1 ? 'trilha' : 'trilhas'} · ${modulesCount} módulos`}
       explorarSubheading={
         trails.length === 1
