@@ -156,15 +156,36 @@ func (n *StudyRequestNotifier) SendAdminNotification(ctx context.Context, adminT
 	return n.sendHTML(ctx, []string{target}, subject, body)
 }
 
-// SendStatusUpdate: estudante recebe email quando o status da solicitação muda
-// para in_production ou ready (etapas que tem ação concreta). Outros status
-// (in_review, rejected) também enviam, mas com mensagem específica.
-func (n *StudyRequestNotifier) SendStatusUpdate(ctx context.Context, to, name string, requestID domsr.ID, newStatus domsr.Status, subject string) error {
+// SendStatusUpdate: estudante recebe email quando o status da solicitação muda.
+// Quando newStatus=ready E deliveredURL não-vazio, o email vira "celebração":
+// CTA grande clicável apontando pro conteúdo gerado pelo admin.
+func (n *StudyRequestNotifier) SendStatusUpdate(ctx context.Context, to, name string, requestID domsr.ID, newStatus domsr.Status, subject string, deliveredURL string) error {
 	if n.sendHTML == nil || to == "" {
 		return nil
 	}
 	displayName := firstName(name)
 	headline, message, accent := statusMessage(newStatus)
+
+	// CTA dedicado quando ready + URL: vira a parte mais importante do email.
+	ctaBlock := ""
+	if newStatus == domsr.StatusReady && strings.TrimSpace(deliveredURL) != "" {
+		ctaBlock = fmt.Sprintf(`
+    <div style="text-align: center; margin: 28px 0 8px;">
+      <a href="%s"
+         style="display: inline-block; background: #059669; color: #fff; text-decoration: none;
+                padding: 16px 32px; border-radius: 10px; font-weight: 700; font-size: 16px;
+                letter-spacing: -0.01em; box-shadow: 0 4px 14px -4px rgba(5, 150, 105, 0.4);">
+        Abrir minha trilha de estudos →
+      </a>
+    </div>
+    <p style="text-align: center; font-size: 12px; color: #71717a; margin: 0 0 12px;">
+      ou copie e cole: <a href="%s" style="color: #059669; word-break: break-all;">%s</a>
+    </p>`,
+			html.EscapeString(deliveredURL),
+			html.EscapeString(deliveredURL),
+			html.EscapeString(deliveredURL),
+		)
+	}
 
 	body := fmt.Sprintf(`
 <div style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 560px; margin: 0 auto; background: #ffffff; color: #18181b;">
@@ -180,17 +201,22 @@ func (n *StudyRequestNotifier) SendStatusUpdate(ctx context.Context, to, name st
     <div style="background: #f4f4f5; padding: 16px; border-radius: 8px; margin: 20px 0;">
       <p style="margin: 0; font-size: 14px; line-height: 1.7; color: #27272a;">%s</p>
     </div>
-    <p style="font-size: 13px; line-height: 1.6; color: #71717a;">
+    %s
+    <p style="font-size: 13px; line-height: 1.6; color: #71717a; margin-top: 20px;">
       Protocolo: <code style="background: #f4f4f5; padding: 2px 6px; border-radius: 4px;">%s</code>
     </p>
   </div>
   <p style="text-align: center; color: #a1a1aa; font-size: 12px; margin: 16px 0 0;">FFV Academy · educação personalizada para qualquer área</p>
 </div>
 `,
-		accent, headline, escapeHTML(displayName), escapeHTML(subject), message, requestID.String(),
+		accent, headline, escapeHTML(displayName), escapeHTML(subject), message,
+		ctaBlock, requestID.String(),
 	)
 
 	subjectLine := fmt.Sprintf("📨 Atualização da sua solicitação — %s", headline)
+	if newStatus == domsr.StatusReady && strings.TrimSpace(deliveredURL) != "" {
+		subjectLine = fmt.Sprintf("🎉 Sua trilha de %s está pronta!", subject)
+	}
 	return n.sendHTML(ctx, []string{to}, subjectLine, body)
 }
 
@@ -201,12 +227,12 @@ func statusMessage(s domsr.Status) (headline, message, accent string) {
 			"Nosso time começou a analisar sua solicitação e seus materiais. Em breve damos próximos passos.",
 			"#4f46e5" // indigo
 	case domsr.StatusInProduction:
-		return "Em produção 🛠️",
-			"Estamos montando sua base de estudo agora. Em até 24h você recebe o link da sua base com trilhas, módulos, questões e revisão prontos pra você estudar.",
+		return "Curadoria iniciada 🛠️",
+			"Começamos a montar sua base de estudo agora — analisando os materiais que você enviou e estruturando trilhas, módulos e questões personalizadas. Em até 24h você recebe o link pronto pra estudar.",
 			"#0891b2" // cyan
 	case domsr.StatusReady:
-		return "Sua experiência está pronta 🎉",
-			"Sua trilha de estudo personalizada foi entregue! Vamos te mandar o link logo em seguida — fique de olho no email/WhatsApp.",
+		return "Sua trilha está pronta 🎉",
+			"Sua base de estudo personalizada foi entregue! Clique no botão abaixo pra acessar agora — trilhas, módulos, questões e tudo organizado pro seu objetivo.",
 			"#059669" // emerald
 	case domsr.StatusRejected:
 		return "Sobre sua solicitação",

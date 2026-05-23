@@ -155,6 +155,7 @@ type StudyRequest struct {
 	description      string
 	status           Status
 	internalNotes    string
+	deliveredURL     string // URL do conteúdo gerado (preenchido ao marcar ready)
 	marketingConsent bool
 	attachments      []Attachment
 	createdAt        time.Time
@@ -297,6 +298,26 @@ func Reconstitute(
 	}
 }
 
+// ReconstituteWithDelivery é igual a Reconstitute mas inclui deliveredURL.
+// Repo usa esse construtor quando carrega solicitação com coluna delivered_url
+// preenchida (status=ready geralmente). Mantemos os dois pra preservar
+// compatibilidade com testes existentes que usam Reconstitute sem o campo novo.
+func ReconstituteWithDelivery(
+	id ID,
+	userID shared.UserID,
+	name, email, phone, studyArea, institution, subject, goal, description string,
+	status Status,
+	internalNotes string,
+	deliveredURL string,
+	marketingConsent bool,
+	attachments []Attachment,
+	createdAt, updatedAt time.Time,
+) *StudyRequest {
+	r := Reconstitute(id, userID, name, email, phone, studyArea, institution, subject, goal, description, status, internalNotes, marketingConsent, attachments, createdAt, updatedAt)
+	r.deliveredURL = deliveredURL
+	return r
+}
+
 // AttachFile adiciona um arquivo anexado. Falha se já atingiu o limite.
 func (r *StudyRequest) AttachFile(att Attachment) error {
 	if len(r.attachments) >= MaxAttachmentsPerRequest {
@@ -338,6 +359,32 @@ func (r *StudyRequest) SetInternalNotes(notes string, now time.Time) error {
 	return nil
 }
 
+// SetDeliveredURL grava o link do conteúdo gerado. Validações:
+//   - Vazio é permitido (admin pode limpar se errou).
+//   - Quando preenchido, deve começar com http:// ou https://.
+//   - Tamanho máximo de 2048 chars (limite seguro de URL).
+//
+// O setter NÃO força status=ready automaticamente — admin decide quando mudar
+// status separadamente (responsabilidade única).
+func (r *StudyRequest) SetDeliveredURL(rawURL string, now time.Time) error {
+	const maxURLLen = 2048
+	url := strings.TrimSpace(rawURL)
+	if url == "" {
+		r.deliveredURL = ""
+		r.updatedAt = now
+		return nil
+	}
+	if len(url) > maxURLLen {
+		return shared.NewValidationError("URL de entrega muito longa")
+	}
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		return shared.NewValidationError("URL de entrega deve começar com http:// ou https://")
+	}
+	r.deliveredURL = url
+	r.updatedAt = now
+	return nil
+}
+
 // AssignToUser vincula a solicitação a um usuário (lead → conta).
 // Não falha se já existe vínculo — sobrescreve.
 func (r *StudyRequest) AssignToUser(userID shared.UserID, now time.Time) {
@@ -358,6 +405,7 @@ func (r *StudyRequest) Goal() string              { return r.goal }
 func (r *StudyRequest) Description() string       { return r.description }
 func (r *StudyRequest) Status() Status            { return r.status }
 func (r *StudyRequest) InternalNotes() string     { return r.internalNotes }
+func (r *StudyRequest) DeliveredURL() string      { return r.deliveredURL }
 func (r *StudyRequest) MarketingConsent() bool    { return r.marketingConsent }
 func (r *StudyRequest) Attachments() []Attachment { return r.attachments }
 func (r *StudyRequest) CreatedAt() time.Time      { return r.createdAt }

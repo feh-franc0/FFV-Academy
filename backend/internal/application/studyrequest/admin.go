@@ -97,6 +97,7 @@ type UpdateCommand struct {
 	ID            string
 	Status        *string // se setado, valida e muda status
 	InternalNotes *string // se setado, atualiza notas (pode ser vazio)
+	DeliveredURL  *string // se setado, atualiza URL de entrega (vazio limpa)
 }
 
 type UpdateUseCase struct {
@@ -143,6 +144,11 @@ func (uc *UpdateUseCase) Execute(ctx context.Context, cmd UpdateCommand) (*domsr
 			return nil, err
 		}
 	}
+	if cmd.DeliveredURL != nil {
+		if err := req.SetDeliveredURL(*cmd.DeliveredURL, now); err != nil {
+			return nil, err
+		}
+	}
 
 	if err := uc.repo.Update(ctx, req); err != nil {
 		return nil, fmt.Errorf("atualizar solicitação: %w", err)
@@ -150,7 +156,7 @@ func (uc *UpdateUseCase) Execute(ctx context.Context, cmd UpdateCommand) (*domsr
 
 	// Notifica estudante apenas se o status mudou.
 	if uc.notifier != nil && cmd.Status != nil && req.Status() != oldStatus {
-		if err := uc.notifier.SendStatusUpdate(ctx, req.Email(), req.Name(), req.ID(), req.Status(), req.Subject()); err != nil {
+		if err := uc.notifier.SendStatusUpdate(ctx, req.Email(), req.Name(), req.ID(), req.Status(), req.Subject(), req.DeliveredURL()); err != nil {
 			uc.logWarn("falha enviando status update", "err", err, "request_id", req.ID().String())
 		}
 	}

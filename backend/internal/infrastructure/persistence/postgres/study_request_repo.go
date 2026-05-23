@@ -95,21 +95,22 @@ func (r *StudyRequestRepo) FindByID(ctx context.Context, id domsr.ID) (*domsr.St
 		SELECT id, COALESCE(user_id, ''), name, email,
 		       COALESCE(phone, ''), study_area, COALESCE(institution, ''),
 		       subject, COALESCE(goal, ''), description,
-		       status, COALESCE(internal_notes, ''), marketing_consent,
-		       created_at, updated_at
+		       status, COALESCE(internal_notes, ''), COALESCE(delivered_url, ''),
+		       marketing_consent, created_at, updated_at
 		FROM study_requests
 		WHERE id = $1
 	`
 	var (
 		rowID, userID, name, email, phone, studyArea, institution string
 		subject, goal, description, status, internalNotes         string
+		deliveredURL                                              string
 		marketing                                                 bool
 		createdAt, updatedAt                                      time.Time
 	)
 	err := r.pool.QueryRow(ctx, reqQ, id.String()).Scan(
 		&rowID, &userID, &name, &email, &phone, &studyArea, &institution,
-		&subject, &goal, &description, &status, &internalNotes, &marketing,
-		&createdAt, &updatedAt,
+		&subject, &goal, &description, &status, &internalNotes, &deliveredURL,
+		&marketing, &createdAt, &updatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -123,12 +124,13 @@ func (r *StudyRequestRepo) FindByID(ctx context.Context, id domsr.ID) (*domsr.St
 		return nil, err
 	}
 
-	return domsr.Reconstitute(
+	return domsr.ReconstituteWithDelivery(
 		domsr.ID(rowID),
 		shared.UserID(userID),
 		name, email, phone, studyArea, institution, subject, goal, description,
 		domsr.Status(status),
 		internalNotes,
+		deliveredURL,
 		marketing,
 		attachments,
 		createdAt, updatedAt,
@@ -146,13 +148,15 @@ func (r *StudyRequestRepo) Update(ctx context.Context, req *domsr.StudyRequest) 
 		UPDATE study_requests
 		   SET user_id        = $1,
 		       status         = $2,
-		       internal_notes = $3
-		 WHERE id = $4
+		       internal_notes = $3,
+		       delivered_url  = $4
+		 WHERE id = $5
 	`
 	tag, err := r.pool.Exec(ctx, q,
 		userIDPtr,
 		req.Status().String(),
 		nullIfEmpty(req.InternalNotes()),
+		nullIfEmpty(req.DeliveredURL()),
 		req.ID().String(),
 	)
 	if err != nil {
@@ -211,8 +215,8 @@ func (r *StudyRequestRepo) List(ctx context.Context, f domsr.Filter) ([]*domsr.S
 		SELECT id, COALESCE(user_id, ''), name, email,
 		       COALESCE(phone, ''), study_area, COALESCE(institution, ''),
 		       subject, COALESCE(goal, ''), description,
-		       status, COALESCE(internal_notes, ''), marketing_consent,
-		       created_at, updated_at
+		       status, COALESCE(internal_notes, ''), COALESCE(delivered_url, ''),
+		       marketing_consent, created_at, updated_at
 		FROM study_requests
 		WHERE %s
 		ORDER BY created_at DESC
@@ -230,22 +234,24 @@ func (r *StudyRequestRepo) List(ctx context.Context, f domsr.Filter) ([]*domsr.S
 		var (
 			rowID, userID, name, email, phone, studyArea, institution string
 			subject, goal, description, status, internalNotes         string
+			deliveredURL                                              string
 			marketing                                                 bool
 			createdAt, updatedAt                                      time.Time
 		)
 		if err := rows.Scan(
 			&rowID, &userID, &name, &email, &phone, &studyArea, &institution,
-			&subject, &goal, &description, &status, &internalNotes, &marketing,
-			&createdAt, &updatedAt,
+			&subject, &goal, &description, &status, &internalNotes, &deliveredURL,
+			&marketing, &createdAt, &updatedAt,
 		); err != nil {
 			return nil, total, fmt.Errorf("study_requests: scan: %w", err)
 		}
-		out = append(out, domsr.Reconstitute(
+		out = append(out, domsr.ReconstituteWithDelivery(
 			domsr.ID(rowID),
 			shared.UserID(userID),
 			name, email, phone, studyArea, institution, subject, goal, description,
 			domsr.Status(status),
 			internalNotes,
+			deliveredURL,
 			marketing,
 			nil, // anexos não carregados em listagem
 			createdAt, updatedAt,

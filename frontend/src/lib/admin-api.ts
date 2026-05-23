@@ -291,6 +291,7 @@ export interface StudyRequestAttachment {
 export interface StudyRequestDetail extends StudyRequestSummary {
   description: string;
   internalNotes?: string;
+  deliveredUrl?: string;
   attachments: StudyRequestAttachment[];
 }
 
@@ -335,7 +336,7 @@ export async function fetchStudyRequest(id: string): Promise<StudyRequestDetail 
 
 export async function updateStudyRequest(
   id: string,
-  patch: { status?: StudyRequestStatus; internalNotes?: string },
+  patch: { status?: StudyRequestStatus; internalNotes?: string; deliveredUrl?: string },
 ): Promise<StudyRequestDetail | null> {
   try {
     return await apiFetch<StudyRequestDetail>(

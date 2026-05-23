@@ -74,6 +74,7 @@ type studyRequestDetailDTO struct {
 	studyRequestSummaryDTO
 	Description   string                  `json:"description"`
 	InternalNotes string                  `json:"internalNotes,omitempty"`
+	DeliveredURL  string                  `json:"deliveredUrl,omitempty"`
 	Attachments   []studyRequestAttachDTO `json:"attachments"`
 }
 
@@ -122,6 +123,7 @@ func detailDTO(req *domsr.StudyRequest) studyRequestDetailDTO {
 		studyRequestSummaryDTO: summaryDTO(req),
 		Description:            req.Description(),
 		InternalNotes:          req.InternalNotes(),
+		DeliveredURL:           req.DeliveredURL(),
 		Attachments:            atts,
 	}
 }
@@ -171,6 +173,7 @@ func (h *StudyRequestAdminHandler) Get(w http.ResponseWriter, r *http.Request) {
 type updateStudyRequestRequest struct {
 	Status        *string `json:"status,omitempty"`
 	InternalNotes *string `json:"internalNotes,omitempty"`
+	DeliveredURL  *string `json:"deliveredUrl,omitempty"`
 }
 
 // Update — PATCH /api/v1/admin/study-requests/{id}
@@ -189,6 +192,7 @@ func (h *StudyRequestAdminHandler) Update(w http.ResponseWriter, r *http.Request
 		ID:            id,
 		Status:        body.Status,
 		InternalNotes: body.InternalNotes,
+		DeliveredURL:  body.DeliveredURL,
 	})
 	if err != nil {
 		HandleDomainError(w, err)
@@ -285,10 +289,8 @@ func (h *StudyRequestAdminHandler) DownloadZip(w http.ResponseWriter, r *http.Re
 	}
 
 	atts := req.Attachments()
-	if len(atts) == 0 {
-		WriteError(w, http.StatusNotFound, "solicitação sem anexos", "no-attachments")
-		return
-	}
+	// NOTA: aceitamos ZIP mesmo sem anexos físicos — o solicitacao.json com
+	// dados do form sempre estará incluído (admin pode usar pra alimentar IA).
 
 	zipName := fmt.Sprintf("solicitacao-%s.zip", shortID(req.ID().String()))
 	encoded := url.PathEscape(zipName)
@@ -304,12 +306,18 @@ func (h *StudyRequestAdminHandler) DownloadZip(w http.ResponseWriter, r *http.Re
 	zw := zip.NewWriter(w)
 	defer zw.Close() //nolint:errcheck
 
-	// Evita colisão de nomes idênticos entre anexos (ex: dois "anotacoes.pdf").
-	used := make(map[string]int, len(atts))
+	// 1) Metadata da solicitação (form data) — sempre incluso. Esse arquivo é
+	// o "input estruturado" que o admin alimenta na IA pra gerar o hub.
+	if err := writeMetadataEntries(zw, req); err != nil {
+		// Não aborta o zip — tenta entregar o que conseguir.
+		w.Header().Set("X-Metadata-Error", "1")
+	}
 
+	// 2) Anexos físicos do storage.
+	used := make(map[string]int, len(atts))
 	failures := 0
 	for _, a := range atts {
-		entryName := uniqueEntryName(a.FileName, a.ID.String(), used)
+		entryName := "anexos/" + uniqueEntryName(a.FileName, a.ID.String(), used)
 		if err := writeZipEntry(r.Context(), zw, h.storage, a, entryName); err != nil {
 			failures++
 			continue
@@ -318,6 +326,129 @@ func (h *StudyRequestAdminHandler) DownloadZip(w http.ResponseWriter, r *http.Re
 	if failures > 0 {
 		w.Header().Set("X-Stream-Error", fmt.Sprintf("%d/%d", failures, len(atts)))
 	}
+}
+
+// writeMetadataEntries injeta dois arquivos no ZIP:
+//   - solicitacao.json: forma estruturada (todos os campos) — fácil de parsear por IA
+//   - solicitacao.txt:  forma legível pra humano abrir e ler de cara
+//
+// Esses arquivos têm as MESMAS info; só formato diferente. Conveniência pro admin.
+func writeMetadataEntries(zw *zip.Writer, req *domsr.StudyRequest) error {
+	meta := buildRequestMetadata(req)
+
+	jsonBytes, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := writeZipBytes(zw, "solicitacao.json", jsonBytes); err != nil {
+		return err
+	}
+
+	return writeZipBytes(zw, "solicitacao.txt", []byte(renderMetadataTXT(meta)))
+}
+
+// requestMetadata captura todos os campos pro solicitacao.json.
+type requestMetadata struct {
+	ID               string                  `json:"id"`
+	Name             string                  `json:"name"`
+	Email            string                  `json:"email"`
+	Phone            string                  `json:"phone,omitempty"`
+	StudyArea        string                  `json:"studyArea"`
+	Institution      string                  `json:"institution,omitempty"`
+	Subject          string                  `json:"subject"`
+	Goal             string                  `json:"goal,omitempty"`
+	Description      string                  `json:"description"`
+	Status           string                  `json:"status"`
+	MarketingConsent bool                    `json:"marketingConsent"`
+	DeliveredURL     string                  `json:"deliveredUrl,omitempty"`
+	CreatedAt        time.Time               `json:"createdAt"`
+	UpdatedAt        time.Time               `json:"updatedAt"`
+	Attachments      []requestMetaAttachment `json:"attachments"`
+}
+
+type requestMetaAttachment struct {
+	FileName    string `json:"fileName"`
+	ContentType string `json:"contentType"`
+	SizeBytes   int64  `json:"sizeBytes"`
+}
+
+func buildRequestMetadata(req *domsr.StudyRequest) requestMetadata {
+	atts := req.Attachments()
+	metaAtts := make([]requestMetaAttachment, 0, len(atts))
+	for _, a := range atts {
+		metaAtts = append(metaAtts, requestMetaAttachment{
+			FileName:    a.FileName,
+			ContentType: a.ContentType,
+			SizeBytes:   a.SizeBytes,
+		})
+	}
+	return requestMetadata{
+		ID:               req.ID().String(),
+		Name:             req.Name(),
+		Email:            req.Email(),
+		Phone:            req.Phone(),
+		StudyArea:        req.StudyArea(),
+		Institution:      req.Institution(),
+		Subject:          req.Subject(),
+		Goal:             req.Goal(),
+		Description:      req.Description(),
+		Status:           req.Status().String(),
+		MarketingConsent: req.MarketingConsent(),
+		DeliveredURL:     req.DeliveredURL(),
+		CreatedAt:        req.CreatedAt(),
+		UpdatedAt:        req.UpdatedAt(),
+		Attachments:      metaAtts,
+	}
+}
+
+func renderMetadataTXT(m requestMetadata) string {
+	var b strings.Builder
+	b.WriteString("════════════════════════════════════════════════\n")
+	b.WriteString("  SOLICITAÇÃO DE EXPERIÊNCIA DE ESTUDO — FFV\n")
+	b.WriteString("════════════════════════════════════════════════\n\n")
+	fmt.Fprintf(&b, "ID:           %s\n", m.ID)
+	fmt.Fprintf(&b, "Recebida em:  %s\n", m.CreatedAt.Format("02/01/2006 15:04"))
+	fmt.Fprintf(&b, "Status atual: %s\n\n", m.Status)
+	b.WriteString("─── ESTUDANTE ───────────────────────────────────\n")
+	fmt.Fprintf(&b, "Nome:         %s\n", m.Name)
+	fmt.Fprintf(&b, "Email:        %s\n", m.Email)
+	if m.Phone != "" {
+		fmt.Fprintf(&b, "WhatsApp:     %s\n", m.Phone)
+	}
+	if m.Institution != "" {
+		fmt.Fprintf(&b, "Instituição:  %s\n", m.Institution)
+	}
+	b.WriteString("\n─── CONTEÚDO SOLICITADO ─────────────────────────\n")
+	fmt.Fprintf(&b, "Área:         %s\n", m.StudyArea)
+	fmt.Fprintf(&b, "Tema:         %s\n", m.Subject)
+	if m.Goal != "" {
+		fmt.Fprintf(&b, "Objetivo:     %s\n", m.Goal)
+	}
+	b.WriteString("\nDescrição completa:\n")
+	b.WriteString(m.Description)
+	b.WriteString("\n\n")
+	if len(m.Attachments) > 0 {
+		b.WriteString("─── ANEXOS ──────────────────────────────────────\n")
+		for _, a := range m.Attachments {
+			fmt.Fprintf(&b, "  • %s (%s · %d bytes)\n", a.FileName, a.ContentType, a.SizeBytes)
+		}
+		b.WriteString("\nVeja a pasta anexos/ deste ZIP para os arquivos físicos.\n")
+	}
+	if m.DeliveredURL != "" {
+		fmt.Fprintf(&b, "\n─── ENTREGA ─────────────────────────────────────\nURL: %s\n", m.DeliveredURL)
+	}
+	return b.String()
+}
+
+func writeZipBytes(zw *zip.Writer, name string, data []byte) error {
+	h := &zip.FileHeader{Name: name, Method: zip.Deflate, Modified: time.Now()}
+	h.SetMode(0o644)
+	w, err := zw.CreateHeader(h)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(data)
+	return err
 }
 
 // writeZipEntry abre o anexo no storage e copia o conteúdo pra um entry novo

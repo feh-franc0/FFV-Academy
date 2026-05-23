@@ -49,8 +49,9 @@ type EmailNotifier interface {
 	SendAdminNotification(ctx context.Context, adminTo string, req *StudyRequest) error
 
 	// SendStatusUpdate: estudante recebe update quando status muda
-	// (ex: in_production, ready).
-	SendStatusUpdate(ctx context.Context, to, name string, requestID ID, newStatus Status, subject string) error
+	// (ex: in_production, ready). Se deliveredURL não for vazio (status=ready),
+	// o email inclui CTA clicável grande pro estudante acessar o conteúdo.
+	SendStatusUpdate(ctx context.Context, to, name string, requestID ID, newStatus Status, subject string, deliveredURL string) error
 }
 
 // FileStorage uploads arquivos anexados a uma StudyRequest.

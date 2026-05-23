@@ -35,9 +35,11 @@ export default function AdminStudyRequestDetailPage() {
   // Form state (controlled)
   const [status, setStatus] = useState<StudyRequestStatus>('pending');
   const [internalNotes, setInternalNotes] = useState('');
+  const [deliveredUrl, setDeliveredUrl] = useState('');
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
+  const [finalizing, setFinalizing] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -53,6 +55,7 @@ export default function AdminStudyRequestDetailPage() {
           setData(res);
           setStatus(res.status);
           setInternalNotes(res.internalNotes ?? '');
+          setDeliveredUrl(res.deliveredUrl ?? '');
         }
       })
       .finally(() => !cancelled && setLoading(false));
@@ -65,9 +68,10 @@ export default function AdminStudyRequestDetailPage() {
     if (!data || saving) return;
     setSaving(true);
     setError(null);
-    const patch: { status?: StudyRequestStatus; internalNotes?: string } = {};
+    const patch: { status?: StudyRequestStatus; internalNotes?: string; deliveredUrl?: string } = {};
     if (status !== data.status) patch.status = status;
     if (internalNotes !== (data.internalNotes ?? '')) patch.internalNotes = internalNotes;
+    if (deliveredUrl !== (data.deliveredUrl ?? '')) patch.deliveredUrl = deliveredUrl;
 
     const updated = await updateStudyRequest(id, patch);
     setSaving(false);
@@ -78,6 +82,68 @@ export default function AdminStudyRequestDetailPage() {
     setData(updated);
     setStatus(updated.status);
     setInternalNotes(updated.internalNotes ?? '');
+    setDeliveredUrl(updated.deliveredUrl ?? '');
+    setDirty(false);
+    setSavedAt(new Date());
+  }
+
+  /**
+   * finalizeWithLink — ação dedicada do fluxo "entregar trilha".
+   * Valida URL, manda PATCH com status=ready + deliveredUrl numa mesma request.
+   * O backend dispara o email celebrativo com o CTA grande pro estudante.
+   */
+  async function finalizeWithLink() {
+    if (!data || finalizing) return;
+    const url = deliveredUrl.trim();
+    if (!url) {
+      setError('Cole a URL da trilha gerada antes de finalizar.');
+      return;
+    }
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      setError('A URL precisa começar com http:// ou https://');
+      return;
+    }
+    const confirmMsg = `Confirmar entrega para ${data.email}?\n\nIsso vai:\n• Mudar status para "Pronto"\n• Enviar email celebrativo com o link clicável\n\nLink: ${url}`;
+    if (!window.confirm(confirmMsg)) return;
+
+    setFinalizing(true);
+    setError(null);
+    const updated = await updateStudyRequest(id, { status: 'ready', deliveredUrl: url });
+    setFinalizing(false);
+    if (!updated) {
+      setError('Falha ao finalizar. Tente novamente.');
+      return;
+    }
+    setData(updated);
+    setStatus(updated.status);
+    setDeliveredUrl(updated.deliveredUrl ?? '');
+    setDirty(false);
+    setSavedAt(new Date());
+  }
+
+  /**
+   * notifyCurationStarted — atalho do botão "Iniciar curadoria": muda status
+   * pra in_production. Backend dispara email "Curadoria iniciada" automaticamente.
+   */
+  async function notifyCurationStarted() {
+    if (!data || saving) return;
+    if (data.status === 'in_production') {
+      setError('Status já está em "em produção".');
+      return;
+    }
+    const confirmMsg = `Avisar ${data.email} que a curadoria começou?\n\nIsso vai mudar status para "Em produção" e enviar email automático.`;
+    if (!window.confirm(confirmMsg)) return;
+
+    setSaving(true);
+    setError(null);
+    const updated = await updateStudyRequest(id, { status: 'in_production' });
+    setSaving(false);
+    if (!updated) {
+      setError('Falha ao notificar. Tente novamente.');
+      return;
+    }
+    setData(updated);
+    setStatus(updated.status);
     setDirty(false);
     setSavedAt(new Date());
   }
@@ -302,6 +368,82 @@ export default function AdminStudyRequestDetailPage() {
                 );
               })}
             </div>
+          </Card>
+
+          <Card title="Workflow de entrega">
+            <p className="text-xs mb-3" style={{ color: 'var(--ffv-muted)', lineHeight: 1.6 }}>
+              Use estes 2 atalhos pra avisar o estudante. Cada ação dispara
+              email automático com o template certo (curadoria iniciada ou trilha pronta).
+            </p>
+
+            <button
+              type="button"
+              onClick={notifyCurationStarted}
+              disabled={saving || data.status === 'in_production' || data.status === 'ready'}
+              className="w-full text-left px-3 py-2.5 rounded-md text-sm transition-colors mb-3"
+              style={{
+                background: data.status === 'in_production' || data.status === 'ready'
+                  ? 'var(--ffv-bg2)'
+                  : 'color-mix(in srgb, var(--ffv-cyan) 14%, transparent)',
+                border: `1px solid ${
+                  data.status === 'in_production' || data.status === 'ready'
+                    ? 'var(--ffv-border)'
+                    : 'var(--ffv-cyan)'
+                }`,
+                color: data.status === 'in_production' || data.status === 'ready'
+                  ? 'var(--ffv-muted)'
+                  : 'var(--ffv-cyan)',
+                fontWeight: 600,
+                cursor: saving || data.status === 'in_production' || data.status === 'ready'
+                  ? 'not-allowed'
+                  : 'pointer',
+                opacity: saving ? 0.6 : 1,
+              }}
+            >
+              {data.status === 'in_production' || data.status === 'ready'
+                ? '✓ Curadoria já iniciada'
+                : '🛠 Iniciar curadoria + avisar estudante'}
+            </button>
+
+            <label className="text-xs font-semibold block mb-1.5" style={{ color: 'var(--ffv-muted)' }}>
+              URL DA TRILHA GERADA
+            </label>
+            <input
+              type="url"
+              value={deliveredUrl}
+              onChange={e => {
+                setDeliveredUrl(e.target.value);
+                setDirty(true);
+              }}
+              placeholder="https://fernandofrancovalle.com/aprenda/..."
+              className="w-full px-3 py-2 rounded-md text-sm font-mono mb-3"
+              style={{
+                background: 'var(--ffv-bg2)',
+                border: '1px solid var(--ffv-border)',
+                color: 'var(--foreground)',
+              }}
+            />
+
+            <button
+              type="button"
+              onClick={finalizeWithLink}
+              disabled={finalizing || !deliveredUrl.trim()}
+              className="w-full text-center px-3 py-3 rounded-md text-sm font-bold transition-colors"
+              style={{
+                background: deliveredUrl.trim()
+                  ? 'linear-gradient(90deg, #059669, #047857)'
+                  : 'var(--ffv-bg2)',
+                color: deliveredUrl.trim() ? '#fff' : 'var(--ffv-muted)',
+                border: '1px solid var(--ffv-border)',
+                cursor: finalizing || !deliveredUrl.trim() ? 'not-allowed' : 'pointer',
+                opacity: finalizing ? 0.6 : 1,
+              }}
+            >
+              {finalizing ? 'Finalizando…' : '🎉 Finalizar + enviar email com link'}
+            </button>
+            <p className="text-[11px] mt-2" style={{ color: 'var(--ffv-muted)', lineHeight: 1.5 }}>
+              Muda o status para "Pronto" e envia o email celebrativo com botão clicável.
+            </p>
           </Card>
 
           <Card title="Notas internas">

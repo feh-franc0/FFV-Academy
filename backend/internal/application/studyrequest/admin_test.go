@@ -78,7 +78,7 @@ func (n *mockNotifier) SendReceivedConfirmation(_ context.Context, _, _ string, 
 func (n *mockNotifier) SendAdminNotification(_ context.Context, _ string, _ *domsr.StudyRequest) error {
 	return nil
 }
-func (n *mockNotifier) SendStatusUpdate(_ context.Context, _, _ string, _ domsr.ID, s domsr.Status, _ string) error {
+func (n *mockNotifier) SendStatusUpdate(_ context.Context, _, _ string, _ domsr.ID, s domsr.Status, _ string, _ string) error {
 	n.statusUpdates = append(n.statusUpdates, s)
 	if s == n.failOn {
 		return errors.New("simulated email failure")
