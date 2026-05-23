@@ -29,6 +29,21 @@ type Config struct {
 	CORS      CORSConfig
 	Telemetry TelemetryConfig
 	Features  FeaturesConfig
+	Admin     AdminConfig
+}
+
+// AdminConfig restringe quem pode acessar rotas /admin/* além do role=admin
+// no DB. Defesa em profundidade: ataque que consegue setar role='admin' via
+// SQL injection ainda falha porque o email não está nesta allowlist.
+//
+// Se a allowlist vier vazia (default), o middleware mantém apenas a checagem
+// de role (comportamento legado pra dev/testes locais sem precisar setar
+// env var).
+//
+// Em produção SEMPRE setar ADMIN_EMAIL_ALLOWLIST=email1@dominio,email2@dominio
+// (separados por vírgula, sem espaços extras).
+type AdminConfig struct {
+	EmailAllowlist []string `envconfig:"ADMIN_EMAIL_ALLOWLIST" default:""`
 }
 
 // FeaturesConfig agrupa feature flags de funcionalidades opcionais.

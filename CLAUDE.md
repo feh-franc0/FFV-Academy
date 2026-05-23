@@ -204,6 +204,52 @@ Em `lib/bases/resolver.ts → detectBaseSlug()`:
 
 ---
 
+## 🔐 ADMIN — Defesa em profundidade (3 camadas)
+
+> **`fernandofv1110@gmail.com` é o único admin atual.** O sistema exige **duas** condições independentes pra qualquer rota `/api/v1/admin/*`: role no DB **E** email na allowlist do env var. Comprometer uma camada sozinho não basta pra escalar privilégio.
+
+### As 3 camadas
+
+| Camada | Onde fica | Como bloqueia |
+|--------|-----------|---------------|
+| **1. DB** | `users.role = 'admin'` | Migration 000065 promove explicitamente. Não há endpoint que altere role. |
+| **2. JWT** | Claim `email` assinado HMAC-SHA256 | Atacante não consegue forjar email/role no token. |
+| **3. Middleware** | Env var `ADMIN_EMAIL_ALLOWLIST` | `RequireAdminWithAllowlist` em `interfaces/http/middleware/auth.go:65` exige role=admin **AND** email ∈ allowlist. |
+
+### Ativando o admin (passo único)
+
+```bash
+# 1. Na VPS, em /opt/ffv/.env:
+ADMIN_EMAIL_ALLOWLIST=fernandofv1110@gmail.com
+
+# 2. Migration aplicada automaticamente em deploy (000065):
+#    UPDATE users SET role='admin' WHERE email='fernandofv1110@gmail.com'
+#    (idempotente — só roda se já existir o user via magic-link login)
+
+# 3. Restart API
+docker compose -f /opt/ffv/docker-compose.prod.yml up -d --force-recreate api
+
+# 4. Login pelo magic-link normal. JWT novo carregará role=admin.
+```
+
+> Se a env var ficar vazia, o middleware degrada pro modo "só role" (compat com dev). Em produção SEMPRE setar.
+
+### Anti-padrões proibidos
+
+- ❌ Endpoint que mude `users.role` via HTTP (não existir = não pode ser exploitado).
+- ❌ Auto-promoção "primeiro user vira admin" (vetor de race-condition).
+- ❌ Allowlist hardcoded no código fonte (rotação de admin precisa de PR — lento). Use env var.
+- ❌ Logar o JWT inteiro (vaza email). Logar só user_id quando precisar.
+
+### Rotacionar admin (se um dia precisar trocar)
+
+1. Cria/promove novo admin via migration nova: `UPDATE users SET role='admin' WHERE email='novo@...'`.
+2. Atualiza `ADMIN_EMAIL_ALLOWLIST=novo@...` no `.env` da VPS (substitui ou adiciona).
+3. Restart API.
+4. (Opcional) Migration nova: `UPDATE users SET role='user' WHERE email='antigo@...'`.
+
+---
+
 ## ☁️ STORAGE DE ARQUIVOS — Cloudflare R2
 
 > **Anexos de StudyRequest e qualquer upload de cliente vão pra Cloudflare R2 (S3-compatible).** Nada de upload fica no Postgres — só metadata + URL canônica `s3://bucket/key`.

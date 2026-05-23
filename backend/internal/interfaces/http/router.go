@@ -30,6 +30,11 @@ type RouterConfig struct {
 	// AuditLog é o repositório de audit log. Opcional — se nil, o middleware é omitido.
 	AuditLog middleware.AuditLogger
 
+	// AdminEmailAllowlist é a lista de emails permitidos pra rotas /admin/*.
+	// Vazio = só checa role (modo legado/dev). Em produção SEMPRE preencher
+	// via env var ADMIN_EMAIL_ALLOWLIST.
+	AdminEmailAllowlist []string
+
 	Health            *handlers.HealthHandler
 	Auth              *handlers.AuthHandler
 	Simulado          *handlers.SimuladoHandler
@@ -350,7 +355,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 		// Admin — requer role=admin.
 		r.Group(func(r chi.Router) {
-			r.Use(middleware.RequireAdmin)
+			r.Use(middleware.RequireAdminWithAllowlist(cfg.AdminEmailAllowlist))
 			r.Get("/api/v1/admin/stats", cfg.Admin.GetStats)
 			r.Get("/api/v1/admin/audit", cfg.Admin.GetAuditLog)
 			r.Get("/api/v1/admin/users", cfg.Admin.ListUsers)
