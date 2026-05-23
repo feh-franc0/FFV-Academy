@@ -33,6 +33,17 @@ export function useUserPreferences() {
   const [source, setSource] = useState<'local' | 'remote'>('local');
   const [syncing, setSyncing] = useState(false);
   const initRef = useRef(false);
+  // mountedRef: evita setState em background depois do unmount. Em testes
+  // com JSDOM teardown, isso prevenia "window is not defined" quando o
+  // promise resolvia depois do environment ter sido destruído.
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // Mount: hidrata do localStorage + tenta server.
   useEffect(() => {
@@ -48,7 +59,7 @@ export function useUserPreferences() {
     let cancelled = false;
     fetchPreferences()
       .then(server => {
-        if (cancelled) return;
+        if (cancelled || !mountedRef.current) return;
         const mapped = serverToUserPreferences(server);
         setPrefs(mapped);
         savePreferences(mapped); // cache local pra próximas leituras
@@ -56,7 +67,7 @@ export function useUserPreferences() {
       })
       .catch(() => {
         // 401, rede, ou shape — fica em local silenciosamente.
-        if (cancelled) return;
+        if (cancelled || !mountedRef.current) return;
         setSource('local');
       });
 
@@ -75,6 +86,7 @@ export function useUserPreferences() {
       setSyncing(true);
       updatePreferences(userPreferencesToUpdateInput(next))
         .then(server => {
+          if (!mountedRef.current) return;
           const mapped = serverToUserPreferences(server);
           setPrefs(mapped); // server pode normalizar (ordenar arrays, etc)
           savePreferences(mapped);
@@ -82,9 +94,13 @@ export function useUserPreferences() {
         })
         .catch(() => {
           // 401 (visitante) ou erro de rede — mantém local, sem perder edit.
+          if (!mountedRef.current) return;
           setSource('local');
         })
-        .finally(() => setSyncing(false));
+        .finally(() => {
+          if (!mountedRef.current) return;
+          setSyncing(false);
+        });
 
       return next;
     });
