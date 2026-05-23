@@ -10,8 +10,17 @@
 - **Framework**: Next.js 16 App Router, React 19
 - **Styling**: Tailwind v4 + CSS custom properties (`--ffv-*`)
 - **Package manager**: npm
-- **Tests**: Vitest + @testing-library/react — 62 arquivos, 562 testes
+- **Tests**: Vitest + @testing-library/react — 116 arquivos, 1181 testes
 - **Deploy**: **SSR Docker** (`output: "standalone"`) → imagem `ghcr.io/feh-franc0/ffv-frontend` rodando na VPS Hostinger KVM (Boston). Servido por Nginx reverse proxy junto com a API. **⚠️ Migração DNS+SSL pendente** — ver seção [Deploy e Infraestrutura](#-deploy-e-infraestrutura) e [README raiz](../README.md#migração-dnsssl-pendente).
+
+---
+
+## ⚡ PRINCÍPIO FUNDAMENTAL — SISTEMA MOLDÁVEL (ZERO DADOS ESTÁTICOS)
+
+- `curriculum.ts` é **fallback temporário** — na Fase 3 será substituído por `curriculum.generated.ts` gerado do DB via snapshot
+- Nenhum componente deve hardcodar slugs de hub/base/trilha — toda lista vem de props ou do snapshot
+- `BASE_REGISTRY` com dados de exibição (theme, mascot, microcopy) permanece em código — mas hubs/trilhas/módulos são do DB
+- Ao adicionar hub novo: só o DB + `BASE_REGISTRY` (visual config) — zero lista hardcoded em componentes
 
 ---
 
@@ -55,19 +64,18 @@ npm run lint   # eslint src/ — zero warnings policy
 | `/news` | Curadoria com NewsCard (imagens reais + magazine layout) |
 | `/search` | Busca real-time de módulos e trilhas |
 | `/explorar` | Discovery por hub/trilha |
-| `/comunidade` | Página de comunidade |
-| `/newsletter` | Opt-in newsletter |
-| `/sobre` | Sobre a plataforma |
+| `/comunidade`, `/newsletter`, `/sobre` | Páginas de marketing da plataforma |
 | `/cheatsheets`, `/roadmaps`, `/playlists` | Recursos complementares |
 | `/verificar` | Verificação de certificados |
 | `/preferencias` | Configurações do usuário |
 
 ### Currículo (`src/lib/curriculum.ts`)
-- **Single source of truth**: ~5000 linhas
-- Exports: `CURRICULUM`, `HUBS`, `LEVELS`, `BADGES_DEF` + helpers (`getHubStats`, `getHubTrails`, etc.)
+
+- **Em migração para DB-driven.** Source of truth: banco de dados (Fase 3). Fallback: `curriculum.ts`.
+- Na Fase 3, `curriculum.ts` será **gerado automaticamente** via `npm run prebuild` → `fetch-curriculum.mjs` (fetch do DB → grava `curriculum.generated.ts`).
+- Exports atuais: `CURRICULUM`, `HUBS`, `LEVELS`, `BADGES_DEF` + helpers (`getHubStats`, `getHubTrails`, etc.)
 - **8 hubs**: IA, AWS, Engenharia, Claude & Anthropic, Fundamentos, Programação, Dados, Profissional Digital
 - **66+ trilhas**, **900+ módulos**
-- BACKLOG: quebrar em arquivos por trilha (arquivo único está pesado)
 
 ### Gamificação — sistema completo
 
@@ -79,24 +87,10 @@ npm run lint   # eslint src/ — zero warnings policy
 | `src/lib/progress-sync.ts` | Pull/push backend `/api/v1/progress` (debounced 3s) |
 | `src/lib/leaderboard-api.ts` | getPublicLeaderboard, getMyRankAll por período |
 | `src/lib/sounds.ts` | Web Audio API — playXPCoin, playLevelUp, playBadge, playPop, unlockAudio |
-| `src/lib/toast.tsx` | Toasts celebrativos customizados (badge 🏆, streak 🔥, level ⭐) com animação própria |
+| `src/lib/toast.tsx` | Toasts celebrativos customizados (badge, streak, level) com animação própria |
 | `src/components/GameHUD.tsx` | Top bar fixa — XP com bump animation, streak, meta diária, due cards |
 | `src/components/StudyHeatmap.tsx` | Heatmap GitHub-style de 91 dias |
 | `src/components/MyRankCard.tsx` | Card de rank em /progresso — XP gap para posição acima |
-
-**GameState (schema v3):**
-```ts
-{
-  xp, level, streak, lastStudyDate, completedModules,
-  quizScores, badges, totalStudyTime, startedAt,
-  reviewCards, archivedCards, studyDays,
-  freezes, dailyGoal, lastReviewDate, lastArticle,
-  preferredHub, onboardedAt, articleProgress,
-  perfectQuizStreak, earlyMorningDays, trailStartedAt,
-  bookmarks, moduleRatings,              // adicionados v3
-  schemaVersion: 3
-}
-```
 
 **Ao adicionar campo ao GameState**, seguir em ordem:
 1. `engine.ts` — interface + DEFAULT_STATE + migrateState() + CURRENT_SCHEMA bump
@@ -104,6 +98,7 @@ npm run lint   # eslint src/ — zero warnings policy
 3. `useGameState.ts` — expor no hook se necessário
 
 ### Auth
+
 | Arquivo | Responsabilidade |
 |---------|-----------------|
 | `src/components/auth/AuthProvider.tsx` | Pull progresso ao login, contexto global |
@@ -130,6 +125,7 @@ npm run lint   # eslint src/ — zero warnings policy
 - `ArchDiagram` (ASCII puro) — **EVITAR** para novos módulos, preferir `ArchFlow`/`FlowDiagram`/`StackFlow`
 
 ### Home (`src/components/home/`)
+
 `Hero`, `GameDemo`, `SocialProofBar`, `HowItWorks`, `ComecarAqui`, `Explorar`, `HomeRanking`, `ComunidadeAutor`, `FinalCta`
 
 - `Hero.tsx` — personalizado para usuários com `lastArticle`: mostra "Continuar: [título]" em vez de "Começar agora"
@@ -139,6 +135,7 @@ npm run lint   # eslint src/ — zero warnings policy
 - `src/lib/analytics.ts` — `track('event_name', { props })` — 13 eventos catalogados
 
 ### Componentes de engajamento
+
 | Componente | Descrição |
 |-----------|-----------|
 | `OnboardingModal.tsx` | Primeira visita — 3 perguntas, recomenda hub/playlist personalizada |
@@ -159,60 +156,64 @@ npm run lint   # eslint src/ — zero warnings policy
 
 ## ⚠️ Gotchas críticos
 
+### Não hardcodar listas de hubs/bases em componentes
+- Usar props ou imports de `CURRICULUM`/`HUBS` — **nunca** arrays literais de slugs dentro de componentes.
+- Com o DB-driven (Fase 3), esses imports virão de `curriculum.generated.ts` (gerado automaticamente no build). Componentes que hardcodam slugs quebrarão na migração.
+
 ### SSR Docker (`output: "standalone"`)
 - O bundle final é uma imagem Docker (`ffv-frontend`) que roda **Node.js 24/7** na VPS.
 - `headers()` em `next.config.ts` **FUNCIONA** — CSP HTTP real é a fonte de verdade (ver bloco abaixo).
 - `dynamic = 'force-dynamic'` e Server Actions funcionam.
 - `generateStaticParams` continua sendo usado para pré-renderizar URLs estáticas no build (904 slugs de `/aprenda/[slug]`, simulados, etc.) — Next entrega HTML pronto no primeiro hit e troca pra dinâmico depois.
 - Imagens externas precisam `images.unoptimized: true` (já configurado) **OU** configurar `images.remotePatterns`. Mantido `unoptimized: true` para evitar dependência do otimizador `sharp` no container.
-- **`trailingSlash: true` ainda obrigatório** — alinha com URLs canônicas e mantém compatibilidade com bookmarks antigos do period FTP.
+- **`trailingSlash: true` ainda obrigatório** — alinha com URLs canônicas e mantém compatibilidade com bookmarks antigos do período FTP.
 
 ### RSC payloads em SSR
-- Em `output: "standalone"`, os RSC payloads (`__next.*.txt`) são **gerados em runtime pelo Node** a cada navegação. Soft navigation entre páginas: **~80ms**.
+- Em `output: "standalone"`, os RSC payloads são **gerados em runtime pelo Node** a cada navegação. Soft navigation entre páginas: **~80ms**.
 - O ADR `docs/adr/0002-exclude-rsc-payloads-from-ftp-deploy.md` está marcado como **superseded** — só fazia sentido em static export FTP.
 
 ### CSP (Content Security Policy)
 - **Fonte de verdade: HTTP header `Content-Security-Policy`** no `next.config.ts` (`async headers()`). Roda em todas as rotas em prod.
 - Permite: `'self'`, Plausible (analytics), Stripe (`js.stripe.com`), `images.unsplash.com`, `*.googleusercontent.com`, `NEXT_PUBLIC_API_BASE_URL`.
-- `frame-ancestors 'none'` (anti-clickjacking) — agora é efetivo via header HTTP (meta tag não suporta).
+- `frame-ancestors 'none'` (anti-clickjacking) — efetivo via header HTTP (meta tag não suporta).
 
 ### Healthcheck endpoint
 - `src/app/api/health/route.ts` expõe `GET /api/health` para o Docker `HEALTHCHECK CMD`.
-- Retorna `{ status: "ok" }` 200. Usado pelo `docker-compose.prod.yml` (frontend service) para `start_period`/`restart`.
+- Retorna `{ status: "ok" }` 200. Usado pelo `docker-compose.prod.yml` (frontend service).
 
 ### Pre-renderização vs runtime
-- Rotas com `generateStaticParams` **e** dados que mudam pouco (artigos `/aprenda/<slug>`): HTML pré-gerado no build, refresh a cada deploy.
-- Rotas dinâmicas client-side (admin, simulados, ranking, news/cheatsheets/playlists/comments): shell vazio + `fetch` em runtime → SEMPRE atualizadas sem deploy.
-- Para artigos atualizarem sem deploy (próxima sprint): adicionar `export const revalidate = 60` em `aprenda/[slug]/page.tsx` (ISR) + webhook do admin que dispara `revalidatePath('/aprenda/<slug>')` quando edita.
+- Rotas com `generateStaticParams` (artigos `/aprenda/<slug>`): HTML pré-gerado no build, refresh a cada deploy.
+- Rotas dinâmicas client-side (admin, simulados, ranking, news/cheatsheets/playlists): shell vazio + `fetch` em runtime → sempre atualizadas sem deploy.
+- Para artigos atualizarem sem deploy: adicionar `export const revalidate = 60` em `aprenda/[slug]/page.tsx` (ISR) + webhook do admin disparando `revalidatePath('/aprenda/<slug>')`.
 
 ### Zod + GameStateSchema (`.strict()`)
-- `GameStateSchema` usa `.strict()` — **qualquer campo não declarado causa rejeição**
-- Ao adicionar campo em `GameState`: adicionar como `.optional()` em `schemas.ts`
-- Caso contrário, `importState` e testes de export/import **quebram silenciosamente**
+- `GameStateSchema` usa `.strict()` — **qualquer campo não declarado causa rejeição**.
+- Ao adicionar campo em `GameState`: adicionar como `.optional()` em `schemas.ts`.
+- Caso contrário, `importState` e testes de export/import **quebram silenciosamente**.
 
 ### JSX em strings
-- Em arrays de options: `['...> 5']` — JSX `{'>'}` NÃO funciona dentro de strings, use `>` direto
-- Em JSX text content: `<>{'>'}5</>` — usar `{'>'}` é correto
-- Backticks em CodeBlock template literal — escapar como `` \` ``
+- Em arrays de options: `['...> 5']` — JSX `{'>'}` NÃO funciona dentro de strings, use `>` direto.
+- Em JSX text content: `<>{'>'}5</>` — usar `{'>'}` é correto.
+- Backticks em CodeBlock template literal — escapar como `` \` ``.
 
 ### Conflitos `public/`
-- `public/sitemap.xml` ou `public/robots.txt` causam **erro 500** (conflito com `app/sitemap.ts`)
-- REMOVIDOS — **nunca recriar**
+- `public/sitemap.xml` ou `public/robots.txt` causam **erro 500** (conflito com `app/sitemap.ts`).
+- REMOVIDOS — **nunca recriar**.
 
 ### `/search` vs `/search-trilha`
 - `/search` = busca real (criada maio/2026)
-- A trilha "Search & Information Retrieval" foi movida de `/search` para `/search-trilha`
+- A trilha "Search & Information Retrieval" foi movida de `/search` para `/search-trilha`.
 
 ### Sonner toast animations
-- `toast.badge()`, `toast.streak()`, `toast.levelUp()` usam `toast.custom()` + `unstyled: true`
-- Animação de enter/exit controlada **internamente** no componente via `useToastFade()` hook
-- `globals.css` tem overrides de `[data-sonner-toast]` para animações mais fluidas globalmente
-- **Não** usar `toast.custom()` com `unstyled: true` esperando as transitions do Sonner — não funcionam
+- `toast.badge()`, `toast.streak()`, `toast.levelUp()` usam `toast.custom()` + `unstyled: true`.
+- Animação de enter/exit controlada **internamente** no componente via `useToastFade()` hook.
+- `globals.css` tem overrides de `[data-sonner-toast]` para animações mais fluidas globalmente.
+- **Não** usar `toast.custom()` com `unstyled: true` esperando as transitions do Sonner — não funcionam.
 
 ### Audio (Web Audio API)
-- `unlockAudio()` **deve ser chamado** num evento de clique do usuário antes de qualquer som
-- GameHUD chama `unlockAudio()` no primeiro clique do header
-- ReviewClient chama `unlockAudio()` em `handleSelect()`
+- `unlockAudio()` **deve ser chamado** num evento de clique do usuário antes de qualquer som.
+- GameHUD chama `unlockAudio()` no primeiro clique do header.
+- ReviewClient chama `unlockAudio()` em `handleSelect()`.
 
 ---
 
@@ -262,7 +263,7 @@ git push main
                 f. rollback automático se health check falhar
 ```
 
-**Não há downtime de backend** (réplicas com max_fails detectam queda e rotam). **Frontend tem ~5s de blip durante o swap** (container antigo para, novo sobe) — Cloudflare na frente (próxima sprint) elimina isso.
+**Não há downtime de backend** (réplicas com max_fails detectam queda e rotam). **Frontend tem ~5s de blip durante o swap** — Cloudflare na frente (próxima sprint) elimina isso.
 
 ### Deploy manual (emergência)
 

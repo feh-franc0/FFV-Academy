@@ -17,6 +17,7 @@ import (
 type HubSeed struct {
 	ID        string   `json:"id"`
 	Slug      string   `json:"slug"`
+	BaseSlug  string   `json:"base_slug"`
 	Name      string   `json:"name"`
 	ShortName string   `json:"shortName"`
 	Color     string   `json:"color"`
@@ -73,7 +74,11 @@ func seedCurriculumImpl(ctx context.Context, pool *pgxpool.Pool, seedsRoot strin
 			if hubID == "" {
 				hubID = h.ID
 			}
-			baseSlug := hubBaseSlug(hubID)
+			// base_slug vem do JSON — sem mapeamento hardcoded
+			baseSlug := h.BaseSlug
+			if baseSlug == "" {
+				baseSlug = "tecnologia" // fallback conservador se ausente no seed
+			}
 			_, err := pool.Exec(ctx, `
 				INSERT INTO hubs (id, slug, base_slug, name, short_name, description, icon, color, position)
 				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -204,24 +209,4 @@ func nullIfEmpty(s string) interface{} {
 		return nil
 	}
 	return s
-}
-
-// hubBaseSlug retorna o slug da base para um dado hub slug, usando o mapeamento canônico.
-func hubBaseSlug(hubSlug string) string {
-	switch hubSlug {
-	case "carreira":
-		return "carreira"
-	case "comunicacao":
-		return "comunicacao"
-	case "marketing":
-		return "marketing"
-	case "conteudo":
-		return "conteudo"
-	case "empreendedorismo":
-		return "empreendedorismo"
-	case "ingles":
-		return "ingles"
-	default:
-		return "tecnologia"
-	}
 }
