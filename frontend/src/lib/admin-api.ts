@@ -358,3 +358,10 @@ export function studyRequestDownloadUrl(downloadPath: string): string {
     (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_API_BASE_URL) || '';
   return `${base}${downloadPath}`;
 }
+
+// URL do endpoint que baixa todos os anexos de uma solicitação como .zip.
+export function studyRequestZipUrl(id: string): string {
+  const base =
+    (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_API_BASE_URL) || '';
+  return `${base}/api/v1/admin/study-requests/${id}/download-all`;
+}

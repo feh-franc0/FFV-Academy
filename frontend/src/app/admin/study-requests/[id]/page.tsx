@@ -15,6 +15,7 @@ import { useEffect, useState } from 'react';
 import {
   fetchStudyRequest,
   studyRequestDownloadUrl,
+  studyRequestZipUrl,
   STUDY_REQUEST_STATUS_COLOR,
   STUDY_REQUEST_STATUS_LABEL,
   STUDY_REQUEST_STATUSES,
@@ -219,6 +220,17 @@ export default function AdminStudyRequestDetailPage() {
             {data.attachments.length === 0 ? (
               <Muted>Estudante não enviou arquivos.</Muted>
             ) : (
+              <>
+                <a
+                  href={studyRequestZipUrl(data.id)}
+                  className="self-start inline-flex items-center gap-2 px-3 py-2 rounded-md text-xs font-bold mb-3"
+                  style={{
+                    background: 'linear-gradient(90deg, var(--ffv-blue), var(--ffv-purple))',
+                    color: '#fff',
+                  }}
+                >
+                  ⬇ Baixar tudo (.zip)
+                </a>
               <ul className="flex flex-col gap-2">
                 {data.attachments.map(a => (
                   <li
@@ -251,6 +263,7 @@ export default function AdminStudyRequestDetailPage() {
                   </li>
                 ))}
               </ul>
+              </>
             )}
           </Card>
         </div>

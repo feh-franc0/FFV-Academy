@@ -91,9 +91,17 @@ var AllowedContentTypes = map[string]bool{
 	"image/png":          true,
 	"image/jpeg":         true,
 	"image/jpg":          true,
+	"image/webp":         true,
+	"image/gif":          true,
 	"text/plain":         true,
+	"text/markdown":      true,
+	"text/csv":           true,
 	"application/msword": true,
 	"application/vnd.openxmlformats-officedocument.wordprocessingml.document": true,
+	"application/vnd.ms-excel": true,
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":         true,
+	"application/vnd.ms-powerpoint":                                             true,
+	"application/vnd.openxmlformats-officedocument.presentationml.presentation": true,
 }
 
 // NewAttachment cria um Attachment validado.

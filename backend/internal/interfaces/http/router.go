@@ -418,6 +418,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				r.Get("/api/v1/admin/study-requests/{id}", cfg.StudyRequestAdmin.Get)
 				r.With(middleware.BodyLimit(32*1024)).Patch("/api/v1/admin/study-requests/{id}", cfg.StudyRequestAdmin.Update)
 				r.Get("/api/v1/admin/study-requests/{id}/attachments/{attachmentId}", cfg.StudyRequestAdmin.DownloadAttachment)
+				r.Get("/api/v1/admin/study-requests/{id}/download-all", cfg.StudyRequestAdmin.DownloadZip)
 			}
 		})
 	})

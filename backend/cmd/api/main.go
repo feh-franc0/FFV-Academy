@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -31,6 +32,7 @@ import (
 	"github.com/fernandofv/api/internal/config"
 	domleaderboard "github.com/fernandofv/api/internal/domain/leaderboard"
 	"github.com/fernandofv/api/internal/domain/shared"
+	domstudyreq "github.com/fernandofv/api/internal/domain/studyrequest"
 	"github.com/fernandofv/api/internal/infrastructure/ai"
 	"github.com/fernandofv/api/internal/infrastructure/audit"
 	"github.com/fernandofv/api/internal/infrastructure/auth"
@@ -196,17 +198,46 @@ func run() error {
 	claudeClient := ai.NewClaudeClient(cfg.Anthropic, tutorCache)
 
 	// ─── Infra: Storage (uploads de StudyRequest) ───────────────────────────────
-	// V1: filesystem local em UPLOAD_DIR (default /tmp/ffv-uploads em dev,
-	// /opt/ffv/uploads em prod — montado como volume Docker).
-	// V2 planejada: S3FileStorage via aws-sdk-go-v2 (interface FileStorage já
-	// abstrai a troca sem mudar use case nem handler).
-	uploadDir := os.Getenv("UPLOAD_DIR")
-	if uploadDir == "" {
-		uploadDir = "/tmp/ffv-uploads"
+	// Se S3_BUCKET é setado, usa S3-compatible (Cloudflare R2 / Backblaze B2 /
+	// MinIO / AWS S3) — mesma interface, plugável. Caso contrário, filesystem
+	// local em UPLOAD_DIR (dev/fallback).
+	//
+	// Vars S3 (todas obrigatórias se S3_BUCKET setado):
+	//   S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY
+	//   S3_ENDPOINT (opcional — vazio = AWS S3 default)
+	//   S3_REGION (default "auto" — R2 friendly)
+	//   S3_PATH_STYLE (default false — true para MinIO)
+	var fileStorage interface {
+		// FileStorage (upload) + AttachmentDownloader (open). Composição inline
+		// — evita import de handlers no escopo de wiring.
+		Upload(ctx context.Context, in domstudyreq.UploadInput) (string, error)
+		Open(ctx context.Context, storageURL string) (io.ReadCloser, error)
 	}
-	fileStorage, err := storageinfra.NewLocalDiskStorage(uploadDir)
-	if err != nil {
-		return fmt.Errorf("file storage: %w", err)
+	if bucket := os.Getenv("S3_BUCKET"); bucket != "" {
+		s3, err := storageinfra.NewS3Storage(ctx, storageinfra.S3Config{
+			Endpoint:        os.Getenv("S3_ENDPOINT"),
+			Region:          os.Getenv("S3_REGION"),
+			Bucket:          bucket,
+			AccessKeyID:     os.Getenv("S3_ACCESS_KEY_ID"),
+			SecretAccessKey: os.Getenv("S3_SECRET_ACCESS_KEY"),
+			PathStyle:       os.Getenv("S3_PATH_STYLE") == "true",
+		})
+		if err != nil {
+			return fmt.Errorf("file storage (s3): %w", err)
+		}
+		fileStorage = s3
+		log.Info("file storage: S3-compatible", "bucket", bucket, "endpoint", os.Getenv("S3_ENDPOINT"))
+	} else {
+		uploadDir := os.Getenv("UPLOAD_DIR")
+		if uploadDir == "" {
+			uploadDir = "/tmp/ffv-uploads"
+		}
+		local, err := storageinfra.NewLocalDiskStorage(uploadDir)
+		if err != nil {
+			return fmt.Errorf("file storage (local): %w", err)
+		}
+		fileStorage = local
+		log.Info("file storage: local disk", "dir", uploadDir)
 	}
 
 	// ─── Infra: Catálogo ────────────────────────────────────────────────────────

@@ -160,6 +160,33 @@ Toda base nova nasce com **o mesmo conjunto de componentes compartilhados** (`Ba
 - **LWW conflict resolution** em `progress_snapshots` (`updated_at`).
 - **Idempotência** em webhooks Stripe (tabela `stripe_events`) e em `awardBadge()` no cliente.
 - **Single VPS, dois serviços** — Nginx faz host-based routing: `api.*` → API Go (×2 réplicas); `www`/root → frontend Next.js.
+- **Storage de arquivos no Cloudflare R2** — anexos de clientes (PDFs, DOCX, XLSX, PPT, imagens) vão pra um bucket R2; o Postgres guarda só metadata + URL canônica `s3://ffv-uploads/<req-id>/<att-id>.ext`. Adapter S3-compatible (`aws-sdk-go-v2`) suporta R2/B2/MinIO/AWS via env vars. Detalhes: [`backend/docs/RUNBOOK.md` §8](./backend/docs/RUNBOOK.md).
+
+### Storage de uploads — Cloudflare R2
+
+Quando um cliente envia arquivos pelo formulário de solicitação de estudo (`/`), o fluxo é:
+
+```
+Browser → POST multipart /api/v1/study-requests
+                ↓
+        Backend Go (FileStorage interface)
+                ↓
+        Cloudflare R2 bucket "ffv-uploads"
+                ↓
+        Postgres salva: storage_url = "s3://ffv-uploads/<req-id>/<att-id>.ext"
+```
+
+Admin baixa um arquivo: `GET /api/v1/admin/study-requests/{id}/attachments/{attId}` ou todos como ZIP: `GET /api/v1/admin/study-requests/{id}/download-all`. O backend faz streaming de `GetObject` do R2 direto pro response, sem persistir no disco da VPS.
+
+**Por quê R2 e não AWS S3:**
+
+| Provider | $/GB/mês | Egress |
+|----------|----------|--------|
+| **Cloudflare R2** ⭐ | $0.015 | **Grátis** |
+| AWS S3 | $0.023 | $0.09/GB |
+| Backblaze B2 | $0.006 | Grátis via Cloudflare |
+
+Adapter está em `backend/internal/infrastructure/storage/s3.go` — trocar de provider é só mudar 4 env vars (`S3_ENDPOINT`, `S3_REGION`, `S3_PATH_STYLE`, credentials).
 
 ### Migração DNS+SSL pendente
 

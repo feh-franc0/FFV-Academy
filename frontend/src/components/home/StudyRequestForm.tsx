@@ -610,7 +610,7 @@ export function StudyRequestForm() {
             </span>
           </label>
           <p className="text-[11px] mt-1" style={{ color: 'var(--ffv-muted)', lineHeight: 1.5 }}>
-            PDFs, DOCX, TXT, PNG ou JPG da sua faculdade, curso ou anotações. Até {STUDY_REQUEST_LIMITS.maxAttachments} arquivos,{' '}
+            PDF, DOCX, XLSX, PPTX, CSV, TXT, MD ou imagens (PNG/JPG/WebP) — apostilas, slides, planilhas, anotações. Até {STUDY_REQUEST_LIMITS.maxAttachments} arquivos,{' '}
             {STUDY_REQUEST_LIMITS.maxAttachmentBytes / 1024 / 1024} MB cada.
           </p>
 
@@ -644,7 +644,7 @@ export function StudyRequestForm() {
               multiple
               accept={STUDY_REQUEST_LIMITS.allowedExtensions.join(',')}
               className="sr-only"
-              aria-label="Anexar materiais (PDF, DOCX, TXT, PNG, JPG)"
+              aria-label="Anexar materiais (PDF, DOCX, XLSX, PPTX, CSV, TXT, MD, imagens)"
               onChange={e => handleFiles(e.target.files)}
               disabled={submitting}
             />

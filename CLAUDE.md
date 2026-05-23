@@ -204,6 +204,66 @@ Em `lib/bases/resolver.ts → detectBaseSlug()`:
 
 ---
 
+## ☁️ STORAGE DE ARQUIVOS — Cloudflare R2
+
+> **Anexos de StudyRequest e qualquer upload de cliente vão pra Cloudflare R2 (S3-compatible).** Nada de upload fica no Postgres — só metadata + URL canônica `s3://bucket/key`.
+
+### Por que R2
+- **Zero egress fees** — frontend baixa arquivos sem custo extra (vs $0.09/GB AWS S3).
+- **API 100% S3-compatible** — adapter Go usa `aws-sdk-go-v2`; trocar pra B2/MinIO/AWS é só mudar env vars.
+- **$0.015/GB/mês** — mais barato que S3 e Firebase.
+
+### Arquitetura
+
+| Camada | Responsabilidade |
+|--------|------------------|
+| `backend/internal/infrastructure/storage/s3.go` | Adapter S3-compatible (PutObject, GetObject) |
+| `backend/internal/domain/studyrequest/ports.go:63` | Interface `FileStorage` (Upload) |
+| `backend/internal/interfaces/http/handlers/study_request_admin_handler.go` | `AttachmentDownloader` (Open) — usado também pelo ZIP bundler |
+| `backend/cmd/api/main.go` | Switch por env: `S3_BUCKET` setado → S3; senão → LocalDisk (dev/fallback) |
+| Postgres `study_request_attachments.storage_url` | Guarda `s3://ffv-uploads/<req-id>/<att-id>.ext` |
+
+### Env vars obrigatórias em produção
+
+```bash
+S3_BUCKET=ffv-uploads
+S3_ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+S3_REGION=auto
+S3_ACCESS_KEY_ID=<R2 API token>
+S3_SECRET_ACCESS_KEY=<R2 API token>
+S3_PATH_STYLE=false
+```
+
+Setup completo passo-a-passo: **[`backend/docs/RUNBOOK.md` §8](./backend/docs/RUNBOOK.md)**.
+
+### Layout de keys no bucket
+
+```
+ffv-uploads/
+├── <study_request_id>/
+│   ├── <attachment_id>.pdf
+│   ├── <attachment_id>.xlsx
+│   └── <attachment_id>.pptx
+└── <outro_request_id>/
+    └── ...
+```
+
+Cada solicitação tem sua pasta (não há agrupamento por usuário — uma pessoa pode ter N solicitações, cada uma com sua pasta). Para baixar todos os arquivos de uma solicitação como ZIP: `GET /api/v1/admin/study-requests/{id}/download-all` (admin only).
+
+### MIME types aceitos
+
+PDF, DOCX, XLS/XLSX, PPT/PPTX, CSV, TXT, MD, PNG, JPG, JPEG, WebP, GIF. Limite: 25 MiB/arquivo, até 10 anexos/solicitação. Whitelist canônica em `backend/internal/domain/studyrequest/study_request.go:89`.
+
+### NÃO FAZER
+
+- ❌ Salvar binário no Postgres (campos BYTEA).
+- ❌ Salvar uploads em `/opt/ffv/uploads/` em produção (esse path é fallback de emergência).
+- ❌ Expor credenciais R2 fora de `.env` (sempre via env vars).
+- ❌ Commitar `.env` no git (já no `.gitignore`).
+- ❌ Reutilizar R2 token entre dev/staging/prod — gerar 1 token por ambiente.
+
+---
+
 ## 🚀 PROTOCOLO DE COMMIT + PUSH + CI (regra fixa do PO)
 
 ### 1. Antes do commit

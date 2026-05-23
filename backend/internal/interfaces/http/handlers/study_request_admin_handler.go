@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"archive/zip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -258,6 +259,132 @@ func (h *StudyRequestAdminHandler) DownloadAttachment(w http.ResponseWriter, r *
 		// Já enviamos headers; só logar via header customizado (cliente pode detectar).
 		w.Header().Set("X-Stream-Error", "1")
 	}
+}
+
+// DownloadZip — GET /api/v1/admin/study-requests/{id}/download-all
+//
+// Stream-a um arquivo .zip contendo todos os anexos da solicitação, lendo
+// cada um via FileStorage.Open e gravando direto na response (sem buffer
+// completo em memória). Nome do zip: solicitacao-<id-curto>.zip.
+//
+// Cada entry preserva o filename original (UTF-8 — zip suporta via flag 0x800).
+// Se um anexo falhar (movido/perdido no storage), pula esse entry e continua;
+// o zip termina íntegro com os arquivos restantes. Falhas ficam registradas
+// no header X-Stream-Error pra observabilidade.
+func (h *StudyRequestAdminHandler) DownloadZip(w http.ResponseWriter, r *http.Request) {
+	if h.storage == nil {
+		WriteError(w, http.StatusServiceUnavailable, "download não disponível", "storage-not-configured")
+		return
+	}
+
+	id := chi.URLParam(r, "id")
+	req, err := h.get.Execute(r.Context(), id)
+	if err != nil {
+		HandleDomainError(w, err)
+		return
+	}
+
+	atts := req.Attachments()
+	if len(atts) == 0 {
+		WriteError(w, http.StatusNotFound, "solicitação sem anexos", "no-attachments")
+		return
+	}
+
+	zipName := fmt.Sprintf("solicitacao-%s.zip", shortID(req.ID().String()))
+	encoded := url.PathEscape(zipName)
+	disposition := fmt.Sprintf(
+		"attachment; filename=\"%s\"; filename*=UTF-8''%s",
+		zipName, encoded,
+	)
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", disposition)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// Sem Content-Length: stream zip não conhece o tamanho final antes do write.
+
+	zw := zip.NewWriter(w)
+	defer zw.Close() //nolint:errcheck
+
+	// Evita colisão de nomes idênticos entre anexos (ex: dois "anotacoes.pdf").
+	used := make(map[string]int, len(atts))
+
+	failures := 0
+	for _, a := range atts {
+		entryName := uniqueEntryName(a.FileName, a.ID.String(), used)
+		if err := writeZipEntry(r.Context(), zw, h.storage, a, entryName); err != nil {
+			failures++
+			continue
+		}
+	}
+	if failures > 0 {
+		w.Header().Set("X-Stream-Error", fmt.Sprintf("%d/%d", failures, len(atts)))
+	}
+}
+
+// writeZipEntry abre o anexo no storage e copia o conteúdo pra um entry novo
+// dentro do zip. Erros são propagados pro caller decidir se aborta ou pula.
+func writeZipEntry(
+	ctx context.Context,
+	zw *zip.Writer,
+	storage AttachmentDownloader,
+	att domsr.Attachment,
+	entryName string,
+) error {
+	reader, err := storage.Open(ctx, att.StorageURL)
+	if err != nil {
+		return err
+	}
+	defer reader.Close() //nolint:errcheck
+
+	header := &zip.FileHeader{
+		Name:     entryName,
+		Method:   zip.Deflate,
+		Modified: att.CreatedAt,
+	}
+	// Habilita UTF-8 no entry (bit 11 do general purpose flag).
+	header.SetMode(0o644)
+	header.NonUTF8 = false
+
+	out, err := zw.CreateHeader(header)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, reader); err != nil {
+		return err
+	}
+	return nil
+}
+
+// uniqueEntryName garante que dois anexos com mesmo filename original não
+// sobrescrevam um ao outro dentro do zip. Em colisão, prefixa o id curto.
+func uniqueEntryName(fileName, attachmentID string, used map[string]int) string {
+	name := sanitizeZipEntryName(fileName)
+	if _, ok := used[name]; !ok {
+		used[name] = 1
+		return name
+	}
+	used[name]++
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	return fmt.Sprintf("%s-%s%s", base, shortID(attachmentID), ext)
+}
+
+// sanitizeZipEntryName remove separadores de path do nome (evita zip-slip
+// se nome original tiver "/" ou "..") e colapsa nomes vazios em "arquivo".
+func sanitizeZipEntryName(name string) string {
+	name = filepath.Base(name)
+	name = strings.ReplaceAll(name, "\\", "_")
+	name = strings.TrimSpace(name)
+	if name == "" || name == "." || name == ".." {
+		return "arquivo"
+	}
+	return name
+}
+
+func shortID(id string) string {
+	if len(id) >= 8 {
+		return id[:8]
+	}
+	return id
 }
 
 // sanitizeFilenameASCII produz uma variante apenas-ASCII pro fallback de
