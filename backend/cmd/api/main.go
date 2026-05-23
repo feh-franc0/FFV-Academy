@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -89,6 +90,20 @@ func run() error {
 	// ─── Logger ────────────────────────────────────────────────────────────────
 	log := logger.New(cfg.App.Env)
 	log.Info("starting ffv-api", "version", cfg.App.Version, "env", cfg.App.Env)
+
+	// Guard contra rodar em DEV MODE numa VPS de produção. Heurística: hostname
+	// começando com "srv" (padrão Hostinger) ou variável FFV_PROD_GUARD=1 setada
+	// pelo docker-compose.prod.yml. Loga ALERT alto — não falha startup pra não
+	// quebrar deploy de emergência, mas o operador é avisado em todo log scrape.
+	if cfg.App.Env != "production" {
+		host, _ := os.Hostname()
+		if strings.HasPrefix(host, "srv") || os.Getenv("FFV_PROD_GUARD") == "1" {
+			log.Error("ALERTA SEGURANÇA: APP_ENV != production em hospedagem de prod",
+				"app_env", cfg.App.Env,
+				"hostname", host,
+				"consequencias", "emails desabilitados (MailHog) + bypass magic-link 000000 ativo")
+		}
+	}
 
 	// ─── Telemetry: OpenTelemetry ───────────────────────────────────────────────
 	// Setup inicializa o TracerProvider e retorna um shutdown para flush gracioso.
