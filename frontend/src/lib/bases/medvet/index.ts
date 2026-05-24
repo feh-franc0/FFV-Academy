@@ -17,6 +17,12 @@ import {
   MOD_11_MELHORAMENTO,
   MOD_12_ENDOGAMIA,
 } from './genetica-modules-3';
+import {
+  MOD_13_METODOS_SELECAO,
+  MOD_14_REPETIBILIDADE_CPP,
+  MOD_15_TESTE_PEDIGREE,
+  MOD_16_TESTE_PROGENIE,
+} from './metodos-selecao-modules';
 
 export const GENETICA_TRAIL: Trail = {
   slug: 'genetica',
@@ -40,6 +46,28 @@ export const GENETICA_TRAIL: Trail = {
   ],
 };
 
+/**
+ * Trilha de aprofundamento em melhoramento prático — métodos de seleção +
+ * testes de avaliação genética. Conteúdo da Aula 13 da Profa. Rafaella Olivieri.
+ *
+ * Foco aplicado: como o melhorista DECIDE quais animais usar como pais,
+ * combinando estatística (CPP/CPT, Pedigree, Progênie) com economia (Índice
+ * de Seleção). Sequencial após a trilha Genética principal.
+ */
+export const METODOS_SELECAO_TRAIL: Trail = {
+  slug: 'metodos-selecao-e-testes',
+  title: 'Métodos de Seleção e Testes',
+  description:
+    'A engenharia do melhoramento animal: como escolher reprodutores combinando estatística e economia. 4 módulos com fórmulas trabalhadas e exercícios resolvidos passo-a-passo.',
+  icon: '🎯',
+  modules: [
+    MOD_13_METODOS_SELECAO,
+    MOD_14_REPETIBILIDADE_CPP,
+    MOD_15_TESTE_PEDIGREE,
+    MOD_16_TESTE_PROGENIE,
+  ],
+};
+
 export const MEDVET_BASE: Base = {
   slug: 'medicina-veterinaria',
   name: 'Medicina Veterinária',
@@ -48,7 +76,7 @@ export const MEDVET_BASE: Base = {
     'Base de conhecimento de Medicina Veterinária. Trilhas profundas com módulos sequenciais, exercícios e revisão — feitas no mesmo padrão da nossa base de Tecnologia.',
   icon: '🐾',
   attribution: 'Conteúdo da trilha Genética baseado nos materiais da Profa. Dra. Rafaella Olivieri (Zootecnista, Dra. em Ciência Animal).',
-  trails: [GENETICA_TRAIL],
+  trails: [GENETICA_TRAIL, METODOS_SELECAO_TRAIL],
   hubs: [
     {
       slug: 'fundamentos',
@@ -78,9 +106,16 @@ export const MEDVET_BASE: Base = {
       slug: 'melhoramento',
       name: 'Melhoramento Animal',
       icon: '🐄',
-      description: 'Como selecionar reprodutores e combinar raças para resultados previsíveis.',
+      description: 'Como selecionar reprodutores, escolher métodos de seleção e usar testes de avaliação genética em rebanho real.',
       colorIndex: 3,
-      moduleSlugs: ['introducao-ao-melhoramento-genetico', 'endogamia-x-exogamia'],
+      moduleSlugs: [
+        'introducao-ao-melhoramento-genetico',
+        'endogamia-x-exogamia',
+        'metodos-de-selecao-melhoramento',
+        'repetibilidade-capacidade-provavel-producao',
+        'teste-de-pedigree-avaliacao-genetica',
+        'teste-de-progenie-avaliacao-genetica',
+      ],
     },
   ],
 };

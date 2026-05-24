@@ -21,6 +21,11 @@ export const MEDVET_MODULE_SLUGS: string[] = [
   'frequencia-genica-hardy-weinberg',
   'introducao-ao-melhoramento-genetico',
   'endogamia-x-exogamia',
+  // Trilha 2 — Métodos de Seleção e Testes (Aula 13 — Profa. Rafaella Olivieri)
+  'metodos-de-selecao-melhoramento',
+  'repetibilidade-capacidade-provavel-producao',
+  'teste-de-pedigree-avaliacao-genetica',
+  'teste-de-progenie-avaliacao-genetica',
 ];
 
 /** Metadata leve dos módulos pra recomendações sem pagar bundle. */
@@ -44,4 +49,9 @@ export const MEDVET_MODULES_LITE: MedvetModuleLite[] = [
   { slug: 'frequencia-genica-hardy-weinberg',     title: 'Frequência Gênica e Equilíbrio de Hardy-Weinberg',              estimatedMin: 26, icon: '📐' },
   { slug: 'introducao-ao-melhoramento-genetico',  title: 'Introdução ao Melhoramento Genético',                           estimatedMin: 22, icon: '🐄' },
   { slug: 'endogamia-x-exogamia',                 title: 'Endogamia × Exogamia — cruzamentos e heterose',                 estimatedMin: 20, icon: '🧪' },
+  // Trilha 2 — Métodos de Seleção e Testes
+  { slug: 'metodos-de-selecao-melhoramento',                title: 'Métodos de Seleção em Melhoramento Animal',                          estimatedMin: 16, icon: '🎯' },
+  { slug: 'repetibilidade-capacidade-provavel-producao',    title: 'Repetibilidade, Capacidade Provável de Produção e Transmissão',     estimatedMin: 20, icon: '📏' },
+  { slug: 'teste-de-pedigree-avaliacao-genetica',           title: 'Teste de Pedigree — Avaliando pelo Ascendente',                     estimatedMin: 16, icon: '🧾' },
+  { slug: 'teste-de-progenie-avaliacao-genetica',           title: 'Teste de Progênie — Avaliando pelos Descendentes',                  estimatedMin: 18, icon: '🐶' },
 ];

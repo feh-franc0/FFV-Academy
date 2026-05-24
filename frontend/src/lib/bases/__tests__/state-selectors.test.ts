@@ -102,8 +102,8 @@ describe('selectTotalModulesForBase', () => {
     expect(total).toBeGreaterThan(100); // CURRICULUM tem 900+ módulos
   });
 
-  it('medvet retorna 12 (1 trilha × 12 módulos)', () => {
-    expect(selectTotalModulesForBase('medicina-veterinaria')).toBe(12);
+  it('medvet retorna 16 (Genética 12 + Métodos de Seleção 4)', () => {
+    expect(selectTotalModulesForBase('medicina-veterinaria')).toBe(16);
   });
 
   it('base desconhecida → 0', () => {

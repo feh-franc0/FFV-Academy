@@ -16,35 +16,41 @@ import {
 } from '@/lib/bases/medvet/simulado-genetica';
 
 describe('Base Medvet — integridade dos dados', () => {
-  it('tem exatamente 12 módulos numerados de 1 a 12', () => {
-    expect(MEDVET_TOTAL_MODULES).toBe(12);
+  it('tem 16 módulos (12 na Genética + 4 em Métodos de Seleção)', () => {
+    expect(MEDVET_TOTAL_MODULES).toBe(16);
     const slugs = getAllModuleSlugs();
-    expect(slugs).toHaveLength(12);
-    const nums = MEDVET_BASE.trails[0].modules.map(m => m.num);
-    expect(nums).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    expect(slugs).toHaveLength(16);
+    // Numeração contínua de 1 a 16 entre as duas trilhas
+    const allNums = MEDVET_BASE.trails.flatMap(t => t.modules.map(m => m.num));
+    expect(allNums).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
   });
 
-  it('tem exatamente 1 trilha (Genética) e 4 hubs', () => {
-    expect(MEDVET_TOTAL_TRAILS).toBe(1);
+  it('tem exatamente 2 trilhas (Genética + Métodos de Seleção) e 4 hubs', () => {
+    expect(MEDVET_TOTAL_TRAILS).toBe(2);
     expect(MEDVET_TOTAL_HUBS).toBe(4);
     expect(MEDVET_BASE.trails[0].slug).toBe('genetica');
+    expect(MEDVET_BASE.trails[1].slug).toBe('metodos-selecao-e-testes');
   });
 
-  it('cada módulo tem keyTerms, sections e quiz não-vazios', () => {
-    for (const m of MEDVET_BASE.trails[0].modules) {
-      expect(m.keyTerms.length, `${m.slug} keyTerms`).toBeGreaterThan(0);
-      expect(m.sections.length, `${m.slug} sections`).toBeGreaterThan(0);
-      expect(m.quiz.length, `${m.slug} quiz`).toBeGreaterThan(0);
+  it('cada módulo (de qualquer trilha) tem keyTerms, sections e quiz não-vazios', () => {
+    for (const trail of MEDVET_BASE.trails) {
+      for (const m of trail.modules) {
+        expect(m.keyTerms.length, `${m.slug} keyTerms`).toBeGreaterThan(0);
+        expect(m.sections.length, `${m.slug} sections`).toBeGreaterThan(0);
+        expect(m.quiz.length, `${m.slug} quiz`).toBeGreaterThan(0);
+      }
     }
   });
 
   it('todas as questões dos módulos têm 4+ opções e correct válido', () => {
-    for (const m of MEDVET_BASE.trails[0].modules) {
-      for (const q of m.quiz) {
-        expect(q.options.length, `${m.slug}: ${q.question.slice(0, 30)}`).toBeGreaterThanOrEqual(2);
-        expect(q.correct).toBeGreaterThanOrEqual(0);
-        expect(q.correct).toBeLessThan(q.options.length);
-        expect(q.explanation.length).toBeGreaterThan(0);
+    for (const trail of MEDVET_BASE.trails) {
+      for (const m of trail.modules) {
+        for (const q of m.quiz) {
+          expect(q.options.length, `${m.slug}: ${q.question.slice(0, 30)}`).toBeGreaterThanOrEqual(2);
+          expect(q.correct).toBeGreaterThanOrEqual(0);
+          expect(q.correct).toBeLessThan(q.options.length);
+          expect(q.explanation.length).toBeGreaterThan(0);
+        }
       }
     }
   });
