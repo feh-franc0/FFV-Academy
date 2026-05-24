@@ -143,11 +143,25 @@ export function StudyRequestForm() {
     };
   }, [activeRequestId]);
 
+  /**
+   * Identidade de arquivo robusta — usada pra detectar duplicatas reais.
+   * Considera nome + tamanho + lastModified, porque o JS pode ter múltiplas
+   * referências File a "mesma" coisa (drag duplo, browse duplo, etc).
+   * Dois arquivos com mesmo nome MAS tamanho/data diferente NÃO são duplicatas
+   * (ex: aluno renomeia duas aulas como "aula.pdf").
+   */
+  function fileIdentity(f: File): string {
+    return `${f.name}::${f.size}::${f.lastModified}`;
+  }
+
   function handleFiles(list: FileList | null) {
     setFileError(null);
     if (!list || list.length === 0) return;
     const incoming = Array.from(list);
     const next: File[] = [...files];
+    const existingIds = new Set(next.map(fileIdentity));
+    const duplicateNames: string[] = [];
+
     for (const f of incoming) {
       if (next.length >= STUDY_REQUEST_LIMITS.maxAttachments) {
         setFileError(`Máximo ${STUDY_REQUEST_LIMITS.maxAttachments} arquivos.`);
@@ -161,12 +175,29 @@ export function StudyRequestForm() {
       const lower = f.name.toLowerCase();
       const allowed = STUDY_REQUEST_LIMITS.allowedExtensions.some(ext => lower.endsWith(ext));
       if (!allowed) {
-        setFileError(`"${f.name}" não é um tipo permitido (PDF, DOCX, TXT, PNG, JPG).`);
+        setFileError(`"${f.name}" não é um tipo permitido (PDF, DOCX, XLSX, PPTX, CSV, TXT, MD, imagens).`);
         continue;
       }
+      // Dedupação: mesmo nome + tamanho + lastModified = mesmo arquivo.
+      // UX-friendly: avisa o usuário em vez de adicionar silenciosamente.
+      const id = fileIdentity(f);
+      if (existingIds.has(id)) {
+        duplicateNames.push(f.name);
+        continue;
+      }
+      existingIds.add(id);
       next.push(f);
     }
+
     setFiles(next);
+
+    // Mensagem agregada se houve duplicatas — só mostra se nenhum outro erro.
+    if (duplicateNames.length > 0) {
+      const names = duplicateNames.length === 1
+        ? `"${duplicateNames[0]}"`
+        : `${duplicateNames.length} arquivos`;
+      setFileError(`${names} já foi adicionado — ignorado pra evitar envio duplicado. Se for outro arquivo com mesmo nome, renomeie antes.`);
+    }
   }
 
   function removeFile(idx: number) {
