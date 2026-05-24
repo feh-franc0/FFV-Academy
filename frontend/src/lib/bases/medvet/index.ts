@@ -104,13 +104,22 @@ export const MEDVET_BASE: Base = {
     },
     {
       slug: 'melhoramento',
-      name: 'Melhoramento Animal',
+      name: 'Melhoramento Animal — Fundamentos',
       icon: '🐄',
-      description: 'Como selecionar reprodutores, escolher métodos de seleção e usar testes de avaliação genética em rebanho real.',
+      description: 'O "porquê" e o "como cruzar" do melhoramento: princípios, endogamia × exogamia, heterose.',
       colorIndex: 3,
       moduleSlugs: [
         'introducao-ao-melhoramento-genetico',
         'endogamia-x-exogamia',
+      ],
+    },
+    {
+      slug: 'avaliacao-selecao',
+      name: 'Avaliação e Seleção Genética',
+      icon: '📊',
+      description: 'Os métodos práticos pra escolher reprodutores: Tandem/Níveis/Índice, CPP/CPT, Pedigree e Progênie. Com fórmulas trabalhadas.',
+      colorIndex: 4,
+      moduleSlugs: [
         'metodos-de-selecao-melhoramento',
         'repetibilidade-capacidade-provavel-producao',
         'teste-de-pedigree-avaliacao-genetica',

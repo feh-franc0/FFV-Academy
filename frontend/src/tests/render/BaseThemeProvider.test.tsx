@@ -62,6 +62,8 @@ describe('<BaseThemeProvider>', () => {
     expect(MEDVET_THEME.accent).toBe('#8a9b7e');         // sage
     expect(MEDVET_THEME.paper).toBe('#fbf7f0');          // warm ivory
     expect(MEDVET_THEME.ink).toBe('#2d4a3e');            // forest sage
-    expect(MEDVET_THEME.hubColors).toHaveLength(4);
+    // 5 cores: 4 originais + forest sage adicionado quando criamos o hub
+    // "Avaliação e Seleção Genética" (mai/2026).
+    expect(MEDVET_THEME.hubColors).toHaveLength(5);
   });
 });

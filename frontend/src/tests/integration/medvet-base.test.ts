@@ -25,9 +25,10 @@ describe('Base Medvet — integridade dos dados', () => {
     expect(allNums).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
   });
 
-  it('tem exatamente 2 trilhas (Genética + Métodos de Seleção) e 4 hubs', () => {
+  it('tem 2 trilhas (Genética + Métodos de Seleção) e 5 hubs', () => {
     expect(MEDVET_TOTAL_TRAILS).toBe(2);
-    expect(MEDVET_TOTAL_HUBS).toBe(4);
+    // 5 hubs: fundamentos, interacao, herancas, melhoramento, avaliacao-selecao
+    expect(MEDVET_TOTAL_HUBS).toBe(5);
     expect(MEDVET_BASE.trails[0].slug).toBe('genetica');
     expect(MEDVET_BASE.trails[1].slug).toBe('metodos-selecao-e-testes');
   });
@@ -77,16 +78,16 @@ describe('Base Medvet — integridade dos dados', () => {
 });
 
 describe('Base Medvet — adapters', () => {
-  it('MEDVET_HUBS converte os 4 hubs com colorIndex válido', () => {
-    expect(MEDVET_HUBS).toHaveLength(4);
+  it('MEDVET_HUBS converte os 5 hubs com colorIndex válido', () => {
+    expect(MEDVET_HUBS).toHaveLength(5);
     for (const hub of MEDVET_HUBS) {
       expect(hub.color).toMatch(/^#[0-9a-f]{6}$/i);
       expect(hub.moduleCount).toBeGreaterThan(0);
     }
   });
 
-  it('MEDVET_PATHS gera 4 caminhos diagnósticos apontando para módulos reais', () => {
-    expect(MEDVET_PATHS).toHaveLength(4);
+  it('MEDVET_PATHS gera 5 caminhos diagnósticos apontando para módulos reais', () => {
+    expect(MEDVET_PATHS).toHaveLength(5);
     for (const p of MEDVET_PATHS) {
       expect(p.href).toMatch(/^\/medicina-veterinaria\//);
     }
@@ -104,9 +105,9 @@ describe('Tema MEDVET — sage palette', () => {
     expect(MEDVET_THEME.accentLight).toBe('#d4a574'); // honey gold
   });
 
-  it('4 hubColors distintos', () => {
+  it('5 hubColors distintos', () => {
     const colors = new Set(MEDVET_THEME.hubColors);
-    expect(colors.size).toBe(4);
+    expect(colors.size).toBe(5);
   });
 });
 

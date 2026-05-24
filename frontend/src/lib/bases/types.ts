@@ -58,8 +58,13 @@ export interface Hub {
   name: string;
   icon: string;
   description: string;
-  /** Índice da cor no array `theme.hubColors` (0-3). */
-  colorIndex: 0 | 1 | 2 | 3;
+  /**
+   * Índice da cor no array `theme.hubColors`. Antes restrito a 0-3
+   * (tuple fixo); agora aceita qualquer N pra suportar bases com mais
+   * de 4 hubs. Bases devem definir hubColors com pelo menos colorIndex+1
+   * cores ou o componente cai num fallback (modulo wrap).
+   */
+  colorIndex: number;
   moduleSlugs: string[];
 }
 

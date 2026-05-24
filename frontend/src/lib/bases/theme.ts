@@ -26,8 +26,16 @@ export interface BaseTheme {
   /** Sucesso / "no ar" (sage, emerald, etc) */
   success: string;
 
-  /** 4 cores dos hubs temáticos (na ordem dos hubs definidos) */
-  hubColors: [string, string, string, string];
+  /**
+   * Cores dos hubs temáticos (na ordem dos hubs definidos).
+   *
+   * Antes era tuple fixo de 4. Agora é array dinâmico (N ≥ 4) — bases
+   * podem ter mais hubs conforme crescem (medvet ganhou um 5º hub
+   * "Avaliação e Seleção Genética" em mai/2026). Componentes que
+   * indexam por colorIndex devem garantir bounds-check ou usar
+   * fallback (colorIndex % hubColors.length).
+   */
+  hubColors: readonly string[];
 
   /** Gradientes opcionais do hero (composição CSS) */
   heroGradient?: string;

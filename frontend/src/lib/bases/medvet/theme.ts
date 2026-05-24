@@ -25,8 +25,10 @@ export const MEDVET_THEME: BaseTheme = {
   accent:      '#8a9b7e',  // sage green — PRIMÁRIA (CTAs, links, kickers)
   accentLight: '#d4a574',  // honey gold — hover/highlights
   success:     '#6b9080',  // forest sage — sucesso/badges
-  // 4 cores dos hubs — todas harmonizando: sage, terracota, mauve poeirento, mel
-  hubColors:   ['#8a9b7e', '#b08968', '#a07775', '#c19a78'],
+  // 5 cores dos hubs — todas harmonizando: sage, terracota, mauve, mel, forest.
+  // 5ª (forest sage escuro) adicionada em mai/2026 com o hub
+  // "Avaliação e Seleção Genética" (separação do hub Melhoramento).
+  hubColors:   ['#8a9b7e', '#b08968', '#a07775', '#c19a78', '#5e8068'],
   // Reescreve os "extras" da paleta global pra harmonizar com sage/terracota.
   // Sem isso, callouts/quests/gradientes que usam --ffv-amber/orange/pink/yellow
   // vazam o navy+amber editorial da tech pra dentro da medvet.
