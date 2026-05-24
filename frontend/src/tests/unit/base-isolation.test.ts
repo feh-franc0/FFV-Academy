@@ -17,12 +17,14 @@ describe('Isolamento por base — universo de módulos', () => {
     expect(mods.every(m => m.href.startsWith('/aprenda/'))).toBe(true);
   });
 
-  it('getAllModulesForBase("medicina-veterinaria") → 12 módulos de Genética', async () => {
+  it('getAllModulesForBase("medicina-veterinaria") → 16 módulos (Genética 12 + Métodos de Seleção 4)', async () => {
     const { getAllModulesForBase } = await import('@/lib/bases/all-modules');
     const mods = getAllModulesForBase('medicina-veterinaria');
-    expect(mods.length).toBe(12);
+    expect(mods.length).toBe(16);
     expect(mods.every(m => m.href.startsWith('/medicina-veterinaria/'))).toBe(true);
-    expect(mods.every(m => m.trailName.toLowerCase().includes('genética'))).toBe(true);
+    // Trilha pode ser "Genética Veterinária" ou "Métodos de Seleção e Testes"
+    const trailNames = new Set(mods.map(m => m.trailName.toLowerCase()));
+    expect(trailNames.size).toBeGreaterThanOrEqual(2);
   });
 
   it('getAllModulesForBase com slug desconhecido → []', async () => {
@@ -51,8 +53,8 @@ describe('Isolamento por base — DailyModule', () => {
     const d = getDailyModule({ baseSlug: 'medicina-veterinaria' });
     expect(d).not.toBeNull();
     expect(d!.title.toLowerCase()).not.toMatch(/aws|cloud practitioner|transformers|kubernetes|postgres/);
-    // Trail de medvet
-    expect(d!.trailName.toLowerCase()).toContain('genética');
+    // Trail de medvet — Genética OU Métodos de Seleção (medvet tem 2 trilhas)
+    expect(d!.trailName.toLowerCase()).toMatch(/genética|métodos de seleção/);
   });
 
   it('em tech sorteia módulo TECH', async () => {

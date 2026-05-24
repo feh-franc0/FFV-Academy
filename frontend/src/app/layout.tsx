@@ -51,7 +51,7 @@ export const metadata: Metadata = {
     template: '%s — FFV Academy',
   },
   description:
-    'FFV — Formação Focada em Você. Envie seus PDFs, slides ou anotações — IA + curadoria humana montam no mesmo dia uma base completa de estudo: trilhas sequenciais, módulos, exercícios e revisão espaçada (SM-2). Não é chatbot. É a sua escola personalizada. Já no ar: Tecnologia (157 módulos) e Medicina Veterinária — Genética (12 módulos). Pode pedir Medicina, Engenharia, Direito, Administração, Design e mais. Grátis na V1.',
+    'FFV — Formação Focada em Você. Envie seus PDFs, slides ou anotações — IA + curadoria humana montam no mesmo dia uma base completa de estudo: trilhas sequenciais, módulos, exercícios e revisão espaçada (SM-2). Não é chatbot. É a sua escola personalizada. Já no ar: Tecnologia (157 módulos) e Medicina Veterinária — Genética + Melhoramento (16 módulos). Pode pedir Medicina, Engenharia, Direito, Administração, Design e mais. Grátis na V1.',
   keywords: [
     // Hero search intent — pivot de produto
     'IA que gera base de conhecimento',

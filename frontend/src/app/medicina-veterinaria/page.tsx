@@ -13,9 +13,9 @@ import { BaseStructuredData } from '@/components/seo/StructuredData';
 import { fetchBasePage } from '@/lib/bases-api';
 
 export const metadata: Metadata = {
-  title: 'Medicina Veterinária — Genética Animal · 12 módulos gratuitos',
+  title: 'Medicina Veterinária — Genética & Melhoramento · 16 módulos gratuitos',
   description:
-    'Trilha completa de Genética Veterinária: das Leis de Mendel ao melhoramento animal. 12 módulos sequenciais com teoria + 100 questões de simulado + revisão espaçada SM-2. Alelismo múltiplo, genes letais, padrões de herança, Hardy-Weinberg, endogamia e exogamia. Gratuito em PT-BR.',
+    'Duas trilhas completas: Genética Veterinária (12 módulos) e Métodos de Seleção & Testes (4 módulos). Das Leis de Mendel ao melhoramento animal, com cálculos de CPP, CPT, Pedigree e Progênie. 16 módulos sequenciais + 100 questões de simulado + revisão espaçada SM-2. Alelismo múltiplo, genes letais, padrões de herança, Hardy-Weinberg, endogamia, exogamia. Gratuito em PT-BR.',
   keywords: [
     'genética veterinária gratuito',
     'leis de mendel veterinária',
@@ -31,9 +31,9 @@ export const metadata: Metadata = {
   ],
   alternates: { canonical: 'https://fernandofrancovalle.com/medicina-veterinaria' },
   openGraph: {
-    title: 'Medicina Veterinária — Genética Animal · 12 módulos gratuitos',
+    title: 'Medicina Veterinária — Genética & Melhoramento · 16 módulos gratuitos',
     description:
-      'Trilha completa de Genética: Mendel, alelismo, Hardy-Weinberg, melhoramento. 12 módulos + simulado de 100 questões + revisão espaçada. Gratuito.',
+      'Duas trilhas de Genética Veterinária + Métodos de Seleção: Mendel, Hardy-Weinberg, CPP, CPT, Pedigree, Progênie. 16 módulos + simulado de 100 questões + revisão espaçada. Gratuito.',
     type: 'website',
     url: 'https://fernandofrancovalle.com/medicina-veterinaria',
     locale: 'pt_BR',
@@ -56,7 +56,7 @@ export default async function MedicinaVeterinariaPage() {
       <BaseStructuredData
         slug="medicina-veterinaria"
         name="Medicina Veterinária — Genética Animal"
-        description="Trilha completa de Genética Veterinária: das Leis de Mendel ao melhoramento animal. 12 módulos sequenciais com teoria, exercícios, simulado de 100 questões e revisão espaçada SM-2."
+        description="Duas trilhas (Genética e Métodos de Seleção): das Leis de Mendel a CPP/CPT/Pedigree/Progênie. 16 módulos sequenciais com teoria, exercícios resolvidos, simulado de 100 questões e revisão espaçada SM-2."
         url="https://fernandofrancovalle.com/medicina-veterinaria"
         modules={MEDVET_TOTAL_MODULES}
         workloadHours={30}

@@ -2717,7 +2717,7 @@ const FAQ_ITEMS = [
   },
   {
     q: 'Funciona pra qualquer área? Medicina, direito, design?',
-    a: 'A V1 já tem tecnologia (157 módulos) e medicina veterinária (12 módulos + simulado) prontas. Outras áreas — medicina humana, direito, design, concurso, pós — abrem por demanda: você manda o pedido, a gente avalia e monta. Maio/2026 já tem fila ativa de medicina e OAB.',
+    a: 'A V1 já tem tecnologia (157 módulos) e medicina veterinária (16 módulos: Genética + Métodos de Seleção, com simulado) prontas. Outras áreas — medicina humana, direito, design, concurso, pós — abrem por demanda: você manda o pedido, a gente avalia e monta. Maio/2026 já tem fila ativa de medicina e OAB.',
   },
 ];
 

@@ -1,7 +1,7 @@
 import { ImageResponse } from 'next/og';
 
 export const dynamic = 'force-static';
-export const alt = 'FFV Academy · Medicina Veterinária — Genética Animal · 12 módulos gratuitos';
+export const alt = 'FFV Academy · Medicina Veterinária — Genética Animal · 16 módulos gratuitos';
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
 
@@ -91,12 +91,12 @@ export default function MedvetOG() {
             lineHeight: '1.45',
           }}
         >
-          Das Leis de Mendel ao melhoramento animal. 12 módulos · simulado de 100 questões · revisão espaçada SM-2. Gratuito.
+          Das Leis de Mendel ao melhoramento animal. 16 módulos · simulado de 100 questões · revisão espaçada SM-2. Gratuito.
         </p>
 
         <div style={{ display: 'flex', gap: '14px', marginTop: 'auto' }}>
           {[
-            { label: '12 módulos', color: '#8a9b7e' },
+            { label: '16 módulos', color: '#8a9b7e' },
             { label: 'Simulado 100q', color: '#b08968' },
             { label: 'Hardy-Weinberg', color: '#5e8068' },
             { label: 'Mendel & Melhoramento', color: '#2d4a3e' },

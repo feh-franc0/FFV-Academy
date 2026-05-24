@@ -55,7 +55,10 @@ test.describe('Base isolation E2E', () => {
     // Como o usuário não tem progresso, vê o empty state ativador com
     // nome da base — nada de "Redes & Web" ou trilhas tech.
     await expect(page.getByText(/comece sua jornada em medicina veterinária/i)).toBeVisible();
-    await expect(page.getByText(/12 módulos esperam/i)).toBeVisible();
+    // Regex flexível pro número de módulos — medvet cresce conforme novos
+    // materiais chegam pelos clientes. O importante é validar a estrutura
+    // "N módulos esperam", não o N específico.
+    await expect(page.getByText(/\d+ módulos esperam/i)).toBeVisible();
   });
 
   test('/revisar em medvet: empty state cita "Medicina Veterinária"', async ({ page }) => {

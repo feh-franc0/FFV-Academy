@@ -61,25 +61,27 @@ function mapTechModule(t: typeof CURRICULUM[number], m: TechModule): BaseModuleS
 }
 
 function mapMedvetModule(): BaseModuleSummary[] {
-  const trail = MEDVET_BASE.trails[0];
-  if (!trail) return [];
-  return trail.modules.map(m => ({
-    slug: m.slug,
-    title: m.title,
-    icon: m.icon,
-    // Medvet usa estimatedMin em vez de readTime; XP ainda não foi atribuído
-    // (decisão pedagógica pendente). Tratamos como leitura sem reward.
-    readTime: m.estimatedMin,
-    xp: 0,
-    trailName: trail.title,
-    // Cor da trilha medvet: usamos accent do tema (sage). Hardcoded aqui
-    // pra não importar o tema (ciclo de imports). Quando medvet ganhar
-    // trail.color, troca pra t.color.
-    trailColor: '#8a9b7e',
-    trailSlug: trail.slug,
-    level: null,
-    href: `/medicina-veterinaria/${m.slug}`,
-  }));
+  // Itera por TODAS as trilhas — antes pegava só trails[0] (Genética),
+  // ignorando "Métodos de Seleção e Testes" e qualquer trilha futura.
+  return MEDVET_BASE.trails.flatMap(trail =>
+    trail.modules.map(m => ({
+      slug: m.slug,
+      title: m.title,
+      icon: m.icon,
+      // Medvet usa estimatedMin em vez de readTime; XP ainda não foi atribuído
+      // (decisão pedagógica pendente). Tratamos como leitura sem reward.
+      readTime: m.estimatedMin,
+      xp: 0,
+      trailName: trail.title,
+      // Cor da trilha medvet: usamos accent do tema (sage). Hardcoded aqui
+      // pra não importar o tema (ciclo de imports). Quando medvet ganhar
+      // trail.color, troca pra t.color.
+      trailColor: '#8a9b7e',
+      trailSlug: trail.slug,
+      level: null,
+      href: `/medicina-veterinaria/${m.slug}`,
+    }))
+  );
 }
 
 /**

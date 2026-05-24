@@ -108,7 +108,7 @@ export default function OGImage() {
         <div style={{ display: 'flex', gap: '14px' }}>
           {[
             { label: 'Tecnologia · 157 módulos', color: '#1e3a8a' },
-            { label: 'Medicina Vet · 12 módulos', color: '#5e8068' },
+            { label: 'Medicina Vet · 16 módulos', color: '#5e8068' },
             { label: 'Gratuito V1', color: '#b8835a' },
             { label: 'PT-BR', color: '#1f3a30' },
           ].map(({ label, color }) => (

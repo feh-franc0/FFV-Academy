@@ -35,7 +35,7 @@ function buildKpis(stats: PublicStats | null): Kpi[] {
       value: String(basesLive),
       unit: basesLive === 1 ? 'no ar' : 'no ar',
       trend: 'neutral',
-      caveat: 'Tecnologia (157 módulos) + Medicina Veterinária (12 módulos + simulado).',
+      caveat: 'Tecnologia (157 módulos) + Medicina Veterinária (16 módulos + simulado).',
     },
     {
       label: 'Total de solicitações recebidas',
