@@ -161,14 +161,30 @@ export function StudyRequestForm() {
     const next: File[] = [...files];
     const existingIds = new Set(next.map(fileIdentity));
     const duplicateNames: string[] = [];
+    let currentTotal = next.reduce((acc, f) => acc + f.size, 0);
 
     for (const f of incoming) {
       if (next.length >= STUDY_REQUEST_LIMITS.maxAttachments) {
         setFileError(`Máximo ${STUDY_REQUEST_LIMITS.maxAttachments} arquivos.`);
         break;
       }
+      // Arquivo vazio (0 bytes) — pode ser deletado do disco entre o select
+      // e o ler, ou um arquivo realmente vazio. Avisa em vez de submeter
+      // (backend rejeita com 400 "arquivo vazio").
+      if (f.size === 0) {
+        setFileError(`"${f.name}" está vazio (0 bytes). Verifique se o arquivo existe e não foi movido/deletado.`);
+        continue;
+      }
       if (f.size > STUDY_REQUEST_LIMITS.maxAttachmentBytes) {
         setFileError(`"${f.name}" excede ${STUDY_REQUEST_LIMITS.maxAttachmentBytes / 1024 / 1024} MB.`);
+        continue;
+      }
+      // Soma total — evita 413/connection-reset do nginx (vira "Failed to fetch").
+      if (currentTotal + f.size > STUDY_REQUEST_LIMITS.maxTotalUploadBytes) {
+        setFileError(
+          `Soma dos anexos ultrapassaria ${STUDY_REQUEST_LIMITS.maxTotalUploadBytes / 1024 / 1024} MB. ` +
+          `Remova algum arquivo antes de adicionar "${f.name}".`,
+        );
         continue;
       }
       // Validamos por extensão pra abrir mais navegadores; o backend revalida MIME.
@@ -187,6 +203,7 @@ export function StudyRequestForm() {
       }
       existingIds.add(id);
       next.push(f);
+      currentTotal += f.size;
     }
 
     setFiles(next);
@@ -211,6 +228,31 @@ export function StudyRequestForm() {
     // (defesa em profundidade — disabled do botão já bloqueia, mas evita
     // re-entrancy se alguém disparar via Enter).
     if (state.kind === 'submitting') return;
+
+    // Re-valida arquivos AGORA — usuário pode ter selecionado e depois
+    // movido/deletado o arquivo do disco. Sem isso, o submit dispara um
+    // request com partes vazias e o backend devolve 400.
+    if (files.length > 0) {
+      const emptyFile = files.find(f => f.size === 0);
+      if (emptyFile) {
+        setFileError(
+          `"${emptyFile.name}" parece ter sumido do disco (0 bytes). Remova e adicione de novo.`,
+        );
+        setState({
+          kind: 'error',
+          message: `O arquivo "${emptyFile.name}" não pode ser lido. Remova-o e tente de novo.`,
+        });
+        return;
+      }
+      const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
+      if (totalBytes > STUDY_REQUEST_LIMITS.maxTotalUploadBytes) {
+        setState({
+          kind: 'error',
+          message: `Soma dos anexos (${Math.round(totalBytes / 1024 / 1024)} MB) ultrapassa o limite de ${STUDY_REQUEST_LIMITS.maxTotalUploadBytes / 1024 / 1024} MB. Remova arquivos antes de enviar.`,
+        });
+        return;
+      }
+    }
 
     setState({ kind: 'submitting' });
     try {
@@ -682,28 +724,38 @@ export function StudyRequestForm() {
           </div>
 
           {files.length > 0 && (
-            <ul className="mt-3 space-y-1.5" aria-label="Arquivos anexados">
-              {files.map((f, idx) => (
-                <li
-                  key={`${f.name}-${idx}`}
-                  className="flex items-center gap-2 text-xs px-3 py-2 rounded-lg"
-                  style={{ background: 'var(--ffv-bg)', border: '1px solid var(--ffv-border)' }}
-                >
-                  <span className="truncate flex-1">{f.name}</span>
-                  <span style={{ color: 'var(--ffv-muted)' }}>{Math.round(f.size / 1024)} KB</span>
-                  <button
-                    type="button"
-                    onClick={() => removeFile(idx)}
-                    aria-label={`Remover ${f.name}`}
-                    style={{ color: 'var(--ffv-red)' }}
-                    className="font-bold px-1"
-                    disabled={submitting}
+            <>
+              <ul className="mt-3 space-y-1.5" aria-label="Arquivos anexados">
+                {files.map((f, idx) => (
+                  <li
+                    key={`${f.name}-${idx}`}
+                    className="flex items-center gap-2 text-xs px-3 py-2 rounded-lg"
+                    style={{ background: 'var(--ffv-bg)', border: '1px solid var(--ffv-border)' }}
                   >
-                    ×
-                  </button>
-                </li>
-              ))}
-            </ul>
+                    <span className="truncate flex-1">{f.name}</span>
+                    <span style={{ color: 'var(--ffv-muted)' }}>{formatFileSize(f.size)}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeFile(idx)}
+                      aria-label={`Remover ${f.name}`}
+                      style={{ color: 'var(--ffv-red)' }}
+                      className="font-bold px-1"
+                      disabled={submitting}
+                    >
+                      ×
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <p
+                className="text-[11px] mt-2"
+                style={{ color: 'var(--ffv-muted)' }}
+                data-testid="upload-summary"
+              >
+                {files.length} arquivo{files.length === 1 ? '' : 's'} ·{' '}
+                {formatFileSize(files.reduce((acc, f) => acc + f.size, 0))} no total
+              </p>
+            </>
           )}
 
           {fileError && (
@@ -728,17 +780,33 @@ export function StudyRequestForm() {
         </label>
 
         {state.kind === 'error' && (
-          <p
-            className="text-xs px-3 py-2 rounded-lg"
+          <div
+            className="px-3.5 py-3 rounded-lg flex gap-2.5 items-start"
             role="alert"
+            data-testid="submit-error"
             style={{
               background: 'color-mix(in srgb, var(--ffv-red) 10%, transparent)',
               border: '1px solid color-mix(in srgb, var(--ffv-red) 30%, transparent)',
               color: 'var(--ffv-red)',
             }}
           >
-            {state.message}
-          </p>
+            <span aria-hidden style={{ fontSize: 16, lineHeight: 1, marginTop: 1 }}>⚠️</span>
+            <div className="flex-1">
+              <p className="text-xs font-semibold" style={{ marginBottom: 2 }}>
+                Não conseguimos enviar sua solicitação
+              </p>
+              <p className="text-xs" style={{ lineHeight: 1.5, color: 'var(--foreground)' }}>
+                {state.message}
+              </p>
+              <p
+                className="text-[11px] mt-1.5"
+                style={{ color: 'var(--ffv-muted)', lineHeight: 1.45 }}
+              >
+                Seus dados continuam preenchidos — só clicar em <strong>Enviar</strong> de novo.
+                Se persistir, escreva direto pra <a href="mailto:fernandofv1110@gmail.com" style={{ color: 'var(--ffv-blue)', textDecoration: 'underline' }}>fernandofv1110@gmail.com</a>.
+              </p>
+            </div>
+          </div>
         )}
 
         <button
@@ -862,6 +930,19 @@ function StatusStep({
       </div>
     </li>
   );
+}
+
+/**
+ * formatFileSize — exibe bytes de forma legível: 800 KB · 1.2 MB · 24 MB.
+ * Usamos base binária (1024) pra bater com o limite do backend (25 MiB).
+ */
+function formatFileSize(bytes: number): string {
+  if (bytes < 0) return '0 KB';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  const mb = bytes / (1024 * 1024);
+  // <10 MB mostra 1 decimal (ex 2.4 MB); >=10 MB arredonda (ex 24 MB).
+  return mb < 10 ? `${mb.toFixed(1)} MB` : `${Math.round(mb)} MB`;
 }
 
 function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
