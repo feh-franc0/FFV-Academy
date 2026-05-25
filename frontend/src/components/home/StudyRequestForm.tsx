@@ -47,7 +47,13 @@ const STUDY_AREAS = [
 
 type FormState =
   | { kind: 'idle' }
-  | { kind: 'submitting' }
+  | {
+      kind: 'submitting';
+      /** % do upload (0-100). undefined até o primeiro onprogress. */
+      progress?: number;
+      /** Tentativa atual — usado pra mostrar "Tentativa 2 de 2" em retry. */
+      attempt?: number;
+    }
   | {
       kind: 'success';
       message: string;
@@ -254,21 +260,28 @@ export function StudyRequestForm() {
       }
     }
 
-    setState({ kind: 'submitting' });
+    setState({ kind: 'submitting', progress: 0 });
     try {
-      const result = await submitStudyRequest({
-        name,
-        email,
-        // Envia número limpo (só dígitos) — backend processa, frontend formata.
-        phone: phone ? unmaskPhone(phone) : undefined,
-        studyArea,
-        institution: institution || undefined,
-        subject,
-        goal: goal || undefined,
-        description,
-        marketingConsent,
-        attachments: files,
-      });
+      const result = await submitStudyRequest(
+        {
+          name,
+          email,
+          // Envia número limpo (só dígitos) — backend processa, frontend formata.
+          phone: phone ? unmaskPhone(phone) : undefined,
+          studyArea,
+          institution: institution || undefined,
+          subject,
+          goal: goal || undefined,
+          description,
+          marketingConsent,
+          attachments: files,
+        },
+        {
+          onProgress: pct => {
+            setState(curr => (curr.kind === 'submitting' ? { ...curr, progress: pct } : curr));
+          },
+        },
+      );
       const submittedAt = new Date().toISOString();
       // Persiste localmente pra usuário ver SLA tracker se voltar.
       saveActiveRequest({
@@ -812,16 +825,39 @@ export function StudyRequestForm() {
         <button
           type="submit"
           disabled={submitting}
-          className="w-full py-3.5 rounded-xl text-sm font-bold transition-all"
+          className="w-full py-3.5 rounded-xl text-sm font-bold transition-all relative overflow-hidden"
           style={{
             background: 'var(--ffv-blue)',
             color: '#fff',
             boxShadow: '0 8px 24px -6px color-mix(in srgb, var(--ffv-blue) 50%, transparent)',
-            opacity: submitting ? 0.7 : 1,
+            opacity: submitting ? 0.85 : 1,
             cursor: submitting ? 'progress' : 'pointer',
           }}
+          data-testid="submit-button"
         >
-          {submitting ? 'Enviando...' : 'Enviar minha solicitação →'}
+          {/* Barra de progresso visual dentro do botão */}
+          {state.kind === 'submitting' && state.progress !== undefined && (
+            <span
+              aria-hidden
+              data-testid="upload-progress-bar"
+              style={{
+                position: 'absolute',
+                inset: 0,
+                background: 'color-mix(in srgb, #fff 20%, transparent)',
+                width: `${state.progress}%`,
+                transition: 'width 200ms ease-out',
+              }}
+            />
+          )}
+          <span style={{ position: 'relative' }}>
+            {state.kind === 'submitting'
+              ? state.progress !== undefined && state.progress < 100
+                ? `Enviando arquivos... ${state.progress}%`
+                : state.progress === 100
+                  ? 'Processando no servidor...'
+                  : 'Enviando...'
+              : 'Enviar minha solicitação →'}
+          </span>
         </button>
 
         <p

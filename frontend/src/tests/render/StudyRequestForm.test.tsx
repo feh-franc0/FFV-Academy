@@ -503,6 +503,82 @@ describe('<StudyRequestForm>', () => {
       expect(await screen.findByText(/Solicitação recebida\./)).toBeInTheDocument();
     });
 
+    it('mostra "Enviando arquivos... X%" no botão durante upload', async () => {
+      const user = userEvent.setup();
+      // Mock que captura onProgress e emite uma sequência de %
+      let progressCb: ((p: number) => void) | undefined;
+      submitMock.mockImplementationOnce((_input, opts: { onProgress?: (p: number) => void }) => {
+        progressCb = opts?.onProgress;
+        return new Promise(resolve => {
+          // Resolve só depois de progress 100 + um delay (simula servidor processando)
+          setTimeout(() => resolve({
+            id: 'abc12345-aaaa-bbbb-cccc-dddddddddddd',
+            status: 'received',
+            attachmentCount: 1,
+            message: 'ok',
+          }), 50);
+        });
+      });
+      render(<StudyRequestForm />);
+      await user.type(screen.getByPlaceholderText(/Como podemos te chamar/), 'Ana');
+      await user.type(screen.getByPlaceholderText('voce@email.com'), 'ana@gmail.com');
+      await user.selectOptions(screen.getByRole('combobox'), 'tecnologia');
+      await user.type(screen.getByPlaceholderText(/Genética animal/), 'Go');
+      await user.type(screen.getByPlaceholderText(/Descreva o que precisa estudar/), 'Backend Go');
+      await user.click(screen.getByRole('button', { name: /Enviar minha solicitação/ }));
+
+      // Simula progresso vindo do XHR
+      await waitFor(() => expect(progressCb).toBeDefined());
+      progressCb!(35);
+      await waitFor(() => {
+        expect(screen.getByTestId('submit-button')).toHaveTextContent(/35%/);
+      });
+      progressCb!(100);
+      await waitFor(() => {
+        expect(screen.getByTestId('submit-button')).toHaveTextContent(/Processando no servidor/i);
+      });
+      // Sucesso eventualmente aparece
+      expect(await screen.findByText(/Solicitação recebida\./)).toBeInTheDocument();
+    });
+
+    it('barra de progresso visual reflete o % (data-testid="upload-progress-bar")', async () => {
+      const user = userEvent.setup();
+      let progressCb: ((p: number) => void) | undefined;
+      submitMock.mockImplementationOnce((_input, opts: { onProgress?: (p: number) => void }) => {
+        progressCb = opts?.onProgress;
+        return new Promise(() => { /* nunca resolve — fica em loading */ });
+      });
+      render(<StudyRequestForm />);
+      await user.type(screen.getByPlaceholderText(/Como podemos te chamar/), 'Ana');
+      await user.type(screen.getByPlaceholderText('voce@email.com'), 'ana@gmail.com');
+      await user.selectOptions(screen.getByRole('combobox'), 'tecnologia');
+      await user.type(screen.getByPlaceholderText(/Genética animal/), 'Go');
+      await user.type(screen.getByPlaceholderText(/Descreva o que precisa estudar/), 'Backend Go');
+      await user.click(screen.getByRole('button', { name: /Enviar minha solicitação/ }));
+
+      await waitFor(() => expect(progressCb).toBeDefined());
+      progressCb!(42);
+      await waitFor(() => {
+        const bar = screen.getByTestId('upload-progress-bar');
+        expect(bar.style.width).toBe('42%');
+      });
+    });
+
+    it('botão fica desabilitado durante o submit (evita double-submit)', async () => {
+      const user = userEvent.setup();
+      submitMock.mockImplementationOnce(() => new Promise(() => { /* never */ }));
+      render(<StudyRequestForm />);
+      await user.type(screen.getByPlaceholderText(/Como podemos te chamar/), 'Ana');
+      await user.type(screen.getByPlaceholderText('voce@email.com'), 'ana@gmail.com');
+      await user.selectOptions(screen.getByRole('combobox'), 'tecnologia');
+      await user.type(screen.getByPlaceholderText(/Genética animal/), 'Go');
+      await user.type(screen.getByPlaceholderText(/Descreva o que precisa estudar/), 'Go');
+      await user.click(screen.getByRole('button', { name: /Enviar minha solicitação/ }));
+      await waitFor(() => {
+        expect(screen.getByTestId('submit-button')).toBeDisabled();
+      });
+    });
+
     it('submit bloqueado client-side se algum arquivo virou 0 bytes (não chama API)', async () => {
       const user = userEvent.setup();
       // 1. Coloca arquivo válido — para passar validação inicial

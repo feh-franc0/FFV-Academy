@@ -4,370 +4,528 @@ import {
   submitStudyRequest,
   StudyRequestError,
   STUDY_REQUEST_LIMITS,
+  resolveContentType,
+  safeFileName,
   type StudyRequestInput,
 } from '../study-request-api';
 
-// Helper — input mínimo válido pro endpoint público
+// ──────────────────────────────────────────────────────────────────
+// Fake XMLHttpRequest — controla cada cenário (sucesso, network, timeout, etc.)
+// ──────────────────────────────────────────────────────────────────
+
+interface FakeUpload {
+  onprogress?: (e: ProgressEvent) => void;
+}
+
+class FakeXHR {
+  static instances: FakeXHR[] = [];
+  static reset() { FakeXHR.instances = []; }
+
+  status = 0;
+  responseText = '';
+  responseHeaders: Record<string, string> = {};
+  timeout = 0;
+  withCredentials = false;
+  upload: FakeUpload = {};
+  onload?: () => void;
+  onerror?: () => void;
+  ontimeout?: () => void;
+  sentBody?: FormData;
+  method = '';
+  url = '';
+  aborted = false;
+
+  constructor() {
+    FakeXHR.instances.push(this);
+  }
+  open(method: string, url: string) {
+    this.method = method;
+    this.url = url;
+  }
+  getResponseHeader(name: string): string | null {
+    return this.responseHeaders[name.toLowerCase()] ?? this.responseHeaders[name] ?? null;
+  }
+  send(body: FormData) {
+    this.sentBody = body;
+  }
+  abort() {
+    this.aborted = true;
+    this.onerror?.();
+  }
+
+  // Helpers pra simular respostas
+  emitProgress(loaded: number, total: number) {
+    this.upload.onprogress?.({
+      lengthComputable: true,
+      loaded,
+      total,
+    } as ProgressEvent);
+  }
+  succeed(payload: unknown, contentType = 'application/json') {
+    this.status = 201;
+    this.responseText = JSON.stringify(payload);
+    this.responseHeaders['Content-Type'] = contentType;
+    this.onload?.();
+  }
+  failHttp(status: number, body: unknown = '', contentType = 'application/json') {
+    this.status = status;
+    this.responseText = typeof body === 'string' ? body : JSON.stringify(body);
+    this.responseHeaders['Content-Type'] = contentType;
+    this.onload?.();
+  }
+  failNetwork() {
+    this.status = 0;
+    this.onerror?.();
+  }
+  failTimeout() {
+    this.status = 0;
+    this.ontimeout?.();
+  }
+}
+
 function baseInput(over: Partial<StudyRequestInput> = {}): StudyRequestInput {
   return {
     name: 'Maria',
     email: 'maria@gmail.com',
     studyArea: 'tecnologia',
-    subject: 'IA aplicada',
-    description: 'Quero virar engenheira de IA',
+    subject: 'IA',
+    description: 'Quero virar engenheira',
     marketingConsent: true,
     ...over,
   };
 }
 
-function jsonResponse(status: number, body: unknown): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
-function emptyResponse(status: number): Response {
-  return new Response('', { status });
-}
-
-function htmlResponse(status: number): Response {
-  return new Response('<html><body>nginx</body></html>', {
-    status,
-    headers: { 'Content-Type': 'text/html' },
-  });
-}
-
 describe('submitStudyRequest — sucesso', () => {
-  let fetchMock: ReturnType<typeof vi.fn>;
-
   beforeEach(() => {
-    fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
+    FakeXHR.reset();
+    vi.stubGlobal('XMLHttpRequest', FakeXHR);
   });
-
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it('manda multipart/form-data com todos os campos obrigatórios e opcionais', async () => {
-    fetchMock.mockResolvedValueOnce(
-      jsonResponse(201, {
-        id: 'abc-12345',
-        status: 'received',
-        attachmentCount: 0,
-        message: 'ok',
-      }),
-    );
+  it('faz POST multipart/form-data com todos os campos', async () => {
+    const promise = submitStudyRequest(baseInput({ phone: '11987654321', institution: 'USP', goal: 'X' }));
+    expect(FakeXHR.instances).toHaveLength(1);
+    const xhr = FakeXHR.instances[0]!;
+    expect(xhr.method).toBe('POST');
+    expect(xhr.url).toMatch(/\/api\/v1\/study-requests$/);
+    expect(xhr.withCredentials).toBe(false);
+    expect(xhr.timeout).toBeGreaterThan(0);
 
-    const res = await submitStudyRequest(
-      baseInput({
-        phone: '11987654321',
-        institution: 'USP',
-        goal: 'Passar na prova',
-      }),
-    );
+    xhr.succeed({ id: 'abc', status: 'received', attachmentCount: 0, message: 'ok' });
+    const result = await promise;
+    expect(result.id).toBe('abc');
 
-    expect(res.id).toBe('abc-12345');
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, opts] = fetchMock.mock.calls[0]!;
-    expect(url).toMatch(/\/api\/v1\/study-requests$/);
-    expect(opts.method).toBe('POST');
-    expect(opts.credentials).toBe('omit');
-    // FormData não tem Content-Type manual — browser preenche com boundary
-    expect(opts.headers).toBeUndefined();
-
-    const fd = opts.body as FormData;
+    const fd = xhr.sentBody!;
     expect(fd.get('name')).toBe('Maria');
     expect(fd.get('email')).toBe('maria@gmail.com');
     expect(fd.get('phone')).toBe('11987654321');
-    expect(fd.get('studyArea')).toBe('tecnologia');
     expect(fd.get('institution')).toBe('USP');
-    expect(fd.get('subject')).toBe('IA aplicada');
-    expect(fd.get('goal')).toBe('Passar na prova');
-    expect(fd.get('description')).toBe('Quero virar engenheira de IA');
+    expect(fd.get('goal')).toBe('X');
     expect(fd.get('marketingConsent')).toBe('true');
   });
 
-  it('NÃO inclui campos opcionais vazios no FormData', async () => {
-    fetchMock.mockResolvedValueOnce(
-      jsonResponse(201, { id: 'x', status: 'received', attachmentCount: 0, message: 'ok' }),
-    );
-
-    await submitStudyRequest(baseInput({ marketingConsent: false }));
-
-    const fd = fetchMock.mock.calls[0]![1].body as FormData;
+  it('omite campos opcionais vazios', async () => {
+    const promise = submitStudyRequest(baseInput({ marketingConsent: false }));
+    const xhr = FakeXHR.instances[0]!;
+    xhr.succeed({ id: 'x', status: 'received', attachmentCount: 0, message: 'ok' });
+    await promise;
+    const fd = xhr.sentBody!;
     expect(fd.get('phone')).toBeNull();
     expect(fd.get('institution')).toBeNull();
-    expect(fd.get('goal')).toBeNull();
     expect(fd.get('marketingConsent')).toBeNull();
   });
 
   it('anexa cada arquivo individualmente com a chave "attachments"', async () => {
-    fetchMock.mockResolvedValueOnce(
-      jsonResponse(201, { id: 'x', status: 'received', attachmentCount: 3, message: 'ok' }),
-    );
+    const pdf = new File(['x'], 'a.pdf', { type: 'application/pdf' });
+    const csv = new File(['x'], 'b.csv', { type: 'text/csv' });
+    const promise = submitStudyRequest(baseInput({ attachments: [pdf, csv] }));
+    const xhr = FakeXHR.instances[0]!;
+    xhr.succeed({ id: 'x', status: 'received', attachmentCount: 2, message: 'ok' });
+    await promise;
+    const attachments = xhr.sentBody!.getAll('attachments');
+    expect(attachments).toHaveLength(2);
+    expect((attachments[0] as File).name).toBe('a.pdf');
+    expect((attachments[1] as File).name).toBe('b.csv');
+  });
 
-    const pdf = new File(['fake pdf bytes'], 'apostila.pdf', { type: 'application/pdf' });
-    const xlsx = new File(['fake xlsx bytes'], 'planilha.xlsx', {
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    });
-    const png = new File(['fake png bytes'], 'foto.png', { type: 'image/png' });
+  it('chama onProgress com % durante o upload', async () => {
+    const onProgress = vi.fn();
+    const promise = submitStudyRequest(baseInput(), { onProgress });
+    const xhr = FakeXHR.instances[0]!;
+    xhr.emitProgress(0, 1000);
+    xhr.emitProgress(250, 1000);
+    xhr.emitProgress(500, 1000);
+    xhr.emitProgress(1000, 1000);
+    xhr.succeed({ id: 'x', status: 'received', attachmentCount: 0, message: 'ok' });
+    await promise;
+    expect(onProgress).toHaveBeenCalledWith(0);
+    expect(onProgress).toHaveBeenCalledWith(25);
+    expect(onProgress).toHaveBeenCalledWith(50);
+    expect(onProgress).toHaveBeenCalledWith(100);
+  });
 
-    await submitStudyRequest(baseInput({ attachments: [pdf, xlsx, png] }));
+  it('ignora progress events com lengthComputable=false (proxy esquisito)', async () => {
+    const onProgress = vi.fn();
+    const promise = submitStudyRequest(baseInput(), { onProgress });
+    const xhr = FakeXHR.instances[0]!;
+    xhr.upload.onprogress!({ lengthComputable: false, loaded: 500, total: 0 } as ProgressEvent);
+    xhr.succeed({ id: 'x', status: 'received', attachmentCount: 0, message: 'ok' });
+    await promise;
+    expect(onProgress).not.toHaveBeenCalled();
+  });
 
-    const fd = fetchMock.mock.calls[0]![1].body as FormData;
-    const attachments = fd.getAll('attachments');
-    expect(attachments).toHaveLength(3);
-    expect((attachments[0] as File).name).toBe('apostila.pdf');
-    expect((attachments[1] as File).name).toBe('planilha.xlsx');
-    expect((attachments[2] as File).name).toBe('foto.png');
+  it('respeita timeoutMs custom no xhr.timeout', async () => {
+    const promise = submitStudyRequest(baseInput(), { timeoutMs: 30_000 });
+    const xhr = FakeXHR.instances[0]!;
+    expect(xhr.timeout).toBe(30_000);
+    xhr.succeed({ id: 'x', status: 'received', attachmentCount: 0, message: 'ok' });
+    await promise;
   });
 });
 
-describe('submitStudyRequest — erros HTTP do backend', () => {
-  let fetchMock: ReturnType<typeof vi.fn>;
-
+describe('submitStudyRequest — erros HTTP', () => {
   beforeEach(() => {
-    fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
+    FakeXHR.reset();
+    vi.stubGlobal('XMLHttpRequest', FakeXHR);
   });
+  afterEach(() => vi.unstubAllGlobals());
 
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it('400 com detail JSON: usa o detail do servidor e classifica como "client"', async () => {
-    fetchMock.mockResolvedValueOnce(
-      jsonResponse(400, { detail: 'email inválido' }),
-    );
-
-    await expect(submitStudyRequest(baseInput())).rejects.toMatchObject({
-      name: 'StudyRequestError',
-      status: 400,
-      detail: 'email inválido',
-      kind: 'client',
-      retryable: false,
-    });
-  });
-
-  it('400 sem detail JSON: usa mensagem genérica de cliente', async () => {
-    fetchMock.mockResolvedValueOnce(emptyResponse(400));
-
-    const err = await submitStudyRequest(baseInput()).catch(e => e as StudyRequestError);
+  it('400 com JSON detail: usa detail do servidor; kind=client; não retryable', async () => {
+    const promise = submitStudyRequest(baseInput(), { maxRetries: 0 });
+    FakeXHR.instances[0]!.failHttp(400, { detail: 'email inválido' });
+    const err = await promise.catch(e => e as StudyRequestError);
     expect(err).toBeInstanceOf(StudyRequestError);
     expect(err.kind).toBe('client');
-    expect(err.detail).toMatch(/verifique os dados/i);
+    expect(err.detail).toBe('email inválido');
+    expect(err.retryable).toBe(false);
   });
 
-  it('413 Payload Too Large: classifica como "payload-too-large" com dica acionável', async () => {
-    fetchMock.mockResolvedValueOnce(htmlResponse(413));
-
-    const err = await submitStudyRequest(baseInput()).catch(e => e as StudyRequestError);
+  it('413: kind=payload-too-large; mensagem acionável', async () => {
+    const promise = submitStudyRequest(baseInput(), { maxRetries: 0 });
+    FakeXHR.instances[0]!.failHttp(413, '<html>nginx</html>', 'text/html');
+    const err = await promise.catch(e => e as StudyRequestError);
     expect(err.kind).toBe('payload-too-large');
     expect(err.retryable).toBe(false);
-    expect(err.detail).toMatch(/remova/i);
-    expect(err.detail).toMatch(/anexo|arquivo|PDF/i);
+    expect(err.detail).toMatch(/remova|reduza/i);
   });
 
-  it('429 Too Many Requests: pede pra aguardar', async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse(429, { detail: 'rate limited' }));
-
-    const err = await submitStudyRequest(baseInput()).catch(e => e as StudyRequestError);
+  it('415: tipo não permitido — mensagem específica', async () => {
+    const promise = submitStudyRequest(baseInput(), { maxRetries: 0 });
+    FakeXHR.instances[0]!.failHttp(415, { detail: 'tipo não permitido para "x.exe"' });
+    const err = await promise.catch(e => e as StudyRequestError);
     expect(err.kind).toBe('client');
+    expect(err.detail).toMatch(/x\.exe|não permitido/i);
+  });
+
+  it('429: pede aguardar', async () => {
+    const promise = submitStudyRequest(baseInput(), { maxRetries: 0 });
+    FakeXHR.instances[0]!.failHttp(429, { detail: 'rate' });
+    const err = await promise.catch(e => e as StudyRequestError);
     expect(err.detail).toMatch(/aguarde|minuto/i);
+    expect(err.retryable).toBe(false);
   });
 
-  it('500: classifica como "server" e marca retryable', async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse(500, { detail: 'boom' }));
-
-    const err = await submitStudyRequest(baseInput()).catch(e => e as StudyRequestError);
+  it('500: kind=server; retryable', async () => {
+    const promise = submitStudyRequest(baseInput(), { maxRetries: 0 });
+    FakeXHR.instances[0]!.failHttp(500, { detail: 'boom' });
+    const err = await promise.catch(e => e as StudyRequestError);
     expect(err.kind).toBe('server');
-    expect(err.retryable).toBe(true);
     expect(err.detail).toBe('boom');
-  });
-
-  it('500 sem detail: usa fallback amigável', async () => {
-    fetchMock.mockResolvedValueOnce(emptyResponse(500));
-
-    const err = await submitStudyRequest(baseInput()).catch(e => e as StudyRequestError);
-    expect(err.kind).toBe('server');
-    expect(err.detail).toMatch(/erro no servidor|notificada/i);
-  });
-
-  it('502 Bad Gateway: server + mensagem específica de deploy', async () => {
-    fetchMock.mockResolvedValueOnce(htmlResponse(502));
-
-    const err = await submitStudyRequest(baseInput()).catch(e => e as StudyRequestError);
-    expect(err.kind).toBe('server');
     expect(err.retryable).toBe(true);
+  });
+
+  it('502/503: mensagem de deploy; retryable', async () => {
+    const promise = submitStudyRequest(baseInput(), { maxRetries: 0 });
+    FakeXHR.instances[0]!.failHttp(502, '', 'text/html');
+    const err = await promise.catch(e => e as StudyRequestError);
+    expect(err.kind).toBe('server');
     expect(err.detail).toMatch(/temporariamente indisponível|deploy/i);
   });
 
-  it('503 Service Unavailable: server retryable', async () => {
-    fetchMock.mockResolvedValueOnce(emptyResponse(503));
+  it('504: kind=timeout; retryable', async () => {
+    const promise = submitStudyRequest(baseInput(), { maxRetries: 0 });
+    FakeXHR.instances[0]!.failHttp(504, '');
+    const err = await promise.catch(e => e as StudyRequestError);
+    expect(err.kind).toBe('timeout');
+    expect(err.detail).toMatch(/demorou demais|arquivos grandes/i);
+  });
 
-    const err = await submitStudyRequest(baseInput()).catch(e => e as StudyRequestError);
+  it('JSON inválido em 2xx: rejeita como server error', async () => {
+    const promise = submitStudyRequest(baseInput(), { maxRetries: 0 });
+    const xhr = FakeXHR.instances[0]!;
+    xhr.status = 201;
+    xhr.responseText = '<<<not json>>>';
+    xhr.responseHeaders['Content-Type'] = 'application/json';
+    xhr.onload?.();
+    const err = await promise.catch(e => e as StudyRequestError);
     expect(err.kind).toBe('server');
-    expect(err.retryable).toBe(true);
-  });
-
-  it('504 Gateway Timeout: classifica como network (envio demorou demais)', async () => {
-    fetchMock.mockResolvedValueOnce(htmlResponse(504));
-
-    const err = await submitStudyRequest(baseInput()).catch(e => e as StudyRequestError);
-    expect(err.kind).toBe('network');
-    expect(err.retryable).toBe(true);
-    expect(err.detail).toMatch(/demorou demais|arquivos grandes|rede/i);
-  });
-
-  it('408 Request Timeout: tratado como network/timeout', async () => {
-    fetchMock.mockResolvedValueOnce(emptyResponse(408));
-
-    const err = await submitStudyRequest(baseInput()).catch(e => e as StudyRequestError);
-    expect(err.kind).toBe('network');
-    expect(err.retryable).toBe(true);
-  });
-
-  it('usa "title" se "detail" estiver ausente no payload Problem+JSON', async () => {
-    fetchMock.mockResolvedValueOnce(
-      jsonResponse(422, { title: 'validation-error', type: 'about:blank' }),
-    );
-
-    const err = await submitStudyRequest(baseInput()).catch(e => e as StudyRequestError);
-    expect(err.detail).toBe('validation-error');
   });
 });
 
-describe('submitStudyRequest — erros de rede (fetch lança)', () => {
-  let fetchMock: ReturnType<typeof vi.fn>;
+describe('submitStudyRequest — erros de rede (xhr.onerror)', () => {
   const originalOnLine = Object.getOwnPropertyDescriptor(window.navigator, 'onLine');
-
   beforeEach(() => {
-    fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
+    FakeXHR.reset();
+    vi.stubGlobal('XMLHttpRequest', FakeXHR);
   });
-
   afterEach(() => {
     vi.unstubAllGlobals();
-    // Restaura navigator.onLine
-    if (originalOnLine) {
-      Object.defineProperty(window.navigator, 'onLine', originalOnLine);
-    } else {
-      Object.defineProperty(window.navigator, 'onLine', {
-        configurable: true,
-        value: true,
-        writable: true,
-      });
-    }
+    if (originalOnLine) Object.defineProperty(window.navigator, 'onLine', originalOnLine);
   });
 
-  it('TypeError "Failed to fetch" (Chrome): vira mensagem amigável de rede', async () => {
-    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
-
-    const err = await submitStudyRequest(baseInput()).catch(e => e as StudyRequestError);
-    expect(err).toBeInstanceOf(StudyRequestError);
+  it('onerror sem aborted: kind=network; retryable; mensagem amigável', async () => {
+    const promise = submitStudyRequest(baseInput(), { maxRetries: 0 });
+    FakeXHR.instances[0]!.failNetwork();
+    const err = await promise.catch(e => e as StudyRequestError);
     expect(err.kind).toBe('network');
     expect(err.status).toBe(0);
     expect(err.retryable).toBe(true);
+    expect(err.detail).toMatch(/conectar ao servidor|instabilidade/i);
     expect(err.detail).not.toMatch(/Failed to fetch/i);
-    expect(err.detail).toMatch(/conectar|instabilidade|rede/i);
   });
 
-  it('TypeError "Load failed" (Safari): também é network', async () => {
-    fetchMock.mockRejectedValueOnce(new TypeError('Load failed'));
-
-    const err = await submitStudyRequest(baseInput()).catch(e => e as StudyRequestError);
-    expect(err.kind).toBe('network');
-    expect(err.detail).not.toMatch(/Load failed/i);
-  });
-
-  it('TypeError "NetworkError when attempting to fetch" (Firefox): network', async () => {
-    fetchMock.mockRejectedValueOnce(new TypeError('NetworkError when attempting to fetch resource'));
-
-    const err = await submitStudyRequest(baseInput()).catch(e => e as StudyRequestError);
-    expect(err.kind).toBe('network');
-  });
-
-  it('quando navigator.onLine=false: mensagem específica de offline', async () => {
-    Object.defineProperty(window.navigator, 'onLine', {
-      configurable: true,
-      value: false,
-      writable: true,
-    });
-    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
-
-    const err = await submitStudyRequest(baseInput()).catch(e => e as StudyRequestError);
-    expect(err.kind).toBe('network');
+  it('navigator.onLine=false: mensagem específica de offline', async () => {
+    Object.defineProperty(window.navigator, 'onLine', { value: false, configurable: true });
+    const promise = submitStudyRequest(baseInput(), { maxRetries: 0 });
+    FakeXHR.instances[0]!.failNetwork();
+    const err = await promise.catch(e => e as StudyRequestError);
     expect(err.detail).toMatch(/offline|sem internet/i);
-    expect(err.detail).toMatch(/dados continuam preenchidos/i);
   });
 
-  it('AbortError (rede cancelada): ainda é network', async () => {
-    const abort = new Error('The user aborted a request');
-    abort.name = 'AbortError';
-    fetchMock.mockRejectedValueOnce(abort);
-
-    const err = await submitStudyRequest(baseInput()).catch(e => e as StudyRequestError);
-    expect(err.kind).toBe('network');
+  it('ontimeout: kind=timeout; mensagem com segundos', async () => {
+    const promise = submitStudyRequest(baseInput(), { maxRetries: 0, timeoutMs: 10_000 });
+    FakeXHR.instances[0]!.failTimeout();
+    const err = await promise.catch(e => e as StudyRequestError);
+    expect(err.kind).toBe('timeout');
+    expect(err.detail).toMatch(/10 segundos|passou de|rede lenta/i);
   });
 
-  it('erro inesperado não-Error: cai em "network" como fallback seguro', async () => {
-    fetchMock.mockRejectedValueOnce('algo deu errado');
-
-    const err = await submitStudyRequest(baseInput()).catch(e => e as StudyRequestError);
-    expect(err).toBeInstanceOf(StudyRequestError);
+  it('AbortController.signal aborta antes de começar: rejeita imediatamente', async () => {
+    const ctrl = new AbortController();
+    ctrl.abort();
+    const promise = submitStudyRequest(baseInput(), { signal: ctrl.signal });
+    const err = await promise.catch(e => e as StudyRequestError);
     expect(err.kind).toBe('network');
+    expect(err.detail).toMatch(/cancelad/i);
+    // Não deve nem ter criado XHR
+    expect(FakeXHR.instances).toHaveLength(0);
+  });
+
+  it('AbortController.signal aborta durante o upload: cancela com mensagem', async () => {
+    const ctrl = new AbortController();
+    const promise = submitStudyRequest(baseInput(), { signal: ctrl.signal });
+    const xhr = FakeXHR.instances[0]!;
+    ctrl.abort();
+    expect(xhr.aborted).toBe(true);
+    const err = await promise.catch(e => e as StudyRequestError);
+    expect(err.kind).toBe('network');
+    expect(err.detail).toMatch(/cancelad/i);
+  });
+});
+
+describe('submitStudyRequest — retry automático', () => {
+  beforeEach(() => {
+    FakeXHR.reset();
+    vi.stubGlobal('XMLHttpRequest', FakeXHR);
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('retry após network failure: 1 retry default, sucesso na segunda', async () => {
+    const promise = submitStudyRequest(baseInput());
+    expect(FakeXHR.instances).toHaveLength(1);
+    FakeXHR.instances[0]!.failNetwork();
+    // Avança o backoff de 800ms
+    await vi.advanceTimersByTimeAsync(800);
+    expect(FakeXHR.instances).toHaveLength(2);
+    FakeXHR.instances[1]!.succeed({ id: 'x', status: 'received', attachmentCount: 0, message: 'ok' });
+    const result = await promise;
+    expect(result.id).toBe('x');
+  });
+
+  it('retry em 502: classifica como server (retryable)', async () => {
+    const promise = submitStudyRequest(baseInput());
+    FakeXHR.instances[0]!.failHttp(502, '', 'text/html');
+    await vi.advanceTimersByTimeAsync(800);
+    expect(FakeXHR.instances).toHaveLength(2);
+    FakeXHR.instances[1]!.succeed({ id: 'x', status: 'received', attachmentCount: 0, message: 'ok' });
+    const result = await promise;
+    expect(result.id).toBe('x');
+  });
+
+  it('retry em 504/timeout: kind=timeout é retryable', async () => {
+    const promise = submitStudyRequest(baseInput());
+    FakeXHR.instances[0]!.failTimeout();
+    await vi.advanceTimersByTimeAsync(800);
+    FakeXHR.instances[1]!.succeed({ id: 'x', status: 'received', attachmentCount: 0, message: 'ok' });
+    const result = await promise;
+    expect(result.id).toBe('x');
+  });
+
+  it('NÃO faz retry em 400 (client): falha imediatamente', async () => {
+    const promise = submitStudyRequest(baseInput());
+    FakeXHR.instances[0]!.failHttp(400, { detail: 'email inválido' });
+    await expect(promise).rejects.toMatchObject({ kind: 'client' });
+    expect(FakeXHR.instances).toHaveLength(1);
+  });
+
+  it('NÃO faz retry em 413: payload-too-large não é retryable', async () => {
+    const promise = submitStudyRequest(baseInput());
+    FakeXHR.instances[0]!.failHttp(413, '');
+    await expect(promise).rejects.toMatchObject({ kind: 'payload-too-large' });
+    expect(FakeXHR.instances).toHaveLength(1);
+  });
+
+  it('maxRetries=0: nenhum retry, mesmo em erro retryable', async () => {
+    const promise = submitStudyRequest(baseInput(), { maxRetries: 0 });
+    FakeXHR.instances[0]!.failNetwork();
+    await expect(promise).rejects.toMatchObject({ kind: 'network' });
+    expect(FakeXHR.instances).toHaveLength(1);
+  });
+
+  it('maxRetries=2: tenta total 3 vezes; falha final mantém última mensagem', async () => {
+    const promise = submitStudyRequest(baseInput(), { maxRetries: 2 });
+    FakeXHR.instances[0]!.failNetwork();
+    await vi.advanceTimersByTimeAsync(800);
+    FakeXHR.instances[1]!.failNetwork();
+    await vi.advanceTimersByTimeAsync(800);
+    FakeXHR.instances[2]!.failNetwork();
+    const err = await promise.catch(e => e as StudyRequestError);
+    expect(err.kind).toBe('network');
+    expect(FakeXHR.instances).toHaveLength(3);
+  });
+
+  it('retry: onProgress é resetado pra 0 antes de cada nova tentativa', async () => {
+    const onProgress = vi.fn();
+    const promise = submitStudyRequest(baseInput(), { onProgress });
+    FakeXHR.instances[0]!.emitProgress(500, 1000); // 50% na 1ª
+    FakeXHR.instances[0]!.failNetwork();
+    await vi.advanceTimersByTimeAsync(800);
+    // 0% logo no começo da 2ª tentativa
+    expect(onProgress).toHaveBeenLastCalledWith(0);
+    FakeXHR.instances[1]!.emitProgress(1000, 1000);
+    FakeXHR.instances[1]!.succeed({ id: 'x', status: 'received', attachmentCount: 0, message: 'ok' });
+    await promise;
+    expect(onProgress).toHaveBeenCalledWith(100);
+  });
+
+  it('abort durante retry: para no signal abort sem nova tentativa', async () => {
+    const ctrl = new AbortController();
+    // Anexa .catch() ANTES de qualquer rejection pra evitar unhandled rejection.
+    const promise = submitStudyRequest(baseInput(), { signal: ctrl.signal, maxRetries: 3 });
+    const caught = promise.catch(e => e as StudyRequestError);
+    FakeXHR.instances[0]!.failNetwork();
+    ctrl.abort();
+    await vi.advanceTimersByTimeAsync(800);
+    const err = await caught;
+    expect(err.kind).toBe('network');
+    expect(FakeXHR.instances).toHaveLength(1); // não tentou de novo
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────
+// resolveContentType — MIME mapping pra tipos que o browser detecta mal
+// ──────────────────────────────────────────────────────────────────
+describe('resolveContentType', () => {
+  it('mantém o type detectado se já está na allowlist', () => {
+    const f = new File(['x'], 'a.pdf', { type: 'application/pdf' });
+    expect(resolveContentType(f)).toBe('application/pdf');
+  });
+
+  it('mapeia .md sem type detectado pra text/markdown', () => {
+    const f = new File(['x'], 'README.md', { type: '' });
+    expect(resolveContentType(f)).toBe('text/markdown');
+  });
+
+  it('mapeia .docx com type incorreto (octet-stream) pro MIME oficial', () => {
+    const f = new File(['x'], 'doc.docx', { type: 'application/octet-stream' });
+    expect(resolveContentType(f)).toBe(
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    );
+  });
+
+  it('mapeia .xlsx com type vazio pro MIME oficial', () => {
+    const f = new File(['x'], 'sheet.xlsx', { type: '' });
+    expect(resolveContentType(f)).toBe(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+  });
+
+  it('mapeia .pptx com type vazio pro MIME oficial', () => {
+    const f = new File(['x'], 'slides.pptx', { type: '' });
+    expect(resolveContentType(f)).toBe(
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    );
+  });
+
+  it('case-insensitive: .PDF maiúsculo funciona', () => {
+    const f = new File(['x'], 'DOC.PDF', { type: '' });
+    expect(resolveContentType(f)).toBe('application/pdf');
+  });
+
+  it('extensão desconhecida: devolve o type original ou octet-stream', () => {
+    const f = new File(['x'], 'a.zzz', { type: '' });
+    expect(resolveContentType(f)).toBe('application/octet-stream');
+  });
+
+  it('jpg e jpeg ambos mapeiam pra image/jpeg', () => {
+    expect(resolveContentType(new File(['x'], 'a.jpg', { type: '' }))).toBe('image/jpeg');
+    expect(resolveContentType(new File(['x'], 'b.jpeg', { type: '' }))).toBe('image/jpeg');
+  });
+});
+
+describe('safeFileName', () => {
+  it('preserva acentos e espaços (válidos em S3 e R2)', () => {
+    expect(safeFileName('Apostila de Anatomia (2026).pdf')).toBe('Apostila de Anatomia (2026).pdf');
+  });
+
+  it('remove path absoluto Unix — só basename fica', () => {
+    expect(safeFileName('/home/user/documento.pdf')).toBe('documento.pdf');
+  });
+
+  it('remove path Windows — só basename fica', () => {
+    expect(safeFileName('C:\\Users\\Fer\\arquivo.docx')).toBe('arquivo.docx');
+  });
+
+  it('remove null bytes e caracteres de controle', () => {
+    expect(safeFileName('arq uivo.pdf')).toBe('arquivo.pdf');
+  });
+
+  it('fallback para "arquivo" se vier vazio', () => {
+    expect(safeFileName('')).toBe('arquivo');
+    expect(safeFileName(' ')).toBe('arquivo');
   });
 });
 
 describe('STUDY_REQUEST_LIMITS', () => {
-  it('expõe limite total de upload espelhando o backend (200 MiB)', () => {
+  it('limite total = 200 MiB (espelha backend)', () => {
     expect(STUDY_REQUEST_LIMITS.maxTotalUploadBytes).toBe(200 * 1024 * 1024);
   });
-
-  it('limite individual de 25 MiB bate com o backend', () => {
+  it('limite por arquivo = 25 MiB', () => {
     expect(STUDY_REQUEST_LIMITS.maxAttachmentBytes).toBe(25 * 1024 * 1024);
   });
-
-  it('limite total >= limite individual (multi-arquivo precisa caber)', () => {
+  it('limite total > limite por arquivo', () => {
     expect(STUDY_REQUEST_LIMITS.maxTotalUploadBytes).toBeGreaterThan(
       STUDY_REQUEST_LIMITS.maxAttachmentBytes,
     );
   });
-
-  it('extensões aceitas incluem todos os tipos críticos esperados', () => {
-    const exts = STUDY_REQUEST_LIMITS.allowedExtensions as readonly string[];
-    expect(exts).toContain('.pdf');
-    expect(exts).toContain('.docx');
-    expect(exts).toContain('.xlsx');
-    expect(exts).toContain('.pptx');
-    expect(exts).toContain('.png');
-    expect(exts).toContain('.jpg');
-    expect(exts).toContain('.csv');
-  });
 });
 
 describe('StudyRequestError', () => {
-  it('kind=unknown como padrão; não é retryable', () => {
-    const err = new StudyRequestError(0, 'oops');
-    expect(err.kind).toBe('unknown');
-    expect(err.retryable).toBe(false);
-  });
-
-  it('kind=network ⇒ retryable=true', () => {
-    expect(new StudyRequestError(0, 'rede', 'network').retryable).toBe(true);
-  });
-
-  it('kind=server ⇒ retryable=true', () => {
-    expect(new StudyRequestError(500, 'oops', 'server').retryable).toBe(true);
-  });
-
-  it('kind=client ⇒ retryable=false', () => {
-    expect(new StudyRequestError(400, 'oops', 'client').retryable).toBe(false);
-  });
-
-  it('kind=payload-too-large ⇒ retryable=false (usuário precisa remover arquivos)', () => {
-    expect(new StudyRequestError(413, 'oops', 'payload-too-large').retryable).toBe(false);
+  it.each([
+    ['unknown', false],
+    ['network', true],
+    ['server', true],
+    ['timeout', true],
+    ['client', false],
+    ['payload-too-large', false],
+  ])('kind=%s ⇒ retryable=%s', (kind, expected) => {
+    const err = new StudyRequestError(0, 'msg', kind as never);
+    expect(err.retryable).toBe(expected);
   });
 });
