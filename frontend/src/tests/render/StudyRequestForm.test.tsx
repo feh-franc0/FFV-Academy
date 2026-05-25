@@ -295,12 +295,78 @@ describe('<StudyRequestForm>', () => {
       expect(screen.getByText(/fluxo\.webp/)).toBeInTheDocument();
     });
 
-    it('rejeita arquivo .exe com mensagem clara (não é tipo permitido)', () => {
+    it('rejeita arquivo .exe com mensagem clara (formato + lista de aceitos)', () => {
       render(<StudyRequestForm />);
       dropFiles([makeFile('virus.exe', 1024, 'application/x-msdownload')]);
-      // não deve estar listado entre os anexos aceitos
       expect(screen.queryByLabelText(/Arquivos anexados/i)).not.toBeInTheDocument();
-      expect(screen.getByText(/não é um tipo permitido/i)).toBeInTheDocument();
+      const err = screen.getByText(/não é aceito/i);
+      // Mensagem identifica o formato problema
+      expect(err).toHaveTextContent(/formato EXE/i);
+      // E lista os formatos aceitos
+      expect(err).toHaveTextContent(/PDF/);
+      expect(err).toHaveTextContent(/DOCX/);
+      expect(err).toHaveTextContent(/PNG/);
+    });
+
+    it.each([
+      ['ZIP', 'arquivo.zip', 'application/zip'],
+      ['RAR', 'arquivo.rar', 'application/x-rar-compressed'],
+      ['MP4', 'video.mp4', 'video/mp4'],
+      ['MP3', 'audio.mp3', 'audio/mpeg'],
+      ['BMP', 'imagem.bmp', 'image/bmp'],
+      ['TIFF', 'foto.tiff', 'image/tiff'],
+      ['HTML', 'pagina.html', 'text/html'],
+      ['JS', 'script.js', 'application/javascript'],
+    ])('rejeita formato não aceito: %s', (fmt, name, type) => {
+      render(<StudyRequestForm />);
+      dropFiles([makeFile(name, 1024, type)]);
+      expect(screen.queryByLabelText(/Arquivos anexados/i)).not.toBeInTheDocument();
+      const err = screen.getByText(/não é aceito/i);
+      expect(err).toHaveTextContent(new RegExp(`formato ${fmt}`, 'i'));
+    });
+
+    it('arquivo sem extensão: mensagem específica', () => {
+      render(<StudyRequestForm />);
+      dropFiles([makeFile('semExtensao', 1024, 'application/octet-stream')]);
+      expect(screen.queryByLabelText(/Arquivos anexados/i)).not.toBeInTheDocument();
+      expect(screen.getByText(/sem extensão|não é aceito/i)).toBeInTheDocument();
+    });
+
+    // Cobertura individual de CADA tipo aceito — garante que nenhum regrediu
+    it.each([
+      ['PDF', 'apostila.pdf', 'application/pdf'],
+      ['DOC (antigo)', 'doc.doc', 'application/msword'],
+      ['DOCX', 'doc.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+      ['XLS (antigo)', 'plan.xls', 'application/vnd.ms-excel'],
+      ['XLSX', 'plan.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+      ['PPT (antigo)', 'slides.ppt', 'application/vnd.ms-powerpoint'],
+      ['PPTX', 'slides.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+      ['CSV', 'dados.csv', 'text/csv'],
+      ['TXT', 'notas.txt', 'text/plain'],
+      ['MD', 'readme.md', 'text/markdown'],
+      ['PNG', 'grafico.png', 'image/png'],
+      ['JPG', 'foto.jpg', 'image/jpeg'],
+      ['JPEG', 'imagem.jpeg', 'image/jpeg'],
+      ['WebP', 'modern.webp', 'image/webp'],
+      ['GIF', 'animado.gif', 'image/gif'],
+    ])('aceita %s individualmente', (_fmt, name) => {
+      render(<StudyRequestForm />);
+      dropFiles([makeFile(name, 2048, 'application/octet-stream')]);
+      // Aceito: aparece na lista
+      const list = screen.getByLabelText(/Arquivos anexados/i);
+      expect(list).toBeInTheDocument();
+      expect(list.querySelectorAll('li')).toHaveLength(1);
+      expect(screen.getByText(name)).toBeInTheDocument();
+    });
+
+    it('case-insensitive: extensão MAIÚSCULA é aceita (.PDF, .JPG)', () => {
+      render(<StudyRequestForm />);
+      dropFiles([
+        makeFile('PROVA.PDF', 1024, 'application/pdf'),
+        makeFile('FOTO.JPG', 1024, 'image/jpeg'),
+      ]);
+      const list = screen.getByLabelText(/Arquivos anexados/i);
+      expect(list.querySelectorAll('li')).toHaveLength(2);
     });
 
     it('rejeita arquivo > 25 MB individualmente', () => {
@@ -363,6 +429,98 @@ describe('<StudyRequestForm>', () => {
       const items = screen.getByLabelText(/Arquivos anexados/i).querySelectorAll('li');
       expect(items).toHaveLength(1);
       expect(screen.getByText(/já foi adicionado/i)).toBeInTheDocument();
+    });
+
+    // ── Cenários explícitos de "2 arquivos iguais" — várias interpretações ──
+
+    it('2 PDFs com MESMO nome mas tamanho diferente: aceita ambos (não são iguais)', () => {
+      render(<StudyRequestForm />);
+      const a = makeFile('aula.pdf', 1024);
+      const b = makeFile('aula.pdf', 2048);
+      dropFiles([a, b]);
+      const items = screen.getByLabelText(/Arquivos anexados/i).querySelectorAll('li');
+      expect(items).toHaveLength(2);
+    });
+
+    it('2 PDFs com mesmo nome+tamanho mas lastModified diferente: aceita ambos', async () => {
+      render(<StudyRequestForm />);
+      // makeFile gera lastModified diferente a cada chamada (Date.now())
+      dropFiles([makeFile('aula.pdf', 1024)]);
+      // pequeno delay garante lastModified diferente
+      await new Promise(r => setTimeout(r, 5));
+      dropFiles([makeFile('aula.pdf', 1024)]);
+      const items = screen.getByLabelText(/Arquivos anexados/i).querySelectorAll('li');
+      expect(items).toHaveLength(2);
+    });
+
+    it('2 arquivos idênticos no MESMO drop: dedupa, aceita só 1', () => {
+      render(<StudyRequestForm />);
+      const a = makeFile('aula.pdf', 1024);
+      dropFiles([a, a]); // mesmo arquivo 2x no mesmo drop
+      const items = screen.getByLabelText(/Arquivos anexados/i).querySelectorAll('li');
+      expect(items).toHaveLength(1);
+    });
+
+    it('2 imagens diferentes (PNG e JPG): aceita ambas', () => {
+      render(<StudyRequestForm />);
+      dropFiles([
+        makeFile('grafico.png', 1024, 'image/png'),
+        makeFile('foto.jpg', 2048, 'image/jpeg'),
+      ]);
+      const items = screen.getByLabelText(/Arquivos anexados/i).querySelectorAll('li');
+      expect(items).toHaveLength(2);
+    });
+
+    it('mesma imagem 2x (mesmo arquivo PNG): dedupa', () => {
+      render(<StudyRequestForm />);
+      const png = makeFile('print.png', 5000, 'image/png');
+      dropFiles([png]);
+      dropFiles([png]);
+      expect(screen.getByLabelText(/Arquivos anexados/i).querySelectorAll('li')).toHaveLength(1);
+      expect(screen.getByText(/já foi adicionado/i)).toBeInTheDocument();
+    });
+
+    it('mesmo PPT 2x: dedupa com mensagem amigável citando o nome', () => {
+      render(<StudyRequestForm />);
+      const ppt = makeFile('aula-genetica.pptx', 8000,
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+      dropFiles([ppt, ppt]);
+      expect(screen.getByLabelText(/Arquivos anexados/i).querySelectorAll('li')).toHaveLength(1);
+      expect(screen.getByText(/aula-genetica\.pptx.*já foi adicionado/i)).toBeInTheDocument();
+    });
+
+    it('3 duplicatas em um mesmo drop: mensagem agregada "3 arquivos"', () => {
+      render(<StudyRequestForm />);
+      const a = makeFile('a.pdf', 100);
+      const b = makeFile('b.pdf', 200);
+      const c = makeFile('c.pdf', 300);
+      dropFiles([a, b, c]);
+      // Re-drop dos 3 mesmos
+      dropFiles([a, b, c]);
+      expect(screen.getByLabelText(/Arquivos anexados/i).querySelectorAll('li')).toHaveLength(3);
+      expect(screen.getByText(/3 arquivos.*já foi adicionado/i)).toBeInTheDocument();
+    });
+
+    it('JPG e JPEG (mesma extensão semântica, sufixos diferentes): aceita os 2', () => {
+      render(<StudyRequestForm />);
+      dropFiles([
+        makeFile('foto1.jpg', 1024, 'image/jpeg'),
+        makeFile('foto2.jpeg', 1024, 'image/jpeg'),
+      ]);
+      const items = screen.getByLabelText(/Arquivos anexados/i).querySelectorAll('li');
+      expect(items).toHaveLength(2);
+    });
+
+    it('PDF + imagem + PPT + DOCX juntos: aceita todos no mesmo batch', () => {
+      render(<StudyRequestForm />);
+      dropFiles([
+        makeFile('apostila.pdf', 1024, 'application/pdf'),
+        makeFile('grafico.png', 2048, 'image/png'),
+        makeFile('slides.pptx', 4096, 'application/vnd.openxmlformats-officedocument.presentationml.presentation'),
+        makeFile('redacao.docx', 8192, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
+      ]);
+      const items = screen.getByLabelText(/Arquivos anexados/i).querySelectorAll('li');
+      expect(items).toHaveLength(4);
     });
 
     it('exibe resumo do total: "N arquivos · XX MB no total"', () => {

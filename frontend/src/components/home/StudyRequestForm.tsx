@@ -197,7 +197,15 @@ export function StudyRequestForm() {
       const lower = f.name.toLowerCase();
       const allowed = STUDY_REQUEST_LIMITS.allowedExtensions.some(ext => lower.endsWith(ext));
       if (!allowed) {
-        setFileError(`"${f.name}" não é um tipo permitido (PDF, DOCX, XLSX, PPTX, CSV, TXT, MD, imagens).`);
+        // Detecta a extensão real pra dar uma mensagem específica em vez de
+        // genérica. Ex: "ZIP não é aceito" é melhor que "não é tipo permitido".
+        const dot = f.name.lastIndexOf('.');
+        const ext = dot >= 0 ? f.name.slice(dot).toLowerCase() : '';
+        const extLabel = ext ? `formato ${ext.replace('.', '').toUpperCase()}` : 'arquivo sem extensão';
+        setFileError(
+          `"${f.name}" não é aceito (${extLabel}). ` +
+          `Aceitamos: PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX, CSV, TXT, MD, PNG, JPG, JPEG, WebP, GIF.`,
+        );
         continue;
       }
       // Dedupação: mesmo nome + tamanho + lastModified = mesmo arquivo.
