@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	"github.com/fernandofv/api/internal/domain/shared"
 	domsr "github.com/fernandofv/api/internal/domain/studyrequest"
@@ -63,7 +64,7 @@ type CreateUseCase struct {
 	userUpserter    domsr.UserUpserter    // opcional — cria conta passwordless pra lead
 	loginCodeIssuer domsr.LoginCodeIssuer // opcional — gera código pro email de boas-vindas
 	notifier        domsr.EmailNotifier
-	adminEmail      string
+	adminEmails     []string // todos os admins notificados em nova solicitação
 	clock           shared.Clock
 	logger          *slog.Logger
 }
@@ -96,10 +97,12 @@ func (uc *CreateUseCase) WithLoginCodeIssuer(issuer domsr.LoginCodeIssuer) *Crea
 	return uc
 }
 
-// WithNotifier habilita envio de emails (confirmação + alerta admin).
-func (uc *CreateUseCase) WithNotifier(n domsr.EmailNotifier, adminEmail string) *CreateUseCase {
+// WithNotifier habilita envio de emails. adminEmails recebe a lista COMPLETA
+// de destinatários do alerta de nova solicitação. Lista vazia desliga o alerta
+// admin (mas confirmação ao estudante segue funcionando).
+func (uc *CreateUseCase) WithNotifier(n domsr.EmailNotifier, adminEmails []string) *CreateUseCase {
 	uc.notifier = n
-	uc.adminEmail = adminEmail
+	uc.adminEmails = adminEmails
 	return uc
 }
 
@@ -197,12 +200,36 @@ func (uc *CreateUseCase) Execute(ctx context.Context, cmd CreateCommand) (*Creat
 	}
 
 	// Notificações são side-effects best-effort. Falhas só loga.
+	//
+	// CONFIRMAÇÃO ao estudante: SÍNCRONA. Travar 1-2s no HTTP é aceitável aqui
+	// porque o user está esperando a tela de "obrigado" e o email é a próxima
+	// ação esperada (entrar no link de magic-link). Se atrasar, ele vê delay.
+	//
+	// ALERTA ao admin: ASSÍNCRONO. Goroutine + context.Background() com timeout
+	// próprio (30s). Razões: (a) admin não precisa receber em tempo real do
+	// submit, (b) Resend pode demorar 2-5s e travar a UX do estudante é pior do
+	// que atrasar o alerta do admin em segundos, (c) request cancela não pode
+	// abortar o envio (estudante fecha aba ainda assim queremos notificar).
 	if uc.notifier != nil {
 		if err := uc.notifier.SendReceivedConfirmation(ctx, req.Email(), req.Name(), req.ID(), req.Subject(), loginCode); err != nil {
 			uc.logWarn("falha enviando confirmação ao estudante", "err", err, "request_id", req.ID().String())
 		}
-		if err := uc.notifier.SendAdminNotification(ctx, uc.adminEmail, req); err != nil {
-			uc.logWarn("falha notificando admin", "err", err, "request_id", req.ID().String())
+
+		if len(uc.adminEmails) > 0 {
+			// Captura por valor pra evitar race com `req` (que é ponteiro mas só
+			// lemos campos imutáveis aqui — Subject, Name, Email, Description, etc).
+			reqCopy := req
+			emails := append([]string(nil), uc.adminEmails...)
+			reqID := req.ID().String()
+			go func() {
+				notifyCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if err := uc.notifier.SendAdminNotification(notifyCtx, emails, reqCopy); err != nil {
+					uc.logWarn("falha notificando admins (assíncrono)", "err", err, "request_id", reqID, "admin_count", len(emails))
+					return
+				}
+				uc.logInfo("admins notificados", "request_id", reqID, "admin_count", len(emails))
+			}()
 		}
 	}
 

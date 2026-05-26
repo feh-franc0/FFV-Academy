@@ -129,16 +129,20 @@ func urlEscape(s string) string {
 	return r.Replace(s)
 }
 
-// SendAdminNotification: alerta o admin de nova solicitação pendente.
-func (n *StudyRequestNotifier) SendAdminNotification(ctx context.Context, adminTo string, req *domsr.StudyRequest) error {
+// SendAdminNotification: alerta TODOS os admins de nova solicitação pendente.
+//
+// Aceita slice de emails (ADMIN_EMAIL_ALLOWLIST). Se vazio, cai pro
+// n.adminEmail (compat com ADMIN_NOTIFICATION_EMAIL singular). Se ambos
+// vazios, é no-op sem erro — preferimos entregar via DB do que falhar HTTP.
+func (n *StudyRequestNotifier) SendAdminNotification(ctx context.Context, adminTos []string, req *domsr.StudyRequest) error {
 	if n.sendHTML == nil {
 		return nil
 	}
-	target := adminTo
-	if target == "" {
-		target = n.adminEmail
+	targets := dedupNonEmpty(adminTos)
+	if len(targets) == 0 && n.adminEmail != "" {
+		targets = []string{n.adminEmail}
 	}
-	if target == "" {
+	if len(targets) == 0 {
 		return nil // sem destinatário configurado — não falha
 	}
 
@@ -203,7 +207,27 @@ func (n *StudyRequestNotifier) SendAdminNotification(ctx context.Context, adminT
 	)
 
 	subject := fmt.Sprintf("🆕 Nova solicitação: %s — %s", req.StudyArea(), truncate(req.Subject(), 60))
-	return n.sendHTML(ctx, []string{target}, subject, body)
+	return n.sendHTML(ctx, targets, subject, body)
+}
+
+// dedupNonEmpty filtra emails vazios e duplicados (case-insensitive) preservando
+// ordem original. Usado pra normalizar a lista de admins antes de enviar.
+func dedupNonEmpty(emails []string) []string {
+	seen := make(map[string]struct{}, len(emails))
+	out := make([]string, 0, len(emails))
+	for _, e := range emails {
+		t := strings.TrimSpace(e)
+		if t == "" {
+			continue
+		}
+		key := strings.ToLower(t)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, t)
+	}
+	return out
 }
 
 // SendStatusUpdate: estudante recebe email quando o status da solicitação muda.

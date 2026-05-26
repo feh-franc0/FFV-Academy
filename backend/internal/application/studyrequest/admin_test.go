@@ -75,7 +75,7 @@ type mockNotifier struct {
 func (n *mockNotifier) SendReceivedConfirmation(_ context.Context, _, _ string, _ domsr.ID, _, _ string) error {
 	return nil
 }
-func (n *mockNotifier) SendAdminNotification(_ context.Context, _ string, _ *domsr.StudyRequest) error {
+func (n *mockNotifier) SendAdminNotification(_ context.Context, _ []string, _ *domsr.StudyRequest) error {
 	return nil
 }
 func (n *mockNotifier) SendStatusUpdate(_ context.Context, _, _ string, _ domsr.ID, s domsr.Status, _ string, _ string) error {
@@ -262,7 +262,7 @@ func Test_Create_AssociatesUserByEmail(t *testing.T) {
 
 	uc := NewCreateUseCase(repo, &mockStorage{}, clock).
 		WithUserLookup(lookup).
-		WithNotifier(notifier, "")
+		WithNotifier(notifier, nil)
 
 	res, err := uc.Execute(context.Background(), CreateCommand{
 		Name:        "Aluno",

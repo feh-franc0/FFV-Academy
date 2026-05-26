@@ -51,8 +51,10 @@ type EmailNotifier interface {
 	// Quando vazio, fallback pro template antigo (só confirmação).
 	SendReceivedConfirmation(ctx context.Context, to, name string, requestID ID, subject, loginCode string) error
 
-	// SendAdminNotification: admin recebe alerta de nova solicitação pendente.
-	SendAdminNotification(ctx context.Context, adminTo string, req *StudyRequest) error
+	// SendAdminNotification: alerta TODOS os admins de nova solicitação pendente.
+	// adminTos pode ter 1+ emails (lista do ADMIN_EMAIL_ALLOWLIST). Lista vazia
+	// é no-op sem erro (não há destinatário).
+	SendAdminNotification(ctx context.Context, adminTos []string, req *StudyRequest) error
 
 	// SendStatusUpdate: estudante recebe update quando status muda
 	// (ex: in_production, ready). Se deliveredURL não for vazio (status=ready),

@@ -316,10 +316,24 @@ func run() error {
 	// ─── Notifier de StudyRequest ───────────────────────────────────────────────
 	// Reaproveita o transport HTTP/SMTP do emailClient via duck-typing (SendHTML).
 	// Em dev: MailHog. Em prod: Resend.
-	adminEmail := os.Getenv("ADMIN_NOTIFICATION_EMAIL")
-	if adminEmail == "" {
-		// Default conservador: fica vazio em dev, alerta admin não é enviado.
-		adminEmail = ""
+	//
+	// Destinatários do alerta admin: prioriza ADMIN_EMAIL_ALLOWLIST (lista vírgula-
+	// separada, já parseada em cfg.Admin.EmailAllowlist) — mesma fonte que o
+	// middleware RequireAdminWithAllowlist usa pra autorizar acesso ao admin.
+	// Faz sentido manter UMA fonte de verdade de "quem é admin" pra evitar drift.
+	// Fallback compat: ADMIN_NOTIFICATION_EMAIL singular (pré-suporte multi).
+	adminEmails := append([]string(nil), cfg.Admin.EmailAllowlist...)
+	if len(adminEmails) == 0 {
+		if legacy := strings.TrimSpace(os.Getenv("ADMIN_NOTIFICATION_EMAIL")); legacy != "" {
+			adminEmails = []string{legacy}
+		}
+	}
+	// adminEmail (singular) preservado pro NewStudyRequestNotifier porque o
+	// notifier ainda precisa de UM endereço fallback interno (caso o use case
+	// passe slice vazio em algum cenário). Usa o primeiro da lista quando há.
+	adminEmail := ""
+	if len(adminEmails) > 0 {
+		adminEmail = adminEmails[0]
 	}
 	frontendURL := os.Getenv("FRONTEND_URL")
 	if frontendURL == "" {
@@ -350,7 +364,7 @@ func run() error {
 		WithUserLookup(studyRequestRepo).
 		WithUserUpserter(userUpserter).
 		WithLoginCodeIssuer(loginCodeIssuer).
-		WithNotifier(studyRequestNotifier, adminEmail).
+		WithNotifier(studyRequestNotifier, adminEmails).
 		WithLogger(log)
 	listStudyRequestsUC := appstudyreq.NewListUseCase(studyRequestRepo)
 	getStudyRequestUC := appstudyreq.NewGetUseCase(studyRequestRepo)
