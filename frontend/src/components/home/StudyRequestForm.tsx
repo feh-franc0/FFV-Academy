@@ -696,10 +696,10 @@ export function StudyRequestForm({ __testInitialStep }: Props = {}) {
         mais aderente fica sua base — e mais rápido a curadoria entrega.
       </p>
 
-      {/* Banner pro user logado — confirma identidade e contextualiza o "atalho"
-          (pulou direto pro passo 2). Não-clicável: pra trocar de conta, faz
+      {/* Banner pro user logado — confirma identidade. Aparece em ambas as
+          variantes (express + wizard). Não-clicável: pra trocar de conta, faz
           logout no header. */}
-      {isLoggedIn && user && currentStep !== 1 && (
+      {isLoggedIn && user && (
         <div
           className="flex items-center gap-3 mb-5 px-3.5 py-2.5 rounded-xl"
           style={{
@@ -713,7 +713,7 @@ export function StudyRequestForm({ __testInitialStep }: Props = {}) {
               Olá, {user.name.split(' ')[0] || 'estudante'}!
             </p>
             <p className="text-[11px] truncate" style={{ color: 'var(--ffv-muted)' }}>
-              Conectado como {user.email}
+              Conectado como {user.email} · só preencha o que quer estudar abaixo
             </p>
           </div>
           <span
@@ -729,19 +729,48 @@ export function StudyRequestForm({ __testInitialStep }: Props = {}) {
         </div>
       )}
 
-      {/* Indicador de progresso — chips clicáveis dos passos visíveis. Mostra
-          posição atual e permite voltar livremente (avançar só se passo atual
-          válido). Acessível: role=tablist com aria-selected. */}
-      <StepIndicator
-        steps={visibleSteps}
-        labels={stepLabels}
-        current={currentStep}
-        onChange={goToStep}
-      />
+      {/* Indicador de progresso — só pro anônimo (logado vê form direto). */}
+      {!isLoggedIn && (
+        <StepIndicator
+          steps={visibleSteps}
+          labels={stepLabels}
+          current={currentStep}
+          onChange={goToStep}
+        />
+      )}
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-4 mt-5" aria-busy={submitting}>
-        {/* ───────────── PASSO 1 — Identidade ───────────── */}
-        {currentStep === 1 && (
+        {/* ╔══════════════════════════════════════════════════════════════╗
+            ║ EXPRESS FORM — usuário logado                                ║
+            ║                                                              ║
+            ║ Tela única (sem wizard, sem review) — identidade vem do      ║
+            ║ profile, termos já foram aceitos no signup. Só pede o que    ║
+            ║ falta: área + tema + descrição + (opcional) anexos.          ║
+            ║ Faculdade e objetivo ficam em "Mais detalhes" colapsado.     ║
+            ╚══════════════════════════════════════════════════════════════╝ */}
+        {isLoggedIn && (
+          <ExpressFormFields
+            studyArea={studyArea} setStudyArea={setStudyArea}
+            institution={institution} setInstitution={setInstitution}
+            subject={subject} setSubject={setSubject}
+            goal={goal} setGoal={setGoal}
+            description={description} setDescription={setDescription}
+            files={files}
+            fileError={fileError}
+            handleFiles={handleFiles}
+            removeFile={removeFile}
+            fileInputRef={fileInputRef}
+            submitting={submitting}
+            inputClass={inputClass}
+            inputStyle={inputStyle}
+            errorState={state.kind === 'error' ? state : null}
+            uploadProgress={state.kind === 'submitting' ? state.progress : undefined}
+            state={state}
+          />
+        )}
+
+        {/* ───────────── PASSO 1 — Identidade (anônimo) ───────────── */}
+        {!isLoggedIn && currentStep === 1 && (
           <fieldset className="flex flex-col gap-4 m-0 p-0 border-0">
             <legend className="sr-only">Passo 1: identifique-se</legend>
 
@@ -848,8 +877,8 @@ export function StudyRequestForm({ __testInitialStep }: Props = {}) {
           </fieldset>
         )}
 
-        {/* ───────────── PASSO 2 — Conteúdo ───────────── */}
-        {currentStep === 2 && (
+        {/* ───────────── PASSO 2 — Conteúdo (anônimo) ───────────── */}
+        {!isLoggedIn && currentStep === 2 && (
           <fieldset className="flex flex-col gap-4 m-0 p-0 border-0">
             <legend className="sr-only">Passo 2: o que você quer estudar</legend>
 
@@ -1036,8 +1065,8 @@ export function StudyRequestForm({ __testInitialStep }: Props = {}) {
           </fieldset>
         )}
 
-        {/* ───────────── PASSO 3 — Confirmar e enviar ───────────── */}
-        {currentStep === 3 && (
+        {/* ───────────── PASSO 3 — Confirmar e enviar (anônimo) ───────────── */}
+        {!isLoggedIn && currentStep === 3 && (
           <fieldset className="flex flex-col gap-4 m-0 p-0 border-0">
             <legend className="sr-only">Passo 3: confira e envie</legend>
 
@@ -1475,4 +1504,294 @@ function ReviewRow({ label, value }: { label: string; value: string }) {
 function truncate(s: string, max: number): string {
   const t = s.trim();
   return t.length <= max ? t : t.slice(0, max - 1) + '…';
+}
+
+/**
+ * ExpressFormFields — variante "1-tela" do form pra usuário logado.
+ *
+ * Sem wizard, sem review, sem termos (já aceitos no signup). Só pede o que
+ * falta saber pra criar a base: área, tema, descrição. Faculdade e objetivo
+ * em "Mais detalhes" colapsado (default-off). Anexos opcionais. Submit
+ * grande no fim.
+ *
+ * Estado vem todo do parent (StudyRequestForm) — esse componente só
+ * renderiza UI + dispara onChange.
+ */
+interface ExpressFormFieldsProps {
+  studyArea: string;
+  setStudyArea: (s: string) => void;
+  institution: string;
+  setInstitution: (s: string) => void;
+  subject: string;
+  setSubject: (s: string) => void;
+  goal: string;
+  setGoal: (s: string) => void;
+  description: string;
+  setDescription: (s: string) => void;
+  files: File[];
+  fileError: string | null;
+  handleFiles: (list: FileList | null) => void;
+  removeFile: (idx: number) => void;
+  fileInputRef: React.RefObject<HTMLInputElement | null>;
+  submitting: boolean;
+  inputClass: string;
+  inputStyle: React.CSSProperties;
+  errorState: { kind: 'error'; message: string } | null;
+  uploadProgress?: number;
+  state: FormState;
+}
+
+function ExpressFormFields(props: ExpressFormFieldsProps) {
+  const {
+    studyArea, setStudyArea,
+    institution, setInstitution,
+    subject, setSubject,
+    goal, setGoal,
+    description, setDescription,
+    files, fileError, handleFiles, removeFile, fileInputRef,
+    submitting,
+    inputClass, inputStyle,
+    errorState, uploadProgress, state,
+  } = props;
+
+  // "Mais detalhes" começa fechado — esses campos são raramente preenchidos
+  // e poluem a tela inicial. User clica pra abrir se precisar.
+  const [moreDetailsOpen, setMoreDetailsOpen] = useState(false);
+
+  return (
+    <fieldset className="flex flex-col gap-4 m-0 p-0 border-0">
+      <legend className="sr-only">Conte o que você quer estudar</legend>
+
+      <Field label="Área de estudo" required>
+        <select
+          required
+          value={studyArea}
+          onChange={e => setStudyArea(e.target.value)}
+          className={inputClass}
+          style={{ ...inputStyle, appearance: 'none' }}
+          disabled={submitting}
+        >
+          <option value="" disabled>Selecione uma área</option>
+          {STUDY_AREAS.map(a => (
+            <option key={a.value} value={a.value}>{a.label}</option>
+          ))}
+        </select>
+      </Field>
+
+      <Field label="Matéria ou tema" required>
+        <input
+          type="text"
+          required
+          value={subject}
+          onChange={e => setSubject(e.target.value)}
+          placeholder="Ex.: Genética animal, Cálculo I, Direito Constitucional…"
+          className={inputClass}
+          style={inputStyle}
+          disabled={submitting}
+        />
+      </Field>
+
+      <Field label="O que você quer aprender?" required>
+        <textarea
+          required
+          rows={4}
+          value={description}
+          onChange={e => setDescription(e.target.value)}
+          placeholder="Descreva o que precisa estudar com o máximo de detalhes — o que sabe, o que falta, prazos, dúvidas."
+          className={inputClass}
+          style={{ ...inputStyle, resize: 'vertical', minHeight: 96 }}
+          disabled={submitting}
+        />
+      </Field>
+
+      {/* Mais detalhes opcionais — collapsible. Default fechado pra não
+          poluir a tela. */}
+      <details
+        open={moreDetailsOpen}
+        onToggle={e => setMoreDetailsOpen((e.target as HTMLDetailsElement).open)}
+        className="rounded-lg border px-3 py-2"
+        style={{ borderColor: 'var(--ffv-border)', background: 'var(--ffv-bg)' }}
+      >
+        <summary
+          className="text-xs font-semibold cursor-pointer select-none"
+          style={{ color: 'var(--ffv-muted)' }}
+        >
+          {moreDetailsOpen ? '▾' : '▸'} Adicionar detalhes opcionais (faculdade, objetivo)
+        </summary>
+        <div className="mt-3 flex flex-col gap-3">
+          <Field label="Faculdade, curso ou instituição">
+            <input
+              type="text"
+              value={institution}
+              onChange={e => setInstitution(e.target.value)}
+              placeholder="(opcional)"
+              className={inputClass}
+              style={inputStyle}
+              disabled={submitting}
+            />
+          </Field>
+          <Field label="Objetivo">
+            <input
+              type="text"
+              value={goal}
+              onChange={e => setGoal(e.target.value)}
+              placeholder="Ex.: Passar na prova, revisar antes do estágio…"
+              className={inputClass}
+              style={inputStyle}
+              disabled={submitting}
+            />
+          </Field>
+        </div>
+      </details>
+
+      {/* Anexos opcionais — same UX do wizard step 2 */}
+      <div>
+        <label className="text-xs font-semibold flex items-center gap-2" style={{ color: 'var(--ffv-muted)' }}>
+          <span>Anexar materiais</span>
+          <span
+            className="text-[10px] font-bold px-1.5 py-0.5 rounded"
+            style={{
+              background: 'color-mix(in srgb, var(--ffv-cyan) 14%, transparent)',
+              color: 'var(--ffv-cyan)',
+            }}
+          >
+            RECOMENDADO
+          </span>
+        </label>
+        <p className="text-[11px] mt-1" style={{ color: 'var(--ffv-muted)', lineHeight: 1.5 }}>
+          PDF, DOCX, XLSX, PPTX, CSV, TXT, MD ou imagens. Até {STUDY_REQUEST_LIMITS.maxAttachments} arquivos,{' '}
+          {STUDY_REQUEST_LIMITS.maxAttachmentBytes / 1024 / 1024} MB cada.
+        </p>
+        <div
+          className="mt-2 rounded-xl p-4 flex flex-col items-center justify-center text-center cursor-pointer"
+          style={{
+            background: 'var(--ffv-bg)',
+            border: '1px dashed var(--ffv-border)',
+            minHeight: 80,
+          }}
+          onClick={() => fileInputRef.current?.click()}
+          onDragOver={e => {
+            e.preventDefault();
+            e.currentTarget.style.borderColor = 'var(--ffv-blue)';
+          }}
+          onDragLeave={e => {
+            e.currentTarget.style.borderColor = 'var(--ffv-border)';
+          }}
+          onDrop={e => {
+            e.preventDefault();
+            e.currentTarget.style.borderColor = 'var(--ffv-border)';
+            handleFiles(e.dataTransfer.files);
+          }}
+        >
+          <p className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
+            <strong style={{ color: 'var(--foreground)' }}>Clique aqui</strong> ou arraste arquivos para anexar
+          </p>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept={STUDY_REQUEST_LIMITS.allowedExtensions.join(',')}
+            className="sr-only"
+            aria-label="Anexar materiais"
+            onChange={e => handleFiles(e.target.files)}
+            disabled={submitting}
+          />
+        </div>
+        {files.length > 0 && (
+          <ul className="mt-3 space-y-1.5" aria-label="Arquivos anexados">
+            {files.map((f, idx) => (
+              <li
+                key={`${f.name}-${idx}`}
+                className="flex items-center gap-2 text-xs px-3 py-2 rounded-lg"
+                style={{ background: 'var(--ffv-bg)', border: '1px solid var(--ffv-border)' }}
+              >
+                <span className="truncate flex-1">{f.name}</span>
+                <span style={{ color: 'var(--ffv-muted)' }}>{formatFileSize(f.size)}</span>
+                <button
+                  type="button"
+                  onClick={() => removeFile(idx)}
+                  aria-label={`Remover ${f.name}`}
+                  style={{ color: 'var(--ffv-red)' }}
+                  className="font-bold px-1"
+                  disabled={submitting}
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {fileError && (
+          <p className="text-xs mt-2" style={{ color: 'var(--ffv-red)' }}>{fileError}</p>
+        )}
+      </div>
+
+      {errorState && (
+        <div
+          className="px-3.5 py-3 rounded-lg flex gap-2.5 items-start"
+          role="alert"
+          data-testid="submit-error"
+          style={{
+            background: 'color-mix(in srgb, var(--ffv-red) 10%, transparent)',
+            border: '1px solid color-mix(in srgb, var(--ffv-red) 30%, transparent)',
+            color: 'var(--ffv-red)',
+          }}
+        >
+          <span aria-hidden style={{ fontSize: 16, lineHeight: 1, marginTop: 1 }}>⚠️</span>
+          <div className="flex-1">
+            <p className="text-xs font-semibold" style={{ marginBottom: 2 }}>
+              Não conseguimos enviar sua solicitação
+            </p>
+            <p className="text-xs" style={{ lineHeight: 1.5, color: 'var(--foreground)' }}>
+              {errorState.message}
+            </p>
+          </div>
+        </div>
+      )}
+
+      <button
+        type="submit"
+        disabled={submitting}
+        className="w-full py-3.5 rounded-xl text-sm font-bold transition-all relative overflow-hidden"
+        style={{
+          background: 'var(--ffv-blue)',
+          color: '#fff',
+          boxShadow: '0 8px 24px -6px color-mix(in srgb, var(--ffv-blue) 50%, transparent)',
+          opacity: submitting ? 0.85 : 1,
+          cursor: submitting ? 'progress' : 'pointer',
+        }}
+        data-testid="submit-button"
+      >
+        {state.kind === 'submitting' && uploadProgress !== undefined && (
+          <span
+            aria-hidden
+            data-testid="upload-progress-bar"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              background: 'color-mix(in srgb, #fff 20%, transparent)',
+              width: `${uploadProgress}%`,
+              transition: 'width 200ms ease-out',
+            }}
+          />
+        )}
+        <span style={{ position: 'relative' }}>
+          {state.kind === 'submitting'
+            ? uploadProgress !== undefined && uploadProgress < 100
+              ? `Enviando arquivos... ${uploadProgress}%`
+              : uploadProgress === 100
+                ? 'Processando no servidor...'
+                : 'Enviando...'
+            : '🎉 Criar minha jornada →'}
+        </span>
+      </button>
+
+      <p
+        className="text-[11px] text-center"
+        style={{ color: 'var(--ffv-muted)', letterSpacing: '0.03em' }}
+      >
+        🔒 LGPD · Pronta em até 24h
+      </p>
+    </fieldset>
+  );
 }
