@@ -12,7 +12,7 @@
  *   2.  OnboardingWizard               — só pra logado com onboarded=false
  *   3.  PreferenciasCTA (banner)       — fallback quando wizard não cabe
  *   4.  SocialProofBar
- *   5.  Continue/Daily/Trilha/Quest    — só pra usuário com progresso
+ *   5.  ContinueCard ("Hoje no FFV")   — só pra usuário com progresso
  *   6.  ComecarAqui                    — paths (hidden quando hasProgress)
  *   7.  Explorar (hubs + playlists)    — foco principal: conteúdo da base
  *   8.  Trending                       — opcional via prop
@@ -25,6 +25,10 @@
  * - 2026-05-25: removidos DailyQuestionCard ("Pergunta do Dia") e HowItWorks
  *   ("Como Funciona / Aprender de verdade") por feedback do PO — repetiam
  *   nas bases sem adicionar valor; foco vira o conteúdo gerado.
+ * - 2026-05-25 (2ª rodada): removidos DailyModuleCard ("Módulo do Dia") e
+ *   QuestPanel ("Quests de Hoje") da seção "Hoje no FFV". Com conteúdo
+ *   gerado sob demanda pelo usuário, sugestão fixa de "módulo do dia"
+ *   compete com a sequência própria. Quests voltam reformuladas depois.
  *
  * Quem decide aparecer ou não é o gate INTERNO do bloco, não o backend.
  * Bases sem gamificação passam `hasGamificationWidgets={false}` e tudo que
@@ -51,11 +55,13 @@ import { useGameState } from '@/hooks/useGameState';
 import { useAuth } from '@/hooks/useAuth';
 import { usePreferences } from '@/hooks/usePreferences';
 import { ContinueCard } from '@/components/ContinueCard';
-import { DailyModuleCard } from '@/components/DailyModuleCard';
-// TrilhaDoDia removida da estrutura padrão (2026-05-21) — não fazia sentido
-// pedagógico atualmente. Componente preservado em src/components/TrilhaDoDia.tsx
-// para uso futuro mas não é mais renderizado na home das bases.
-import { QuestPanel } from '@/components/QuestPanel';
+// Componentes removidos da home das bases mas preservados pra uso futuro:
+// - DailyModuleCard (src/components/DailyModuleCard.tsx): removido em
+//   2026-05-25 porque "módulo do dia" único deixou de fazer sentido com
+//   conteúdo gerado sob demanda pelo usuário.
+// - QuestPanel (src/components/QuestPanel.tsx): removido em 2026-05-25 —
+//   PO quer reformular antes de mostrar de novo.
+// - TrilhaDoDia (src/components/TrilhaDoDia.tsx): removido em 2026-05-21.
 import { SignupCTA } from '@/components/auth/SignupCTA';
 import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
 import { StreakRepairModal } from '@/components/streak/StreakRepairModal';
@@ -102,7 +108,7 @@ interface KnowledgeBaseHomeProps {
   hideComunidade?: boolean;
   /**
    * Habilita TODOS os widgets de gamificação (OnboardingWizard,
-   * Continue/Daily/Trilha/Quest, Trending, StreakRepairModal).
+   * ContinueCard, Trending, StreakRepairModal).
    * Default true — base sem gamificação passa false.
    */
   hasGamificationWidgets?: boolean;
@@ -110,7 +116,7 @@ interface KnowledgeBaseHomeProps {
   hideTrending?: boolean;
   /** Esconde SocialProofBar. */
   hideSocialProof?: boolean;
-  /** Heading do bloco "Hoje no FFV" (continue/daily/trilha/quest). */
+  /** Heading do bloco "Hoje no FFV" (ContinueCard). */
   todayHeading?: string;
   todayKicker?: string;
 }
@@ -265,17 +271,13 @@ export function KnowledgeBaseHome({
               {todayHeading}
             </h2>
             {/*
-              Antes era grid md:grid-cols-2 — quando um dos cards retornava
-              null (ex.: ContinueCard ausente porque o usuário nunca terminou
-              nada DA BASE), sobrava um gap vazio à direita. Agora os cards
-              empilham e cada um ocupa 100% da largura. Os componentes têm
-              <section> interno com max-w-5xl mx-auto, então centralizam.
+              "Módulo do Dia" (DailyModuleCard) e "Quests de Hoje" (QuestPanel)
+              foram removidos em 2026-05-25 — agora que o conteúdo das bases é
+              gerado sob demanda pelo usuário, sugerir UM "módulo do dia"
+              fixo não faz sentido (o usuário tem sequência própria). Quests
+              vão voltar depois reformuladas. Por ora, só ContinueCard.
             */}
             <ContinueCard />
-            <DailyModuleCard />
-            <div className="mt-4">
-              <QuestPanel />
-            </div>
           </div>
         </section>
       )}
