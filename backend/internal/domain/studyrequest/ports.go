@@ -39,6 +39,17 @@ type Filter struct {
 	Offset    int
 }
 
+// AdminEmailLookup retorna a lista de emails de admins ativos do sistema
+// (users.role = 'admin' AND deleted_at IS NULL). Usado pelo CreateUseCase
+// pra notificar todos admins quando uma nova solicitação é criada.
+//
+// Fonte de verdade = DB (não env var). Permite cadastrar/promover admin
+// via SQL ou futura UI sem restart do container. Implementação em
+// infrastructure/persistence/postgres.
+type AdminEmailLookup interface {
+	ListAdminEmails(ctx context.Context) ([]string, error)
+}
+
 // EmailNotifier envia notificações por email relacionadas ao ciclo de vida
 // de uma StudyRequest. Implementado em infrastructure/email.
 type EmailNotifier interface {

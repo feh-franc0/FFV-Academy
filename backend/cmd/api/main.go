@@ -360,10 +360,16 @@ func run() error {
 	userUpserter := postgresinfra.NewUserUpserterAdapter(userRepo, clock)
 	loginCodeIssuer := postgresinfra.NewLoginCodeAdapter(magicTokenStore, clock, magicTokenTTL)
 
+	// Lookup de admins direto do DB — fonte primária dos destinatários do alerta.
+	// `adminEmails` (ADMIN_EMAIL_ALLOWLIST) vira REDE DE SEGURANÇA: usado se o
+	// DB estiver indisponível OU se ninguém tiver role='admin' cadastrado ainda.
+	adminEmailLookup := postgresinfra.NewAdminEmailLookup(pool)
+
 	createStudyRequestUC := appstudyreq.NewCreateUseCase(studyRequestRepo, fileStorage, clock).
 		WithUserLookup(studyRequestRepo).
 		WithUserUpserter(userUpserter).
 		WithLoginCodeIssuer(loginCodeIssuer).
+		WithAdminLookup(adminEmailLookup).
 		WithNotifier(studyRequestNotifier, adminEmails).
 		WithLogger(log)
 	listStudyRequestsUC := appstudyreq.NewListUseCase(studyRequestRepo)

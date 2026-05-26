@@ -58,15 +58,16 @@ type CreateResult struct {
 // Falhas no envio de email NÃO abortam — são logadas e seguimos em frente:
 // melhor entregar a solicitação ao admin via DB do que recusar pelo email.
 type CreateUseCase struct {
-	repo            domsr.Repository
-	storage         domsr.FileStorage
-	userLookup      domsr.UserLookup
-	userUpserter    domsr.UserUpserter    // opcional — cria conta passwordless pra lead
-	loginCodeIssuer domsr.LoginCodeIssuer // opcional — gera código pro email de boas-vindas
-	notifier        domsr.EmailNotifier
-	adminEmails     []string // todos os admins notificados em nova solicitação
-	clock           shared.Clock
-	logger          *slog.Logger
+	repo                domsr.Repository
+	storage             domsr.FileStorage
+	userLookup          domsr.UserLookup
+	userUpserter        domsr.UserUpserter    // opcional — cria conta passwordless pra lead
+	loginCodeIssuer     domsr.LoginCodeIssuer // opcional — gera código pro email de boas-vindas
+	notifier            domsr.EmailNotifier
+	adminLookup         domsr.AdminEmailLookup // fonte primária — query users WHERE role='admin'
+	adminEmailsFallback []string               // env ADMIN_EMAIL_ALLOWLIST — usado se lookup falhar/vazio
+	clock               shared.Clock
+	logger              *slog.Logger
 }
 
 func NewCreateUseCase(repo domsr.Repository, storage domsr.FileStorage, clock shared.Clock) *CreateUseCase {
@@ -97,12 +98,21 @@ func (uc *CreateUseCase) WithLoginCodeIssuer(issuer domsr.LoginCodeIssuer) *Crea
 	return uc
 }
 
-// WithNotifier habilita envio de emails. adminEmails recebe a lista COMPLETA
-// de destinatários do alerta de nova solicitação. Lista vazia desliga o alerta
-// admin (mas confirmação ao estudante segue funcionando).
-func (uc *CreateUseCase) WithNotifier(n domsr.EmailNotifier, adminEmails []string) *CreateUseCase {
+// WithNotifier habilita envio de emails. adminEmailsFallback é a lista de
+// emails do ADMIN_EMAIL_ALLOWLIST — usada como REDE DE SEGURANÇA se a query
+// de admins no DB falhar (DB indisponível) ou retornar vazio (nenhum role=admin
+// cadastrado ainda). Sem fallback e DB cai = alerta perdido.
+func (uc *CreateUseCase) WithNotifier(n domsr.EmailNotifier, adminEmailsFallback []string) *CreateUseCase {
 	uc.notifier = n
-	uc.adminEmails = adminEmails
+	uc.adminEmailsFallback = adminEmailsFallback
+	return uc
+}
+
+// WithAdminLookup ativa fonte primária de destinatários do alerta admin:
+// query no DB (users.role='admin'). Sem isso, cai direto pro fallback do
+// WithNotifier. Recomendado em produção.
+func (uc *CreateUseCase) WithAdminLookup(lookup domsr.AdminEmailLookup) *CreateUseCase {
+	uc.adminLookup = lookup
 	return uc
 }
 
@@ -215,22 +225,34 @@ func (uc *CreateUseCase) Execute(ctx context.Context, cmd CreateCommand) (*Creat
 			uc.logWarn("falha enviando confirmação ao estudante", "err", err, "request_id", req.ID().String())
 		}
 
-		if len(uc.adminEmails) > 0 {
-			// Captura por valor pra evitar race com `req` (que é ponteiro mas só
-			// lemos campos imutáveis aqui — Subject, Name, Email, Description, etc).
-			reqCopy := req
-			emails := append([]string(nil), uc.adminEmails...)
-			reqID := req.ID().String()
-			go func() {
-				notifyCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer cancel()
-				if err := uc.notifier.SendAdminNotification(notifyCtx, emails, reqCopy); err != nil {
-					uc.logWarn("falha notificando admins (assíncrono)", "err", err, "request_id", reqID, "admin_count", len(emails))
-					return
-				}
-				uc.logInfo("admins notificados", "request_id", reqID, "admin_count", len(emails))
-			}()
-		}
+		// Alerta admin: resolve destinatários DEPOIS, dentro da goroutine, pra
+		// não bloquear a resposta HTTP. Estratégia:
+		//   1. Query DB (users.role='admin') — fonte primária.
+		//   2. Se falhar OU vazio: fallback pra env var ADMIN_EMAIL_ALLOWLIST.
+		//   3. Se ambos vazios: log warn, sem-op (request fica no DB, admin
+		//      pode ver via /admin/study-requests mesmo sem email).
+		reqCopy := req
+		fallback := append([]string(nil), uc.adminEmailsFallback...)
+		reqID := req.ID().String()
+		lookup := uc.adminLookup
+		notifier := uc.notifier
+		logger := uc.logger
+
+		go func() {
+			notifyCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			emails := resolveAdminEmails(notifyCtx, lookup, fallback, reqID, logger)
+			if len(emails) == 0 {
+				logWarnTo(logger, "nenhum admin configurado pra receber alerta", "request_id", reqID)
+				return
+			}
+			if err := notifier.SendAdminNotification(notifyCtx, emails, reqCopy); err != nil {
+				logWarnTo(logger, "falha notificando admins", "err", err, "request_id", reqID, "admin_count", len(emails))
+				return
+			}
+			logInfoTo(logger, "admins notificados", "request_id", reqID, "admin_count", len(emails))
+		}()
 	}
 
 	return &CreateResult{
@@ -241,13 +263,38 @@ func (uc *CreateUseCase) Execute(ctx context.Context, cmd CreateCommand) (*Creat
 }
 
 func (uc *CreateUseCase) logWarn(msg string, keyvals ...any) {
-	if uc.logger != nil {
-		uc.logger.Warn(msg, keyvals...)
-	}
+	logWarnTo(uc.logger, msg, keyvals...)
 }
 
 func (uc *CreateUseCase) logInfo(msg string, keyvals ...any) {
-	if uc.logger != nil {
-		uc.logger.Info(msg, keyvals...)
+	logInfoTo(uc.logger, msg, keyvals...)
+}
+
+// resolveAdminEmails tenta DB primeiro; cai pro fallback se erro/vazio.
+// Função livre (não método) pra simplificar uso dentro de goroutine sem
+// segurar referência ao receiver.
+func resolveAdminEmails(ctx context.Context, lookup domsr.AdminEmailLookup, fallback []string, reqID string, logger *slog.Logger) []string {
+	if lookup != nil {
+		emails, err := lookup.ListAdminEmails(ctx)
+		if err != nil {
+			logWarnTo(logger, "lookup de admins no DB falhou, usando fallback (env)", "err", err, "request_id", reqID, "fallback_count", len(fallback))
+		} else if len(emails) > 0 {
+			return emails
+		} else {
+			logWarnTo(logger, "DB retornou 0 admins (role='admin'), usando fallback (env)", "request_id", reqID, "fallback_count", len(fallback))
+		}
+	}
+	return fallback
+}
+
+func logWarnTo(logger *slog.Logger, msg string, keyvals ...any) {
+	if logger != nil {
+		logger.Warn(msg, keyvals...)
+	}
+}
+
+func logInfoTo(logger *slog.Logger, msg string, keyvals ...any) {
+	if logger != nil {
+		logger.Info(msg, keyvals...)
 	}
 }
