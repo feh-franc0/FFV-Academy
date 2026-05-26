@@ -139,7 +139,7 @@ cd mcp && npm test                         # 77 testes (100% linhas/funções)
 
 ## 📌 ESTADO ATUAL (mai/2026)
 
-8 bases live: `tecnologia`, `medicina-veterinaria`, `carreira`, `comunicacao`, `marketing`, `conteudo`, `empreendedorismo`, `ingles`.
+9 bases live: `tecnologia`, `medicina-veterinaria`, `carreira`, `comunicacao`, `marketing`, `conteudo`, `empreendedorismo`, `ingles`, `neurociencia`.
 
 **Mudanças grandes recentes** — ver [`CHANGELOG.md`](./CHANGELOG.md):
 - Fase 1 do plano DB-driven concluída (migrations 000055–000063): schema base→hub→trail→module via FK, importer sem switch hardcoded
