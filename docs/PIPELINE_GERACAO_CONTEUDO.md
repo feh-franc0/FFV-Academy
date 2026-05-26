@@ -19,6 +19,7 @@
 9. [Importer Go — como rodar](#importer)
 10. [Validações pós-import](#validacoes-pos)
 11. [Caso de uso: Lara — Genética Vet](#caso-lara)
+12. [⭐ Padrão obrigatório: 100 questões por hub](#simulado-100q)
 
 ---
 
@@ -927,6 +928,162 @@ git push origin main
 #    - Clica "🎉 Finalizar + enviar email com link"
 #    - Lara recebe email celebrativo.
 ```
+
+---
+
+<a id="simulado-100q"></a>
+## 12. ⭐ Padrão obrigatório: 100 questões por hub
+
+> **Decisão fixa do PO (mai/2026):** toda base de conhecimento gerada DEVE ter um simulado de **100 questões** cobrindo o hub/trilha principal — não é opcional, faz parte da entrega mínima.
+
+### 12.1 Por quê
+
+O simulado de 100 questões é o que SEPARA uma base "de verdade" de uma "vitrine". Quem estuda os 8-16 módulos da trilha precisa de:
+
+1. **Aferição real do que aprendeu** — quiz inline de cada módulo (5-8 questões) é insuficiente pra simular prova.
+2. **Revisão cross-módulo** — só simulado tipo prova testa transferência entre conceitos de módulos diferentes.
+3. **Sensação de "graduação"** — 70% de acerto em 100 questões vira certificado emocional concreto.
+4. **Conteúdo evergreen** — simulado bem feito é o ativo mais reutilizado da base (gera ranking, cards SRS, segunda passada antes de prova real).
+
+Existem 2 referências internas vivas que SEGUEM o padrão:
+- `frontend/src/lib/bases/medvet/simulado-genetica.ts` (16 módulos · 100q)
+- `frontend/src/lib/bases/neurociencia/simulado-neuromarketing.ts` (8 módulos · 100q)
+
+### 12.2 Distribuição obrigatória
+
+| Item | Regra |
+|------|-------|
+| **Total** | **100 questões EXATAS** — nem 95, nem 110. 100. |
+| **Por hub** | Distribuir proporcionalmente: 4 hubs = 25 cada; 5 hubs = 20 cada; etc. |
+| **Por módulo dentro do hub** | Distribuir proporcionalmente aos módulos. Hub de 2 módulos = ~12-13 questões/módulo. |
+| **Difficulty mix** | ~25% easy · ~50% medium · ~25% hard. **Nunca** 100% easy ou 100% hard. |
+| **Sem timer** | UX da plataforma é estudo, não corrida — sem cronômetro. |
+| **Passing score** | 70% (70/100 corretas) como padrão. |
+| **Tempo estimado** | ~180 min (1,8 min/questão em média). |
+
+### 12.3 Schema obrigatório de cada questão
+
+```ts
+interface SimuladoQuestion {
+  id: string;                // 'q001', 'q002', ..., 'q100' — zero-padded, sequencial
+  question: string;          // Enunciado completo. SEM markdown, SEM markup HTML.
+  options: string[];         // SEMPRE 4 alternativas. Nunca 2, nunca 5.
+  correct: number;           // Índice 0-3 da correta.
+  explanation: string;       // OBRIGATÓRIO — explica POR QUE a correta está certa
+                             //   E por que cada uma das erradas está errada.
+                             //   Esse texto vira o "ensinamento" pós-resposta.
+  topic: string;             // Tópico/módulo de origem (pra heatmap de fraquezas).
+  difficulty: 'easy' | 'medium' | 'hard';
+  hint?: string;             // Opcional MAS RECOMENDADO — aponta o conceito
+                             //   sem entregar a resposta. Usuário pode "pedir dica".
+}
+```
+
+### 12.4 Regras hard sobre conteúdo das questões
+
+1. **APLICAÇÃO, não decoreba.** Toda questão testa ENTENDIMENTO — não memorização de definição.
+   - ❌ "O que significa a sigla LTV?"
+   - ✅ "Uma marca tem CAC R$ 50 e LTV R$ 200. Qual a interpretação correta dessa razão 1:4 pra decisão de investimento em marketing?"
+
+2. **Cenários reais.** Use casos do dia a dia da disciplina (vacas leiteiras, anúncio de Black Friday, pricing de SaaS, embalagem na prateleira).
+
+3. **Distratores plausíveis.** Cada alternativa errada deve ser uma confusão CRÍVEL, não absurdo óbvio.
+   - ❌ "A) Plutão · B) Cérebro Reptiliano · C) Vermelho · D) Quesadilha"
+   - ✅ Quatro respostas que um estudante razoável poderia confundir, todas no campo conceitual da pergunta.
+
+4. **Explanation pedagógica.** A explicação NÃO É "alternativa B está correta". Ela DEVE:
+   - Explicar POR QUE a correta está certa (mecanismo, princípio, autor original).
+   - Explicar POR QUE as outras estão erradas (qual confusão típica cada uma representa).
+   - Fornecer 1 reference acadêmica quando aplicável (Kahneman 2011, Cialdini 1984, etc.).
+
+5. **Hint útil.** Quando incluir hint, ela aponta o CAMINHO (qual princípio aplicar, qual estrutura cerebral pensar) sem dar a resposta literal.
+
+### 12.5 Arquivo e estrutura
+
+```
+frontend/src/lib/bases/<base-slug>/simulado-<topico>.ts
+```
+
+Exporta:
+- `SIMULADO_<TOPICO>: SimuladoQuestion[]` (array de 100)
+- `SIMULADO_META = { title, description, totalQuestions: 100, passingScore: 70, estimatedMinutes: 180 }`
+
+Página: `frontend/src/app/<base-slug>/simulado-<topico>/page.tsx` (usa `<SimuladoRunner>`).
+
+### 12.6 Wiring obrigatório no BaseConfig
+
+No `frontend/src/lib/bases/registry.ts`, a base DEVE declarar:
+
+```ts
+const <BASE>_CONFIG: BaseConfig = {
+  // ... outros campos ...
+  nav: {
+    hubNavItems: [
+      { href: '/<base>/simulado-<topico>', label: 'Simulado', color: '...', iconName: 'target' },
+    ],
+    hideGlobalContentNav: true,
+  },
+  footer: {
+    // ... mobilePrimary inclui o simulado ...
+    mobilePrimary: [
+      { label: 'Trilha',   href: '/<base>' },
+      { label: 'Simulado', href: '/<base>/simulado-<topico>' },
+      { label: 'Progresso', href: '/progresso' },
+      { label: 'Revisar',  href: '/revisar' },
+    ],
+  },
+  simulados: [
+    {
+      slug: 'simulado-<topico>',
+      title: 'Simulado 100 questões de <Tópico>',
+      href: '/<base>/simulado-<topico>',
+    },
+  ],
+};
+```
+
+E na home da base (`src/app/<base>/page.tsx`), o CTA secundário do hero é "Simulado 100 questões":
+
+```tsx
+ctas: [
+  { href: firstModuleHref, label: 'Começar pelo módulo 01 →', variant: 'primary' },
+  { href: '/<base>/simulado-<topico>', label: 'Simulado 100 questões', variant: 'secondary' },
+],
+stats: [
+  { value: `${TOTAL_MODULES}`, label: 'módulos' },
+  { value: '100', label: 'questões' },        // ⭐ DESTACAR o simulado
+  { value: `${TOTAL_HUBS}`, label: 'hubs' },
+  { value: 'R$ 0', label: 'custo' },
+],
+```
+
+### 12.7 Checklist de aceite
+
+Antes de fechar PR com nova base:
+
+- [ ] Arquivo `simulado-<topico>.ts` com exatamente 100 questões
+- [ ] Mix de difficulty: pelo menos 20 easy, 40-60 medium, 20+ hard
+- [ ] Distribuição proporcional por hub/módulo (sem hub negligenciado)
+- [ ] Toda questão tem `explanation` que ENSINA (não só "é B")
+- [ ] Pelo menos 80% das questões têm `hint` opcional
+- [ ] Cada questão tem 4 alternativas, `correct` apontando pra índice válido
+- [ ] Distratores plausíveis (não absurdos óbvios)
+- [ ] Página `app/<base>/simulado-<topico>/page.tsx` registrada
+- [ ] `BaseConfig.nav.hubNavItems` aponta pro simulado
+- [ ] `BaseConfig.simulados[]` declara entry
+- [ ] Home da base mostra CTA "Simulado 100 questões" + stat "100 questões"
+
+### 12.8 Volume real esperado
+
+Pra cada base nova, a IA + curadoria humana entrega:
+- 8-16 módulos com 5-8 quizzes inline (total: ~80-130 quizzes inline)
+- **+** 1 simulado de 100 questões cobrindo todos os hubs
+- **= 180-230 questões** por base na entrega mínima
+
+É volume substancial. Por isso a geração é em ondas:
+1. **Onda 1 (1-2 dias):** módulos + quizzes inline + 100q do simulado
+2. **Onda 2 (1 semana depois):** revisão pedagógica + correções
+3. **Onda 3 (1 mês depois):** expansão pra simulados por hub se demanda justificar
 
 ---
 

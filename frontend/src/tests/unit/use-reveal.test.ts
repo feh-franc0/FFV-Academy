@@ -132,4 +132,57 @@ describe('useReveal — callback ref que funciona com lazy-mount', () => {
     // melhor mostrar o conteúdo do que esconder pra sempre.
     expect(node.dataset.reveal).toBe('in');
   });
+
+  it('REGRESSÃO 2026-05-25 (mobile /bases "Todas"): força reveal após fallbackMs se IO nunca disparar', () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useReveal({ fallbackMs: 800 }));
+    const node = document.createElement('div');
+    act(() => { result.current(node); });
+
+    // IO observou mas nunca disparou (elemento permanece fora da viewport
+    // no caso real — /bases no mobile, lista de 17 itens abaixo da fold).
+    expect(node.dataset.reveal).toBeUndefined();
+
+    // Antes do fallback, ainda invisível.
+    act(() => { vi.advanceTimersByTime(700); });
+    expect(node.dataset.reveal).toBeUndefined();
+
+    // Após fallbackMs, força reveal pra não deixar conteúdo invisível.
+    act(() => { vi.advanceTimersByTime(200); });
+    expect(node.dataset.reveal).toBe('in');
+
+    vi.useRealTimers();
+  });
+
+  it('fallback cancelado quando IO dispara antes do timeout (sem dupla execução)', () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useReveal({ fallbackMs: 800 }));
+    const node = document.createElement('div');
+    act(() => { result.current(node); });
+
+    // IO dispara em 300ms — antes do fallback de 800ms.
+    act(() => { vi.advanceTimersByTime(300); });
+    act(() => { triggerIntersect?.(node); });
+    expect(node.dataset.reveal).toBe('in');
+
+    // Avança até depois do fallback original — não deve mudar nada nem
+    // disparar setter de novo. dataset.reveal continua "in".
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(node.dataset.reveal).toBe('in');
+
+    vi.useRealTimers();
+  });
+
+  it('fallbackMs=0 desabilita o safety net (comportamento antigo)', () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useReveal({ fallbackMs: 0 }));
+    const node = document.createElement('div');
+    act(() => { result.current(node); });
+
+    act(() => { vi.advanceTimersByTime(5000); });
+    // Sem fallback, fica invisível pra sempre (comportamento original).
+    expect(node.dataset.reveal).toBeUndefined();
+
+    vi.useRealTimers();
+  });
 });

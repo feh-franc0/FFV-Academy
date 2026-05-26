@@ -5,7 +5,6 @@ import {
   NEUROCIENCIA_HUBS,
   NEUROCIENCIA_PATHS,
   NEUROCIENCIA_TOTAL_MODULES,
-  NEUROCIENCIA_TOTAL_TRAILS,
   NEUROCIENCIA_TOTAL_HUBS,
 } from '@/lib/bases/neurociencia/adapters';
 import { KnowledgeBaseHome } from '@/components/base/KnowledgeBaseHome';
@@ -80,11 +79,11 @@ export default async function NeurocienciaPage() {
           description: NEUROCIENCIA_BASE.description,
           ctas: [
             { href: firstModuleHref, label: 'Começar pelo módulo 01 →', variant: 'primary' },
-            { href: '/neurociencia#explorar', label: 'Ver os 4 hubs temáticos', variant: 'secondary' },
+            { href: '/neurociencia/simulado-neuromarketing', label: 'Simulado 100 questões', variant: 'secondary' },
           ],
           stats: [
             { value: `${NEUROCIENCIA_TOTAL_MODULES}`, label: 'módulos' },
-            { value: `${NEUROCIENCIA_TOTAL_TRAILS}`, label: 'trilha' },
+            { value: '100', label: 'questões' },
             { value: `${NEUROCIENCIA_TOTAL_HUBS}`, label: 'hubs' },
             { value: 'R$ 0', label: 'custo' },
           ],

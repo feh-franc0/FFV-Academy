@@ -9,9 +9,9 @@ import type { BaseNavItem } from '@/components/base/BaseNavContext';
  */
 export const NEUROCIENCIA_NAV_ITEMS: BaseNavItem[] = [
   {
-    href: '/neurociencia/triuno-cerebro-do-consumidor',
-    label: 'Começar trilha',
-    color: '#7c3aed',
-    iconName: 'brain',
+    href: '/neurociencia/simulado-neuromarketing',
+    label: 'Simulado',
+    color: '#ec4899',
+    iconName: 'target',
   },
 ];

@@ -217,11 +217,18 @@ const NEUROCIENCIA_CONFIG: BaseConfig = {
     contentLinks: NEUROCIENCIA_FOOTER_CONTENT,
     mobilePrimary: [
       { label: 'Trilha', href: '/neurociencia' },
+      { label: 'Simulado', href: '/neurociencia/simulado-neuromarketing' },
       { label: 'Progresso', href: '/progresso' },
       { label: 'Revisar', href: '/revisar' },
-      { label: 'Ranking', href: '/ranking' },
     ],
   },
+  simulados: [
+    {
+      slug: 'simulado-neuromarketing',
+      title: 'Simulado 100 questões de Neuromarketing',
+      href: '/neurociencia/simulado-neuromarketing',
+    },
+  ],
   features: { gamification: 'global', srs: true, quizzes: true, community: false },
 };
 
