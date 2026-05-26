@@ -18,6 +18,7 @@
 
 import { CURRICULUM, type Module as TechModule } from '@/lib/curriculum';
 import { MEDVET_BASE } from '@/lib/bases/medvet';
+import { NEUROCIENCIA_BASE } from '@/lib/bases/neurociencia';
 import { DEFAULT_BASE_SLUG } from './registry';
 
 /**
@@ -84,6 +85,26 @@ function mapMedvetModule(): BaseModuleSummary[] {
   );
 }
 
+function mapNeurocienciaModule(): BaseModuleSummary[] {
+  // Mesma lógica do medvet: hardcode da cor accent (violet) pra evitar
+  // ciclo de import com o NEUROCIENCIA_THEME. Quando bases ganharem
+  // trail.color próprio, trocar pra t.color.
+  return NEUROCIENCIA_BASE.trails.flatMap(trail =>
+    trail.modules.map(m => ({
+      slug: m.slug,
+      title: m.title,
+      icon: m.icon,
+      readTime: m.estimatedMin,
+      xp: 0,
+      trailName: trail.title,
+      trailColor: '#7c3aed',
+      trailSlug: trail.slug,
+      level: null,
+      href: `/neurociencia/${m.slug}`,
+    }))
+  );
+}
+
 /**
  * Retorna TODOS os módulos da base. Ordem importa: usada como sequência
  * sugerida (primeiro não-completo vira "start-fresh"/"daily" candidate).
@@ -94,6 +115,9 @@ export function getAllModulesForBase(baseSlug: string): BaseModuleSummary[] {
   }
   if (baseSlug === 'medicina-veterinaria') {
     return mapMedvetModule();
+  }
+  if (baseSlug === 'neurociencia') {
+    return mapNeurocienciaModule();
   }
   // Bases queued ou desconhecidas: vazio (componentes downstream escondem
   // a seção em vez de mostrar lixo).

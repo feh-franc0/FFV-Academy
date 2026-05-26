@@ -14,6 +14,9 @@ import type { BaseConfig, FooterLinkItem } from './types';
 import { TECH_NAV_ITEMS } from './tecnologia/nav';
 import { MEDVET_NAV_ITEMS } from './medvet/nav';
 import { MEDVET_BASE } from './medvet';
+import { NEUROCIENCIA_BASE } from './neurociencia';
+import { NEUROCIENCIA_NAV_ITEMS } from './neurociencia/nav';
+import { NEUROCIENCIA_THEME } from './neurociencia/theme';
 import { DEFAULT_THEME } from './theme';
 import { MEDVET_THEME } from './medvet/theme';
 import { TECH_TOTAL_TRAILS, TECH_TOTAL_MODULES, TECH_TOTAL_HUBS } from './tecnologia';
@@ -158,6 +161,67 @@ const MEDVET_CONFIG: BaseConfig = {
       href: '/medicina-veterinaria/simulado-genetica',
     },
   ],
+  features: { gamification: 'global', srs: true, quizzes: true, community: false },
+};
+
+// ──────────────────────────────────────────────────────────────────────
+// Neurociência BaseConfig — base profissional vertical similar à medvet,
+// nascida da solicitação real de estudante de PUC Neurociência sobre
+// "Neurociência aplicada a Marketing". Tem trilha única (Neuromarketing)
+// com 4 hubs temáticos e 8 módulos.
+// ──────────────────────────────────────────────────────────────────────
+
+const NEUROCIENCIA_FOOTER_HUBS: FooterLinkItem[] = (NEUROCIENCIA_BASE.hubs ?? []).map(h => ({
+  label: h.name,
+  href: `/neurociencia/hub/${h.slug}/`,
+}));
+
+const NEUROCIENCIA_FOOTER_CONTENT: FooterLinkItem[] = [
+  { label: 'Trilha Neuromarketing', href: '/neurociencia' },
+  { label: 'Progresso', href: '/progresso' },
+  { label: 'Revisar (SRS)', href: '/revisar' },
+  { label: 'Ranking', href: '/ranking' },
+];
+
+const NEUROCIENCIA_CONFIG: BaseConfig = {
+  ...NEUROCIENCIA_BASE,
+  basePath: '/neurociencia',
+  status: 'live',
+  theme: NEUROCIENCIA_THEME,
+  mascot: {
+    emoji: '🧠',
+    name: 'Neo',
+    greeting: 'Oi! Pronto pra entender por que seu cérebro decide o que decide?',
+  },
+  microcopy: {
+    ctaPrimary: 'Começar trilha',
+    ctaSecondary: 'Explorar hubs',
+    emptyState: 'Sem módulos por aqui ainda.',
+    searchPlaceholder: 'Buscar módulos, trilhas, conceitos…',
+    rankingTitle: 'Top da semana em Neurociência',
+    xpUnitSingular: 'XP',
+    xpUnitPlural: 'XP',
+    moduleNoun: 'módulo',
+    trailNoun: 'trilha',
+  },
+  slogans: {
+    hero: 'Neurociência aplicada ao marketing — com profundidade real',
+    sub: 'Kahneman, Cialdini, Schultz, Knutson. 8 módulos sequenciais com exemplos do dia a dia, analogias lúdicas e exercícios.',
+    cta: 'Começar pelo módulo 01',
+  },
+  nav: { hubNavItems: NEUROCIENCIA_NAV_ITEMS, hideGlobalContentNav: true },
+  footer: {
+    hubColumnTitle: 'Hubs temáticos',
+    hubLinks: NEUROCIENCIA_FOOTER_HUBS,
+    contentColumnTitle: 'Conteúdo',
+    contentLinks: NEUROCIENCIA_FOOTER_CONTENT,
+    mobilePrimary: [
+      { label: 'Trilha', href: '/neurociencia' },
+      { label: 'Progresso', href: '/progresso' },
+      { label: 'Revisar', href: '/revisar' },
+      { label: 'Ranking', href: '/ranking' },
+    ],
+  },
   features: { gamification: 'global', srs: true, quizzes: true, community: false },
 };
 
@@ -426,6 +490,7 @@ const INGLES_CONFIG = makeProfissionalBase({
 export const BASE_REGISTRY: Record<string, BaseConfig> = {
   tecnologia: TECH_CONFIG,
   'medicina-veterinaria': MEDVET_CONFIG,
+  neurociencia: NEUROCIENCIA_CONFIG,
   carreira: CARREIRA_CONFIG,
   comunicacao: COMUNICACAO_CONFIG,
   marketing: MARKETING_CONFIG,

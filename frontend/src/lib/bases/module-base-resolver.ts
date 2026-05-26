@@ -18,6 +18,7 @@
 
 import { CURRICULUM, HUBS } from '@/lib/curriculum';
 import { MEDVET_MODULE_SLUGS } from '@/lib/bases/medvet/slugs';
+import { NEUROCIENCIA_MODULE_SLUGS } from '@/lib/bases/neurociencia/slugs';
 import { DEFAULT_BASE_SLUG } from './registry';
 
 const moduleToBase = new Map<string, string>();
@@ -79,6 +80,11 @@ for (const trail of CURRICULUM) {
 // Medvet — só slugs (não importa conteúdo pesado dos 12 módulos).
 for (const slug of MEDVET_MODULE_SLUGS) {
   register(slug, 'medicina-veterinaria');
+}
+
+// Neurociência — 8 módulos da trilha Neuromarketing.
+for (const slug of NEUROCIENCIA_MODULE_SLUGS) {
+  register(slug, 'neurociencia');
 }
 
 /**
