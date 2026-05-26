@@ -156,6 +156,12 @@ func (stubUserRepoBilling) SoftDelete(context.Context, shared.UserID, time.Time)
 func (stubUserRepoBilling) ListForAdmin(context.Context, int, int) ([]*domidentity.User, int, error) {
 	return nil, 0, nil
 }
+func (stubUserRepoBilling) MarkLoggedIn(context.Context, shared.UserID, time.Time) error {
+	return nil
+}
+func (stubUserRepoBilling) VerificationStatusBatch(context.Context, []shared.UserID) (map[shared.UserID]domidentity.VerificationStatus, error) {
+	return map[shared.UserID]domidentity.VerificationStatus{}, nil
+}
 
 func Test_Security_StripeWebhook_DuplicateEvent_Idempotent(t *testing.T) {
 	eventRepo := newStubStripeEventRepo()

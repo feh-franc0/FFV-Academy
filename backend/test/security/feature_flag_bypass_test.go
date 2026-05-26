@@ -42,6 +42,10 @@ func (ffUserRepo) SoftDelete(context.Context, shared.UserID, time.Time) error   
 func (ffUserRepo) ListForAdmin(context.Context, int, int) ([]*domidentity.User, int, error) {
 	return nil, 0, nil
 }
+func (ffUserRepo) MarkLoggedIn(context.Context, shared.UserID, time.Time) error { return nil }
+func (ffUserRepo) VerificationStatusBatch(context.Context, []shared.UserID) (map[shared.UserID]domidentity.VerificationStatus, error) {
+	return map[shared.UserID]domidentity.VerificationStatus{}, nil
+}
 
 type ffTokenStore struct{}
 
