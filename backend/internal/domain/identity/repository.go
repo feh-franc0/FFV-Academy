@@ -37,6 +37,31 @@ type UserRepository interface {
 
 	// ListForAdmin retorna usuários paginados para o admin.
 	ListForAdmin(ctx context.Context, limit, offset int) ([]*User, int, error)
+
+	// MarkLoggedIn registra um login bem-sucedido: atualiza last_login_at e,
+	// na PRIMEIRA vez, define email_verified_at. Usado pelo VerifyMagicLink UC
+	// pra comprovar que o email do estudante é real (necessário pra priorizar
+	// solicitações de base no admin).
+	//
+	// Idempotente: chamar várias vezes só atualiza last_login_at; email_verified_at
+	// permanece imutável após a primeira vez.
+	MarkLoggedIn(ctx context.Context, id shared.UserID, now time.Time) error
+
+	// VerificationStatusBatch retorna email_verified_at + last_login_at pra um
+	// lote de userIDs. Usado pelo admin handler de study-requests pra exibir
+	// badges 📩 "email verificado" + "logou há X". Reduz N+1 → 1 query.
+	//
+	// IDs não encontrados são omitidos do map (sem erro). Map pode estar
+	// vazio se nenhum dos IDs existe.
+	VerificationStatusBatch(ctx context.Context, ids []shared.UserID) (map[shared.UserID]VerificationStatus, error)
+}
+
+// VerificationStatus agrega os timestamps de verificação de email + login.
+// Ambos nullable pra refletir o estado real (user nunca logou? email nunca
+// verificado?).
+type VerificationStatus struct {
+	EmailVerifiedAt *time.Time
+	LastLoginAt     *time.Time
 }
 
 // MagicTokenStore é o port de armazenamento de tokens de magic link.

@@ -43,7 +43,13 @@ type Filter struct {
 // de uma StudyRequest. Implementado em infrastructure/email.
 type EmailNotifier interface {
 	// SendReceivedConfirmation: estudante recebe confirmação ao enviar.
-	SendReceivedConfirmation(ctx context.Context, to, name string, requestID ID, subject string) error
+	//
+	// loginCode (opcional, pode ser vazio): código de 6 dígitos pra magic-link.
+	// Quando presente, o email inclui CTA grande "Confirmar e acompanhar"
+	// linkando pra https://<frontend>/login?email=<X>&code=<Y>, permitindo
+	// 1 clique → logged in → vê dashboard com status da solicitação.
+	// Quando vazio, fallback pro template antigo (só confirmação).
+	SendReceivedConfirmation(ctx context.Context, to, name string, requestID ID, subject, loginCode string) error
 
 	// SendAdminNotification: admin recebe alerta de nova solicitação pendente.
 	SendAdminNotification(ctx context.Context, adminTo string, req *StudyRequest) error
@@ -52,6 +58,31 @@ type EmailNotifier interface {
 	// (ex: in_production, ready). Se deliveredURL não for vazio (status=ready),
 	// o email inclui CTA clicável grande pro estudante acessar o conteúdo.
 	SendStatusUpdate(ctx context.Context, to, name string, requestID ID, newStatus Status, subject string, deliveredURL string) error
+}
+
+// LoginCodeIssuer gera um código de magic-link de 6 dígitos pro email e
+// persiste em Redis com TTL — sem enviar email. Usado pelo CreateUseCase pra
+// embutir o código na confirmação de recebimento, evitando 2 emails separados.
+//
+// Implementação em infra reusa identity.MagicTokenStore + crypto/rand.
+type LoginCodeIssuer interface {
+	// IssueForEmail gera código + armazena em Redis (TTL ~10min). Retorna o
+	// código pra ser incluído no email. Falha aqui NÃO bloqueia o submit —
+	// cliente ainda pode pedir código novo via /login normal.
+	IssueForEmail(ctx context.Context, email string) (code string, err error)
+}
+
+// UserUpserter cria conta passwordless pra leads anônimos no submit, ou
+// retorna ID do user existente. Garante que toda solicitação tenha um
+// user_id real associado — base pra rastrear email_verified_at e
+// last_login_at posteriormente.
+//
+// Idempotente: chamar várias vezes pro mesmo email retorna o mesmo ID.
+type UserUpserter interface {
+	// UpsertPasswordlessUser cria conta se não existir (com nome/phone do
+	// formulário) OU retorna ID se já existir. Não dispara email — quem
+	// envia é o LoginCodeIssuer + EmailNotifier.
+	UpsertPasswordlessUser(ctx context.Context, email, name, phone string, marketingConsent bool) (userID string, isNew bool, err error)
 }
 
 // FileStorage uploads arquivos anexados a uma StudyRequest.

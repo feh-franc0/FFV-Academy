@@ -169,6 +169,18 @@ func (uc *VerifyMagicLinkUseCase) Execute(ctx context.Context, cmd VerifyMagicLi
 		return VerifyMagicLinkResult{}, fmt.Errorf("verify magic link: %w", err)
 	}
 
+	// Marca login bem-sucedido (email_verified_at na 1ª vez + last_login_at sempre).
+	// Não-bloqueante: se falhar, login continua válido — só perdemos o sinal pro
+	// admin. Logado como warn pra investigação eventual.
+	if markErr := uc.userRepo.MarkLoggedIn(ctx, user.ID(), now); markErr != nil {
+		uc.logger.WarnContext(ctx, "falha ao registrar last_login_at (não-bloqueante)",
+			"use_case", "VerifyMagicLink",
+			"request_id", middleware.RequestIDFromContext(ctx),
+			"user_id", user.ID().String(),
+			"error", markErr.Error(),
+		)
+	}
+
 	// Emite tokens.
 	accessToken, err := uc.tokenIssuer.IssueAccessToken(user.ID(), user.Email(), user.Role())
 	if err != nil {

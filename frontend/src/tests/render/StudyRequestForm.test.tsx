@@ -153,12 +153,12 @@ describe('<StudyRequestForm>', () => {
       await waitFor(() => {
         expect(submitMock).toHaveBeenCalledTimes(1);
       });
-      expect(screen.getByText(/Solicitação recebida\./)).toBeInTheDocument();
+      expect(screen.getByText(/Recebemos seu pedido/)).toBeInTheDocument();
       expect(screen.getByText(/Status da sua base/i)).toBeInTheDocument();
       // ID curto aparece
       expect(screen.getByText(new RegExp(`#${SHORT_ID}`))).toBeInTheDocument();
-      // Email aparece
-      expect(screen.getByText('maria@gmail.com')).toBeInTheDocument();
+      // Email aparece (em múltiplos pontos da tela de sucesso: callout + detalhes)
+      expect(screen.getAllByText('maria@gmail.com').length).toBeGreaterThan(0);
       // Persistido no localStorage
       const stored = JSON.parse(window.localStorage.getItem('ffv_active_study_request_v1')!);
       expect(stored.email).toBe('maria@gmail.com');
@@ -658,7 +658,7 @@ describe('<StudyRequestForm>', () => {
       await waitFor(() => {
         expect(submitMock).toHaveBeenCalledTimes(2);
       });
-      expect(await screen.findByText(/Solicitação recebida\./)).toBeInTheDocument();
+      expect(await screen.findByText(/Recebemos seu pedido/)).toBeInTheDocument();
     });
 
     it('mostra "Enviando arquivos... X%" no botão durante upload', async () => {
@@ -696,7 +696,7 @@ describe('<StudyRequestForm>', () => {
         expect(screen.getByTestId('submit-button')).toHaveTextContent(/Processando no servidor/i);
       });
       // Sucesso eventualmente aparece
-      expect(await screen.findByText(/Solicitação recebida\./)).toBeInTheDocument();
+      expect(await screen.findByText(/Recebemos seu pedido/)).toBeInTheDocument();
     });
 
     it('barra de progresso visual reflete o % (data-testid="upload-progress-bar")', async () => {

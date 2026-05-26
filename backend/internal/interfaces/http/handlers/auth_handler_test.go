@@ -133,6 +133,12 @@ func (m *mockHandlerUserRepo) SoftDelete(_ context.Context, _ shared.UserID, _ t
 func (m *mockHandlerUserRepo) ListForAdmin(_ context.Context, _, _ int) ([]*domidentity.User, int, error) {
 	return nil, 0, nil
 }
+func (m *mockHandlerUserRepo) MarkLoggedIn(_ context.Context, _ shared.UserID, _ time.Time) error {
+	return nil
+}
+func (m *mockHandlerUserRepo) VerificationStatusBatch(_ context.Context, _ []shared.UserID) (map[shared.UserID]domidentity.VerificationStatus, error) {
+	return map[shared.UserID]domidentity.VerificationStatus{}, nil
+}
 
 // mockHandlerRefreshRepo — implementação mínima do RefreshTokenRepository.
 type mockHandlerRefreshRepo struct{}

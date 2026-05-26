@@ -78,6 +78,12 @@ func (m *mockUserRepo) SoftDelete(_ context.Context, id shared.UserID, _ time.Ti
 func (m *mockUserRepo) ListForAdmin(_ context.Context, _, _ int) ([]*domidentity.User, int, error) {
 	return nil, 0, nil
 }
+func (m *mockUserRepo) MarkLoggedIn(_ context.Context, _ shared.UserID, _ time.Time) error {
+	return nil
+}
+func (m *mockUserRepo) VerificationStatusBatch(_ context.Context, _ []shared.UserID) (map[shared.UserID]domidentity.VerificationStatus, error) {
+	return map[shared.UserID]domidentity.VerificationStatus{}, nil
+}
 
 type mockRefreshRepo struct {
 	saved        []domidentity.RefreshToken

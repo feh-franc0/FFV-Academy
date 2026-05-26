@@ -44,6 +44,12 @@ func (r *exportUserRepo) SoftDelete(_ context.Context, _ shared.UserID, _ time.T
 func (r *exportUserRepo) ListForAdmin(_ context.Context, _, _ int) ([]*identity.User, int, error) {
 	return nil, 0, nil
 }
+func (r *exportUserRepo) MarkLoggedIn(_ context.Context, _ shared.UserID, _ time.Time) error {
+	return nil
+}
+func (r *exportUserRepo) VerificationStatusBatch(_ context.Context, _ []shared.UserID) (map[shared.UserID]identity.VerificationStatus, error) {
+	return map[shared.UserID]identity.VerificationStatus{}, nil
+}
 
 type exportAttemptLister struct{ attempts []*domsim.Attempt }
 

@@ -57,13 +57,15 @@ type CreateResult struct {
 // Falhas no envio de email NÃO abortam — são logadas e seguimos em frente:
 // melhor entregar a solicitação ao admin via DB do que recusar pelo email.
 type CreateUseCase struct {
-	repo       domsr.Repository
-	storage    domsr.FileStorage
-	userLookup domsr.UserLookup
-	notifier   domsr.EmailNotifier
-	adminEmail string
-	clock      shared.Clock
-	logger     *slog.Logger
+	repo            domsr.Repository
+	storage         domsr.FileStorage
+	userLookup      domsr.UserLookup
+	userUpserter    domsr.UserUpserter    // opcional — cria conta passwordless pra lead
+	loginCodeIssuer domsr.LoginCodeIssuer // opcional — gera código pro email de boas-vindas
+	notifier        domsr.EmailNotifier
+	adminEmail      string
+	clock           shared.Clock
+	logger          *slog.Logger
 }
 
 func NewCreateUseCase(repo domsr.Repository, storage domsr.FileStorage, clock shared.Clock) *CreateUseCase {
@@ -73,6 +75,24 @@ func NewCreateUseCase(repo domsr.Repository, storage domsr.FileStorage, clock sh
 // WithUserLookup habilita associação automática lead → user logado por email.
 func (uc *CreateUseCase) WithUserLookup(lookup domsr.UserLookup) *CreateUseCase {
 	uc.userLookup = lookup
+	return uc
+}
+
+// WithUserUpserter habilita criação automática de conta passwordless pra
+// leads anônimos no submit. Combinado com WithLoginCodeIssuer, permite que
+// o email de boas-vindas inclua o código de magic-link inline — 1 clique do
+// estudante → logado → dashboard de status.
+func (uc *CreateUseCase) WithUserUpserter(upserter domsr.UserUpserter) *CreateUseCase {
+	uc.userUpserter = upserter
+	return uc
+}
+
+// WithLoginCodeIssuer habilita emissão de código de magic-link no submit.
+// O código é incluído no email de confirmação (não dispara email separado).
+// Falha aqui NÃO bloqueia — solicitação ainda é salva, cliente pode pedir
+// novo código depois via /login normal.
+func (uc *CreateUseCase) WithLoginCodeIssuer(issuer domsr.LoginCodeIssuer) *CreateUseCase {
+	uc.loginCodeIssuer = issuer
 	return uc
 }
 
@@ -136,14 +156,26 @@ func (uc *CreateUseCase) Execute(ctx context.Context, cmd CreateCommand) (*Creat
 		}
 	}
 
-	// Associação automática lead → user: se já existe um user com esse email,
-	// vincula a solicitação à conta. Falha aqui NÃO bloqueia — solicitação anônima
-	// é válida.
-	if cmd.UserID.IsZero() && uc.userLookup != nil {
-		if foundID, err := uc.userLookup.FindUserIDByEmail(ctx, req.Email()); err != nil {
-			uc.logWarn("user lookup falhou", "err", err)
-		} else if foundID != "" {
-			req.AssignToUser(shared.UserID(foundID), uc.clock.Now())
+	// Associação automática lead → user: PRIORIDADE 1 — upserter (cria conta
+	// passwordless se não existir). PRIORIDADE 2 — userLookup legado (só
+	// associa se já existir). Sem nenhum, lead fica anônimo (compat).
+	if cmd.UserID.IsZero() {
+		switch {
+		case uc.userUpserter != nil:
+			if uid, isNew, err := uc.userUpserter.UpsertPasswordlessUser(
+				ctx, req.Email(), req.Name(), req.Phone(), req.MarketingConsent(),
+			); err != nil {
+				uc.logWarn("upsert user falhou (não-bloqueante)", "err", err)
+			} else {
+				req.AssignToUser(shared.UserID(uid), uc.clock.Now())
+				uc.logInfo("user associado", "user_id", uid, "is_new", isNew)
+			}
+		case uc.userLookup != nil:
+			if foundID, err := uc.userLookup.FindUserIDByEmail(ctx, req.Email()); err != nil {
+				uc.logWarn("user lookup falhou", "err", err)
+			} else if foundID != "" {
+				req.AssignToUser(shared.UserID(foundID), uc.clock.Now())
+			}
 		}
 	}
 
@@ -151,9 +183,22 @@ func (uc *CreateUseCase) Execute(ctx context.Context, cmd CreateCommand) (*Creat
 		return nil, fmt.Errorf("salvar solicitação: %w", err)
 	}
 
+	// Gera código de magic-link (best-effort) pra incluir no email de
+	// boas-vindas. Falha aqui NÃO bloqueia — cliente pode pedir código depois
+	// via /login normal. Rate limit do RequestMagicLinkUseCase NÃO se aplica
+	// aqui (esse flow é interno e idempotente por solicitação).
+	loginCode := ""
+	if uc.loginCodeIssuer != nil {
+		if code, err := uc.loginCodeIssuer.IssueForEmail(ctx, req.Email()); err != nil {
+			uc.logWarn("falha gerando código de login (não-bloqueante)", "err", err, "request_id", req.ID().String())
+		} else {
+			loginCode = code
+		}
+	}
+
 	// Notificações são side-effects best-effort. Falhas só loga.
 	if uc.notifier != nil {
-		if err := uc.notifier.SendReceivedConfirmation(ctx, req.Email(), req.Name(), req.ID(), req.Subject()); err != nil {
+		if err := uc.notifier.SendReceivedConfirmation(ctx, req.Email(), req.Name(), req.ID(), req.Subject(), loginCode); err != nil {
 			uc.logWarn("falha enviando confirmação ao estudante", "err", err, "request_id", req.ID().String())
 		}
 		if err := uc.notifier.SendAdminNotification(ctx, uc.adminEmail, req); err != nil {
@@ -171,5 +216,11 @@ func (uc *CreateUseCase) Execute(ctx context.Context, cmd CreateCommand) (*Creat
 func (uc *CreateUseCase) logWarn(msg string, keyvals ...any) {
 	if uc.logger != nil {
 		uc.logger.Warn(msg, keyvals...)
+	}
+}
+
+func (uc *CreateUseCase) logInfo(msg string, keyvals ...any) {
+	if uc.logger != nil {
+		uc.logger.Info(msg, keyvals...)
 	}
 }

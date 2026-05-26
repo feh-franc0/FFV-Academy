@@ -276,6 +276,17 @@ export interface StudyRequestSummary {
   marketingConsent: boolean;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Quando o estudante clicou no magic-link do email de boas-vindas e entrou
+   * pela primeira vez. Ausência indica "email não verificado" — lead frio
+   * que o admin pode despriorizar.
+   */
+  emailVerifiedAt?: string;
+  /**
+   * Último login do estudante. Combinado com emailVerifiedAt indica
+   * engajamento: "logou há 2h" sinaliza lead ativo agora.
+   */
+  lastLoginAt?: string;
 }
 
 export interface StudyRequestAttachment {

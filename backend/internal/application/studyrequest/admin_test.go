@@ -72,7 +72,7 @@ type mockNotifier struct {
 	failOn        domsr.Status
 }
 
-func (n *mockNotifier) SendReceivedConfirmation(_ context.Context, _, _ string, _ domsr.ID, _ string) error {
+func (n *mockNotifier) SendReceivedConfirmation(_ context.Context, _, _ string, _ domsr.ID, _, _ string) error {
 	return nil
 }
 func (n *mockNotifier) SendAdminNotification(_ context.Context, _ string, _ *domsr.StudyRequest) error {

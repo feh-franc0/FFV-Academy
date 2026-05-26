@@ -364,11 +364,50 @@ export function StudyRequestForm() {
                 color: 'var(--foreground)',
               }}
             >
-              Solicitação recebida.
+              📬 Recebemos seu pedido!
             </h3>
             <p className="text-sm" style={{ color: 'var(--ffv-muted)', lineHeight: 1.5 }}>
-              {state.message}
+              Em até 24h sua trilha vai estar pronta. Pra acompanhar o status
+              em tempo real, confirme seu email aqui embaixo.
             </p>
+          </div>
+        </div>
+
+        {/* CTA principal pós-submit: confirmar email pra ativar a conta + acompanhar
+            status. Esse é o ponto-chave do fluxo — sem clicar aqui, o admin vê o
+            lead como "🟡 aguardando confirmação" e a curadoria fica em fila menor. */}
+        <div
+          className="rounded-xl p-4 mb-5"
+          style={{
+            background: 'color-mix(in srgb, var(--ffv-blue) 8%, var(--ffv-bg))',
+            border: '1px dashed color-mix(in srgb, var(--ffv-blue) 45%, var(--ffv-border))',
+          }}
+        >
+          <div className="flex items-start gap-3">
+            <span style={{ fontSize: 22 }} aria-hidden>📩</span>
+            <div className="flex-1 min-w-0">
+              <p
+                className="text-sm font-semibold mb-1"
+                style={{ color: 'var(--foreground)', letterSpacing: '-0.01em' }}
+              >
+                Abra seu email pra confirmar e acompanhar
+              </p>
+              <p
+                className="text-xs"
+                style={{ color: 'var(--ffv-muted)', lineHeight: 1.6, marginBottom: 8 }}
+              >
+                Enviamos um link pra <strong style={{ color: 'var(--foreground)' }}>{state.email}</strong>{' '}
+                com um código de acesso (6 dígitos). Clique no botão{' '}
+                <em>&ldquo;Confirmar e acompanhar status&rdquo;</em> no email — você entra direto
+                no seu painel com o status em tempo real.
+              </p>
+              <p
+                className="text-[11px]"
+                style={{ color: 'var(--ffv-muted)', fontStyle: 'italic' }}
+              >
+                Demora 30s a 2min pra chegar. Cheque também a pasta de spam.
+              </p>
+            </div>
           </div>
         </div>
 

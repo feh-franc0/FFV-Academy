@@ -18,9 +18,18 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	appsr "github.com/fernandofv/api/internal/application/studyrequest"
+	"github.com/fernandofv/api/internal/domain/identity"
 	"github.com/fernandofv/api/internal/domain/shared"
 	domsr "github.com/fernandofv/api/internal/domain/studyrequest"
 )
+
+// VerificationLookup é um port mínimo que o admin handler usa pra exibir
+// badges de "email verificado" + "logou há X" na listagem. Subset de
+// identity.UserRepository.VerificationStatusBatch — evita acoplar o handler
+// ao repo completo. Opcional: se nil, badges não aparecem (compat).
+type VerificationLookup interface {
+	VerificationStatusBatch(ctx context.Context, ids []shared.UserID) (map[shared.UserID]identity.VerificationStatus, error)
+}
 
 // AttachmentDownloader é um adapter opcional do FileStorage que sabe entregar
 // o conteúdo binário de um anexo para download. Não vive no domain porque
@@ -33,10 +42,11 @@ type AttachmentDownloader interface {
 
 // StudyRequestAdminHandler expõe operações CRUD admin sobre StudyRequest.
 type StudyRequestAdminHandler struct {
-	list    *appsr.ListUseCase
-	get     *appsr.GetUseCase
-	update  *appsr.UpdateUseCase
-	storage AttachmentDownloader // opcional
+	list             *appsr.ListUseCase
+	get              *appsr.GetUseCase
+	update           *appsr.UpdateUseCase
+	storage          AttachmentDownloader // opcional
+	verificationRepo VerificationLookup   // opcional — badges email_verified
 }
 
 func NewStudyRequestAdminHandler(
@@ -49,6 +59,13 @@ func NewStudyRequestAdminHandler(
 
 func (h *StudyRequestAdminHandler) WithStorage(s AttachmentDownloader) *StudyRequestAdminHandler {
 	h.storage = s
+	return h
+}
+
+// WithVerificationLookup habilita exibição de badges 📩 email_verified +
+// last_login_at na listagem. Sem isso, os campos saem omitidos no JSON.
+func (h *StudyRequestAdminHandler) WithVerificationLookup(v VerificationLookup) *StudyRequestAdminHandler {
+	h.verificationRepo = v
 	return h
 }
 
@@ -68,6 +85,11 @@ type studyRequestSummaryDTO struct {
 	MarketingConsent bool      `json:"marketingConsent"`
 	CreatedAt        time.Time `json:"createdAt"`
 	UpdatedAt        time.Time `json:"updatedAt"`
+	// Verificação de email do estudante (vem do user vinculado). Quando o
+	// estudante clica no magic-link do email de boas-vindas e entra, esses
+	// timestamps são populados. Admin usa pra priorizar leads reais.
+	EmailVerifiedAt *time.Time `json:"emailVerifiedAt,omitempty"`
+	LastLoginAt     *time.Time `json:"lastLoginAt,omitempty"`
 }
 
 type studyRequestDetailDTO struct {
@@ -150,6 +172,30 @@ func (h *StudyRequestAdminHandler) List(w http.ResponseWriter, r *http.Request) 
 	for i, req := range res.Items {
 		dtos[i] = summaryDTO(req)
 	}
+
+	// Enriquece com email_verified_at + last_login_at do user vinculado.
+	// Batch 1-query pra evitar N+1. Falha aqui NÃO bloqueia — DTOs saem
+	// sem badge mas com dados normais.
+	if h.verificationRepo != nil {
+		userIDs := make([]shared.UserID, 0, len(dtos))
+		for _, d := range dtos {
+			if d.UserID != "" {
+				userIDs = append(userIDs, shared.UserID(d.UserID))
+			}
+		}
+		if len(userIDs) > 0 {
+			statuses, err := h.verificationRepo.VerificationStatusBatch(r.Context(), userIDs)
+			if err == nil {
+				for i, d := range dtos {
+					if status, ok := statuses[shared.UserID(d.UserID)]; ok {
+						dtos[i].EmailVerifiedAt = status.EmailVerifiedAt
+						dtos[i].LastLoginAt = status.LastLoginAt
+					}
+				}
+			}
+		}
+	}
+
 	WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"data":   dtos,
 		"total":  res.Total,

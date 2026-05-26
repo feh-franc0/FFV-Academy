@@ -41,42 +41,92 @@ func NewStudyRequestNotifier(sendHTML SendHTMLFunc, adminEmail, frontendURL stri
 }
 
 // SendReceivedConfirmation: estudante recebe confirmação ao enviar solicitação.
-func (n *StudyRequestNotifier) SendReceivedConfirmation(ctx context.Context, to, name string, requestID domsr.ID, subject string) error {
+//
+// loginCode (opcional): quando presente, o email inclui CTA grande "Confirmar
+// e acompanhar" linkando pra /login com email+code pré-preenchidos — 1 clique
+// → logado → dashboard de status. Também serve como prova de email real
+// (admin vê email_verified_at quando o estudante clica + entra).
+func (n *StudyRequestNotifier) SendReceivedConfirmation(ctx context.Context, to, name string, requestID domsr.ID, subject, loginCode string) error {
 	if n.sendHTML == nil || to == "" {
 		return nil
 	}
 	displayName := firstName(name)
+
+	// CTA de login direto: aparece quando temos o código + frontendURL.
+	// URL embute email+code pra prefill no /login, evitando re-digitação.
+	loginCTA := ""
+	codeBlock := ""
+	if loginCode != "" && n.frontendURL != "" {
+		// URL-encode do email pra evitar quebrar querystring.
+		loginURL := fmt.Sprintf("%s/login?email=%s&code=%s",
+			n.frontendURL, urlEscape(to), urlEscape(loginCode))
+		loginCTA = fmt.Sprintf(`
+    <div style="text-align: center; margin: 28px 0 12px;">
+      <a href="%s"
+         style="display: inline-block; background: #4f46e5; color: #fff; text-decoration: none;
+                padding: 14px 28px; border-radius: 10px; font-weight: 700; font-size: 15px;
+                letter-spacing: -0.01em; box-shadow: 0 4px 14px -4px rgba(79, 70, 229, 0.4);">
+        Confirmar e acompanhar status →
+      </a>
+    </div>
+    <p style="text-align: center; font-size: 12px; color: #71717a; margin: 0 0 16px;">
+      Ou entre manualmente em <a href="%s/login" style="color: #4f46e5;">%s/login</a>
+    </p>`,
+			loginURL, n.frontendURL, strings.TrimPrefix(strings.TrimPrefix(n.frontendURL, "https://"), "http://"))
+
+		codeBlock = fmt.Sprintf(`
+    <div style="background: #faf5ff; border: 1px dashed #c4b5fd; padding: 14px 18px; margin: 12px 0 0; border-radius: 8px; text-align: center;">
+      <p style="margin: 0 0 6px; font-size: 11px; color: #6b21a8; letter-spacing: 0.08em; font-family: monospace;">SEU CÓDIGO DE ACESSO</p>
+      <p style="margin: 0; font-size: 28px; font-weight: 800; color: #4c1d95; letter-spacing: 0.4em; font-family: monospace;">%s</p>
+      <p style="margin: 6px 0 0; font-size: 11px; color: #6b7280;">Válido por 10 minutos</p>
+    </div>`, html.EscapeString(loginCode))
+	}
+
 	body := fmt.Sprintf(`
 <div style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 560px; margin: 0 auto; background: #ffffff; color: #18181b;">
   <div style="background: #4f46e5; padding: 32px 24px; border-radius: 12px 12px 0 0;">
-    <h1 style="margin: 0; color: #fff; font-size: 24px; letter-spacing: -0.02em;">Solicitação recebida ✅</h1>
+    <h1 style="margin: 0; color: #fff; font-size: 24px; letter-spacing: -0.02em;">📬 Recebemos seu pedido!</h1>
   </div>
   <div style="padding: 28px 24px; border: 1px solid #e4e4e7; border-top: none; border-radius: 0 0 12px 12px;">
     <p style="font-size: 16px; line-height: 1.6; margin: 0 0 16px;">Olá, <strong>%s</strong>!</p>
     <p style="font-size: 15px; line-height: 1.7; color: #52525b;">
-      Recebemos sua solicitação de experiência de estudo personalizada sobre
-      <strong style="color: #18181b;">%s</strong>.
+      Já recebemos sua solicitação de trilha personalizada sobre
+      <strong style="color: #18181b;">%s</strong>. Pra confirmar seu email e acompanhar o status,
+      clique no botão abaixo:
     </p>
-    <div style="background: #f4f4f5; border-left: 4px solid #4f46e5; padding: 16px; margin: 24px 0; border-radius: 6px;">
+    %s
+    %s
+    <div style="background: #f4f4f5; border-left: 4px solid #4f46e5; padding: 16px; margin: 24px 0 16px; border-radius: 6px;">
       <p style="margin: 0; font-size: 13px; color: #52525b; line-height: 1.6;">
-        <strong>Próximos passos:</strong><br>
-        1. Nosso time vai analisar sua solicitação e seus materiais.<br>
-        2. Vamos montar uma trilha de estudo personalizada para o seu objetivo.<br>
-        3. Você recebe um email assim que a experiência estiver pronta.
+        <strong>O que acontece agora:</strong><br>
+        ✅ Pedido recebido<br>
+        ✨ Preparando sua trilha (em até 24h)<br>
+        🎉 Avisamos por aqui quando ficar pronta
       </p>
     </div>
     <p style="font-size: 13px; line-height: 1.6; color: #71717a;">
-      Protocolo da solicitação: <code style="background: #f4f4f5; padding: 2px 6px; border-radius: 4px;">%s</code>
+      Protocolo: <code style="background: #f4f4f5; padding: 2px 6px; border-radius: 4px;">%s</code>
     </p>
-    <p style="font-size: 13px; line-height: 1.6; color: #71717a; margin-top: 24px;">
-      Tem dúvidas ou quer adicionar algo? Responda a este email — chega direto pra gente.
+    <p style="font-size: 13px; line-height: 1.6; color: #71717a; margin-top: 20px;">
+      Tem dúvidas? Responda este email — chega direto pra gente.
     </p>
   </div>
-  <p style="text-align: center; color: #a1a1aa; font-size: 12px; margin: 16px 0 0;">FFV Academy · educação personalizada para qualquer área</p>
+  <p style="text-align: center; color: #a1a1aa; font-size: 12px; margin: 16px 0 0;">FFV Academy · trilha de estudo personalizada por demanda</p>
 </div>
-`, escapeHTML(displayName), escapeHTML(subject), requestID.String())
+`, escapeHTML(displayName), escapeHTML(subject), loginCTA, codeBlock, requestID.String())
 
-	return n.sendHTML(ctx, []string{to}, "✅ Solicitação recebida — FFV Academy", body)
+	return n.sendHTML(ctx, []string{to}, "📬 Recebemos seu pedido — confirme pra acompanhar", body)
+}
+
+// urlEscape encurta a chamada — net/url.QueryEscape importado via strings.NewReplacer
+// causaria overhead; usamos uma escape simples manual pra evitar import novo.
+// Backend só envia email/code que já são ASCII restritos, então safe.
+func urlEscape(s string) string {
+	r := strings.NewReplacer(
+		" ", "%20", "+", "%2B", "&", "%26", "=", "%3D", "#", "%23",
+		"?", "%3F", "/", "%2F", "@", "%40",
+	)
+	return r.Replace(s)
 }
 
 // SendAdminNotification: alerta o admin de nova solicitação pendente.

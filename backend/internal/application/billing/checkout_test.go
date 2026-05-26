@@ -122,6 +122,12 @@ func (m *mockUserRepoBilling) SoftDelete(_ context.Context, _ shared.UserID, _ t
 func (m *mockUserRepoBilling) ListForAdmin(_ context.Context, _, _ int) ([]*domidentity.User, int, error) {
 	return nil, 0, nil
 }
+func (m *mockUserRepoBilling) MarkLoggedIn(_ context.Context, _ shared.UserID, _ time.Time) error {
+	return nil
+}
+func (m *mockUserRepoBilling) VerificationStatusBatch(_ context.Context, _ []shared.UserID) (map[shared.UserID]domidentity.VerificationStatus, error) {
+	return map[shared.UserID]domidentity.VerificationStatus{}, nil
+}
 
 func newUserNoProducts(t *testing.T, id shared.UserID, now time.Time) *domidentity.User {
 	t.Helper()

@@ -11,6 +11,14 @@ interface Props {
   reason?: string;
   /** Pré-preenche e auto-submete o email — usado pelo formulário inline da home. */
   initialEmail?: string;
+  /**
+   * Pré-preenche o código de 6 dígitos. Usado pela página `/login?email=X&code=Y`
+   * quando o estudante clica no botão "Confirmar e acompanhar status" do email
+   * de boas-vindas pós-submit de study-request. Combinado com initialEmail,
+   * o modal pula o passo de email e mostra o código já digitado — basta 1
+   * clique no submit pra entrar.
+   */
+  initialCode?: string;
   onSuccess: (user: UserProfile) => void;
   onCancel: () => void;
 }
@@ -26,7 +34,7 @@ type Step = 'email' | 'register' | 'code';
  * 2a. Novo usuário: nome + celular + consentimento + código.
  * 2b. Retornante: apenas código.
  */
-export function LoginModal({ reason, initialEmail, onSuccess, onCancel }: Props) {
+export function LoginModal({ reason, initialEmail, initialCode, onSuccess, onCancel }: Props) {
   const [step, setStep] = useState<Step>('email');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,7 +43,11 @@ export function LoginModal({ reason, initialEmail, onSuccess, onCancel }: Props)
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [consent, setConsent] = useState(false);
-  const [code, setCode] = useState('');
+  // Pré-preenche o código quando vem do magic-link do email pós-submit.
+  // Sanitiza pra só dígitos (defesa contra valor estranho na URL).
+  const [code, setCode] = useState(() =>
+    (initialCode ?? '').replace(/\D/g, '').slice(0, 6),
+  );
 
   const codeInputRef = useRef<HTMLInputElement>(null);
 

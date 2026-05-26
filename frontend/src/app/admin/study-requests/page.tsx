@@ -175,22 +175,12 @@ export default function AdminStudyRequestsPage() {
                   <td className="px-3 py-2 max-w-xs truncate" title={req.subject}>
                     {req.subject}
                   </td>
-                  <td className="px-3 py-2">
-                    {req.userId ? (
-                      <span
-                        title="Vinculada a uma conta existente"
-                        style={{ color: 'var(--ffv-green)' }}
-                      >
-                        ●
-                      </span>
-                    ) : (
-                      <span
-                        title="Lead anônimo"
-                        style={{ color: 'var(--ffv-muted)' }}
-                      >
-                        ○
-                      </span>
-                    )}
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    <EmailVerificationBadge
+                      emailVerifiedAt={req.emailVerifiedAt}
+                      lastLoginAt={req.lastLoginAt}
+                      userId={req.userId}
+                    />
                   </td>
                   <td
                     className="px-3 py-2 whitespace-nowrap"
@@ -253,4 +243,71 @@ function formatRelative(iso: string): string {
   if (diff < 86400) return `${Math.floor(diff / 3600)} h`;
   if (diff < 604800) return `${Math.floor(diff / 86400)} d`;
   return date.toLocaleDateString('pt-BR');
+}
+
+/**
+ * Badge visual de verificação do email do estudante. 3 estados:
+ *
+ *   🟢 Email verificado · "logou há 2h"  — estudante clicou no magic-link e
+ *      entrou. Lead real, prioriza na fila.
+ *   🟡 Aguardando confirmação            — solicitação criada conta passwordless
+ *      mas estudante ainda não clicou no email. Pode ser real (vai chegar) ou
+ *      bounce — esperar 24-48h.
+ *   ⚪ Lead anônimo                       — solicitação antiga (pré-2026-05) sem
+ *      conta vinculada. Só email solto, sem prova.
+ */
+function EmailVerificationBadge({
+  emailVerifiedAt,
+  lastLoginAt,
+  userId,
+}: {
+  emailVerifiedAt?: string;
+  lastLoginAt?: string;
+  userId?: string;
+}) {
+  if (emailVerifiedAt) {
+    const loginInfo = lastLoginAt
+      ? `logou ${formatRelative(lastLoginAt)}`
+      : `verificado ${formatRelative(emailVerifiedAt)}`;
+    return (
+      <span
+        title={`Email verificado em ${new Date(emailVerifiedAt).toLocaleString('pt-BR')} · ${loginInfo}`}
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold"
+        style={{
+          background: 'color-mix(in srgb, #3fb950 16%, transparent)',
+          color: '#2ea043',
+          border: '1px solid color-mix(in srgb, #3fb950 36%, transparent)',
+        }}
+      >
+        📩 {loginInfo}
+      </span>
+    );
+  }
+  if (userId) {
+    return (
+      <span
+        title="Conta passwordless criada — estudante ainda não confirmou o email (não clicou no magic-link)"
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold"
+        style={{
+          background: 'color-mix(in srgb, #d29922 16%, transparent)',
+          color: '#bb8009',
+          border: '1px solid color-mix(in srgb, #d29922 36%, transparent)',
+        }}
+      >
+        🟡 aguardando
+      </span>
+    );
+  }
+  return (
+    <span
+      title="Lead anônimo — sem conta vinculada (solicitação antiga)"
+      className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium"
+      style={{
+        color: 'var(--ffv-muted)',
+        border: '1px solid var(--ffv-border)',
+      }}
+    >
+      ⚪ anônimo
+    </span>
+  );
 }

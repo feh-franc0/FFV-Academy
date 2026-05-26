@@ -168,6 +168,66 @@ func (r *UserRepo) ExistsByPhone(ctx context.Context, phone identity.Phone) (boo
 	return exists, err
 }
 
+// VerificationStatusBatch implementa identity.UserRepository.
+// Query única com ANY($1) — eficiente pra lotes pequenos (≤500 ids).
+// IDs não encontrados saem do map silenciosamente (sem erro).
+func (r *UserRepo) VerificationStatusBatch(ctx context.Context, ids []shared.UserID) (map[shared.UserID]identity.VerificationStatus, error) {
+	if len(ids) == 0 {
+		return map[shared.UserID]identity.VerificationStatus{}, nil
+	}
+	idStrs := make([]string, len(ids))
+	for i, id := range ids {
+		idStrs[i] = id.String()
+	}
+	rows, err := r.pool.Query(ctx,
+		`SELECT id, email_verified_at, last_login_at
+		   FROM users
+		  WHERE id = ANY($1) AND deleted_at IS NULL`,
+		idStrs,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("user repo: verification status batch: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[shared.UserID]identity.VerificationStatus, len(ids))
+	for rows.Next() {
+		var (
+			idStr           string
+			emailVerifiedAt *time.Time
+			lastLoginAt     *time.Time
+		)
+		if err := rows.Scan(&idStr, &emailVerifiedAt, &lastLoginAt); err != nil {
+			return nil, fmt.Errorf("user repo: scan verification status: %w", err)
+		}
+		out[shared.UserID(idStr)] = identity.VerificationStatus{
+			EmailVerifiedAt: emailVerifiedAt,
+			LastLoginAt:     lastLoginAt,
+		}
+	}
+	return out, rows.Err()
+}
+
+// MarkLoggedIn registra o login: atualiza last_login_at sempre, mas só seta
+// email_verified_at na primeira vez (via COALESCE — preserva o valor anterior
+// se já existia). Idempotente.
+func (r *UserRepo) MarkLoggedIn(ctx context.Context, id shared.UserID, now time.Time) error {
+	res, err := r.pool.Exec(ctx,
+		`UPDATE users
+		    SET last_login_at     = $2,
+		        email_verified_at = COALESCE(email_verified_at, $2)
+		  WHERE id = $1 AND deleted_at IS NULL`,
+		id.String(), now,
+	)
+	if err != nil {
+		return fmt.Errorf("user repo: mark logged in: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("%w: user", shared.ErrNotFound)
+	}
+	return nil
+}
+
 func (r *UserRepo) SoftDelete(ctx context.Context, id shared.UserID, now time.Time) error {
 	res, err := r.pool.Exec(ctx,
 		`UPDATE users SET deleted_at = $2, updated_at = $2 WHERE id = $1 AND deleted_at IS NULL`,

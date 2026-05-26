@@ -341,8 +341,17 @@ func run() error {
 	}
 	studyRequestNotifier := email.NewStudyRequestNotifier(sendHTMLFn, adminEmail, frontendURL)
 
+	// Adapters de auth passwordless pra study-request:
+	// - UserUpserterAdapter: cria conta passwordless pro lead no submit
+	// - LoginCodeAdapter: emite código de magic-link pra embutir no email
+	//   de boas-vindas (1 clique → logged in → dashboard de status)
+	userUpserter := postgresinfra.NewUserUpserterAdapter(userRepo, clock)
+	loginCodeIssuer := postgresinfra.NewLoginCodeAdapter(magicTokenStore, clock, magicTokenTTL)
+
 	createStudyRequestUC := appstudyreq.NewCreateUseCase(studyRequestRepo, fileStorage, clock).
 		WithUserLookup(studyRequestRepo).
+		WithUserUpserter(userUpserter).
+		WithLoginCodeIssuer(loginCodeIssuer).
 		WithNotifier(studyRequestNotifier, adminEmail).
 		WithLogger(log)
 	listStudyRequestsUC := appstudyreq.NewListUseCase(studyRequestRepo)
@@ -413,7 +422,7 @@ func run() error {
 		WithStatusReader(studyRequestRepo)
 	studyRequestAdminH := handlers.NewStudyRequestAdminHandler(
 		listStudyRequestsUC, getStudyRequestUC, updateStudyRequestUC,
-	).WithStorage(fileStorage)
+	).WithStorage(fileStorage).WithVerificationLookup(userRepo)
 
 	// ─── Observabilidade: Prometheus ────────────────────────────────────────────
 	metricsReg := middleware.NewMetricsRegistry()
