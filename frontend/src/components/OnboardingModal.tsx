@@ -1,11 +1,21 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useContext, useEffect, useMemo, useState } from 'react';
 import { CURRICULUM, HUBS, type Module, type Trail } from '@/lib/curriculum';
 import { useGameState } from '@/hooks/useGameState';
+import { AuthContext } from '@/hooks/useAuth';
 import { recordArticleVisit } from '@/lib/engine';
+import { trackEvent } from '@/lib/tracking';
 
-type Step = 'intro' | 'q-level' | 'q-goal' | 'q-time' | 'choose';
+/**
+ * Wizard de onboarding em 5 passos (último é o convite de signup pra
+ * anônimo). O passo `save-progress` aproveita o efeito Pico-Fim (Kahneman):
+ * o user acabou de receber UMA TRILHA PERSONALIZADA — pico de dopamina
+ * antecipatória + endowment effect. Pedir conta NESSE momento converte
+ * dramaticamente melhor que pedir no início (anti-padrão). Ver
+ * `docs/PROMPT_DESIGN_NEUROCIENCIA.md` §1.
+ */
+type Step = 'intro' | 'q-level' | 'q-goal' | 'q-time' | 'choose' | 'save-progress';
 
 type Level = 'beginner' | 'intermediate' | 'advanced';
 type Goal = 'ia' | 'aws' | 'engenharia' | 'claude';
@@ -97,11 +107,23 @@ const GOAL_OPTIONS: { value: Goal; label: string; desc: string; icon: string; hu
 
 export function OnboardingModal() {
   const { state, finishOnboarding, updateDailyGoal } = useGameState();
+  const auth = useContext(AuthContext);
+  const isLoggedIn = !!auth?.isLoggedIn;
+
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<Step>('intro');
   const [selectedLevel, setSelectedLevel] = useState<Level | null>(null);
   const [selectedGoal, setSelectedGoal] = useState<Goal | null>(null);
   const [selectedTime, setSelectedTime] = useState<number | null>(null);
+
+  // Escolha pendente — preserva intenção entre o passo 'choose' e
+  // 'save-progress'. Quando usuário anônimo clica num módulo da playlist,
+  // a gente pausa, mostra o convite de signup, e SÓ executa
+  // finishOnboarding + recordArticleVisit DEPOIS (no botão "salvar grátis"
+  // ou "continuar sem conta"). Pra logado, executa direto.
+  const [pendingChoice, setPendingChoice] = useState<
+    { kind: 'playlist'; slug: string; hubSlug: string } | { kind: 'hub'; hubSlug: string } | null
+  >(null);
 
   useEffect(() => {
     if (!state) return;
@@ -134,33 +156,95 @@ export function OnboardingModal() {
   }
 
   function handleChooseHub(slug: string) {
+    if (!isLoggedIn) {
+      // Pausa antes de fechar — mostra convite de signup primeiro.
+      setPendingChoice({ kind: 'hub', hubSlug: slug });
+      setStep('save-progress');
+      trackEvent({
+        eventType: 'cta.shown',
+        targetType: 'cta',
+        targetId: 'onboarding_save_progress',
+        metadata: { trigger: 'hub_chosen', hub: slug },
+      });
+      return;
+    }
     finishOnboarding(slug);
     setOpen(false);
   }
 
   function handleChoosePlaylistFirst(slug: string, hubSlug: string) {
-    // Salva hub preferido + persiste primeiro módulo da playlist como lastArticle
-    // pra Continue Card retomar de onde o onboarding parou.
-    finishOnboarding(hubSlug);
-    const m = playlist.find(p => p.slug === slug) ?? playlist[0];
-    if (m) {
-      const trail = CURRICULUM.find(t => t.modules.some(mod => mod.slug === m.slug));
-      try {
-        recordArticleVisit({
-          slug: m.slug,
-          title: m.title,
-          icon: m.icon,
-          trailName: trail?.name ?? '',
-          trailColor: trail?.color ?? 'var(--ffv-blue)',
-          readTime: m.readTime,
-          xp: m.xp,
-          href: `/aprenda/${m.slug}`,
-        });
-      } catch {
-        // não bloqueia o onboarding se o storage falhar
+    if (!isLoggedIn) {
+      setPendingChoice({ kind: 'playlist', slug, hubSlug });
+      setStep('save-progress');
+      trackEvent({
+        eventType: 'cta.shown',
+        targetType: 'cta',
+        targetId: 'onboarding_save_progress',
+        metadata: { trigger: 'playlist_chosen', hub: hubSlug, module: slug },
+      });
+      return;
+    }
+    commitChoice({ kind: 'playlist', slug, hubSlug });
+  }
+
+  /** Aplica de fato a escolha (logado ou após "continuar sem conta"). */
+  function commitChoice(choice: { kind: 'playlist'; slug: string; hubSlug: string } | { kind: 'hub'; hubSlug: string }) {
+    finishOnboarding(choice.hubSlug);
+    if (choice.kind === 'playlist') {
+      const m = playlist.find(p => p.slug === choice.slug) ?? playlist[0];
+      if (m) {
+        const trail = CURRICULUM.find(t => t.modules.some(mod => mod.slug === m.slug));
+        try {
+          recordArticleVisit({
+            slug: m.slug,
+            title: m.title,
+            icon: m.icon,
+            trailName: trail?.name ?? '',
+            trailColor: trail?.color ?? 'var(--ffv-blue)',
+            readTime: m.readTime,
+            xp: m.xp,
+            href: `/aprenda/${m.slug}`,
+          });
+        } catch {
+          // não bloqueia o onboarding se o storage falhar
+        }
       }
     }
     setOpen(false);
+  }
+
+  /** Botão "Salvar grátis" do passo save-progress → abre LoginModal. */
+  function handleSaveProgressSignup() {
+    trackEvent({
+      eventType: 'cta.click',
+      targetType: 'cta',
+      targetId: 'onboarding_save_progress',
+      metadata: {
+        outcome: 'signup_started',
+        choice_kind: pendingChoice?.kind ?? 'none',
+      },
+    });
+    // Aplica a escolha antes de abrir o modal — assim user volta logado
+    // já com hub preferido + last article configurados.
+    if (pendingChoice) commitChoice(pendingChoice);
+    auth?.requireLogin('salvar sua trilha personalizada').catch(() => {
+      /* user cancelou o login — onboarding já fechou, sem ação extra */
+    });
+  }
+
+  /** Botão "Explorar sem conta" → executa a escolha e fecha. */
+  function handleSaveProgressSkip() {
+    trackEvent({
+      eventType: 'cta.dismissed',
+      targetType: 'cta',
+      targetId: 'onboarding_save_progress',
+      metadata: { choice_kind: pendingChoice?.kind ?? 'none' },
+    });
+    if (pendingChoice) {
+      commitChoice(pendingChoice);
+    } else {
+      handleSkip();
+    }
   }
 
   function handleFinishTime() {
@@ -184,6 +268,7 @@ export function OnboardingModal() {
     'q-goal': 'DIAGNÓSTICO · 2 DE 3',
     'q-time': 'DIAGNÓSTICO · 3 DE 3',
     'choose': 'SUA TRILHA PERSONALIZADA',
+    'save-progress': 'PRONTO PRA COMEÇAR',
   };
 
   const recommendedHub = recommendedSlug ? HUBS.find(h => h.slug === recommendedSlug) : null;
@@ -278,6 +363,17 @@ export function OnboardingModal() {
                 {playlist.length > 0 && recommendedHub
                   ? `${playlist.length} módulos em ${recommendedHub.name}, ordenados pelo seu nível.`
                   : 'Por onde você quer começar?'}
+              </p>
+            </>
+          )}
+          {step === 'save-progress' && (
+            <>
+              <h2 style={{ fontSize: '1.4rem', fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1.2, marginBottom: 8 }}>
+                ✨ Sua trilha está pronta!
+              </h2>
+              <p style={{ fontSize: 13, color: 'var(--ffv-muted)', lineHeight: 1.6 }}>
+                Salve grátis pra acessar de qualquer dispositivo, ganhar XP e
+                não perder o progresso.
               </p>
             </>
           )}
@@ -568,9 +664,124 @@ export function OnboardingModal() {
               )}
             </div>
           )}
+          {step === 'save-progress' && (
+            <div className="flex flex-col gap-4">
+              {/* Preview da trilha — dopamina antecipatória: o user vê o
+                  resultado concreto antes de decidir. Endowment já agiu. */}
+              {pendingChoice?.kind === 'playlist' && recommendedHub && (() => {
+                const m = playlist.find(p => p.slug === pendingChoice.slug);
+                if (!m) return null;
+                return (
+                  <div
+                    className="flex items-center gap-3 p-3 rounded-xl"
+                    style={{
+                      background: `color-mix(in srgb, ${recommendedHub.color} 8%, var(--ffv-bg2))`,
+                      border: `1px solid color-mix(in srgb, ${recommendedHub.color} 32%, transparent)`,
+                    }}
+                  >
+                    <span style={{ fontSize: 24, flexShrink: 0 }} aria-hidden>{m.icon}</span>
+                    <div className="flex-1 min-w-0">
+                      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: recommendedHub.color, marginBottom: 2 }}>
+                        Próximo módulo
+                      </div>
+                      <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--foreground)', lineHeight: 1.3 }}>
+                        {m.title}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--ffv-muted)', marginTop: 2 }}>
+                        {playlist.length} módulos · {recommendedHub.name}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+              {pendingChoice?.kind === 'hub' && (() => {
+                const h = HUBS.find(x => x.slug === pendingChoice.hubSlug);
+                if (!h) return null;
+                return (
+                  <div
+                    className="flex items-center gap-3 p-3 rounded-xl"
+                    style={{
+                      background: `color-mix(in srgb, ${h.color} 8%, var(--ffv-bg2))`,
+                      border: `1px solid color-mix(in srgb, ${h.color} 32%, transparent)`,
+                    }}
+                  >
+                    <span style={{ fontSize: 24, flexShrink: 0 }} aria-hidden>{h.icon}</span>
+                    <div className="flex-1 min-w-0">
+                      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: h.color, marginBottom: 2 }}>
+                        Sua área escolhida
+                      </div>
+                      <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--foreground)', lineHeight: 1.3 }}>
+                        {h.name}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--ffv-muted)', marginTop: 2 }}>
+                        {h.tagline}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* 3 benefícios — Lei de Hick (≤3 itens), neocórtex digere fácil */}
+              <ul style={{ listStyle: 'none', padding: 0, margin: 0 }} className="flex flex-col gap-2">
+                <BenefitItem text="Continuar de onde parou em qualquer dispositivo" />
+                <BenefitItem text="Ganhar XP e badges por cada módulo concluído" />
+                <BenefitItem text="Acessar sua trilha personalizada quando quiser" />
+              </ul>
+
+              <button
+                type="button"
+                onClick={handleSaveProgressSignup}
+                className="py-3.5 rounded-xl font-bold text-sm"
+                style={{
+                  background: 'var(--ffv-blue)',
+                  color: '#fff',
+                  boxShadow: '0 8px 24px -6px color-mix(in srgb, var(--ffv-blue) 45%, transparent)',
+                }}
+              >
+                Salvar grátis e começar →
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveProgressSkip}
+                className="py-2.5 rounded-xl font-medium"
+                style={{
+                  background: 'transparent',
+                  color: 'var(--ffv-muted)',
+                  fontSize: 13,
+                  border: '1px solid var(--ffv-border)',
+                }}
+              >
+                Continuar sem conta
+              </button>
+              <p
+                className="text-[11px] text-center"
+                style={{ color: 'var(--ffv-muted)', letterSpacing: '0.02em' }}
+              >
+                30s · sem cartão · sem senha · seu progresso fica salvo igual
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </div>
+  );
+}
+
+/** Item de benefício com checkmark verde — usado no step save-progress. */
+function BenefitItem({ text }: { text: string }) {
+  return (
+    <li
+      className="flex items-start gap-2"
+      style={{ fontSize: 12.5, color: 'var(--foreground)', lineHeight: 1.5 }}
+    >
+      <span
+        aria-hidden
+        style={{ color: 'var(--ffv-green)', fontWeight: 800, fontSize: 13, marginTop: 1, flexShrink: 0 }}
+      >
+        ✓
+      </span>
+      <span>{text}</span>
+    </li>
   );
 }
 

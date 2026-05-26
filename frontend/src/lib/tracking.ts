@@ -203,6 +203,10 @@ export type EventType =
   | 'auth.logout'                // logout manual
   // CTAs
   | 'cta.click'                  // clique genérico em CTA (identifica via targetId)
+  | 'cta.shown'                  // CTA contextual entrou em viewport (gatilho funil)
+  | 'cta.dismissed'              // user fechou CTA sem converter (props: id, time_visible_sec)
+  // Conteúdo — telemetria de profundidade de leitura
+  | 'module.scroll_milestone'    // user atingiu marco 25/50/75/100% scroll no módulo
   // Search
   | 'search.submit'              // enter na busca
   | 'search.result_click'        // clique em um resultado

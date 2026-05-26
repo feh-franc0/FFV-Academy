@@ -29,6 +29,8 @@ import { ArticleDiscussion } from '@/components/ArticleDiscussion';
 import { PeerComparisonChip } from '@/components/peer/PeerComparisonChip';
 import { calculatePeerPercentile } from '@/lib/peer-stats';
 import { NextModuleCard } from '@/components/article/NextModuleCard';
+import { PostReadSignupCta } from '@/components/cta/PostReadSignupCta';
+import { useScrollMilestones } from '@/hooks/useScrollMilestones';
 
 function getNextModule(slug: string) {
   for (const trail of CURRICULUM) {
@@ -79,6 +81,13 @@ export function ModuleLayout({
   relatedSlugs,
 }: ModuleLayoutProps) {
   const { state, markComplete, submitQuiz, trackVisit, trackProgress } = useGameState();
+
+  // Ref pro <article> root — usado por useScrollMilestones (telemetria de
+  // profundidade) e PostReadSignupCta (gatilho de 75% scroll). Ambos
+  // funcionam de forma passiva, sem afetar UX.
+  const articleRef = useRef<HTMLElement>(null);
+  useScrollMilestones({ moduleSlug: slug, contentRef: articleRef });
+
   const [quizStarted, setQuizStarted] = useState(false);
   const [answers, setAnswers] = useState<(number | null)[]>(quiz.map(() => null));
   const [submitted, setSubmitted] = useState(false);
@@ -253,7 +262,7 @@ export function ModuleLayout({
   }
 
   return (
-    <article className="max-w-2xl mx-auto px-4 sm:px-6 pb-20" data-article-root>
+    <article ref={articleRef} className="max-w-2xl mx-auto px-4 sm:px-6 pb-20" data-article-root>
       {/* Print-only: capa, renderizada apenas em PDF */}
       <PrintCover
         title={title}
@@ -418,6 +427,11 @@ export function ModuleLayout({
       <div className="mt-10">
         <ShareSocial slug={slug} title={title} accent={trailColor} />
       </div>
+
+      {/* Convite de signup pós-leitura — gatilho neurocientífico (pico-fim).
+          Aparece SÓ pra anônimo, após 75% scroll + 30s + 3s idle, 1x por
+          sessão, cooldown 72h. Ver docs/PROMPT_DESIGN_NEUROCIENCIA.md. */}
+      <PostReadSignupCta moduleSlug={slug} contentRef={articleRef} />
 
       {/* Quiz section (interativo, escondido em PDF) */}
       <section className="mt-14 ffv-no-print" data-quiz-interactive>
