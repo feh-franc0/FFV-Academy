@@ -24,33 +24,58 @@ import { useEffect } from 'react';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useActiveBase } from '@/components/base/ActiveBaseContext';
 import { trackView, type ViewKind } from '@/lib/tracking';
+import { getBaseBySlug } from '@/lib/bases/registry';
+import { getBaseSlugForModule } from '@/lib/bases/module-base-resolver';
 
 function classifyPath(pathname: string): { kind: ViewKind; slug: string; baseSlug?: string } {
+  // /admin/* — NUNCA tem base. Não herdar do context.
   if (pathname.startsWith('/admin')) {
     return { kind: 'admin', slug: pathname };
   }
+
+  // /aprenda/<slug> — infere base via resolver (módulo conhece sua base).
+  // Antes: hardcoded 'tecnologia' — bug que poluía o admin com tudo virando Tecnologia.
   if (pathname.startsWith('/aprenda/')) {
     const slug = pathname.split('/')[2] ?? '';
-    return { kind: 'module', slug, baseSlug: 'tecnologia' };
+    const inferred = getBaseSlugForModule(slug);
+    return { kind: 'module', slug, baseSlug: inferred ?? undefined };
   }
-  // Padrão /<baseSlug>/<modSlug> — ex.: /medicina-veterinaria/mod-mendel
-  // Detecta heurística: 2 segmentos, segundo não é "simulado-..."
-  const segs = pathname.split('/').filter(Boolean);
-  if (segs.length === 2) {
-    const [maybeBase, maybeMod] = segs;
-    if (maybeMod.startsWith('simulado-') || maybeMod === 'simulado') {
-      return { kind: 'simulado', slug: maybeMod, baseSlug: maybeBase };
-    }
-    return { kind: 'module', slug: maybeMod, baseSlug: maybeBase };
-  }
-  // Home de base (/tecnologia, /medicina-veterinaria) — 1 seg
-  if (segs.length === 1) {
-    return { kind: 'page', slug: segs[0], baseSlug: segs[0] };
-  }
-  // /simulados raiz
+
+  // /simulados raiz — kind=simulado, sem base.
   if (pathname.startsWith('/simulados')) {
     return { kind: 'simulado', slug: pathname };
   }
+
+  const segs = pathname.split('/').filter(Boolean);
+
+  // / — marketing global.
+  if (segs.length === 0) {
+    return { kind: 'page', slug: '/' };
+  }
+
+  // /<seg> — só vira baseSlug se for base CONHECIDA no registry.
+  // Antes: assumia cego que segs[0] era base, poluindo com /bases, /ranking, /sobre.
+  if (segs.length === 1) {
+    const slug = segs[0];
+    if (getBaseBySlug(slug)) {
+      return { kind: 'page', slug, baseSlug: slug };
+    }
+    return { kind: 'page', slug: pathname };
+  }
+
+  // /<base>/<slug> — 2 segmentos. Só assume base+módulo se o primeiro for base conhecida.
+  if (segs.length === 2) {
+    const [maybeBase, maybeMod] = segs;
+    if (getBaseBySlug(maybeBase)) {
+      if (maybeMod.startsWith('simulado-') || maybeMod === 'simulado') {
+        return { kind: 'simulado', slug: maybeMod, baseSlug: maybeBase };
+      }
+      return { kind: 'module', slug: maybeMod, baseSlug: maybeBase };
+    }
+    // Não é base conhecida (ex: /sobre/equipe). Marketing/global.
+    return { kind: 'page', slug: pathname };
+  }
+
   return { kind: 'page', slug: pathname };
 }
 
@@ -62,9 +87,14 @@ export function PageTracker() {
   useEffect(() => {
     if (!pathname) return;
     const c = classifyPath(pathname);
-    // baseSlug efetivo: prioriza o que o context ActiveBase sabe, cai pro
-    // heurístico do path (ex. quando o usuário cai numa página sem provider).
-    const baseSlug = activeBase?.slug || c.baseSlug;
+
+    // baseSlug: classifyPath é autoritativo. activeBase só entra como FALLBACK
+    // pra rotas de aprendizado (module/simulado) quando o classify não inferiu —
+    // útil pra rotas legadas tipo /ia/intro, /aws/clf-c02. NUNCA herdar pra admin
+    // (admin não tem base) nem pra páginas marketing/global (que classify resolveu como sem base).
+    const baseSlug = c.baseSlug
+      ?? ((c.kind === 'module' || c.kind === 'simulado') ? activeBase?.slug : undefined);
+
     const queryString = searchParams?.toString() ?? '';
     const fullPath = queryString ? `${pathname}?${queryString}` : pathname;
 
