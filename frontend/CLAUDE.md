@@ -1,6 +1,32 @@
 # FFV Academy — Frontend
 
-> **Ver `../CLAUDE.md` para proposta de valor, posicionamento, roadmap de funcionalidades e pitch completo.**
+> **Proposta de valor + roadmap:** `../CLAUDE.md`.
+> **Método de ensino (pipeline + 100Q + SRS):** `../TEACHING_METHOD.md` — **leitura obrigatória** antes de mexer em UI do produto.
+> **Estratégia + concorrentes + SWOT:** `../STRATEGY.md`.
+
+---
+
+## 🎯 O que é o produto (linguagem de aluno)
+
+Sabe quando o aluno precisa estudar alguma coisa — apostila, livro, vídeo de aula, artigo, foto do quadro — e bate o desespero de *"por onde começo?"* e *"como vou lembrar na prova?"* **A FFV resolve isso.**
+
+Ele joga o material lá (PDF, foto, link, áudio, vídeo). Em 2-3 minutos recebe: **resumo**, **mapinha de conceitos**, **dicionário dos termos difíceis**, **100 perguntas** sempre (do básico ao difícil), **revisão espaçada** que lembra nos dias certos, e **simulado cronometrado** tipo prova. Vira aluno daquele conteúdo: estuda 30min/dia, ganha pontos, streak, ranking, certificado pro LinkedIn.
+
+**O conteúdo é do aluno** — não é a FFV empurrando aula pronta. Gratuito, em português. Pro $7/mês destrava uso ilimitado.
+
+> **Em uma frase:** o aluno joga o material dele lá, a FFV transforma em aprendizado que gruda na cabeça.
+
+---
+
+## 🎯 Foco real do produto (pós-pivot mai/2026)
+
+A FFV é uma **plataforma de user-generated learning**. O aluno sobe conteúdo (PDF/imagem/texto/link/áudio/vídeo) e recebe módulo estruturado com **100 questões obrigatórias** + SRS real.
+
+**Implicação prática pra frontend:**
+- **Fluxo central** é `/upload` → processamento → `/modulo/[id]` com simulado + cards SRS. UI dessa jornada é P0.
+- **Bases curadas** (157 módulos em 8 bases) continuam acessíveis mas **viram biblioteca/showcase**, não foco de novas features.
+- **Não criar UI nova** pra hubs/trilhas curadas sem checar se serve o fluxo user-generated.
+- **Toda feature nova** passa pelo crivo do `TEACHING_METHOD.md §12` ("a feature mantém a regra das 100Q? respeita Bloom? reforça SRS?").
 
 ---
 

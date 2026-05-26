@@ -23,17 +23,20 @@ import { toast } from '@/lib/toast';
  * backend. UI não bloqueia (lib retorna 403 que mostramos na tela), mas
  * a tela só está linkada do admin dashboard.
  */
+const PAGE_SIZE = 50;
+
 export function AdminCommentsClient() {
   const [status, setStatus] = useState<CommentStatus>('flagged');
   const [items, setItems] = useState<Comment[] | null>(null);
   const [total, setTotal] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const fetchItems = useCallback(async (signal?: AbortSignal) => {
     setLoadError(null);
     setItems(null);
     try {
-      const res = await adminListComments(status, { signal, limit: 100 });
+      const res = await adminListComments(status, { signal, limit: PAGE_SIZE, offset: 0 });
       setItems(res.data);
       setTotal(res.total);
     } catch (err) {
@@ -46,6 +49,20 @@ export function AdminCommentsClient() {
       setItems([]);
     }
   }, [status]);
+
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !items) return;
+    setLoadingMore(true);
+    try {
+      const res = await adminListComments(status, { limit: PAGE_SIZE, offset: items.length });
+      setItems(prev => [...(prev ?? []), ...res.data]);
+      setTotal(res.total);
+    } catch (err) {
+      setLoadError(err instanceof CommentApiError ? err.message : 'Erro ao carregar mais.');
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [status, items, loadingMore]);
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -136,6 +153,7 @@ export function AdminCommentsClient() {
       )}
 
       {items !== null && items.length > 0 && (
+        <>
         <ul className="flex flex-col gap-4 list-none p-0">
           {items.map(c => (
             <li
@@ -194,6 +212,20 @@ export function AdminCommentsClient() {
             </li>
           ))}
         </ul>
+        {items.length < total && (
+          <div className="mt-4 flex justify-center">
+            <button
+              type="button"
+              onClick={() => void loadMore()}
+              disabled={loadingMore}
+              className="px-5 py-2 rounded-md text-sm font-semibold disabled:opacity-50"
+              style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)', cursor: 'pointer' }}
+            >
+              {loadingMore ? 'Carregando…' : `Carregar mais (${total - items.length} restantes)`}
+            </button>
+          </div>
+        )}
+        </>
       )}
     </main>
   );

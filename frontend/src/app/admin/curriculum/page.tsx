@@ -5,7 +5,7 @@
  */
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { apiFetch } from '@/lib/api-client';
 
 interface ArticleItem {
@@ -23,35 +23,50 @@ interface ListResponse {
   total: number;
 }
 
+const PAGE_SIZE = 100;
+
 export default function AdminCurriculumPage() {
   const [items, setItems] = useState<ArticleItem[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [search, setSearch] = useState('');
 
+  // Carga inicial — primeira página. NÃO faz mais loop de 50 páginas (antes
+  // chegava a buscar 5000 artigos por sessão). Em vez disso, paginação sob
+  // demanda via "Carregar mais".
   useEffect(() => {
     let cancelled = false;
-    async function loadAll() {
-      const out: ArticleItem[] = [];
+    async function loadFirst() {
       try {
-        for (let offset = 0; offset < 50; offset++) {
-          const res = await apiFetch<ListResponse>(`/api/v1/curriculum?limit=100&offset=${offset * 100}`, {}, true);
-          if (!res?.data?.length) break;
-          out.push(...res.data);
-          if (res.data.length < 100) break;
+        const res = await apiFetch<ListResponse>(`/api/v1/curriculum?limit=${PAGE_SIZE}&offset=0`, {}, true);
+        if (!cancelled && res) {
+          setItems(res.data ?? []);
+          setTotal(res.total ?? 0);
         }
       } catch {
         // backend offline
       }
-      if (!cancelled) {
-        setItems(out);
-        setLoading(false);
-      }
+      if (!cancelled) setLoading(false);
     }
-    loadAll();
-    return () => {
-      cancelled = true;
-    };
+    void loadFirst();
+    return () => { cancelled = true; };
   }, []);
+
+  const loadMore = useCallback(async () => {
+    if (loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const res = await apiFetch<ListResponse>(`/api/v1/curriculum?limit=${PAGE_SIZE}&offset=${items.length}`, {}, true);
+      if (res) {
+        setItems(prev => [...prev, ...(res.data ?? [])]);
+        if (typeof res.total === 'number') setTotal(res.total);
+      }
+    } catch {
+      // backend offline
+    }
+    setLoadingMore(false);
+  }, [items.length, loadingMore]);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return items;
@@ -64,7 +79,9 @@ export default function AdminCurriculumPage() {
       <header>
         <h1 className="text-2xl font-bold">Currículo</h1>
         <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
-          {loading ? 'Carregando…' : `${items.length.toLocaleString('pt-BR')} artigos no banco`}
+          {loading
+            ? 'Carregando…'
+            : `${items.length.toLocaleString('pt-BR')} de ${total.toLocaleString('pt-BR')} artigos carregados`}
         </p>
       </header>
 
@@ -117,10 +134,24 @@ export default function AdminCurriculumPage() {
         </table>
         {filtered.length > 200 && (
           <p className="p-3 text-xs" style={{ color: 'var(--ffv-muted)' }}>
-            Mostrando 200 de {filtered.length}. Refine a busca pra ver outros.
+            Mostrando 200 de {filtered.length} (após filtro local). Refine a busca pra ver outros.
           </p>
         )}
       </div>
+
+      {items.length < total && !search.trim() && (
+        <div className="flex justify-center">
+          <button
+            type="button"
+            onClick={() => void loadMore()}
+            disabled={loadingMore}
+            className="px-5 py-2 rounded-md text-sm font-semibold disabled:opacity-50"
+            style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)', cursor: 'pointer' }}
+          >
+            {loadingMore ? 'Carregando…' : `Carregar mais ${PAGE_SIZE} (${total - items.length} restantes)`}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

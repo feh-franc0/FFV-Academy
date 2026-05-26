@@ -168,12 +168,17 @@ type pgxCheatsheetsRepo struct{ pool *pgxpool.Pool }
 var _ handlers.CheatsheetsRepository = (*pgxCheatsheetsRepo)(nil)
 
 func (r *pgxCheatsheetsRepo) List(ctx context.Context) ([]handlers.CheatsheetSummary, error) {
+	// LIMIT 500 defensivo: pessoa criou cheatsheets em massa por engano ou
+	// vetor de DoS por inflar conteúdo não vai matar o backend nem o cliente.
+	// Volume real esperado: dezenas. Quando passar de 200, vale paginar com
+	// envelope {data, total}; por enquanto contrato fica array simples.
 	rows, err := r.pool.Query(ctx, `
 		SELECT slug, title, COALESCE(subtitle, ''), COALESCE(description, ''),
 		       accent, COALESCE(emoji, ''), "order"
 		FROM cheatsheets
 		WHERE deleted_at IS NULL AND status = 'published'
 		ORDER BY "order" ASC, title ASC
+		LIMIT 500
 	`)
 	if err != nil {
 		return nil, err
@@ -255,12 +260,15 @@ type pgxPlaylistsRepo struct{ pool *pgxpool.Pool }
 var _ handlers.PlaylistsRepository = (*pgxPlaylistsRepo)(nil)
 
 func (r *pgxPlaylistsRepo) List(ctx context.Context) ([]handlers.Playlist, error) {
+	// LIMIT 500 defensivo. Mesma justificativa de cheatsheets — volume real
+	// é dezenas. Paginação completa fica pra quando passar de 200.
 	rows, err := r.pool.Query(ctx, `
 		SELECT id::text, slug, title, COALESCE(subtitle, ''), COALESCE(audience, ''),
 		       color, COALESCE(emoji, ''), module_slugs, "order", status, created_at, updated_at
 		FROM playlists
 		WHERE deleted_at IS NULL AND status = 'published'
 		ORDER BY "order" ASC, title ASC
+		LIMIT 500
 	`)
 	if err != nil {
 		return nil, err

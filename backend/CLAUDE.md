@@ -1,5 +1,35 @@
 # CLAUDE.md — Backend (Go API)
 
+## 🎯 O que é o produto (linguagem de aluno)
+
+Sabe quando o aluno precisa estudar alguma coisa — apostila, livro, vídeo de aula, artigo, foto do quadro — e bate o desespero de *"por onde começo?"* e *"como vou lembrar na prova?"* **A FFV resolve isso.**
+
+Ele joga o material lá (PDF, foto, link, áudio, vídeo). Em 2-3 minutos recebe: **resumo**, **mapinha de conceitos**, **dicionário dos termos difíceis**, **100 perguntas** sempre (do básico ao difícil), **revisão espaçada** que lembra nos dias certos, e **simulado cronometrado** tipo prova. Vira aluno daquele conteúdo: estuda 30min/dia, ganha pontos, streak, ranking, certificado pro LinkedIn.
+
+**O conteúdo é do aluno** — não é a FFV empurrando aula pronta. Gratuito, em português. Pro $7/mês destrava uso ilimitado.
+
+> **Em uma frase:** o aluno joga o material dele lá, a FFV transforma em aprendizado que gruda na cabeça.
+>
+> **Este backend é o motor invisível que faz essa promessa existir** — recebe os arquivos, orquestra extração/estruturação/geração das 100Q, agenda a revisão espaçada, distribui pontos/badges/streak, gera certificados, cuida da assinatura. Tudo o que o aluno **não** vê.
+
+---
+
+## 🎯 Foco real do produto (pós-pivot mai/2026)
+
+A FFV é **plataforma de user-generated learning**: aluno sobe conteúdo → backend ingere/extrai/estrutura → gera 100 questões calibradas por Bloom → cria cards SRS. Doc canônico do método: [`../TEACHING_METHOD.md`](../TEACHING_METHOD.md).
+
+**Implicação prática pro backend:**
+
+- **Novo domínio crítico:** `ingest/` (extração: PDF, OCR, Whisper, Readability, yt-dlp) + `module-generator/` (Bloom-calibrated 100Q via Claude API) + `srs/` (já existe, integrar com módulos gerados).
+- **Endpoints novos prioritários** (ver `STRATEGY.md §9` — dias 3-14):
+  - `POST /api/v1/upload` — recebe arquivo, salva em R2, dispara worker
+  - `GET /api/v1/modules/{id}/status` — polling do processamento
+  - `GET /api/v1/modules/{id}` — módulo completo (resumo, mapa, glossário, 100Q)
+  - `POST /api/v1/modules/{id}/simulate` — submete tentativa do simulado
+- **Workers em background** (Asynq/Redis): ingestão custa 30-180s; HTTP request não pode bloquear.
+- **Validador automático (2º modelo):** segundo LLM revisa as 100Q antes de entregar — gabarito único, alternativas plausíveis, distribuição Bloom ±2.
+- **Métricas P0:** custo LLM por upload (alvo <$0.15), % uploads que viram módulo (>95%), latência média processamento.
+
 ## Documentação complementar
 
 - `api/openapi.yaml` — contrato OpenAPI 3.1 (rotas, schemas, errors, servidores).
@@ -7,6 +37,8 @@
 - `docs/RUNBOOK.md` — setup local, migrations em prod, rotação de secrets, webhook travado, backup, SLOs.
 - `docs/TESTING.md` — pirâmide de testes, comandos, coverage targets, exemplos por camada.
 - `docs/SECURITY.md` — threat model STRIDE, controles, checklist de PR review, política de secrets.
+- `../TEACHING_METHOD.md` — método pedagógico (Bloom, distribuição 100Q, anti-padrões).
+- `../STRATEGY.md` — concorrentes (NotebookLM, Quizlet, ChatGPT Study Mode), SWOT, gaps que estamos preenchendo.
 
 ---
 

@@ -70,7 +70,10 @@ function baseBadge(slug?: string): string {
 export default function AdminViewsPage() {
   const [views, setViews] = useState<ViewEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | undefined>(undefined);
+  const [hasMore, setHasMore] = useState(false);
 
   // Filtros
   const [baseFilter, setBaseFilter] = useState('');
@@ -79,9 +82,15 @@ export default function AdminViewsPage() {
   const [slugFilter, setSlugFilter] = useState('');
   const [hours, setHours] = useState(24);
 
+  // load() recarrega do zero (filtro mudou ou botão Atualizar).
+  // loadMore() pagina pra frente via cursor.
+  const PAGE_SIZE = 50;
+
   const load = useCallback(() => {
     setLoading(true);
     setErr(null);
+    setNextCursor(undefined);
+    setHasMore(false);
     const since = new Date(Date.now() - hours * 3600 * 1000).toISOString();
     fetchAdminViews({
       base: baseFilter || undefined,
@@ -89,7 +98,7 @@ export default function AdminViewsPage() {
       user: userFilter || undefined,
       slug: slugFilter || undefined,
       since,
-      limit: 200,
+      limit: PAGE_SIZE,
     })
       .then(resp => {
         if (!resp) {
@@ -98,9 +107,33 @@ export default function AdminViewsPage() {
           return;
         }
         setViews(resp.views);
+        setNextCursor(resp.nextCursor);
+        setHasMore(resp.hasMore);
       })
       .finally(() => setLoading(false));
   }, [baseFilter, kindFilter, userFilter, slugFilter, hours]);
+
+  const loadMore = useCallback(() => {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    const since = new Date(Date.now() - hours * 3600 * 1000).toISOString();
+    fetchAdminViews({
+      base: baseFilter || undefined,
+      kind: kindFilter || undefined,
+      user: userFilter || undefined,
+      slug: slugFilter || undefined,
+      since,
+      limit: PAGE_SIZE,
+      cursor: nextCursor,
+    })
+      .then(resp => {
+        if (!resp) return;
+        setViews(prev => [...prev, ...resp.views]);
+        setNextCursor(resp.nextCursor);
+        setHasMore(resp.hasMore);
+      })
+      .finally(() => setLoadingMore(false));
+  }, [baseFilter, kindFilter, userFilter, slugFilter, hours, nextCursor, loadingMore]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -180,7 +213,9 @@ export default function AdminViewsPage() {
 
       <div className="mb-3 flex items-center justify-between text-sm">
         <span style={{ color: 'var(--ffv-muted)' }}>
-          {loading ? 'Carregando…' : `${views.length} acesso${views.length === 1 ? '' : 's'}`}
+          {loading
+            ? 'Carregando…'
+            : `${views.length} acesso${views.length === 1 ? '' : 's'} ${hasMore ? '(mais disponíveis)' : 'carregados'}`}
         </span>
         <button
           onClick={load}
@@ -259,6 +294,19 @@ export default function AdminViewsPage() {
           </tbody>
         </table>
       </div>
+
+      {hasMore && (
+        <div className="mt-4 flex justify-center">
+          <button
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="px-5 py-2 rounded-md text-sm font-semibold disabled:opacity-50"
+            style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}
+          >
+            {loadingMore ? 'Carregando…' : 'Carregar mais 50'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

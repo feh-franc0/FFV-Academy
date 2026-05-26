@@ -12,6 +12,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
 	"strconv"
 	"strings"
@@ -19,19 +20,58 @@ import (
 )
 
 // AdminViewsRepository — port de leitura do feed.
+//
+// ListViews retorna (entries, nextCursor, hasMore). O cursor é opaco —
+// formato interno: base64(viewed_at_rfc3339|id). hasMore=true quando há mais
+// resultados além desta página. nextCursor vazio quando não há mais.
 type AdminViewsRepository interface {
-	ListViews(ctx context.Context, q ListViewsQuery) ([]ViewEntry, error)
+	ListViews(ctx context.Context, q ListViewsQuery) (entries []ViewEntry, nextCursor string, hasMore bool, err error)
 }
 
 // ListViewsQuery — filtros aceitos. Todos opcionais.
+//
+// Paginação é keyset (cursor por viewed_at + id) em vez de OFFSET — escala pra
+// milhões de linhas sem perder performance. ORDER fixo é DESC por (viewed_at, id).
 type ListViewsQuery struct {
-	BaseSlug  string    // exato
-	Kind      string    // module|page|simulado|admin|other
-	UserEmail string    // exato (lowercase)
-	Slug      string    // exato
-	Since     time.Time // viewed_at >= since
-	Until     time.Time // viewed_at <  until
-	Limit     int       // 1..200, default 50
+	BaseSlug   string    // exato
+	Kind       string    // module|page|simulado|admin|other
+	UserEmail  string    // exato (lowercase)
+	Slug       string    // exato
+	Since      time.Time // viewed_at >= since
+	Until      time.Time // viewed_at <  until
+	Limit      int       // 1..200, default 50
+	CursorTime time.Time // se !zero, exige (viewed_at, id) < (cursorTime, cursorID)
+	CursorID   int64     // tiebreaker do cursor
+}
+
+// EncodeCursor — formato opaco usado pelo cliente. Base64 de "rfc3339|id".
+func EncodeCursor(viewedAt time.Time, id int64) string {
+	raw := viewedAt.UTC().Format(time.RFC3339Nano) + "|" + strconv.FormatInt(id, 10)
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+// DecodeCursor — inverso de EncodeCursor. Retorna zero values se inválido.
+func DecodeCursor(s string) (time.Time, int64, bool) {
+	if s == "" {
+		return time.Time{}, 0, false
+	}
+	b, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return time.Time{}, 0, false
+	}
+	parts := strings.SplitN(string(b), "|", 2)
+	if len(parts) != 2 {
+		return time.Time{}, 0, false
+	}
+	t, err := time.Parse(time.RFC3339Nano, parts[0])
+	if err != nil {
+		return time.Time{}, 0, false
+	}
+	id, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return time.Time{}, 0, false
+	}
+	return t, id, true
 }
 
 // ViewEntry — uma linha do feed.
@@ -56,9 +96,13 @@ type ViewEntry struct {
 }
 
 // ListViewsResponse — envelope da resposta.
+// NextCursor preenchido apenas se HasMore. Cliente envia ?cursor=<NextCursor>
+// pra próxima página.
 type ListViewsResponse struct {
-	Views []ViewEntry `json:"views"`
-	Count int         `json:"count"`
+	Views      []ViewEntry `json:"views"`
+	Count      int         `json:"count"`
+	NextCursor string      `json:"nextCursor,omitempty"`
+	HasMore    bool        `json:"hasMore"`
 }
 
 // AdminViewsHandler — exposes GET /api/v1/admin/views.
@@ -91,7 +135,7 @@ func (h *AdminViewsHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	entries, err := h.repo.ListViews(ctx, q)
+	entries, nextCursor, hasMore, err := h.repo.ListViews(ctx, q)
 	if err != nil {
 		HandleDomainError(w, err)
 		return
@@ -104,8 +148,10 @@ func (h *AdminViewsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Cache-Control", "private, max-age=10")
 	WriteJSON(w, http.StatusOK, ListViewsResponse{
-		Views: entries,
-		Count: len(entries),
+		Views:      entries,
+		Count:      len(entries),
+		NextCursor: nextCursor,
+		HasMore:    hasMore,
 	})
 }
 
@@ -165,6 +211,13 @@ func parseListViewsQuery(r *http.Request) ListViewsQuery {
 	}
 	if q.Limit < 1 || q.Limit > 200 {
 		q.Limit = 50
+	}
+
+	if c := v.Get("cursor"); c != "" {
+		if t, id, ok := DecodeCursor(c); ok {
+			q.CursorTime = t
+			q.CursorID = id
+		}
 	}
 
 	return q

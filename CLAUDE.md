@@ -4,11 +4,49 @@
 
 ## 🎯 O QUE É A FFV ACADEMY
 
-**FFV Academy é a escola de engenharia para a era da IA — gratuita, gamificada e sem hype.**
+### Pitch em português coloquial (pra entender o produto, não a tech)
 
-> **"Aprenda IA, AWS e Engenharia de Software como engenheiro — não como consumidor de hype. Gamificado, gratuito e com revisão espaçada real."**
+Sabe quando você precisa estudar alguma coisa — uma apostila, um livro, um vídeo de aula, um artigo da internet, a foto que você tirou do quadro da sala — e bate aquele desespero de *"por onde eu começo?"* e *"como é que eu vou lembrar disso tudo na hora da prova?"*
 
-**Diferenciais**: profundidade técnica real (internals de transformers, MVCC, syscalls) + gamificação completa (XP/níveis/badges/streak/SM-2/ranking) + 100% gratuito + PT-BR + PWA. É o ponto de intersecção que nenhuma outra plataforma preenche.
+**A FFV resolve isso.**
+
+Você joga o material lá dentro. Pode ser PDF, foto, link, áudio, vídeo, qualquer coisa. Em uns dois ou três minutos, ela te devolve uma escola montada em cima daquele conteúdo:
+
+- Um **resumo** do que importa.
+- Um **mapinha** mostrando como os assuntos se conectam.
+- Um **dicionário** dos termos difíceis, explicado em português normal.
+- **Cem perguntas** pra você testar se entendeu de verdade — não cinco, não vinte, sempre cem, indo do básico (*"o que é tal coisa"*) até o difícil (*"monte sua própria solução pra isso"*).
+- Um sistema que vai te **lembrar de revisar** essas perguntas nos dias certos pra você não esquecer com o tempo.
+- Uma **simulação tipo prova de verdade**, cronometrada.
+
+Aí o aluno vira aluno daquele conteúdo. Estuda 30 minutinhos por dia, a FFV avisa quando é hora de revisar o que tá esquecendo, dá pontos quando acerta, mostra a sequência de dias estudando, coloca num ranking com outras pessoas, e no fim entrega um **certificado de verdade** pra colocar no LinkedIn.
+
+**O ponto central:** o conteúdo é **do aluno**. Não é a FFV empurrando aula pronta. É o aluno trazendo o que precisa aprender — pra prova, pro concurso, pro vestibular, pro trabalho, pra faculdade — e a FFV virando aquilo num plano de estudo sério, com método científico de retenção (a mesma técnica que estudantes de medicina usam pra decorar tudo, aplicada em qualquer assunto).
+
+Tudo **de graça**, em **português**, sem encheção. Quem quiser usar à vontade sem limite, paga US$7/mês (uns R$35). Mas a base é gratuita.
+
+> **Em uma frase:** o aluno joga o material dele lá, a FFV transforma em aprendizado que gruda na cabeça.
+
+### Pitch técnico (resumo formal)
+
+**FFV é a plataforma onde o aluno sobe qualquer conteúdo (PDF, imagem, texto, link, áudio, vídeo) e recebe um plano de estudo estruturado pedagogicamente: resumo, mapa conceitual, glossário, *100 questões obrigatórias* calibradas pela Taxonomia de Bloom, e revisão espaçada real (SM-2 / FSRS). Gratuita, em PT-BR, sem hype.**
+
+> **"Suba qualquer conteúdo. Receba 100 questões calibradas + revisão espaçada. Aprenda de verdade, em português, de graça."**
+
+### Princípios não-negociáveis do produto
+
+1. **O CONTEÚDO É DO ALUNO.** Quem traz o material é o estudante — PDF da apostila, foto do livro, link do artigo, áudio da aula. A FFV é o **método** que transforma isso em aprendizado retido. Não somos editora; somos pipeline pedagógico.
+2. **100 QUESTÕES SEMPRE.** Cada upload gera EXATAMENTE 100 questões distribuídas em Bloom (20 Lembrar + 30 Entender + 25 Aplicar + 15 Analisar + 7 Avaliar + 3 Criar). Nunca 30, nunca 60, nunca 200. Se o conteúdo for pequeno demais, o sistema recusa e pede mais material.
+3. **SRS real, não fake.** SM-2 (hoje) → FSRS-6 (2027). Ease factor, interval tracking, memory decay reais — diferente dos "pseudo-SRS" dos concorrentes (Knowt, Quizlet, NotebookLM).
+4. **PT-BR nativo.** Não é tradução; é cultura BR (ENEM, concurso, CESPE/FGV/Vunesp, OAB, residência).
+5. **Pedagogia ancorada em research.** Karpicke, Roediger, Bjork, Sweller, Bloom — cada decisão de produto passa pelo crivo "ensina ou só engaja?".
+
+> **Documento canônico do método:** [`TEACHING_METHOD.md`](./TEACHING_METHOD.md) — pipeline técnico, princípios, anatomia do módulo gerado.
+> **Documento canônico de estratégia:** [`STRATEGY.md`](./STRATEGY.md) — concorrentes, SWOT, plano executivo.
+
+### Histórico do pivot (mai/2026)
+
+Até abril/2026 a FFV era uma **escola com currículo curado** (157 módulos em 8 bases: Tecnologia, Medicina Veterinária, Carreira, Comunicação, Marketing, Conteúdo, Empreendedorismo, Inglês). Em maio/2026 pivotamos: o **produto principal** passa a ser o **pipeline user-generated**. O currículo curado **continua existindo** como biblioteca pública + showcase do método + seed SEO, mas **não expandimos** curadoria nova até o user-generated rodar bem (ver `TEACHING_METHOD.md §8`).
 
 ---
 
@@ -103,7 +141,7 @@ cd mcp && npm test                         # 77 testes (100% linhas/funções)
 
 8 bases live: `tecnologia`, `medicina-veterinaria`, `carreira`, `comunicacao`, `marketing`, `conteudo`, `empreendedorismo`, `ingles`.
 
-**Mudanças grandes recentes** — ver [`CHANGELOG_PLATFORM_2026-05.md`](./CHANGELOG_PLATFORM_2026-05.md):
+**Mudanças grandes recentes** — ver [`CHANGELOG.md`](./CHANGELOG.md):
 - Fase 1 do plano DB-driven concluída (migrations 000055–000063): schema base→hub→trail→module via FK, importer sem switch hardcoded
 - 5 trilhas novas (29 módulos do Profissional Digital)
 - Home redesenhada (16 → 8 seções), ranking com 4 períodos (geral/anual/mensal/semanal)
@@ -111,7 +149,7 @@ cd mcp && npm test                         # 77 testes (100% linhas/funções)
 - Backend Go com endpoints `/api/v1/stats` e `/api/v1/leaderboard/public`
 - Gamificação: sons Web Audio API, heatmap de estudo, metas diárias
 
-**Sempre que fizer mudanças grandes**, criar novo changelog incremental (`CHANGELOG_PLATFORM_YYYY-MM.md`).
+**Sempre que fizer mudanças grandes**, registrar em `CHANGELOG.md` (timeline única) com tag `[PLATAFORMA] [BACKEND] [CURRÍCULO] [GAMIFICAÇÃO]`.
 
 ---
 
@@ -338,11 +376,19 @@ PDF, DOCX, XLS/XLSX, PPT/PPTX, CSV, TXT, MD, PNG, JPG, JPEG, WebP, GIF. Limite: 
 
 ## 📚 DOCUMENTOS DE REFERÊNCIA
 
+**10 docs canônicos na raiz** (consolidação de 28 → 10 em mai/2026). Antigos arquivados em `docs/archive/`.
+
 | Doc | Quando consultar |
 |-----|------------------|
-| [`CHANGELOG_PLATFORM_2026-05.md`](./CHANGELOG_PLATFORM_2026-05.md) | Estado atual após mai/2026 — leia primeiro |
-| [`BACKEND_ROADMAP.md`](./BACKEND_ROADMAP.md) | Iniciativas que dependem de backend |
-| [`MELHORIAS.md`](./MELHORIAS.md) | Roadmap pedagógico/visual |
-| [`CURRICULUM_MASTER_PLAN.md`](./CURRICULUM_MASTER_PLAN.md) | Plano mestre do currículo |
+| [`TEACHING_METHOD.md`](./TEACHING_METHOD.md) | **Método pedagógico** — pipeline ingestão → 100Q → SRS. Doc canônico do produto. |
+| [`CHANGELOG.md`](./CHANGELOG.md) | Timeline única de mudanças (plataforma + currículo) — leia primeiro |
+| [`STRATEGY.md`](./STRATEGY.md) | Mercado, concorrentes (NotebookLM, Quizlet, ChatGPT Study Mode...), SWOT, plano 90d |
+| [`ROADMAP.md`](./ROADMAP.md) | Iniciativas priorizadas por Tier (backend + frontend + produto + conteúdo) |
+| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | Arquitetura técnica unificada (frontend + backend + DB-driven + isolamento de base) |
+| [`AUDITS_2026-05.md`](./AUDITS_2026-05.md) | Índice consolidado das 5 auditorias de mai/2026 (code/platform/UX/validation/medvet) |
+| [`CURRICULUM_MASTER_PLAN.md`](./CURRICULUM_MASTER_PLAN.md) | Plano mestre do currículo (66 trilhas, 570+ artigos) |
+| [`MIGRATION_PLAN_CONTENT_TO_DB.md`](./MIGRATION_PLAN_CONTENT_TO_DB.md) | CMS plan — 10 sprints de migração conteúdo → DB |
+| [`BACKLOG.md`](./BACKLOG.md) | Pendências operacionais do Fernando |
+| [`docs/SKILL_ADVISOR.md`](./docs/SKILL_ADVISOR.md) | Advisor de Produto Educacional (business + pedagogia + metodologia de estudos) |
 | [`backend/PLAN.md`](./backend/PLAN.md) | Plano detalhado da API Go |
 | `frontend/CLAUDE.md` | Arquitetura frontend, gotchas, mapa de componentes |

@@ -11,22 +11,30 @@ import { apiFetch, getAccessToken } from './api-client';
 export interface AdminStats {
   totalUsers: number;
   usersLast7Days: number;
+  usersPrev7Days: number;
   usersLast30Days: number;
+  usersPrev30Days: number;
   activeDaily: number;
+  activeDailyPrev: number;
   activeWeekly: number;
+  activeWeeklyPrev: number;
   activeMonthly: number;
+  activeMonthlyPrev: number;
   totalXpAwarded: number;
   totalAttempts: number;
   totalCertificates: number;
   totalArticles: number;
   totalBlocks: number;
   viewsLast7Days: number;
+  viewsPrev7Days: number;
   viewsLast30Days: number;
+  viewsPrev30Days: number;
   generatedAt: string;
 }
 
 export interface TrailViewStat {
   trailId: string;
+  title: string;
   views: number;
 }
 
@@ -165,6 +173,10 @@ export interface ViewEntry {
 export interface ListViewsResponse {
   views: ViewEntry[];
   count: number;
+  // Paginação keyset: cliente envia ?cursor=<nextCursor> pra próxima página.
+  // hasMore=true quando ainda existem rows além da página atual.
+  nextCursor?: string;
+  hasMore: boolean;
 }
 
 export async function fetchAdminViews(params: {
@@ -175,6 +187,7 @@ export async function fetchAdminViews(params: {
   since?: string;
   until?: string;
   limit?: number;
+  cursor?: string;
 } = {}): Promise<ListViewsResponse | null> {
   const q = new URLSearchParams();
   if (params.base) q.set('base', params.base);
@@ -183,6 +196,7 @@ export async function fetchAdminViews(params: {
   if (params.slug) q.set('slug', params.slug);
   if (params.since) q.set('since', params.since);
   if (params.until) q.set('until', params.until);
+  if (params.cursor) q.set('cursor', params.cursor);
   q.set('limit', String(params.limit ?? 50));
   try {
     return await apiFetch(`/api/v1/admin/views?${q.toString()}`, {}, true);

@@ -25,23 +25,86 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 
-function StatCard({ label, value, hint }: { label: string; value: string | number; hint?: string }) {
+/**
+ * BigNumberCard — card de KPI com delta vs período anterior.
+ *
+ * Convenções:
+ *  - value: número atual da janela (ex: usersLast7Days)
+ *  - prev: número do MESMO tamanho de janela imediatamente anterior (7-14d atrás)
+ *  - periodLabel: rótulo curto da janela ("7d", "24h", "30d")
+ *  - inversed=true pra métricas onde menor é melhor (ex: churn). Default false.
+ *
+ * Delta = (value - prev) / max(prev, 1) × 100. Quando prev=0 e value>0, mostra
+ * apenas "novo" (sem %, infinito não ajuda visualmente).
+ */
+function BigNumberCard({
+  label,
+  value,
+  prev,
+  periodLabel,
+  inversed = false,
+}: {
+  label: string;
+  value: number;
+  prev?: number;
+  periodLabel?: string;
+  inversed?: boolean;
+}) {
+  let deltaUI: React.ReactNode = null;
+  if (prev !== undefined) {
+    const diff = value - prev;
+    if (prev === 0 && value === 0) {
+      deltaUI = (
+        <span className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
+          sem variação{periodLabel ? ` vs ${periodLabel} anterior` : ''}
+        </span>
+      );
+    } else if (prev === 0) {
+      deltaUI = (
+        <span className="text-xs font-semibold" style={{ color: '#15803d' }}>
+          novo{periodLabel ? ` (${periodLabel})` : ''}
+        </span>
+      );
+    } else {
+      const pct = (diff / prev) * 100;
+      const positive = inversed ? diff < 0 : diff > 0;
+      const negative = inversed ? diff > 0 : diff < 0;
+      const color = positive ? '#15803d' : negative ? '#dc2626' : 'var(--ffv-muted)';
+      const arrow = diff > 0 ? '↑' : diff < 0 ? '↓' : '·';
+      deltaUI = (
+        <span className="text-xs font-semibold" style={{ color }}>
+          {arrow} {pct >= 0 ? '+' : ''}{pct.toFixed(1)}%
+          {periodLabel && (
+            <span className="ml-1 font-normal" style={{ color: 'var(--ffv-muted)' }}>
+              vs {periodLabel} anterior
+            </span>
+          )}
+        </span>
+      );
+    }
+  } else if (periodLabel) {
+    deltaUI = (
+      <span className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
+        {periodLabel}
+      </span>
+    );
+  }
+
   return (
     <div
-      className="p-4 rounded-xl"
+      className="p-5 rounded-xl flex flex-col gap-2"
       style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}
     >
-      <div className="text-xs uppercase tracking-widest font-semibold mb-1" style={{ color: 'var(--ffv-muted)' }}>
+      <div
+        className="text-xs uppercase tracking-widest font-semibold"
+        style={{ color: 'var(--ffv-muted)' }}
+      >
         {label}
       </div>
-      <div className="text-3xl font-bold" style={{ color: 'var(--foreground)' }}>
-        {typeof value === 'number' ? value.toLocaleString('pt-BR') : value}
+      <div className="text-4xl font-bold leading-tight" style={{ color: 'var(--foreground)' }}>
+        {value.toLocaleString('pt-BR')}
       </div>
-      {hint && (
-        <div className="text-xs mt-1" style={{ color: 'var(--ffv-muted)' }}>
-          {hint}
-        </div>
-      )}
+      {deltaUI}
     </div>
   );
 }
@@ -94,11 +157,11 @@ export default function AdminDashboard() {
         <h2 className="text-sm font-semibold uppercase tracking-widest mb-3" style={{ color: 'var(--ffv-muted)' }}>
           Usuários
         </h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <StatCard label="Total" value={s.totalUsers} />
-          <StatCard label="Novos 7d" value={s.usersLast7Days} />
-          <StatCard label="Novos 30d" value={s.usersLast30Days} />
-          <StatCard label="XP total" value={s.totalXpAwarded} />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <BigNumberCard label="Total" value={s.totalUsers} periodLabel="acumulado" />
+          <BigNumberCard label="Novos cadastros" value={s.usersLast7Days} prev={s.usersPrev7Days} periodLabel="7d" />
+          <BigNumberCard label="Novos cadastros" value={s.usersLast30Days} prev={s.usersPrev30Days} periodLabel="30d" />
+          <BigNumberCard label="XP distribuído" value={s.totalXpAwarded} periodLabel="acumulado" />
         </div>
       </section>
 
@@ -106,23 +169,23 @@ export default function AdminDashboard() {
         <h2 className="text-sm font-semibold uppercase tracking-widest mb-3" style={{ color: 'var(--ffv-muted)' }}>
           Atividade
         </h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <StatCard label="DAU" value={s.activeDaily} hint="ativos nas últimas 24h" />
-          <StatCard label="WAU" value={s.activeWeekly} hint="ativos nos últimos 7d" />
-          <StatCard label="MAU" value={s.activeMonthly} hint="ativos nos últimos 30d" />
-          <StatCard label="Views 7d" value={s.viewsLast7Days} hint={`${s.viewsLast30Days.toLocaleString('pt-BR')} em 30d`} />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <BigNumberCard label="DAU" value={s.activeDaily} prev={s.activeDailyPrev} periodLabel="ontem" />
+          <BigNumberCard label="WAU" value={s.activeWeekly} prev={s.activeWeeklyPrev} periodLabel="7d" />
+          <BigNumberCard label="MAU" value={s.activeMonthly} prev={s.activeMonthlyPrev} periodLabel="30d" />
+          <BigNumberCard label="Views" value={s.viewsLast7Days} prev={s.viewsPrev7Days} periodLabel="7d" />
         </div>
       </section>
 
       <section>
         <h2 className="text-sm font-semibold uppercase tracking-widest mb-3" style={{ color: 'var(--ffv-muted)' }}>
-          Conteúdo
+          Conteúdo & engajamento
         </h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <StatCard label="Artigos" value={s.totalArticles} />
-          <StatCard label="Blocks" value={s.totalBlocks} />
-          <StatCard label="Simulado attempts" value={s.totalAttempts} />
-          <StatCard label="Certificados" value={s.totalCertificates} />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <BigNumberCard label="Views 30d" value={s.viewsLast30Days} prev={s.viewsPrev30Days} periodLabel="30d" />
+          <BigNumberCard label="Simulado attempts" value={s.totalAttempts} periodLabel="acumulado" />
+          <BigNumberCard label="Certificados emitidos" value={s.totalCertificates} periodLabel="acumulado" />
+          <BigNumberCard label="Artigos publicados" value={s.totalArticles} periodLabel="acumulado" />
         </div>
       </section>
 
@@ -232,8 +295,8 @@ export default function AdminDashboard() {
                   background: i % 2 === 0 ? 'transparent' : 'var(--ffv-bg2)',
                 }}
               >
-                <span className="font-mono">{t.trailId}</span>
-                <span className="font-semibold">{t.views.toLocaleString('pt-BR')}</span>
+                <span className="truncate" title={t.trailId}>{t.title || t.trailId}</span>
+                <span className="font-semibold flex-shrink-0 ml-3">{t.views.toLocaleString('pt-BR')}</span>
               </div>
             ))}
           </div>

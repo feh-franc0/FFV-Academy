@@ -34,7 +34,9 @@ func (r *pgxAdminStatsRepo) GetAdminStats(ctx context.Context) (handlers.AdminSt
 	}{
 		{`SELECT COUNT(*) FROM users WHERE deleted_at IS NULL`, &s.TotalUsers},
 		{`SELECT COUNT(*) FROM users WHERE deleted_at IS NULL AND created_at >= now() - INTERVAL '7 days'`, &s.UsersLast7Days},
+		{`SELECT COUNT(*) FROM users WHERE deleted_at IS NULL AND created_at >= now() - INTERVAL '14 days' AND created_at < now() - INTERVAL '7 days'`, &s.UsersPrev7Days},
 		{`SELECT COUNT(*) FROM users WHERE deleted_at IS NULL AND created_at >= now() - INTERVAL '30 days'`, &s.UsersLast30Days},
+		{`SELECT COUNT(*) FROM users WHERE deleted_at IS NULL AND created_at >= now() - INTERVAL '60 days' AND created_at < now() - INTERVAL '30 days'`, &s.UsersPrev30Days},
 		{`SELECT COUNT(*) FROM curriculum_articles`, &s.TotalArticles},
 		{`SELECT COUNT(*) FROM module_blocks`, &s.TotalBlocks},
 		{`SELECT COALESCE(SUM(xp_gained), 0) FROM leaderboard`, &s.TotalXPAwarded},
@@ -51,6 +53,8 @@ func (r *pgxAdminStatsRepo) GetAdminStats(ctx context.Context) (handlers.AdminSt
 	}
 
 	// DAU/WAU/MAU vêm da module_views se houver tráfego, caso contrário 0.
+	// Cada janela "atual" tem seu pareado "prev" deslocado pra trás do mesmo
+	// tamanho (24-48h, 7-14d, 30-60d) — usado pelo dashboard pra mostrar delta %.
 	_ = r.pool.QueryRow(ctx, `
 		SELECT COUNT(DISTINCT COALESCE(user_id, anon_id, ''))
 		FROM module_views
@@ -59,26 +63,57 @@ func (r *pgxAdminStatsRepo) GetAdminStats(ctx context.Context) (handlers.AdminSt
 	_ = r.pool.QueryRow(ctx, `
 		SELECT COUNT(DISTINCT COALESCE(user_id, anon_id, ''))
 		FROM module_views
+		WHERE viewed_at >= now() - INTERVAL '48 hours' AND viewed_at < now() - INTERVAL '24 hours'
+		  AND COALESCE(user_id, anon_id) IS NOT NULL
+	`).Scan(&s.ActiveDailyPrev)
+	_ = r.pool.QueryRow(ctx, `
+		SELECT COUNT(DISTINCT COALESCE(user_id, anon_id, ''))
+		FROM module_views
 		WHERE viewed_at >= now() - INTERVAL '7 days' AND COALESCE(user_id, anon_id) IS NOT NULL
 	`).Scan(&s.ActiveWeekly)
 	_ = r.pool.QueryRow(ctx, `
 		SELECT COUNT(DISTINCT COALESCE(user_id, anon_id, ''))
 		FROM module_views
+		WHERE viewed_at >= now() - INTERVAL '14 days' AND viewed_at < now() - INTERVAL '7 days'
+		  AND COALESCE(user_id, anon_id) IS NOT NULL
+	`).Scan(&s.ActiveWeeklyPrev)
+	_ = r.pool.QueryRow(ctx, `
+		SELECT COUNT(DISTINCT COALESCE(user_id, anon_id, ''))
+		FROM module_views
 		WHERE viewed_at >= now() - INTERVAL '30 days' AND COALESCE(user_id, anon_id) IS NOT NULL
 	`).Scan(&s.ActiveMonthly)
+	_ = r.pool.QueryRow(ctx, `
+		SELECT COUNT(DISTINCT COALESCE(user_id, anon_id, ''))
+		FROM module_views
+		WHERE viewed_at >= now() - INTERVAL '60 days' AND viewed_at < now() - INTERVAL '30 days'
+		  AND COALESCE(user_id, anon_id) IS NOT NULL
+	`).Scan(&s.ActiveMonthlyPrev)
 
 	_ = r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM module_views WHERE viewed_at >= now() - INTERVAL '7 days'`).Scan(&s.ViewsLast7Days)
+	_ = r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM module_views WHERE viewed_at >= now() - INTERVAL '14 days' AND viewed_at < now() - INTERVAL '7 days'`).Scan(&s.ViewsPrev7Days)
 	_ = r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM module_views WHERE viewed_at >= now() - INTERVAL '30 days'`).Scan(&s.ViewsLast30Days)
+	_ = r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM module_views WHERE viewed_at >= now() - INTERVAL '60 days' AND viewed_at < now() - INTERVAL '30 days'`).Scan(&s.ViewsPrev30Days)
 
 	return s, nil
 }
 
 func (r *pgxAdminStatsRepo) GetTopTrails(ctx context.Context, since time.Time, limit int) ([]handlers.TrailViewStat, error) {
+	// LEFT JOIN com `trails` traz o nome humano quando o trail_id bate com uma
+	// trilha real do currículo. Se não bater (legacy ou trail removido), o
+	// COALESCE devolve o próprio id como fallback — não esconde dados, mas
+	// também não inventa nome.
+	//
+	// Filtro kind='module' garante que só views reais de módulo contam. Sem isso,
+	// kind=page/admin/simulado polui o ranking (ex: /admin/users gerava trail_id
+	// vazio mas tracking antigo enviava trail_id residual).
 	rows, err := r.pool.Query(ctx, `
-		SELECT trail_id, COUNT(*) AS n
-		FROM module_views
-		WHERE viewed_at >= $1 AND trail_id IS NOT NULL AND trail_id <> ''
-		GROUP BY trail_id
+		SELECT v.trail_id, COALESCE(t.name, v.trail_id) AS title, COUNT(*) AS n
+		FROM module_views v
+		LEFT JOIN trails t ON t.id = v.trail_id
+		WHERE v.viewed_at >= $1
+		  AND v.trail_id IS NOT NULL AND v.trail_id <> ''
+		  AND v.kind = 'module'
+		GROUP BY v.trail_id, t.name
 		ORDER BY n DESC
 		LIMIT $2
 	`, since, limit)
@@ -90,7 +125,7 @@ func (r *pgxAdminStatsRepo) GetTopTrails(ctx context.Context, since time.Time, l
 	var out []handlers.TrailViewStat
 	for rows.Next() {
 		var item handlers.TrailViewStat
-		if err := rows.Scan(&item.TrailID, &item.Views); err != nil {
+		if err := rows.Scan(&item.TrailID, &item.Title, &item.Views); err != nil {
 			return out, nil
 		}
 		out = append(out, item)
@@ -99,11 +134,16 @@ func (r *pgxAdminStatsRepo) GetTopTrails(ctx context.Context, since time.Time, l
 }
 
 func (r *pgxAdminStatsRepo) GetTopModules(ctx context.Context, since time.Time, limit int) ([]handlers.ModuleViewStat, error) {
+	// Filtro kind='module' essencial: sem isso o ranking misturava homepage (/),
+	// /bases, home de bases (tecnologia, medicina-veterinaria) e rotas admin
+	// (/admin, /admin/study-requests), todas tratadas como "módulo" só por terem
+	// slug preenchido.
 	rows, err := r.pool.Query(ctx, `
 		SELECT v.slug, COALESCE(a.title, v.slug) AS title, COALESCE(a.trail_id, '') AS trail_id, COUNT(*) AS n
 		FROM module_views v
 		LEFT JOIN curriculum_articles a ON a.slug = v.slug
 		WHERE v.viewed_at >= $1
+		  AND v.kind = 'module'
 		GROUP BY v.slug, a.title, a.trail_id
 		ORDER BY n DESC
 		LIMIT $2
@@ -395,11 +435,17 @@ type pgxAdminViewsRepo struct{ pool *pgxpool.Pool }
 
 var _ handlers.AdminViewsRepository = (*pgxAdminViewsRepo)(nil)
 
-func (r *pgxAdminViewsRepo) ListViews(ctx context.Context, q handlers.ListViewsQuery) ([]handlers.ViewEntry, error) {
+func (r *pgxAdminViewsRepo) ListViews(ctx context.Context, q handlers.ListViewsQuery) ([]handlers.ViewEntry, string, bool, error) {
 	// Construímos SQL dinamicamente com placeholders posicionais. Cada filtro
 	// vira um AND opcional. Postgres aproveita os índices parciais da mig 51
 	// (idx_module_views_base_viewed, idx_module_views_user_email_viewed,
 	// idx_module_views_kind_viewed) quando o filtro correspondente é usado.
+	//
+	// Paginação keyset: ordenação fixa por (viewed_at DESC, id DESC). Quando há
+	// cursor, condição extra `(viewed_at, id) < (cursorTime, cursorID)` salta
+	// pra próxima página em O(log n) — sem custo de OFFSET com milhões de rows.
+	// Truque do limit+1: pedimos limit+1 rows; se o backend devolver >limit,
+	// existe próxima página e usamos o último item de `out` como cursor.
 	conds := []string{"viewed_at >= $1", "viewed_at < $2"}
 	args := []any{q.Since, q.Until}
 	add := func(sql string, val any) {
@@ -418,7 +464,14 @@ func (r *pgxAdminViewsRepo) ListViews(ctx context.Context, q handlers.ListViewsQ
 	if q.Slug != "" {
 		add("slug = ", q.Slug)
 	}
-	args = append(args, q.Limit)
+	if !q.CursorTime.IsZero() {
+		args = append(args, q.CursorTime, q.CursorID)
+		idxT := "$" + itoa(len(args)-1)
+		idxID := "$" + itoa(len(args))
+		conds = append(conds, "(viewed_at, id) < ("+idxT+", "+idxID+")")
+	}
+	// limit + 1 sentinela
+	args = append(args, q.Limit+1)
 	limitIdx := "$" + itoa(len(args))
 
 	query := `
@@ -430,16 +483,16 @@ func (r *pgxAdminViewsRepo) ListViews(ctx context.Context, q handlers.ListViewsQ
 		       COALESCE(session_id,'')
 		FROM module_views
 		WHERE ` + joinAnd(conds) + `
-		ORDER BY viewed_at DESC
+		ORDER BY viewed_at DESC, id DESC
 		LIMIT ` + limitIdx
 
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("admin_views: query: %w", err)
+		return nil, "", false, fmt.Errorf("admin_views: query: %w", err)
 	}
 	defer rows.Close()
 
-	out := make([]handlers.ViewEntry, 0, q.Limit)
+	out := make([]handlers.ViewEntry, 0, q.Limit+1)
 	for rows.Next() {
 		var e handlers.ViewEntry
 		if err := rows.Scan(
@@ -450,11 +503,24 @@ func (r *pgxAdminViewsRepo) ListViews(ctx context.Context, q handlers.ListViewsQ
 			&e.UserDisplayName, &e.AnonID,
 			&e.SessionID,
 		); err != nil {
-			return nil, fmt.Errorf("admin_views: scan: %w", err)
+			return nil, "", false, fmt.Errorf("admin_views: scan: %w", err)
 		}
 		out = append(out, e)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, "", false, err
+	}
+
+	hasMore := len(out) > q.Limit
+	if hasMore {
+		out = out[:q.Limit] // descarta o sentinela
+	}
+	nextCursor := ""
+	if hasMore && len(out) > 0 {
+		last := out[len(out)-1]
+		nextCursor = handlers.EncodeCursor(last.ViewedAt, last.ID)
+	}
+	return out, nextCursor, hasMore, nil
 }
 
 func joinAnd(conds []string) string {

@@ -20,9 +20,13 @@ interface NewsItem {
   status: string;
 }
 
+const PAGE_SIZE = 50;
+
 export default function AdminNewsPage() {
   const [items, setItems] = useState<NewsItem[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -31,16 +35,33 @@ export default function AdminNewsPage() {
       return;
     }
     try {
-      const res = await fetch(`${API_BASE}/api/v1/news?limit=200`);
+      const res = await fetch(`${API_BASE}/api/v1/news?limit=${PAGE_SIZE}&offset=0`);
       if (res.ok) {
-        const body = (await res.json()) as { data?: NewsItem[] };
+        const body = (await res.json()) as { data?: NewsItem[]; total?: number };
         setItems(body.data ?? []);
+        setTotal(body.total ?? 0);
       }
     } catch {
       // backend offline
     }
     setLoading(false);
   }, []);
+
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !API_BASE) return;
+    setLoadingMore(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/news?limit=${PAGE_SIZE}&offset=${items.length}`);
+      if (res.ok) {
+        const body = (await res.json()) as { data?: NewsItem[]; total?: number };
+        setItems(prev => [...prev, ...(body.data ?? [])]);
+        if (typeof body.total === 'number') setTotal(body.total);
+      }
+    } catch {
+      // backend offline
+    }
+    setLoadingMore(false);
+  }, [items.length, loadingMore]);
 
   useEffect(() => {
     load();
@@ -58,7 +79,7 @@ export default function AdminNewsPage() {
         <div>
           <h1 className="text-2xl font-bold">News</h1>
           <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
-            {loading ? 'Carregando…' : `${items.length} notícias`}
+            {loading ? 'Carregando…' : `${items.length} de ${total} notícias`}
           </p>
         </div>
         <Link
@@ -111,6 +132,20 @@ export default function AdminNewsPage() {
           </tbody>
         </table>
       </div>
+
+      {items.length < total && (
+        <div className="flex justify-center">
+          <button
+            type="button"
+            onClick={() => void loadMore()}
+            disabled={loadingMore}
+            className="px-5 py-2 rounded-md text-sm font-semibold disabled:opacity-50"
+            style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)', cursor: 'pointer' }}
+          >
+            {loadingMore ? 'Carregando…' : `Carregar mais (${total - items.length} restantes)`}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -2,9 +2,32 @@
 
 # FFV Academy
 
-**Plataforma de educação real — pega o material do aluno e devolve uma escola: trilha estruturada, revisão espaçada SM-2, gamificação completa e curadoria humana. Em 24h. Gratuito.**
+</div>
 
-Não é gerador de resumo. Não é chatbot. É uma plataforma **modular por base de conhecimento** — tecnologia, medicina veterinária, direito, design, qualquer área — com o mesmo padrão pedagógico: trilhas com módulos sequenciais, quizzes com explicação, SRS real (algoritmo SM-2 do Anki) e gamificação coerente (XP, badges, streak, ranking).
+## O que é
+
+Sabe quando você precisa estudar alguma coisa — uma apostila, um livro, um vídeo de aula, um artigo da internet, a foto que você tirou do quadro da sala — e bate aquele desespero de *"por onde eu começo?"* e *"como é que eu vou lembrar disso tudo na hora da prova?"*
+
+**A FFV resolve isso.**
+
+Você joga o material lá dentro. Pode ser PDF, foto, link, áudio, vídeo, qualquer coisa. Em uns dois ou três minutos, ela te devolve uma escola montada em cima daquele conteúdo:
+
+- Um **resumo** do que importa.
+- Um **mapinha** mostrando como os assuntos se conectam.
+- Um **dicionário** dos termos difíceis, explicado em português normal.
+- **Cem perguntas** pra você testar se entendeu de verdade — não cinco, não vinte, sempre cem, indo do básico (*"o que é tal coisa"*) até o difícil (*"monte sua própria solução pra isso"*).
+- Um sistema que vai te **lembrar de revisar** essas perguntas nos dias certos pra você não esquecer com o tempo.
+- Uma **simulação tipo prova de verdade**, cronometrada.
+
+Aí você vira aluno daquele conteúdo. Estuda 30 minutinhos por dia, a FFV te avisa quando é hora de revisar o que tá esquecendo, te dá pontos quando você acerta, mostra sua sequência de dias estudando, te coloca num ranking com outras pessoas, e no fim te dá um **certificado de verdade** pra colocar no LinkedIn.
+
+**O ponto central:** o conteúdo é **seu**. Não é a FFV te empurrando aula pronta. É **você** trazendo o que precisa aprender — pra prova, pro concurso, pro vestibular, pro trabalho, pra faculdade — e a FFV virando aquilo num plano de estudo sério, com método científico de retenção (a mesma técnica que os estudantes de medicina usam pra decorar tudo, mas aplicada em qualquer assunto).
+
+Tudo **de graça**, em **português**, sem encheção. Se você quiser usar à vontade sem limite, paga sete dólares por mês (uns 35 reais). Mas a base é gratuita.
+
+> **Em uma frase:** você joga seu material lá, ela transforma em aprendizado que gruda na sua cabeça.
+
+<div align="center">
 
 Monorepo full-stack: Next.js 16 SSR, API em Go 1.25, MCP server pra Claude, pipeline de vídeo Remotion + Playwright e tooling de diagramas AWS auto-corrigíveis.
 
@@ -18,7 +41,7 @@ Monorepo full-stack: Next.js 16 SSR, API em Go 1.25, MCP server pra Claude, pipe
 [![Tests](https://img.shields.io/badge/tests-504%20passing-brightgreen)]()
 [![Coverage](https://img.shields.io/badge/coverage-80%25%2B-brightgreen)]()
 
-[Demo](https://fernandofrancovalle.com) · [Documentação](./CLAUDE.md) · [Roadmap](./BACKEND_ROADMAP.md) · [Currículo](./CURRICULUM_MASTER_PLAN.md) · [Changelog mai/2026](./CHANGELOG_PLATFORM_2026-05.md)
+[Demo](https://fernandofrancovalle.com) · [Documentação](./CLAUDE.md) · [**Método de Ensino**](./TEACHING_METHOD.md) · [Estratégia + SWOT](./STRATEGY.md) · [Roadmap](./ROADMAP.md) · [Arquitetura](./ARCHITECTURE.md) · [Currículo (legado)](./CURRICULUM_MASTER_PLAN.md) · [Changelog](./CHANGELOG.md)
 
 </div>
 
@@ -53,22 +76,50 @@ Monorepo full-stack: Next.js 16 SSR, API em Go 1.25, MCP server pra Claude, pipe
 
 ## Sobre o projeto
 
-**FFV Academy** é uma plataforma de educação modular por **base de conhecimento**. Cada base (tecnologia, medicina veterinária, direito, design, concurso, e assim por diante) compartilha o mesmo padrão pedagógico — trilhas com módulos sequenciais, quizzes com dicas e explicações, revisão espaçada SM-2, gamificação completa — e só varia em **conteúdo, cores e microcopy**.
+**FFV Academy** é uma **plataforma de user-generated learning** com pedagogia embutida. O aluno sobe qualquer conteúdo; a plataforma estrutura, gera 100 questões calibradas e devolve um plano de estudo com revisão espaçada real.
 
-**Como funciona:** o estudante envia o material que tem (PDFs da faculdade, slides do curso, anotações próprias) e a área de estudo. Em até 24h, IA + curadoria humana montam uma base de estudo completa, no mesmo padrão das bases já no ar. O usuário não recebe um resumo — recebe uma escola.
+**Como funciona** (detalhes em [`TEACHING_METHOD.md`](./TEACHING_METHOD.md)):
 
-### Bases já no ar (mai/2026)
+```
+INPUT → INGESTÃO → ANÁLISE → ESTRUTURAÇÃO → 100 QUESTÕES → SRS → SIMULADO
+ PDF      OCR        Bloom       Resumo +       20 Lembrar    SM-2     100 itens
+ IMG      Whisper    Conceitos   Mapa +         30 Entender   FSRS     cronometrado
+ TXT      pdf.js     Domínio     Glossário      25 Aplicar    cards
+ LINK     Readab.    Nível       Sequência      15 Analisar   diários
+ ÁUDIO    Whisper                didática       7  Avaliar
+ VÍDEO    yt-dlp                                3  Criar
+```
+
+**Em ~2-3 minutos**, o aluno recebe: resumo executivo, mapa conceitual, glossário, sequência didática, 100 questões com gabarito + explicação, 100 cards SRS criados automaticamente, simulado cronometrado dos 100 itens. **PT-BR nativo**. **Gratuito** (com plano Pro $7/mo planejado).
+
+### Como esse modelo difere do mercado
+
+| Concorrente | Limitação que FFV não tem |
+|---|---|
+| NotebookLM (Google) | Flashcards sem SRS real — só "Got it/Missed it" + shuffle |
+| Quizlet + Coconote | Magic Notes gera 10-30 cards; Learn Mode ≠ SRS canônico |
+| ChatGPT Study Mode | Conversacional, sem 100Q estruturado por Bloom |
+| StudyFetch | Cap 20 questões/quiz |
+| Conker | Cap 10 questões/quiz no free |
+| Anki / Mochi / RemNote | SRS sério mas **sem AI gen nativo a partir de upload** |
+| Stoodi / Descomplica / QConcursos | PT-BR + curado mas **sem upload-to-AI** |
+
+> Análise completa de 16 concorrentes + 7 gaps defensáveis + SWOT em [`STRATEGY.md`](./STRATEGY.md).
+
+### Currículo curado (legado — mantido como showcase)
+
+Antes do pivot a FFV era escola com **157 módulos curados** em 8 bases (Tecnologia, Medicina Veterinária, Carreira, Comunicação, Marketing, Conteúdo, Empreendedorismo, Inglês). Esses módulos **continuam acessíveis** como biblioteca pública + prova social do método + seed SEO. Não estamos expandindo curadoria nova até o pipeline user-generated rodar bem.
 
 | Base | Trilhas | Módulos | Simulado |
 |---|---|---|---|
-| **Tecnologia** (`/tecnologia`) | 16 trilhas em 8 hubs (IA, AWS, Engenharia, Claude/Anthropic, Fundamentos, Programação, Dados, Profissional Digital) | 157 módulos | CLF-C02 (1015 questões) |
-| **Medicina Veterinária** (`/medicina-veterinaria`) | 1 trilha (Genética em 4 hubs temáticos) | 12 módulos | 100 questões de Genética |
+| **Tecnologia** (`/tecnologia`) | 16 trilhas em 8 hubs | 157 módulos | CLF-C02 (1015 questões) |
+| **Medicina Veterinária** (`/medicina-veterinaria`) | 1 trilha (Genética em 4 hubs) | 12 módulos | 100 questões de Genética |
 
-Toda base nova nasce com **o mesmo conjunto de componentes compartilhados** (`BaseModule`, `BaseThemeProvider`, `BaseNavContext`, `TrailSummaryDrawer`, `SimuladoRunner`, `GameHUD`). Só muda a paleta, o conteúdo, o mascote, o microcopy e os links de header/footer. Adicionar uma base = adicionar uma entrada em [`frontend/src/lib/bases/registry.ts`](./frontend/src/lib/bases/registry.ts) — o `BaseResolver` descobre automaticamente.
+Toda base nova nasce com **o mesmo conjunto de componentes compartilhados** (`BaseModule`, `BaseThemeProvider`, `BaseNavContext`, `TrailSummaryDrawer`, `SimuladoRunner`, `GameHUD`). Adicionar uma base = adicionar uma entrada em [`frontend/src/lib/bases/registry.ts`](./frontend/src/lib/bases/registry.ts) — o `BaseResolver` descobre automaticamente.
 
-> Arquitetura completa em [`ARCHITECTURE_BASES_MODULAR.md`](./ARCHITECTURE_BASES_MODULAR.md).
+> Arquitetura completa em [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 >
-> Posicionamento competitivo em [`COMPETITIVE_ANALYSIS_2026-05.md`](./COMPETITIVE_ANALYSIS_2026-05.md).
+> Posicionamento competitivo + SWOT em [`STRATEGY.md`](./STRATEGY.md).
 
 ### Diferenciais reais vs concorrência (NotebookLM, ChatGPT, Stoodi, Anki)
 
@@ -331,12 +382,15 @@ fernandofrancovalledotcom/
 │   └── dependabot.yml     Atualizações semanais (gomod, npm, actions, docker)
 ├── .husky/                pre-commit: lint + test + go build + go test
 ├── CLAUDE.md              Documentação canônica para agentes (start here)
-├── BACKEND_ROADMAP.md     Próximas features do backend
+├── STRATEGY.md            Mercado, concorrentes, plano executivo 90d
+├── ROADMAP.md             Iniciativas priorizadas por Tier
+├── ARCHITECTURE.md        Arquitetura técnica unificada
+├── CHANGELOG.md           Timeline única de mudanças
+├── AUDITS_2026-05.md      Índice consolidado das 5 auditorias de mai/2026
 ├── CURRICULUM_MASTER_PLAN.md  Roadmap editorial (66 trilhas, 570+ artigos)
-├── BRIEFING_CURRICULUM_V2.md  Estratégia editorial e DNA do conteúdo
-├── CHANGELOG_CURRICULUM_V2.md Histórico de adições ao currículo
-├── WALKTHROUGH.md         Setup + deploy para o maintainer
-└── MELHORIAS.md           Backlog priorizado de UX/infra
+├── MIGRATION_PLAN_CONTENT_TO_DB.md  CMS plan
+├── BACKLOG.md             Pendências operacionais
+└── docs/SKILL_ADVISOR.md  Advisor de Produto Educacional (business + pedagogia)
 ```
 
 ---
@@ -676,12 +730,15 @@ Atualizações **semanais** (segunda 04:00 UTC) em 4 ecossistemas: `gomod`, `npm
 | [`backend/docs/SECURITY.md`](./backend/docs/SECURITY.md)         | STRIDE threat model, controls, checklist                                                   |
 | [`backend/api/openapi.yaml`](./backend/api/openapi.yaml)         | Contrato OpenAPI 3.1 (todas as rotas, schemas, erros)                                       |
 | [`docs/CI.md`](./docs/CI.md)                                     | Detalhes dos workflows e troubleshooting de CI                                              |
-| [`BACKEND_ROADMAP.md`](./BACKEND_ROADMAP.md)                     | Próximas features do backend                                                                 |
+| [`STRATEGY.md`](./STRATEGY.md)                                   | Mercado, concorrentes, posicionamento, plano executivo 90d                                  |
+| [`ROADMAP.md`](./ROADMAP.md)                                     | Iniciativas priorizadas por Tier (backend + frontend + produto + conteúdo)                  |
+| [`ARCHITECTURE.md`](./ARCHITECTURE.md)                           | Arquitetura técnica unificada (frontend + backend + DB-driven + isolamento de base)         |
+| [`AUDITS_2026-05.md`](./AUDITS_2026-05.md)                       | Índice das 5 auditorias de mai/2026 (code/platform/UX/validation/medvet)                    |
+| [`CHANGELOG.md`](./CHANGELOG.md)                                 | Timeline única de mudanças significativas                                                    |
 | [`CURRICULUM_MASTER_PLAN.md`](./CURRICULUM_MASTER_PLAN.md)       | Roadmap editorial das 66 trilhas                                                             |
-| [`BRIEFING_CURRICULUM_V2.md`](./BRIEFING_CURRICULUM_V2.md)       | DNA editorial, posicionamento, target                                                        |
-| [`CHANGELOG_CURRICULUM_V2.md`](./CHANGELOG_CURRICULUM_V2.md)     | Histórico de adições ao currículo                                                            |
-| [`WALKTHROUGH.md`](./WALKTHROUGH.md)                             | Setup + deploy passo a passo (maintainer)                                                    |
-| [`MELHORIAS.md`](./MELHORIAS.md)                                 | Backlog priorizado de UX/infra                                                               |
+| [`MIGRATION_PLAN_CONTENT_TO_DB.md`](./MIGRATION_PLAN_CONTENT_TO_DB.md) | Plano de migração de conteúdo → DB (10 sprints)                                       |
+| [`BACKLOG.md`](./BACKLOG.md)                                     | Pendências operacionais                                                                      |
+| [`docs/SKILL_ADVISOR.md`](./docs/SKILL_ADVISOR.md)               | Advisor de Produto Educacional (business + pedagogia + metodologia)                          |
 
 ---
 
@@ -693,7 +750,7 @@ Atualizações **semanais** (segunda 04:00 UTC) em 4 ecossistemas: `gomod`, `npm
 - Tutor IA: trocar mock do frontend por chamada real ao backend (`POST /tutor/ask`).
 - Implementar painel de leaderboard no frontend (backend já expõe).
 
-**Médio prazo (ver [`BACKEND_ROADMAP.md`](./BACKEND_ROADMAP.md)):**
+**Médio prazo (ver [`ROADMAP.md`](./ROADMAP.md)):**
 
 - Webhooks externos (analytics, eventos para CRM).
 - Dashboard administrativo de métricas editoriais.

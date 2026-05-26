@@ -21,26 +21,49 @@ type AdminStatsRepository interface {
 }
 
 // AdminStats é o snapshot agregado retornado por /api/v1/admin/stats.
+//
+// Campos `*Prev*` são pareados com o respectivo `*Last*` e representam o
+// período IMEDIATAMENTE ANTERIOR (deslocado pra trás pelo mesmo tamanho):
+//   - UsersLast7Days = últimos 7d        | UsersPrev7Days = 7-14d atrás
+//   - UsersLast30Days = últimos 30d      | UsersPrev30Days = 30-60d atrás
+//   - ActiveDaily = últimas 24h          | ActiveDailyPrev = 24-48h atrás
+//   - ActiveWeekly = últimos 7d          | ActiveWeeklyPrev = 7-14d atrás
+//   - ActiveMonthly = últimos 30d        | ActiveMonthlyPrev = 30-60d atrás
+//   - ViewsLast7Days = últimos 7d        | ViewsPrev7Days = 7-14d atrás
+//   - ViewsLast30Days = últimos 30d      | ViewsPrev30Days = 30-60d atrás
+//
+// Frontend calcula delta % = (current - prev) / max(prev, 1) * 100.
+// Cumulativos (totalUsers, totalXP, totalArticles, totalBlocks) não têm prev
+// porque a comparação faria pouco sentido.
 type AdminStats struct {
-	TotalUsers      int64     `json:"totalUsers"`
-	UsersLast7Days  int64     `json:"usersLast7Days"`
-	UsersLast30Days int64     `json:"usersLast30Days"`
-	ActiveDaily     int64     `json:"activeDaily"`
-	ActiveWeekly    int64     `json:"activeWeekly"`
-	ActiveMonthly   int64     `json:"activeMonthly"`
-	TotalXPAwarded  int64     `json:"totalXpAwarded"`
-	TotalAttempts   int64     `json:"totalAttempts"`
-	TotalCertifs    int64     `json:"totalCertificates"`
-	TotalArticles   int64     `json:"totalArticles"`
-	TotalBlocks     int64     `json:"totalBlocks"`
-	ViewsLast7Days  int64     `json:"viewsLast7Days"`
-	ViewsLast30Days int64     `json:"viewsLast30Days"`
-	GeneratedAt     time.Time `json:"generatedAt"`
+	TotalUsers        int64     `json:"totalUsers"`
+	UsersLast7Days    int64     `json:"usersLast7Days"`
+	UsersPrev7Days    int64     `json:"usersPrev7Days"`
+	UsersLast30Days   int64     `json:"usersLast30Days"`
+	UsersPrev30Days   int64     `json:"usersPrev30Days"`
+	ActiveDaily       int64     `json:"activeDaily"`
+	ActiveDailyPrev   int64     `json:"activeDailyPrev"`
+	ActiveWeekly      int64     `json:"activeWeekly"`
+	ActiveWeeklyPrev  int64     `json:"activeWeeklyPrev"`
+	ActiveMonthly     int64     `json:"activeMonthly"`
+	ActiveMonthlyPrev int64     `json:"activeMonthlyPrev"`
+	TotalXPAwarded    int64     `json:"totalXpAwarded"`
+	TotalAttempts     int64     `json:"totalAttempts"`
+	TotalCertifs      int64     `json:"totalCertificates"`
+	TotalArticles     int64     `json:"totalArticles"`
+	TotalBlocks       int64     `json:"totalBlocks"`
+	ViewsLast7Days    int64     `json:"viewsLast7Days"`
+	ViewsPrev7Days    int64     `json:"viewsPrev7Days"`
+	ViewsLast30Days   int64     `json:"viewsLast30Days"`
+	ViewsPrev30Days   int64     `json:"viewsPrev30Days"`
+	GeneratedAt       time.Time `json:"generatedAt"`
 }
 
 // TrailViewStat — entrada do top trails (views agregados por trilha).
+// Title vem do JOIN com tabela `trails`; cai pro próprio TrailID se não bater.
 type TrailViewStat struct {
 	TrailID string `json:"trailId"`
+	Title   string `json:"title"`
 	Views   int64  `json:"views"`
 }
 
