@@ -92,22 +92,6 @@ export const GameStateSchema = z.object({
   }).optional(),
   /** Mapa de questId → ISO timestamp quando XP foi reivindicado (novo sistema). */
   questsClaimedAt: z.record(z.string(), z.string()).optional(),
-  /** Pergunta do Dia — estado do dia corrente. */
-  dailyQuestion: z.object({
-    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    questionId: z.string(),
-    answeredId: z.string().optional(),
-    correct: z.boolean().optional(),
-    answeredAt: z.string().optional(),
-  }).optional(),
-  dailyQuestionStreak: z.number().int().nonnegative().optional(),
-  dailyQuestionHistory: z.array(z.object({
-    id: z.string(),
-    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    correct: z.boolean(),
-    source: z.enum(['module', 'simulado', 'pool']),
-    hubId: z.string().optional(),
-  })).optional(),
   /** Metadata adicionada pelo exportState — ignorada na importação. */
   exportedAt: z.string().optional(),
 }).strict();

@@ -37,7 +37,6 @@ function defaultPrefs(over: Partial<Preferences> = {}): Preferences {
     certificationIds: [],
     objectives: [],
     skillLevel: '',
-    dailyQuestionEnabled: true,
     onboarded: false,
     updatedAt: '2026-05-16T12:00:00Z',
     ...over,

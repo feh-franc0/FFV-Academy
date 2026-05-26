@@ -25,7 +25,6 @@ function makePrefs(over: Partial<Preferences> = {}): Preferences {
     certificationIds: [],
     objectives: [],
     skillLevel: '',
-    dailyQuestionEnabled: true,
     onboarded: false,
     updatedAt: '2026-05-16T12:00:00Z',
     ...over,
@@ -75,11 +74,11 @@ describe('updatePreferences', () => {
 
   it('omite campos undefined do body (não envia chaves null/undefined)', async () => {
     apiFetchMock.mockResolvedValue(makePrefs());
-    await updatePreferences({ dailyQuestionEnabled: false });
+    await updatePreferences({ skillLevel: 'beginner' });
 
     const body = JSON.parse(apiFetchMock.mock.calls[0][1].body);
-    expect(Object.keys(body)).toEqual(['dailyQuestionEnabled']);
-    expect(body.dailyQuestionEnabled).toBe(false);
+    expect(Object.keys(body)).toEqual(['skillLevel']);
+    expect(body.skillLevel).toBe('beginner');
   });
 
   it('passa listas vazias intencionalmente (limpa preferência)', async () => {

@@ -39,8 +39,6 @@ function seedGameState(overrides: Partial<{ xp: number; streak: number; lastStud
     bookmarks: [],
     moduleRatings: {},
     quests: { daily: [], weekly: [] },
-    dailyQuestionStreak: 0,
-    dailyQuestionHistory: [],
     ...overrides,
   };
   localStorage.setItem(GAME_KEY, JSON.stringify(base));

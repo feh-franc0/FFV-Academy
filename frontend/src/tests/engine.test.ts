@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 
 // engine.ts usa 'use client' — ok em Vitest, a diretiva é ignorada
 // Mas depende de localStorage (jsdom fornece) e de CURRICULUM/LEVELS
-import { completeModule, loadState, answerDailyQuestion } from '../lib/engine';
+import { completeModule, loadState } from '../lib/engine';
 import { getLevelInfo } from '../lib/curriculum';
 
 // Módulo real do currículo (existe no CURRICULUM)
@@ -105,8 +105,8 @@ describe('completeModule', () => {
   });
 });
 
-describe('migrateState v3 → v6', () => {
-  it('preserva campos antigos e adiciona dailyQuestionStreak/History e questsClaimedAt', () => {
+describe('migrateState v3 → v7', () => {
+  it('preserva campos antigos, descarta dailyQuestion* legados e adiciona questsClaimedAt', () => {
     localStorage.clear();
     const legacy = {
       schemaVersion: 3,
@@ -115,91 +115,26 @@ describe('migrateState v3 → v6', () => {
       completedModules: ['m1'],
       bookmarks: ['m1'],
       moduleRatings: { m1: 1 },
+      // Campos da Pergunta do Dia (descontinuada em 2026-05-25) devem ser
+      // descartados pela migração v6→v7 e nunca aparecer no estado atual.
+      dailyQuestion: { date: '2026-05-20', questionId: 'q1' },
+      dailyQuestionStreak: 5,
+      dailyQuestionHistory: [{ id: 'q1', date: '2026-05-20', correct: true, source: 'pool' }],
     };
     localStorage.setItem('ffv_academy', JSON.stringify(legacy));
     const state = loadState();
     expect(state.xp).toBe(100);
     expect(state.completedModules).toContain('m1');
     expect(state.bookmarks).toContain('m1');
-    expect(state.schemaVersion).toBe(6);
-    expect(state.dailyQuestionStreak).toBe(0);
-    expect(state.dailyQuestionHistory).toEqual([]);
+    expect(state.schemaVersion).toBe(7);
     expect(state.quests).toEqual({ daily: [], weekly: [] });
     expect(state.questsClaimedAt).toEqual({});
-  });
-});
-
-describe('answerDailyQuestion', () => {
-  it('acerto soma 5 XP, incrementa streak, registra no histórico', () => {
-    localStorage.clear();
-    const result = answerDailyQuestion({
-      questionId: 'sim_x_q1',
-      answeredId: 'A',
-      correctId: 'A',
-      source: 'simulado',
-      stem: 'Stem?',
-      options: ['A', 'B', 'C', 'D'],
-      correctIndex: 0,
-      explanation: 'porque',
-      topic: 'IAM',
-    });
-    expect(result.correct).toBe(true);
-    expect(result.xpGained).toBe(5);
-    expect(result.streak).toBe(1);
-    const state = loadState();
-    expect(state.dailyQuestion?.correct).toBe(true);
-    expect(state.dailyQuestionHistory?.length).toBe(1);
-  });
-
-  it('erro soma 1 XP, reseta streak, cria card SRS', () => {
-    localStorage.clear();
-    const before = loadState();
-    expect(before.reviewCards.length).toBe(0);
-    const result = answerDailyQuestion({
-      questionId: 'sim_x_q1',
-      answeredId: 'B',
-      correctId: 'A',
-      source: 'simulado',
-      stem: 'Stem?',
-      options: ['A', 'B', 'C', 'D'],
-      correctIndex: 0,
-      explanation: 'porque',
-      topic: 'IAM',
-    });
-    expect(result.correct).toBe(false);
-    expect(result.xpGained).toBe(1);
-    expect(result.streak).toBe(0);
-    const state = loadState();
-    expect(state.reviewCards.length).toBe(1);
-  });
-
-  it('idempotente: segunda chamada no mesmo dia não muda XP', () => {
-    localStorage.clear();
-    answerDailyQuestion({
-      questionId: 'sim_x_q1',
-      answeredId: 'A',
-      correctId: 'A',
-      source: 'simulado',
-      stem: 'S',
-      options: ['A', 'B', 'C', 'D'],
-      correctIndex: 0,
-      explanation: '',
-      topic: 't',
-    });
-    const xpAfterFirst = loadState().xp;
-    const second = answerDailyQuestion({
-      questionId: 'sim_x_q1',
-      answeredId: 'A',
-      correctId: 'A',
-      source: 'simulado',
-      stem: 'S',
-      options: ['A', 'B', 'C', 'D'],
-      correctIndex: 0,
-      explanation: '',
-      topic: 't',
-    });
-    expect(second.xpGained).toBe(0);
-    expect(loadState().xp).toBe(xpAfterFirst);
+    // dailyQuestion* foram removidos da GameState — checamos via cast
+    // porque o tipo nem expõe mais essas chaves.
+    const stateAsAny = state as unknown as Record<string, unknown>;
+    expect(stateAsAny.dailyQuestion).toBeUndefined();
+    expect(stateAsAny.dailyQuestionStreak).toBeUndefined();
+    expect(stateAsAny.dailyQuestionHistory).toBeUndefined();
   });
 });
 

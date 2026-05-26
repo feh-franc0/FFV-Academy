@@ -7,7 +7,7 @@
  *
  * A camada UI consome via React Query / useEffect e renderiza condicionalmente:
  *   - onboarded=false → mostra OnboardingWizard bloqueante
- *   - onboarded=true  → mostra DailyQuestionCard filtrado pelas certifications
+ *   - onboarded=true  → libera personalização de recomendações por base
  */
 
 import { apiFetch } from './api-client';
@@ -38,7 +38,6 @@ export interface Preferences {
   certificationIds: string[];
   objectives: Objective[];
   skillLevel: SkillLevel;
-  dailyQuestionEnabled: boolean;
   onboarded: boolean;
   onboardedAt?: string;
   updatedAt: string;
@@ -57,7 +56,6 @@ export interface UpdatePreferencesInput {
   certificationIds?: string[];
   objectives?: Objective[];
   skillLevel?: SkillLevel;
-  dailyQuestionEnabled?: boolean;
   // Fase 3
   interestedBases?: string[];
   homeBase?: string;

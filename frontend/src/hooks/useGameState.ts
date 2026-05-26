@@ -18,9 +18,7 @@ import {
   rateModule,
   claimQuestReward,
   claimQuestRewardV2,
-  answerDailyQuestion as engineAnswerDailyQuestion,
   type GameState,
-  type DailyQuestionResult,
   type CompleteModuleResult,
   type CompleteModuleInput,
   type ReviewCardResult,
@@ -334,24 +332,6 @@ export function useGameState() {
     if (next) debouncedSaveToIDB(next);
   }, [debouncedSaveToIDB]);
 
-  const answerDaily = useCallback((input: Parameters<typeof engineAnswerDailyQuestion>[0]): DailyQuestionResult => {
-    unlockAudio();
-    const result = engineAnswerDailyQuestion(input);
-    const next = loadState();
-    setState(next);
-    if (next) debouncedSaveToIDB(next);
-
-    if (result.leveledUp) {
-      playLevelUp();
-      toast.levelUp(result.newLevel);
-    } else if (result.correct) {
-      playXPCoin();
-    } else {
-      playPop();
-    }
-    return result;
-  }, [debouncedSaveToIDB]);
-
   const levelInfo = state ? getLevelInfo(state.xp) : null;
 
   const trailsProgress = CURRICULUM.map(trail => ({
@@ -451,6 +431,5 @@ export function useGameState() {
     rate,
     claimQuest,
     claimQuestV2,
-    answerDaily,
   };
 }

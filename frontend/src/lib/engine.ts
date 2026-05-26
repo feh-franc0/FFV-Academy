@@ -7,7 +7,6 @@ import { GAME_CONFIG, STORAGE_KEYS } from './constants';
 import { getRaw, setRaw, onStorageError } from './storage';
 import { GameStateSchema, safeParseJSON } from './schemas';
 import { evaluateModuleBadges, evaluateReviewBadges, evaluateQuizBadges } from './badges';
-import { hashString } from './random-question';
 
 export interface StudyDay {
   date: string;            // YYYY-MM-DD
@@ -72,22 +71,9 @@ export interface GameState {
   };
   /** Mapa de questId → ISO timestamp quando XP foi reivindicado (novo sistema). */
   questsClaimedAt?: Record<string, string>;
-  // v5 — Pergunta do Dia
-  /** Estado da pergunta sorteada hoje. */
-  dailyQuestion?: {
-    date: string;             // ISO YYYY-MM-DD
-    questionId: string;
-    answeredId?: string;
-    correct?: boolean;
-    answeredAt?: string;
-  };
-  /** Streak de Pergunta do Dia (acertou em dias consecutivos). */
-  dailyQuestionStreak?: number;
-  /** Últimas 30 perguntas respondidas — usado para evitar repetição. */
-  dailyQuestionHistory?: Array<{ id: string; date: string; correct: boolean; source: 'module' | 'simulado' | 'pool'; hubId?: string }>;
 }
 
-const CURRENT_SCHEMA = 6;
+const CURRENT_SCHEMA = 7;
 
 /** Migra estado antigo (sem schemaVersion) para versão atual. */
 function migrateState(parsed: Record<string, unknown>): Partial<GameState> {
@@ -122,14 +108,11 @@ function migrateState(parsed: Record<string, unknown>): Partial<GameState> {
       quests: { daily: [], weekly: [] },
     };
   }
-  // v4 → v5: pergunta do dia (campos opcionais — só adiciona o streak/history default)
+  // v4 → v5: (legado) campos da Pergunta do Dia adicionados aqui.
+  // Removidos em 2026-05-25 — feature deletada. Step preservado só pra
+  // manter monotonia de schemaVersion.
   if (version < 5) {
-    state = {
-      ...state,
-      schemaVersion: 5,
-      dailyQuestionStreak: typeof state.dailyQuestionStreak === 'number' ? state.dailyQuestionStreak : 0,
-      dailyQuestionHistory: Array.isArray(state.dailyQuestionHistory) ? state.dailyQuestionHistory : [],
-    };
+    state = { ...state, schemaVersion: 5 };
   }
   // v5 → v6: questsClaimedAt (mapa questId → ISO timestamp)
   if (version < 6) {
@@ -138,6 +121,15 @@ function migrateState(parsed: Record<string, unknown>): Partial<GameState> {
       schemaVersion: 6,
       questsClaimedAt: state.questsClaimedAt && typeof state.questsClaimedAt === 'object' ? state.questsClaimedAt : {},
     };
+  }
+  // v6 → v7: remove dailyQuestion* (Pergunta do Dia foi descontinuada).
+  // Mesmo estados antigos com esses campos ficam ignorados — DEFAULT_STATE
+  // não tem mais essas chaves, então o spread em loadState() os descarta.
+  if (version < 7) {
+    state = { ...state, schemaVersion: 7 };
+    delete (state as Record<string, unknown>).dailyQuestion;
+    delete (state as Record<string, unknown>).dailyQuestionStreak;
+    delete (state as Record<string, unknown>).dailyQuestionHistory;
   }
   return state as Partial<GameState>;
 }
@@ -178,9 +170,6 @@ const DEFAULT_STATE: GameState = {
   moduleRatings: {},
   quests: { daily: [], weekly: [] },
   questsClaimedAt: {},
-  dailyQuestion: undefined,
-  dailyQuestionStreak: 0,
-  dailyQuestionHistory: [],
 };
 
 export function loadState(): GameState {
@@ -223,9 +212,6 @@ export function loadState(): GameState {
         moduleRatings: migrated.moduleRatings && typeof migrated.moduleRatings === 'object' ? migrated.moduleRatings as Record<string, 1 | -1> : {},
         quests: migrated.quests && typeof migrated.quests === 'object' ? migrated.quests as GameState['quests'] : { daily: [], weekly: [] },
         questsClaimedAt: migrated.questsClaimedAt && typeof migrated.questsClaimedAt === 'object' ? migrated.questsClaimedAt as Record<string, string> : {},
-        dailyQuestion: migrated.dailyQuestion && typeof migrated.dailyQuestion === 'object' ? migrated.dailyQuestion as GameState['dailyQuestion'] : undefined,
-        dailyQuestionStreak: typeof migrated.dailyQuestionStreak === 'number' ? migrated.dailyQuestionStreak : 0,
-        dailyQuestionHistory: Array.isArray(migrated.dailyQuestionHistory) ? migrated.dailyQuestionHistory as GameState['dailyQuestionHistory'] : [],
       };
     }
   } catch {}
@@ -778,135 +764,6 @@ export function claimQuestRewardV2(questId: string, xpReward: number): void {
 // Todas as trilhas liberadas — o leitor escolhe por onde começa
 export function isTrailUnlocked(): boolean {
   return true;
-}
-
-/* ──────────────────────────────────────────────
-   PERGUNTA DO DIA — sorteio diário do pool unificado
-──────────────────────────────────────────────── */
-
-export interface DailyQuestionResult {
-  correct: boolean;
-  xpGained: number;
-  streak: number;
-  leveledUp: boolean;
-  newLevel: number;
-}
-
-/**
- * Registra resposta da Pergunta do Dia. Acerto soma 5 XP + alimenta SRS via reviewCard(good);
- * erro soma 1 XP + cria um novo ReviewCard SRS para o tópico.
- *
- * Idempotente por data: se já houver resposta com `date === today`, retorna estado atual.
- */
-export function answerDailyQuestion(input: {
-  questionId: string;
-  answeredId: string;
-  correctId: string;
-  source: 'module' | 'simulado' | 'pool';
-  hubId?: string;
-  /** Slug do módulo de origem, se for source='module'. */
-  moduleSlug?: string;
-  /** Para hidratar SRS quando criamos um novo card a partir de erro em simulado. */
-  stem: string;
-  options: string[];
-  correctIndex: number;
-  explanation: string;
-  topic: string;
-  trailColor?: string;
-}): DailyQuestionResult {
-  let state = loadState();
-  const today = todayISO();
-  // Idempotência: já respondeu hoje
-  if (state.dailyQuestion?.date === today && state.dailyQuestion.answeredId) {
-    return {
-      correct: !!state.dailyQuestion.correct,
-      xpGained: 0,
-      streak: state.dailyQuestionStreak ?? 0,
-      leveledUp: false,
-      newLevel: state.level,
-    };
-  }
-
-  const correct = input.answeredId === input.correctId;
-  const xpGained = correct ? 5 : 1;
-  const prevLevel = state.level;
-  const addRes = addXP(state, xpGained);
-  state = addRes.state;
-
-  // Streak: incrementa se acerto E ontem houve resposta; reseta caso contrário (gap > 1 dia).
-  const yesterday = (() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 1);
-    return isoDate(d);
-  })();
-  const lastDate = state.dailyQuestion?.date;
-  let streak = state.dailyQuestionStreak ?? 0;
-  if (correct) {
-    streak = lastDate === yesterday ? streak + 1 : 1;
-  } else {
-    streak = 0;
-  }
-
-  // SRS hook
-  // - Acerto: se existir card pra essa pergunta (id "mod_<slug>_qN"), aplica reviewCard('good').
-  // - Erro: cria card novo (se source=simulado) ou força reviewCard('again') (se card existe).
-  const cardIdGuess = input.moduleSlug ? input.questionId.replace(/^mod_/, '') : null;
-  const existingIdx = cardIdGuess
-    ? state.reviewCards.findIndex(c => c.id === cardIdGuess)
-    : -1;
-  if (existingIdx >= 0) {
-    const existing = state.reviewCards[existingIdx];
-    const updated = reviewCard(existing, correct ? 'good' : 'again');
-    const next = [...state.reviewCards];
-    next[existingIdx] = updated;
-    state = { ...state, reviewCards: next };
-  } else if (!correct) {
-    // Sem card prévio + erro: cria novo card a partir da pergunta
-    const newCard = createCard(
-      input.moduleSlug ?? `daily-${today}`,
-      input.topic,
-      input.trailColor ?? '#58a6ff',
-      hashString(input.questionId) % 9999,
-      input.stem,
-      input.options,
-      input.correctIndex,
-      input.explanation,
-    );
-    state = { ...state, reviewCards: [...state.reviewCards, newCard] };
-  }
-
-  // Histórico (cap 30)
-  const historyEntry = {
-    id: input.questionId,
-    date: today,
-    correct,
-    source: input.source,
-    hubId: input.hubId,
-  };
-  const prevHistory = state.dailyQuestionHistory ?? [];
-  const history = [...prevHistory, historyEntry].slice(-30);
-
-  state = {
-    ...state,
-    dailyQuestion: {
-      date: today,
-      questionId: input.questionId,
-      answeredId: input.answeredId,
-      correct,
-      answeredAt: new Date().toISOString(),
-    },
-    dailyQuestionStreak: streak,
-    dailyQuestionHistory: history,
-  };
-
-  saveState(state);
-  return {
-    correct,
-    xpGained,
-    streak,
-    leveledUp: addRes.newLevel > prevLevel,
-    newLevel: addRes.newLevel,
-  };
 }
 
 /* ──────────────────────────────────────────────

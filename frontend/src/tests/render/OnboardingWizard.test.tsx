@@ -23,7 +23,6 @@ function defaultPrefsResponse(over: Record<string, unknown> = {}) {
     certificationIds: [],
     objectives: ['certifications'],
     skillLevel: 'intermediate',
-    dailyQuestionEnabled: true,
     onboarded: true,
     onboardedAt: '2026-05-16T12:00:00Z',
     updatedAt: '2026-05-16T12:00:00Z',

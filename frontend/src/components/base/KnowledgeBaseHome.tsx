@@ -10,18 +10,21 @@
  * em todas):
  *   1.  Hero (com ou sem GameDemo)
  *   2.  OnboardingWizard               — só pra logado com onboarded=false
- *   3.  DailyQuestionCard              — só pra logado com onboarded=true + flag
- *   4.  PreferenciasCTA (banner)       — fallback quando wizard não cabe
- *   5.  SocialProofBar
- *   6.  HowItWorks
- *   7.  Continue/Daily/Trilha/Quest    — só pra usuário com progresso
- *   8.  ComecarAqui                    — paths (hidden quando hasProgress)
- *   9.  Explorar (hubs + playlists)
- *   10. Trending                       — opcional via prop
- *   11. HomeRanking                    — opcional via prop hideRanking
- *   12. ComunidadeAutor                — opcional via prop hideComunidade
- *   13. FinalCta
- *   14. StreakRepairModal (overlay)
+ *   3.  PreferenciasCTA (banner)       — fallback quando wizard não cabe
+ *   4.  SocialProofBar
+ *   5.  Continue/Daily/Trilha/Quest    — só pra usuário com progresso
+ *   6.  ComecarAqui                    — paths (hidden quando hasProgress)
+ *   7.  Explorar (hubs + playlists)    — foco principal: conteúdo da base
+ *   8.  Trending                       — opcional via prop
+ *   9.  HomeRanking                    — opcional via prop hideRanking
+ *   10. ComunidadeAutor                — opcional via prop hideComunidade
+ *   11. FinalCta
+ *   12. StreakRepairModal (overlay)
+ *
+ * Histórico:
+ * - 2026-05-25: removidos DailyQuestionCard ("Pergunta do Dia") e HowItWorks
+ *   ("Como Funciona / Aprender de verdade") por feedback do PO — repetiam
+ *   nas bases sem adicionar valor; foco vira o conteúdo gerado.
  *
  * Quem decide aparecer ou não é o gate INTERNO do bloco, não o backend.
  * Bases sem gamificação passam `hasGamificationWidgets={false}` e tudo que
@@ -37,7 +40,6 @@ import Link from 'next/link';
 import type { BaseTheme } from '@/lib/bases/theme';
 import { Hero, type HeroProps } from '@/components/home/Hero';
 import { SocialProofBar } from '@/components/home/SocialProofBar';
-import { HowItWorks } from '@/components/home/HowItWorks';
 import { ComecarAqui, type ComecarPath } from '@/components/home/ComecarAqui';
 import { Explorar, type HubCardData, type PlaylistCardData } from '@/components/home/Explorar';
 import { Trending } from '@/components/home/Trending';
@@ -55,7 +57,6 @@ import { DailyModuleCard } from '@/components/DailyModuleCard';
 // para uso futuro mas não é mais renderizado na home das bases.
 import { QuestPanel } from '@/components/QuestPanel';
 import { SignupCTA } from '@/components/auth/SignupCTA';
-import { DailyQuestionCard } from '@/components/daily/DailyQuestionCard';
 import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
 import { StreakRepairModal } from '@/components/streak/StreakRepairModal';
 import {
@@ -101,7 +102,7 @@ interface KnowledgeBaseHomeProps {
   hideComunidade?: boolean;
   /**
    * Habilita TODOS os widgets de gamificação (OnboardingWizard,
-   * DailyQuestionCard, Continue/Daily/Trilha/Quest, Trending, StreakRepairModal).
+   * Continue/Daily/Trilha/Quest, Trending, StreakRepairModal).
    * Default true — base sem gamificação passa false.
    */
   hasGamificationWidgets?: boolean;
@@ -109,14 +110,6 @@ interface KnowledgeBaseHomeProps {
   hideTrending?: boolean;
   /** Esconde SocialProofBar. */
   hideSocialProof?: boolean;
-  /** Esconde HowItWorks. */
-  hideHowItWorks?: boolean;
-  /** Steps personalizados do HowItWorks pra base (default = texto neutro). */
-  howItWorksSteps?: Parameters<typeof HowItWorks>[0] extends { steps?: infer S } ? S : never;
-  /** Override do título do HowItWorks. */
-  howItWorksHeading?: string;
-  /** Override do subtítulo do HowItWorks. */
-  howItWorksSubheading?: string;
   /** Heading do bloco "Hoje no FFV" (continue/daily/trilha/quest). */
   todayHeading?: string;
   todayKicker?: string;
@@ -161,10 +154,6 @@ export function KnowledgeBaseHome({
   hasGamificationWidgets = true,
   hideTrending = false,
   hideSocialProof = false,
-  hideHowItWorks = false,
-  howItWorksSteps,
-  howItWorksHeading,
-  howItWorksSubheading,
   todayHeading = 'Hoje no FFV',
   todayKicker = 'Continue de onde parou',
 }: KnowledgeBaseHomeProps) {
@@ -207,16 +196,11 @@ export function KnowledgeBaseHome({
     setRepairModal({ open: false, streak: 0 });
   }
 
-  // OnboardingWizard, DailyQuestion e PreferenciasCTA — só fazem sentido quando
-  // a base tem gamificação ligada (caso contrário, não há preferências de
-  // estudo a configurar).
+  // OnboardingWizard e PreferenciasCTA — só fazem sentido quando a base tem
+  // gamificação ligada (caso contrário, não há preferências de estudo a
+  // configurar).
   const showOnboardingWizard =
     hasGamificationWidgets && isLoggedIn && prefStatus === 'ready' && preferences?.onboarded === false;
-  const showDailyQuestion =
-    hasGamificationWidgets
-    && isLoggedIn
-    && preferences?.onboarded === true
-    && preferences?.dailyQuestionEnabled;
   const showPreferencesCTA =
     hasGamificationWidgets && isLoggedIn && prefStatus === 'ready' && preferences?.onboarded === false;
 
@@ -232,15 +216,6 @@ export function KnowledgeBaseHome({
             await refreshPrefs();
           }}
         />
-      )}
-
-      {showDailyQuestion && (
-        <section className="px-6 pt-10" aria-labelledby="daily-question-heading">
-          <div className="max-w-6xl mx-auto">
-            <h2 id="daily-question-heading" className="sr-only">Pergunta do Dia</h2>
-            <DailyQuestionCard />
-          </div>
-        </section>
       )}
 
       {showPreferencesCTA && !showOnboardingWizard && (
@@ -268,13 +243,6 @@ export function KnowledgeBaseHome({
       )}
 
       {!hideSocialProof && <SocialProofBar />}
-      {!hideHowItWorks && (
-        <HowItWorks
-          steps={howItWorksSteps}
-          heading={howItWorksHeading}
-          subheading={howItWorksSubheading}
-        />
-      )}
 
       {hasProgress && (
         <section className="px-6 py-12" style={{ borderTop: '1px solid var(--ffv-border)' }}>

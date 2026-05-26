@@ -2,8 +2,8 @@
 
 /**
  * Tela `/preferencias-aprendizado` — edição standalone das preferências
- * pedagógicas. Refletem instantaneamente no DailyQuestionCard e nas
- * recomendações do dashboard ao salvar.
+ * pedagógicas. Refletem instantaneamente nas recomendações do dashboard
+ * ao salvar.
  *
  * Não confundir com `/preferencias` (privacidade/LGPD). Esta tela é só
  * sobre conteúdo educacional.
@@ -35,7 +35,6 @@ export function PreferenciasAprendizadoClient() {
   const [hubIds, setHubIds] = useState<string[]>([]);
   const [certificationIds, setCertificationIds] = useState<string[]>([]);
   const [skillLevel, setSkillLevel] = useState<SkillLevel>('');
-  const [dailyQuestionEnabled, setDailyQuestionEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -52,7 +51,6 @@ export function PreferenciasAprendizadoClient() {
       setHubIds(preferences.hubIds);
       setCertificationIds(preferences.certificationIds);
       setSkillLevel(preferences.skillLevel);
-      setDailyQuestionEnabled(preferences.dailyQuestionEnabled);
     }
   }, [preferences]);
 
@@ -70,7 +68,6 @@ export function PreferenciasAprendizadoClient() {
         hubIds,
         certificationIds,
         skillLevel,
-        dailyQuestionEnabled,
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
@@ -213,31 +210,6 @@ export function PreferenciasAprendizadoClient() {
             );
           })}
         </div>
-      </section>
-
-      {/* Toggle Pergunta do Dia */}
-      <section className="mb-8 p-5 rounded-2xl flex items-center gap-4" style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}>
-        <div className="flex-1 min-w-0">
-          <h2 className="text-lg font-bold mb-1">❓ Pergunta do Dia no dashboard</h2>
-          <p className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
-            Mostrar uma questão por dia das suas certificações na home logada.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => setDailyQuestionEnabled(v => !v)}
-          aria-pressed={dailyQuestionEnabled}
-          className="relative w-12 h-7 rounded-full transition-colors shrink-0"
-          style={{ background: dailyQuestionEnabled ? '#f78166' : 'var(--ffv-border)' }}
-        >
-          <span
-            className="absolute top-0.5 w-6 h-6 rounded-full transition-transform"
-            style={{
-              background: '#fff',
-              transform: dailyQuestionEnabled ? 'translateX(22px)' : 'translateX(2px)',
-            }}
-          />
-        </button>
       </section>
 
       {error && (
