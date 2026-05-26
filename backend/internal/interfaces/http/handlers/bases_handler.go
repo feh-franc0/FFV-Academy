@@ -212,7 +212,6 @@ type BasePageDTO struct {
 
 // BasePageFlagsDTO — toggles de exibição da home.
 type BasePageFlagsDTO struct {
-	HideRanking          bool `json:"hideRanking"`
 	HideComunidade       bool `json:"hideComunidade"`
 	HideGlobalContentNav bool `json:"hideGlobalContentNav"`
 }
@@ -263,7 +262,6 @@ func basePageDTOFromDomain(b *dombase.Base) BasePageDTO {
 		Microcopy: b.Microcopy,
 		Slogans:   b.Slogans,
 		Flags: BasePageFlagsDTO{
-			HideRanking:          b.HideRanking,
 			HideComunidade:       b.HideComunidade,
 			HideGlobalContentNav: b.HideGlobalContentNav,
 		},

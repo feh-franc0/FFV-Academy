@@ -35,7 +35,7 @@ import type { BaseConfig } from '@/lib/bases/types';
  * App dentro de uma base (/medicina-veterinaria/*, /tecnologia/*, /aprenda/*):
  *   - GameHUD, footer e tema vêm da base resolvida pelo pathname
  *
- * App em rota global (/progresso, /ranking, /revisar, /perfil…):
+ * App em rota global (/progresso, /revisar, /perfil…):
  *   - GameHUD, footer e tema vêm da BASE ATIVA (última base visitada pelo
  *     usuário). Isso mantém o usuário "no mundinho dele" mesmo quando navega
  *     pra rotas compartilhadas.

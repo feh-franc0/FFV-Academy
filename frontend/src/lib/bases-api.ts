@@ -139,7 +139,6 @@ export interface BasePageDTO {
   slogans?: Record<string, string>;
   features?: BaseFeaturesDTO;
   flags: {
-    hideRanking: boolean;
     hideComunidade: boolean;
     hideGlobalContentNav: boolean;
   };

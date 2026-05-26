@@ -72,7 +72,7 @@ describe('ActiveBaseProvider — persistência via localStorage', () => {
 
   it('rota global NÃO sobrescreve o storage (não polui)', async () => {
     window.localStorage.setItem(STORAGE_KEY, 'medicina-veterinaria');
-    mockPathname = '/ranking';
+    mockPathname = '/progresso';
     renderHook(() => useActiveBase(), { wrapper });
     await new Promise(resolve => setTimeout(resolve, 30));
     expect(window.localStorage.getItem(STORAGE_KEY)).toBe('medicina-veterinaria');

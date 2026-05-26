@@ -9,7 +9,7 @@ import type { BaseConfig } from '@/lib/bases/types';
 /**
  * ActiveBase — base "ativa" para o usuário.
  *
- * Por que existe: rotas globais (/progresso, /ranking, /revisar, /perfil...)
+ * Por que existe: rotas globais (/progresso, /revisar, /perfil...)
  * são SHARED entre bases. O resolver não sabe em qual base o usuário "está"
  * vindo de — então cai no DEFAULT (tech) e o tema/microcopy vazam.
  *

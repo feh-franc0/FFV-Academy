@@ -56,7 +56,7 @@ export function HowItWorks({ steps, heading, subheading }: HowItWorksProps = {})
   const finalHeading = heading ?? 'Aprender de verdade, não só ler artigo.';
   const finalSubheading =
     subheading ??
-    'Plataforma gamificada com XP, badges, streak e ranking. Você aprende e ainda compete consigo mesmo (e com a comunidade).';
+    'Plataforma gamificada com XP, badges e streak. Você aprende em ritmo próprio com revisão espaçada que cobra o que importa.';
 
   return (
     <section className="px-6 py-20" style={{ borderTop: '1px solid var(--ffv-border)' }}>

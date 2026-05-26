@@ -33,7 +33,6 @@ const MARKETING_PATHS = new Set([
 /** Rotas que pertencem ao chrome de app mas não a uma base específica. */
 const APP_GLOBAL_PREFIXES = [
   '/progresso',
-  '/ranking',
   '/revisar',
   '/preferencias',
   '/perfil',

@@ -2220,7 +2220,7 @@ function PadraoFFV() {
             span="md:col-span-5"
             accent={SAGE_ACCENT}
             title="Gamificação inteligente"
-            subtitle="XP, badges, streak, ranking. Ritmo > força de vontade."
+            subtitle="XP, badges e streak. Ritmo > força de vontade."
             visual={
               <div className="mt-5">
                 {/* XP bar */}
@@ -2697,7 +2697,7 @@ const FAQ_ITEMS = [
   },
   {
     q: 'Como é diferente do ChatGPT, NotebookLM e Anki?',
-    a: 'ChatGPT te responde; ele esquece amanhã. NotebookLM te dá um resumo do PDF em 30 segundos. Anki tem SRS sofisticado (hoje FSRS-6), mas exige que você crie cada card sozinho. A FFV junta tudo num sistema: trilha sequencial → quiz → SRS calibrado pelo seu próprio material → ranking. Você entende, testa e revisa no tempo certo — não monta nada.',
+    a: 'ChatGPT te responde; ele esquece amanhã. NotebookLM te dá um resumo do PDF em 30 segundos. Anki tem SRS sofisticado (hoje FSRS-6), mas exige que você crie cada card sozinho. A FFV junta tudo num sistema: trilha sequencial → quiz → SRS calibrado pelo seu próprio material → certificado. Você entende, testa e revisa no tempo certo — não monta nada.',
   },
   {
     q: 'Posso mandar PDF da faculdade, da pós, do concurso?',

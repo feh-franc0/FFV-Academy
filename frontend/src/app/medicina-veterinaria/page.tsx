@@ -96,7 +96,6 @@ export default async function MedicinaVeterinariaPage() {
       explorarHeading={`${MEDVET_TOTAL_HUBS} hubs temáticos, ${MEDVET_TOTAL_MODULES} módulos`}
       explorarSubheading="Hubs agrupam módulos da trilha de Genética por área de afinidade — atalho ideal quando você já sabe o tema que quer estudar."
       hideComunidade
-      hideRanking={false}
       finalCta={{
         kicker: 'Não é sua área?',
         title: (

@@ -148,7 +148,6 @@ type Base struct {
 	FinalCta  FinalCta
 
 	HideGlobalContentNav bool
-	HideRanking          bool
 	HideComunidade       bool
 
 	SortOrder int

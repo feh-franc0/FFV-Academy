@@ -16,9 +16,8 @@
  *   6.  ComecarAqui                    — paths (hidden quando hasProgress)
  *   7.  Explorar (hubs + playlists)    — foco principal: conteúdo da base
  *   8.  Trending                       — opcional via prop
- *   9.  HomeRanking                    — opcional via prop hideRanking
- *   10. ComunidadeAutor                — opcional via prop hideComunidade
- *   11. FinalCta
+ *   9.  ComunidadeAutor                — opcional via prop hideComunidade
+ *   10. FinalCta
  *   12. StreakRepairModal (overlay)
  *
  * Histórico:
@@ -47,7 +46,6 @@ import { SocialProofBar } from '@/components/home/SocialProofBar';
 import { ComecarAqui, type ComecarPath } from '@/components/home/ComecarAqui';
 import { Explorar, type HubCardData, type PlaylistCardData } from '@/components/home/Explorar';
 import { Trending } from '@/components/home/Trending';
-import { HomeRanking } from '@/components/home/HomeRanking';
 import { ComunidadeAutor } from '@/components/home/ComunidadeAutor';
 import { FinalCta } from '@/components/home/FinalCta';
 
@@ -104,7 +102,6 @@ interface KnowledgeBaseHomeProps {
     footnote?: string;
   };
   /** Esconde sections que não fazem sentido pra uma base específica. */
-  hideRanking?: boolean;
   hideComunidade?: boolean;
   /**
    * Habilita TODOS os widgets de gamificação (OnboardingWizard,
@@ -155,7 +152,6 @@ export function KnowledgeBaseHome({
   comecarSubheading,
   afterHero,
   finalCta,
-  hideRanking = false,
   hideComunidade = false,
   hasGamificationWidgets = true,
   hideTrending = false,
@@ -299,7 +295,6 @@ export function KnowledgeBaseHome({
 
       {hasGamificationWidgets && !hideTrending && <Trending />}
 
-      {!hideRanking && <HomeRanking />}
       {!hideComunidade && <ComunidadeAutor />}
 
       {/* CTA destacado de signup — só aparece pra visitante anônimo.

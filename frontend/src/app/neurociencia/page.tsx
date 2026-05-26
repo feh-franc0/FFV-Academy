@@ -98,7 +98,6 @@ export default async function NeurocienciaPage() {
         explorarHeading={`${NEUROCIENCIA_TOTAL_HUBS} hubs temáticos, ${NEUROCIENCIA_TOTAL_MODULES} módulos sequenciais`}
         explorarSubheading="Hubs agrupam módulos da trilha de Neuromarketing por afinidade — atalho ideal quando você já sabe o tema que quer estudar."
         hideComunidade
-        hideRanking={false}
         finalCta={{
           kicker: 'Não é sua área?',
           title: (

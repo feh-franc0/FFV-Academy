@@ -27,7 +27,7 @@ const baseSelectColumns = `
     modules, trails, hubs,
     theme, nav_items, slogans, microcopy, footer, features,
     hero, paths, hubs_cards, playlists, final_cta,
-    hide_global_content_nav, hide_ranking, hide_comunidade, sort_order
+    hide_global_content_nav, hide_comunidade, sort_order
 `
 
 // GetBySlug retorna a base pelo slug ou shared.ErrNotFound.
@@ -83,7 +83,7 @@ func scanBase(row rowScanner) (*dombase.Base, error) {
 		&b.Modules, &b.Trails, &b.Hubs,
 		&themeRaw, &navRaw, &sloganRaw, &microRaw, &footerRaw, &featuresRaw,
 		&heroRaw, &pathsRaw, &hubsRaw, &playlistsRaw, &finalCtaRaw,
-		&b.HideGlobalContentNav, &b.HideRanking, &b.HideComunidade, &b.SortOrder,
+		&b.HideGlobalContentNav, &b.HideComunidade, &b.SortOrder,
 	)
 	if err != nil {
 		return nil, err

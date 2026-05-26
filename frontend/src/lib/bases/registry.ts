@@ -64,7 +64,6 @@ const TECH_CONFIG: BaseConfig = {
     ctaSecondary: 'Explorar hubs',
     emptyState: 'Sem módulos por aqui ainda.',
     searchPlaceholder: 'Buscar módulos, trilhas, hubs…',
-    rankingTitle: 'Top devs da semana',
     xpUnitSingular: 'XP',
     xpUnitPlural: 'XP',
     moduleNoun: 'módulo',
@@ -85,7 +84,6 @@ const TECH_CONFIG: BaseConfig = {
       { label: 'Trilhas', href: '/explorar' },
       { label: 'News', href: '/news' },
       { label: 'Simulados', href: '/simulados' },
-      { label: 'Ranking', href: '/ranking' },
     ],
   },
   features: { gamification: 'global', srs: true, quizzes: true, community: true },
@@ -130,7 +128,6 @@ const MEDVET_CONFIG: BaseConfig = {
     ctaSecondary: 'Ver simulado',
     emptyState: 'Sem módulos por aqui ainda.',
     searchPlaceholder: 'Buscar módulos, trilhas…',
-    rankingTitle: 'Top vets da semana',
     xpUnitSingular: 'XP',
     xpUnitPlural: 'XP',
     moduleNoun: 'módulo',
@@ -180,7 +177,6 @@ const NEUROCIENCIA_FOOTER_CONTENT: FooterLinkItem[] = [
   { label: 'Trilha Neuromarketing', href: '/neurociencia' },
   { label: 'Progresso', href: '/progresso' },
   { label: 'Revisar (SRS)', href: '/revisar' },
-  { label: 'Ranking', href: '/ranking' },
 ];
 
 const NEUROCIENCIA_CONFIG: BaseConfig = {
@@ -198,7 +194,6 @@ const NEUROCIENCIA_CONFIG: BaseConfig = {
     ctaSecondary: 'Explorar hubs',
     emptyState: 'Sem módulos por aqui ainda.',
     searchPlaceholder: 'Buscar módulos, trilhas, conceitos…',
-    rankingTitle: 'Top da semana em Neurociência',
     xpUnitSingular: 'XP',
     xpUnitPlural: 'XP',
     moduleNoun: 'módulo',
@@ -260,7 +255,6 @@ interface ProfissionalBaseSeed {
     moduleNoun: string;
     trailNoun: string;
     searchPlaceholder: string;
-    rankingTitle: string;
   };
 }
 
@@ -269,7 +263,6 @@ function makeProfissionalBase(seed: ProfissionalBaseSeed): BaseConfig {
   const ownContent: FooterLinkItem[] = [
     { label: 'Progresso', href: '/progresso' },
     { label: 'Revisar (SRS)', href: '/revisar' },
-    { label: 'Ranking', href: '/ranking' },
     { label: 'Glossário', href: '/glossario' },
   ];
   return {
@@ -298,7 +291,6 @@ function makeProfissionalBase(seed: ProfissionalBaseSeed): BaseConfig {
       ctaSecondary: 'Explorar conteúdo',
       emptyState: 'Sem módulos por aqui ainda.',
       searchPlaceholder: seed.microcopy.searchPlaceholder,
-      rankingTitle: seed.microcopy.rankingTitle,
       xpUnitSingular: 'XP',
       xpUnitPlural: 'XP',
       moduleNoun: seed.microcopy.moduleNoun,
@@ -320,7 +312,6 @@ function makeProfissionalBase(seed: ProfissionalBaseSeed): BaseConfig {
         { label: seed.shortLabel, href: seed.basePath },
         { label: 'Progresso', href: '/progresso' },
         { label: 'Revisar', href: '/revisar' },
-        { label: 'Ranking', href: '/ranking' },
       ],
     },
     features: { gamification: 'global', srs: true, quizzes: true, community: true },
@@ -350,7 +341,6 @@ const CARREIRA_CONFIG = makeProfissionalBase({
     moduleNoun: 'módulo',
     trailNoun: 'trilha',
     searchPlaceholder: 'Buscar tópicos de carreira…',
-    rankingTitle: 'Top de Carreira da semana',
   },
 });
 
@@ -377,7 +367,6 @@ const COMUNICACAO_CONFIG = makeProfissionalBase({
     moduleNoun: 'módulo',
     trailNoun: 'trilha',
     searchPlaceholder: 'Buscar tópicos de comunicação…',
-    rankingTitle: 'Top de Comunicação da semana',
   },
 });
 
@@ -404,7 +393,6 @@ const MARKETING_CONFIG = makeProfissionalBase({
     moduleNoun: 'módulo',
     trailNoun: 'trilha',
     searchPlaceholder: 'Buscar tópicos de marketing…',
-    rankingTitle: 'Top de Marketing da semana',
   },
 });
 
@@ -431,7 +419,6 @@ const CONTEUDO_CONFIG = makeProfissionalBase({
     moduleNoun: 'módulo',
     trailNoun: 'trilha',
     searchPlaceholder: 'Buscar tópicos de conteúdo…',
-    rankingTitle: 'Top Criadores da semana',
   },
 });
 
@@ -458,7 +445,6 @@ const EMPREENDEDORISMO_CONFIG = makeProfissionalBase({
     moduleNoun: 'módulo',
     trailNoun: 'trilha',
     searchPlaceholder: 'Buscar tópicos de empreendedorismo…',
-    rankingTitle: 'Top Empreendedores da semana',
   },
 });
 
@@ -485,7 +471,6 @@ const INGLES_CONFIG = makeProfissionalBase({
     moduleNoun: 'fase',
     trailNoun: 'jornada',
     searchPlaceholder: 'Buscar cenários e fases…',
-    rankingTitle: 'Top da semana em Inglês',
   },
 });
 

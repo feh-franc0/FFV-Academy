@@ -30,7 +30,6 @@ import (
 	appstudyreq "github.com/fernandofv/api/internal/application/studyrequest"
 	apptutor "github.com/fernandofv/api/internal/application/tutor"
 	"github.com/fernandofv/api/internal/config"
-	domleaderboard "github.com/fernandofv/api/internal/domain/leaderboard"
 	"github.com/fernandofv/api/internal/domain/shared"
 	domstudyreq "github.com/fernandofv/api/internal/domain/studyrequest"
 	"github.com/fernandofv/api/internal/infrastructure/ai"
@@ -160,7 +159,6 @@ func run() error {
 	certRepo := postgresinfra.NewCertificateRepo(pool)
 	purchaseRepo := postgresinfra.NewPurchaseRepo(pool)
 	stripeEventRepo := postgresinfra.NewStripeEventRepo(pool)
-	leaderboardRepo := postgresinfra.NewLeaderboardRepo(pool)
 	eventRepo := postgresinfra.NewEventRepo(pool)
 	questionReportRepo := postgresinfra.NewQuestionReportRepo(pool)
 	progressExportAdapter := postgresinfra.NewProgressExportAdapter(pool)
@@ -397,7 +395,6 @@ func run() error {
 			return len(u.PaidProducts()) > 0
 		})
 	featuresH := handlers.NewFeaturesHandler(cfg.Features)
-	leaderboardH := handlers.NewLeaderboardHandler(leaderboardRepo)
 	statsH := handlers.NewStatsHandler(&pgxStatsRepo{pool: pool})
 	adminH := handlers.NewAdminHandler(userRepo, attemptRepo, eventUC).
 		WithAuditLog(auditLogRepo).
@@ -412,7 +409,6 @@ func run() error {
 	adminEventsH := handlers.NewAdminEventsHandler(&pgxAdminEventsRepo{pool: pool})
 	commentsH := handlers.NewCommentsHandler(&pgxCommentsRepo{pool: pool})
 	trendingH := handlers.NewTrendingHandler(&pgxTrendingRepo{pool: pool})
-	trailLbH := handlers.NewTrailLeaderboardHandler(&pgxTrailLeaderboardRepo{pool: pool})
 	newsH := handlers.NewNewsHandler(&pgxNewsRepo{pool: pool})
 	cheatH := handlers.NewCheatsheetsHandler(&pgxCheatsheetsRepo{pool: pool})
 	playH := handlers.NewPlaylistsHandler(&pgxPlaylistsRepo{pool: pool})
@@ -448,7 +444,6 @@ func run() error {
 		Certificate:         certH,
 		Billing:             billingH,
 		Tutor:               tutorH,
-		Leaderboard:         leaderboardH,
 		Stats:               statsH,
 		Admin:               adminH,
 		AdminViews:          adminViewsH,
@@ -458,7 +453,6 @@ func run() error {
 		ModuleView:          moduleViewH,
 		Comments:            commentsH,
 		Trending:            trendingH,
-		TrailLeaderboard:    trailLbH,
 		News:                newsH,
 		Cheatsheets:         cheatH,
 		Playlists:           playH,
@@ -531,5 +525,4 @@ func (a *auditLogAdapter) InsertAuditEntry(ctx context.Context, entry middleware
 }
 
 // Compile-time checks — garante que tipos concretos satisfazem interfaces.
-var _ domleaderboard.Repository = (*postgresinfra.LeaderboardRepo)(nil)
 var _ middleware.AuditLogger = (*auditLogAdapter)(nil)

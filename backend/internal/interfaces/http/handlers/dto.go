@@ -198,14 +198,6 @@ func simuladoToDTO(s *domsim.Simulado) SimuladoDTO {
 	}
 }
 
-// LeaderboardEntryDTO é a representação de uma entrada no ranking.
-type LeaderboardEntryDTO struct {
-	Rank     int64  `json:"rank"`
-	UserID   string `json:"userId"`
-	UserName string `json:"userName"`
-	Score    int    `json:"score"`
-}
-
 func max(a, b int64) int64 {
 	if a > b {
 		return a

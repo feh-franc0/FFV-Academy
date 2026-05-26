@@ -61,7 +61,6 @@ function getPrimaryItems(): Item[] {
     { href: '/', label: 'Início', color: 'var(--ffv-blue)', Icon: BrainCircuit },
     { href: '/explorar', label: 'Explorar', color: 'var(--ffv-purple)', Icon: Search },
     { href: '/progresso', label: 'Progresso', color: 'var(--ffv-green)', Icon: ChartBarIncreasing },
-    { href: '/ranking', label: 'Ranking', color: 'var(--ffv-gold)', Icon: Target },
   ];
 }
 
@@ -307,7 +306,6 @@ export function MobileNav() {
                 <SheetLink href="/times" label="Times de Estudo" color="var(--ffv-blue)" Icon={Brain} />
                 <SheetLink href="/perfil" label="Meu Perfil Dev" color="var(--ffv-green)" Icon={ChartBarIncreasing} />
                 <SheetLink href="/devcard" label="Dev Card" color="var(--ffv-purple)" Icon={GraduationCap} />
-                <SheetLink href="/ranking" label="Ranking" color="#f78166" Icon={Target} />
               </SheetSection>
 
               <SheetSection title="Conta">

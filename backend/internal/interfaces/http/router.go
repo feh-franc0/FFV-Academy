@@ -42,7 +42,6 @@ type RouterConfig struct {
 	Certificate       *handlers.CertificateHandler
 	Billing           *handlers.BillingHandler
 	Tutor             *handlers.TutorHandler
-	Leaderboard       *handlers.LeaderboardHandler
 	Stats             *handlers.StatsHandler
 	Admin             *handlers.AdminHandler
 	AdminViews        *handlers.AdminViewsHandler        // opcional — feed admin de pageviews
@@ -52,7 +51,6 @@ type RouterConfig struct {
 	ModuleView        *handlers.ModuleViewHandler        // opcional — registra views de módulos (public)
 	Comments          *handlers.CommentsHandler          // opcional — comentários por artigo/trilha/bloco
 	Trending          *handlers.TrendingHandler          // opcional — top módulos por views recentes
-	TrailLeaderboard  *handlers.TrailLeaderboardHandler  // opcional — top users por trilha
 	News              *handlers.NewsHandler              // opcional — notícias curadas
 	Cheatsheets       *handlers.CheatsheetsHandler       // opcional — referências rápidas em markdown
 	Playlists         *handlers.PlaylistsHandler         // opcional — agrupamentos curados de módulos
@@ -141,9 +139,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/api/v1/bases/{slug}/page", cfg.Bases.GetPage)
 	}
 
-	// Top-10 do ranking semanal — público, anonimizado para visitantes.
-	r.Get("/api/v1/leaderboard/public", cfg.Leaderboard.GetPublic)
-
 	// Feature flags — público, permite ao frontend descobrir features ativas em runtime.
 	if cfg.Features != nil {
 		r.Get("/api/v1/features", cfg.Features.Get)
@@ -170,11 +165,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// Trending — público, módulos mais acessados.
 	if cfg.Trending != nil {
 		r.Get("/api/v1/curriculum/trending", cfg.Trending.Get)
-	}
-
-	// Trail leaderboard — público, top users de uma trilha.
-	if cfg.TrailLeaderboard != nil {
-		r.Get("/api/v1/leaderboard/trail/{trailId}", cfg.TrailLeaderboard.Get)
 	}
 
 	// Os endpoints públicos de news/cheatsheets/playlists ficam após a
@@ -335,11 +325,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 		// Tutor IA — rate-limit por IP além do rate-limit por user já existente.
 		r.With(tutorLimit.Middleware()).Post("/api/v1/tutor/ask", cfg.Tutor.Ask)
-
-		// Leaderboard.
-		r.Get("/api/v1/leaderboard", cfg.Leaderboard.GetWeekly)
-		r.Get("/api/v1/leaderboard/me", cfg.Leaderboard.GetMyRank)
-		r.Get("/api/v1/leaderboard/me/all", cfg.Leaderboard.GetMyRankAll)
 
 		// Comments — escrita autenticada (body ≤ 8KB) + rate limit anti-spam.
 		// Vote/Report têm limits próprios e body pequeno (≤512B).

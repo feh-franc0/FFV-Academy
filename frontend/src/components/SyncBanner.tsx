@@ -16,7 +16,7 @@ const RE_SHOW_AFTER_DAYS = 7;
  *   3. Não dispensou o banner nos últimos 7 dias
  *
  * Mensagem honesta: "Seu progresso está salvo só neste navegador. Crie conta
- * grátis para sincronizar entre dispositivos e entrar no ranking."
+ * grátis para sincronizar entre dispositivos e acompanhar seu progresso."
  *
  * Posicionamento: top sticky, abaixo do header, dentro de uma faixa
  * gradient-soft que respeita a hierarquia visual.
@@ -70,7 +70,7 @@ export function SyncBanner() {
       <p className="text-xs md:text-sm flex-1" style={{ color: 'var(--foreground)' }}>
         <strong>Seu progresso está salvo só neste navegador.</strong>{' '}
         <span style={{ color: 'var(--ffv-muted)' }}>
-          Crie conta grátis para sincronizar entre dispositivos e aparecer no ranking.
+          Crie conta grátis para sincronizar entre dispositivos e acompanhar seu progresso.
         </span>
       </p>
       <div className="flex items-center gap-2">

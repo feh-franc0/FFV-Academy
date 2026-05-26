@@ -25,14 +25,6 @@ vi.mock('@/hooks/usePreferences', () => ({
   usePreferences: () => ({ preferences: null, status: 'idle', refresh: vi.fn() }),
 }));
 
-// API de leaderboard mockada para o widget HomeRanking
-vi.mock('@/lib/leaderboard-api', () => ({
-  getLeaderboard: vi.fn().mockResolvedValue({ weekStart: '2026-04-20', items: [] }),
-  getMyRank: vi.fn().mockResolvedValue(null),
-  getPublicLeaderboard: vi.fn().mockResolvedValue({ entries: [] }),
-  getMyRankAll: vi.fn().mockResolvedValue([]),
-}));
-
 import { KnowledgeBaseHome } from '@/components/base/KnowledgeBaseHome';
 
 describe('a11y · <KnowledgeBaseHome>', () => {

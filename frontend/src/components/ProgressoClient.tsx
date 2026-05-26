@@ -7,7 +7,6 @@ import { useGameState } from '@/hooks/useGameState';
 import { exportState, importState } from '@/lib/engine';
 import { ShareCard } from '@/components/ShareCard';
 import { Certificate, getCompletedTrailIds } from '@/components/Certificate';
-import { MyRankCard } from '@/components/MyRankCard';
 import { QuestsCard } from '@/components/QuestsCard';
 import {
   BADGES_DEF,
@@ -280,10 +279,6 @@ export function ProgressoClient() {
             </Link>
           </div>
         </div>
-      </section>
-
-      <section className="max-w-5xl mx-auto px-6 pb-12">
-        <MyRankCard />
       </section>
 
       {isActiveTech && (

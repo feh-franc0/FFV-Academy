@@ -96,7 +96,6 @@ export interface BaseMicrocopy {
   ctaSecondary: string;
   emptyState: string;
   searchPlaceholder: string;
-  rankingTitle: string;
   /** Unidade de XP no header — "XP" / "ponto clínico" / "ponto OAB". */
   xpUnitSingular: string;
   xpUnitPlural: string;

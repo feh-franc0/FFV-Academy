@@ -59,7 +59,6 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${base}/cheatsheet`, lastModified: BUILD_DATE, changeFrequency: 'monthly' as const, priority: 0.7 },
     { url: `${base}/playlists`, lastModified: BUILD_DATE, changeFrequency: 'monthly' as const, priority: 0.7 },
     { url: `${base}/simulados`, lastModified: BUILD_DATE, changeFrequency: 'monthly' as const, priority: 0.9 },
-    { url: `${base}/ranking`, lastModified: BUILD_DATE, changeFrequency: 'daily' as const, priority: 0.9 },
     { url: `${base}/news`, lastModified: BUILD_DATE, changeFrequency: 'daily' as const, priority: 0.9 },
     { url: `${base}/sobre`, lastModified: BUILD_DATE, changeFrequency: 'monthly' as const, priority: 0.7 },
     { url: `${base}/comunidade`, lastModified: BUILD_DATE, changeFrequency: 'monthly' as const, priority: 0.7 },

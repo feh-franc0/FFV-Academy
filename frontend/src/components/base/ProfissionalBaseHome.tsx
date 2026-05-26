@@ -136,7 +136,6 @@ export function ProfissionalBaseHome({ hub, heroHighlight }: ProfissionalBaseHom
           ? 'Trilha completa desta base — clique para abrir o blog com todos os módulos.'
           : 'Cada trilha cobre uma área dentro da base. Clique para ver o blog com todos os módulos.'
       }
-      hideRanking={false}
       hideComunidade
       hasGamificationWidgets
       finalCta={{

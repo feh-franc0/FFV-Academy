@@ -17,7 +17,6 @@ import { BlockTree } from '@/components/article/BlockRenderer';
 import { ViewTracker } from '@/components/article/ViewTracker';
 import { ArticleDiscussion } from '@/components/ArticleDiscussion';
 import { NextSteps } from '@/components/article/NextSteps';
-import { TrailLeaderboard } from '@/components/ranking/TrailLeaderboard';
 import { AnkiExport } from '@/components/article/AnkiExport';
 import { TrailCertificateBanner } from '@/components/TrailCertificateBanner';
 import { TrailSidebar } from '@/components/article/TrailSidebar';
@@ -251,10 +250,6 @@ export default async function ModulePage({ params }: PageProps) {
         </div>
 
         <NextSteps slug={slug} />
-
-        <section className="mt-12">
-          <TrailLeaderboard trailId={article.trail_id} />
-        </section>
 
         <section className="mt-12">
           <ArticleDiscussion targetType="article" slug={slug} title={article.title} />

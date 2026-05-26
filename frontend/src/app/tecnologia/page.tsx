@@ -100,7 +100,6 @@ export default async function TecnologiaPage() {
         hubs={TECH_HUBS}
         playlists={TECH_PLAYLISTS}
         mapHref="/mapa"
-        hideRanking={dto?.flags.hideRanking ?? false}
         hideComunidade={dto?.flags.hideComunidade ?? false}
         hasGamificationWidgets
       />
