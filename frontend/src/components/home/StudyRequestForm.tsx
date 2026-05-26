@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 
+import { AuthContext } from '@/hooks/useAuth';
 import {
   STUDY_REQUEST_LIMITS,
   StudyRequestError,
@@ -66,7 +67,38 @@ type FormState =
     }
   | { kind: 'error'; message: string };
 
-export function StudyRequestForm() {
+/**
+ * 3-step wizard: identidade → conteúdo → revisão+submit.
+ *
+ * Step 1: nome + email + whatsapp (pulado quando user já logado)
+ * Step 2: área + faculdade + tema + objetivo + descrição + anexos
+ * Step 3: resumo do pedido + termos + submit
+ *
+ * Quando o user está logado, step 1 é pulado: name/email/phone vêm do
+ * UserProfile, mostra um banner "Olá, Maria · maria@gmail.com" e o user
+ * só preenche o conteúdo + confirma. Reduz drasticamente a fricção pra
+ * quem já é registrado.
+ */
+type Step = 1 | 2 | 3;
+
+/**
+ * Props opcionais. `__testInitialStep` é um escape hatch SÓ pra testes —
+ * permite pular pra um passo específico sem precisar navegar pela UI.
+ * O underscore-duplo deixa claro que não é API pública.
+ */
+interface Props {
+  /** @internal — usado só por testes (jsdom) pra pular pra um passo. */
+  __testInitialStep?: Step;
+}
+
+export function StudyRequestForm({ __testInitialStep }: Props = {}) {
+  // Auth é opcional: form funciona em landing pública (sem AuthProvider em
+  // alguns mocks de teste) e dentro do app (com AuthProvider). Quando há
+  // provider, pré-popula identidade; sem provider, comporta como anônimo.
+  const auth = useContext(AuthContext);
+  const user = auth?.user ?? null;
+  const isLoggedIn = !!auth?.isLoggedIn;
+
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [emailSuggestion, setEmailSuggestion] = useState<string | null>(null);
@@ -81,6 +113,27 @@ export function StudyRequestForm() {
   const [fileError, setFileError] = useState<string | null>(null);
   const [state, setState] = useState<FormState>({ kind: 'idle' });
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Passo atual do wizard. Quando logado, começa direto no 2 (conteúdo) já que
+  // identidade vem do perfil. Compute lazy pra usar valor inicial certo no SSR.
+  // `__testInitialStep` sobrescreve pra testes (jsdom).
+  const [currentStep, setCurrentStep] = useState<Step>(
+    () => __testInitialStep ?? (isLoggedIn ? 2 : 1),
+  );
+
+  // Pré-preenche identidade quando user logado. useEffect porque user pode
+  // hidratar async (AuthProvider faz pull do /me ao montar).
+  useEffect(() => {
+    if (user) {
+      if (!name && user.name) setName(user.name);
+      if (!email && user.email) setEmail(user.email);
+      if (!phone && user.phone) setPhone(maskBrazilianPhone(user.phone));
+      // Se estava no passo 1 e o user logou no meio, salta pro passo 2.
+      // (Cenário: user abre form anônimo, clica em "logar" no header, volta.)
+      if (currentStep === 1) setCurrentStep(2);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   // Hidratar solicitação ativa (mesmo device, sessão anterior).
   // Se o usuário voltar 4h depois, vê o SLA tracker no estado correto
@@ -234,6 +287,47 @@ export function StudyRequestForm() {
   function removeFile(idx: number) {
     setFiles(files.filter((_, i) => i !== idx));
     setFileError(null);
+  }
+
+  // ── Validação por passo ────────────────────────────────────────────────────
+  // Bloqueia avanço se o passo não tem o mínimo necessário. Mensagem amigável.
+  // useMemo pra não recalcular a cada render e ter ref estável pro botão disabled.
+  const step1Valid = useMemo(() => {
+    if (!name.trim()) return { ok: false, error: 'Preencha seu nome pra continuar' };
+    const emailTrim = email.trim();
+    if (!emailTrim) return { ok: false, error: 'Preencha seu e-mail pra continuar' };
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailTrim)) {
+      return { ok: false, error: 'E-mail parece inválido — confere a digitação?' };
+    }
+    return { ok: true as const };
+  }, [name, email]);
+
+  const step2Valid = useMemo(() => {
+    if (!studyArea) return { ok: false, error: 'Escolha uma área de estudo' };
+    if (!subject.trim()) return { ok: false, error: 'Diga qual matéria ou tema' };
+    if (!description.trim()) {
+      return { ok: false, error: 'Conte o que você quer aprender — quanto mais detalhe, melhor a trilha' };
+    }
+    return { ok: true as const };
+  }, [studyArea, subject, description]);
+
+  function goToStep(target: Step) {
+    // Não deixa pular passo pra frente sem validar; pra trás é livre.
+    if (target > currentStep) {
+      if (currentStep === 1 && !step1Valid.ok) return;
+      if (currentStep === 2 && !step2Valid.ok) return;
+    }
+    setCurrentStep(target);
+    // Scroll suave pro topo do form ao trocar de passo. Em jsdom (testes)
+    // scrollIntoView não existe — try/catch silencioso evita unhandled error.
+    if (typeof window !== 'undefined') {
+      const top = document.getElementById('study-request-form-top');
+      if (top && typeof top.scrollIntoView === 'function') {
+        try {
+          top.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } catch { /* jsdom não implementa — ignora */ }
+      }
+    }
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -550,8 +644,18 @@ export function StudyRequestForm() {
 
   const submitting = state.kind === 'submitting';
 
+  // Quantos passos efetivamente o user vê. Logado pula o 1, fica em 2 passos
+  // (conteúdo → revisar). Anônimo passa pelos 3.
+  const visibleSteps: Step[] = isLoggedIn ? [2, 3] : [1, 2, 3];
+  const stepLabels: Record<Step, string> = {
+    1: 'Identidade',
+    2: 'Conteúdo',
+    3: 'Confirmar',
+  };
+
   return (
     <div
+      id="study-request-form-top"
       className="rounded-2xl p-7"
       style={{
         background: 'var(--ffv-bg2)',
@@ -587,80 +691,167 @@ export function StudyRequestForm() {
       >
         Solicitar minha base de estudo
       </h3>
-      <p className="text-sm mb-6" style={{ color: 'var(--ffv-muted)', lineHeight: 1.6 }}>
-        Diga o que você precisa estudar. Quanto mais detalhes e materiais você enviar, mais aderente fica sua base — e mais rápido a curadoria entrega.
+      <p className="text-sm mb-5" style={{ color: 'var(--ffv-muted)', lineHeight: 1.6 }}>
+        Diga o que você precisa estudar. Quanto mais detalhes e materiais você enviar,
+        mais aderente fica sua base — e mais rápido a curadoria entrega.
       </p>
 
-      <form onSubmit={handleSubmit} className="flex flex-col gap-4" aria-busy={submitting}>
-        <Field label="Nome" required>
-          <input
-            type="text"
-            required
-            autoComplete="name"
-            value={name}
-            onChange={e => setName(e.target.value)}
-            placeholder="Como podemos te chamar?"
-            className={inputClass}
-            style={inputStyle}
-            disabled={submitting}
-          />
-        </Field>
+      {/* Banner pro user logado — confirma identidade e contextualiza o "atalho"
+          (pulou direto pro passo 2). Não-clicável: pra trocar de conta, faz
+          logout no header. */}
+      {isLoggedIn && user && currentStep !== 1 && (
+        <div
+          className="flex items-center gap-3 mb-5 px-3.5 py-2.5 rounded-xl"
+          style={{
+            background: 'color-mix(in srgb, var(--ffv-green) 10%, transparent)',
+            border: '1px solid color-mix(in srgb, var(--ffv-green) 28%, transparent)',
+          }}
+        >
+          <span style={{ fontSize: 18 }} aria-hidden>👋</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-semibold truncate" style={{ color: 'var(--foreground)' }}>
+              Olá, {user.name.split(' ')[0] || 'estudante'}!
+            </p>
+            <p className="text-[11px] truncate" style={{ color: 'var(--ffv-muted)' }}>
+              Conectado como {user.email}
+            </p>
+          </div>
+          <span
+            className="text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded"
+            style={{
+              background: 'color-mix(in srgb, var(--ffv-green) 18%, transparent)',
+              color: 'var(--ffv-green)',
+            }}
+            aria-hidden
+          >
+            ✓ identificado
+          </span>
+        </div>
+      )}
 
-        <div className="grid sm:grid-cols-2 gap-4">
-          <Field label="E-mail" required>
-            <input
-              type="email"
-              required
-              autoComplete="email"
-              value={email}
-              onChange={e => {
-                setEmail(e.target.value);
-                // Limpa sugestão enquanto digita pra não atrapalhar.
-                if (emailSuggestion) setEmailSuggestion(null);
-              }}
-              onBlur={() => setEmailSuggestion(suggestEmailDomain(email))}
-              placeholder="voce@email.com"
-              className={inputClass}
-              style={inputStyle}
-              disabled={submitting}
-              aria-describedby={emailSuggestion ? 'email-suggestion' : undefined}
-            />
-            {emailSuggestion && (
-              <p
-                id="email-suggestion"
-                className="text-[11px] mt-1.5"
-                style={{ color: 'var(--ffv-blue)', lineHeight: 1.4 }}
-              >
-                Você quis dizer{' '}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEmail(emailSuggestion);
-                    setEmailSuggestion(null);
+      {/* Indicador de progresso — chips clicáveis dos passos visíveis. Mostra
+          posição atual e permite voltar livremente (avançar só se passo atual
+          válido). Acessível: role=tablist com aria-selected. */}
+      <StepIndicator
+        steps={visibleSteps}
+        labels={stepLabels}
+        current={currentStep}
+        onChange={goToStep}
+      />
+
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4 mt-5" aria-busy={submitting}>
+        {/* ───────────── PASSO 1 — Identidade ───────────── */}
+        {currentStep === 1 && (
+          <fieldset className="flex flex-col gap-4 m-0 p-0 border-0">
+            <legend className="sr-only">Passo 1: identifique-se</legend>
+
+            <Field label="Nome" required>
+              <input
+                type="text"
+                required
+                autoComplete="name"
+                value={name}
+                onChange={e => setName(e.target.value)}
+                placeholder="Como podemos te chamar?"
+                className={inputClass}
+                style={inputStyle}
+                disabled={submitting}
+              />
+            </Field>
+
+            <div className="grid sm:grid-cols-2 gap-4">
+              <Field label="E-mail" required>
+                <input
+                  type="email"
+                  required
+                  autoComplete="email"
+                  value={email}
+                  onChange={e => {
+                    setEmail(e.target.value);
+                    if (emailSuggestion) setEmailSuggestion(null);
                   }}
-                  className="underline font-semibold"
-                  style={{ color: 'var(--ffv-blue)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-                >
-                  {emailSuggestion}
-                </button>?
+                  onBlur={() => setEmailSuggestion(suggestEmailDomain(email))}
+                  placeholder="voce@email.com"
+                  className={inputClass}
+                  style={inputStyle}
+                  disabled={submitting}
+                  aria-describedby={emailSuggestion ? 'email-suggestion' : undefined}
+                />
+                {emailSuggestion && (
+                  <p
+                    id="email-suggestion"
+                    className="text-[11px] mt-1.5"
+                    style={{ color: 'var(--ffv-blue)', lineHeight: 1.4 }}
+                  >
+                    Você quis dizer{' '}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEmail(emailSuggestion);
+                        setEmailSuggestion(null);
+                      }}
+                      className="underline font-semibold"
+                      style={{ color: 'var(--ffv-blue)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                    >
+                      {emailSuggestion}
+                    </button>?
+                  </p>
+                )}
+              </Field>
+              <Field label="WhatsApp">
+                <input
+                  type="tel"
+                  autoComplete="tel"
+                  inputMode="numeric"
+                  value={phone}
+                  onChange={e => setPhone(maskBrazilianPhone(e.target.value))}
+                  placeholder="(11) 98765-4321"
+                  maxLength={15}
+                  className={inputClass}
+                  style={inputStyle}
+                  disabled={submitting}
+                />
+              </Field>
+            </div>
+
+            {/* Mensagem amigável de validação — só aparece quando user tenta
+                avançar com algo errado. Mostra dica específica do que falta. */}
+            {!step1Valid.ok && (name || email) && (
+              <p
+                className="text-xs"
+                style={{ color: 'var(--ffv-amber)', marginTop: -4 }}
+              >
+                {step1Valid.error}
               </p>
             )}
-          </Field>
-          <Field label="WhatsApp">
-            <input
-              type="tel"
-              autoComplete="tel"
-              inputMode="numeric"
-              value={phone}
-              onChange={e => setPhone(maskBrazilianPhone(e.target.value))}
-              placeholder="(11) 98765-4321"
-              maxLength={15}
-              className={inputClass}
-              style={inputStyle}
-              disabled={submitting}
+
+            <p
+              className="text-[11px] mt-2 px-3 py-2 rounded-lg"
+              style={{
+                color: 'var(--ffv-muted)',
+                background: 'var(--ffv-bg)',
+                border: '1px solid var(--ffv-border)',
+                lineHeight: 1.55,
+              }}
+            >
+              💡 <strong style={{ color: 'var(--foreground)' }}>Sem senha, sem cartão.</strong>{' '}
+              Criamos uma conta passwordless pra você acompanhar o status. Enviamos
+              um link mágico no seu e-mail.
+            </p>
+
+            <StepNav
+              onNext={() => goToStep(2)}
+              canNext={step1Valid.ok}
+              currentStep={1}
+              totalSteps={visibleSteps.length}
             />
-          </Field>
-        </div>
+          </fieldset>
+        )}
+
+        {/* ───────────── PASSO 2 — Conteúdo ───────────── */}
+        {currentStep === 2 && (
+          <fieldset className="flex flex-col gap-4 m-0 p-0 border-0">
+            <legend className="sr-only">Passo 2: o que você quer estudar</legend>
 
         <Field label="Área de estudo" required>
           <select
@@ -825,19 +1016,80 @@ export function StudyRequestForm() {
           )}
         </div>
 
-        <label className="flex items-start gap-2 text-xs" style={{ color: 'var(--ffv-muted)' }}>
-          <input
-            type="checkbox"
-            checked={marketingConsent}
-            onChange={e => setMarketingConsent(e.target.checked)}
-            style={{ marginTop: 2 }}
-            disabled={submitting}
-          />
-          <span>
-            Aceito receber updates sobre minha solicitação por e-mail ou WhatsApp.
-            Você pode cancelar quando quiser.
-          </span>
-        </label>
+            {/* Aviso amigável de validação do passo 2 */}
+            {!step2Valid.ok && (studyArea || subject || description) && (
+              <p
+                className="text-xs"
+                style={{ color: 'var(--ffv-amber)', marginTop: -4 }}
+              >
+                {step2Valid.error}
+              </p>
+            )}
+
+            <StepNav
+              onBack={isLoggedIn ? undefined : () => goToStep(1)}
+              onNext={() => goToStep(3)}
+              canNext={step2Valid.ok}
+              currentStep={isLoggedIn ? 1 : 2}
+              totalSteps={visibleSteps.length}
+            />
+          </fieldset>
+        )}
+
+        {/* ───────────── PASSO 3 — Confirmar e enviar ───────────── */}
+        {currentStep === 3 && (
+          <fieldset className="flex flex-col gap-4 m-0 p-0 border-0">
+            <legend className="sr-only">Passo 3: confira e envie</legend>
+
+            <div
+              className="rounded-xl p-4"
+              style={{
+                background: 'var(--ffv-bg)',
+                border: '1px solid var(--ffv-border)',
+              }}
+            >
+              <p
+                className="font-mono uppercase text-[10px] mb-3"
+                style={{ color: 'var(--ffv-muted)', letterSpacing: '0.12em', fontWeight: 700 }}
+              >
+                Resumo do seu pedido
+              </p>
+              <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-2 text-xs">
+                <ReviewRow label="Nome" value={name} />
+                <ReviewRow label="E-mail" value={email} />
+                {phone && <ReviewRow label="WhatsApp" value={phone} />}
+                <ReviewRow
+                  label="Área"
+                  value={STUDY_AREAS.find(a => a.value === studyArea)?.label ?? studyArea}
+                />
+                {institution && <ReviewRow label="Instituição" value={institution} />}
+                <ReviewRow label="Matéria/tema" value={subject} />
+                {goal && <ReviewRow label="Objetivo" value={goal} />}
+                <ReviewRow label="Descrição" value={truncate(description, 160)} />
+                {files.length > 0 && (
+                  <ReviewRow
+                    label="Anexos"
+                    value={`${files.length} arquivo${files.length === 1 ? '' : 's'} · ${formatFileSize(
+                      files.reduce((acc, f) => acc + f.size, 0),
+                    )}`}
+                  />
+                )}
+              </dl>
+            </div>
+
+            <label className="flex items-start gap-2 text-xs" style={{ color: 'var(--ffv-muted)' }}>
+              <input
+                type="checkbox"
+                checked={marketingConsent}
+                onChange={e => setMarketingConsent(e.target.checked)}
+                style={{ marginTop: 2 }}
+                disabled={submitting}
+              />
+              <span>
+                Aceito receber updates sobre minha solicitação por e-mail ou WhatsApp.
+                Você pode cancelar quando quiser.
+              </span>
+            </label>
 
         {state.kind === 'error' && (
           <div
@@ -869,50 +1121,69 @@ export function StudyRequestForm() {
           </div>
         )}
 
-        <button
-          type="submit"
-          disabled={submitting}
-          className="w-full py-3.5 rounded-xl text-sm font-bold transition-all relative overflow-hidden"
-          style={{
-            background: 'var(--ffv-blue)',
-            color: '#fff',
-            boxShadow: '0 8px 24px -6px color-mix(in srgb, var(--ffv-blue) 50%, transparent)',
-            opacity: submitting ? 0.85 : 1,
-            cursor: submitting ? 'progress' : 'pointer',
-          }}
-          data-testid="submit-button"
-        >
-          {/* Barra de progresso visual dentro do botão */}
-          {state.kind === 'submitting' && state.progress !== undefined && (
-            <span
-              aria-hidden
-              data-testid="upload-progress-bar"
-              style={{
-                position: 'absolute',
-                inset: 0,
-                background: 'color-mix(in srgb, #fff 20%, transparent)',
-                width: `${state.progress}%`,
-                transition: 'width 200ms ease-out',
-              }}
-            />
-          )}
-          <span style={{ position: 'relative' }}>
-            {state.kind === 'submitting'
-              ? state.progress !== undefined && state.progress < 100
-                ? `Enviando arquivos... ${state.progress}%`
-                : state.progress === 100
-                  ? 'Processando no servidor...'
-                  : 'Enviando...'
-              : 'Enviar minha solicitação →'}
-          </span>
-        </button>
+            <div className="flex gap-2 items-stretch">
+              <button
+                type="button"
+                onClick={() => goToStep(2)}
+                disabled={submitting}
+                className="px-4 py-3.5 rounded-xl text-sm font-semibold transition-all"
+                style={{
+                  background: 'transparent',
+                  color: 'var(--foreground)',
+                  border: '1px solid var(--ffv-border)',
+                  flexShrink: 0,
+                }}
+                aria-label="Voltar pra editar o conteúdo"
+              >
+                ← Voltar
+              </button>
+              <button
+                type="submit"
+                disabled={submitting}
+                className="flex-1 py-3.5 rounded-xl text-sm font-bold transition-all relative overflow-hidden"
+                style={{
+                  background: 'var(--ffv-blue)',
+                  color: '#fff',
+                  boxShadow: '0 8px 24px -6px color-mix(in srgb, var(--ffv-blue) 50%, transparent)',
+                  opacity: submitting ? 0.85 : 1,
+                  cursor: submitting ? 'progress' : 'pointer',
+                }}
+                data-testid="submit-button"
+              >
+                {/* Barra de progresso visual dentro do botão */}
+                {state.kind === 'submitting' && state.progress !== undefined && (
+                  <span
+                    aria-hidden
+                    data-testid="upload-progress-bar"
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      background: 'color-mix(in srgb, #fff 20%, transparent)',
+                      width: `${state.progress}%`,
+                      transition: 'width 200ms ease-out',
+                    }}
+                  />
+                )}
+                <span style={{ position: 'relative' }}>
+                  {state.kind === 'submitting'
+                    ? state.progress !== undefined && state.progress < 100
+                      ? `Enviando arquivos... ${state.progress}%`
+                      : state.progress === 100
+                        ? 'Processando no servidor...'
+                        : 'Enviando...'
+                    : '🎉 Criar minha jornada →'}
+                </span>
+              </button>
+            </div>
 
-        <p
-          className="text-[11px] text-center"
-          style={{ color: 'var(--ffv-muted)', letterSpacing: '0.03em' }}
-        >
-          🔒 LGPD · Seus dados ficam com a gente, sem spam.
-        </p>
+            <p
+              className="text-[11px] text-center"
+              style={{ color: 'var(--ffv-muted)', letterSpacing: '0.03em' }}
+            >
+              🔒 LGPD · Seus dados ficam com a gente, sem spam.
+            </p>
+          </fieldset>
+        )}
       </form>
     </div>
   );
@@ -1038,4 +1309,170 @@ function Field({ label, required, children }: { label: string; required?: boolea
       <div className="mt-1.5">{children}</div>
     </label>
   );
+}
+
+/**
+ * StepIndicator — chips numerados dos passos visíveis. Mostra posição atual
+ * (chip preenchido) e permite navegar pra trás clicando. Pra frente só via
+ * botão Próximo (que valida).
+ */
+function StepIndicator({
+  steps,
+  labels,
+  current,
+  onChange,
+}: {
+  steps: Step[];
+  labels: Record<Step, string>;
+  current: Step;
+  onChange: (s: Step) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2" role="tablist" aria-label="Passos do formulário">
+      {steps.map((s, idx) => {
+        const isCurrent = s === current;
+        const isPast = s < current;
+        const canClick = isPast; // só permite voltar
+        return (
+          <div key={s} className="flex items-center gap-2 flex-1 min-w-0">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={isCurrent}
+              onClick={() => canClick && onChange(s)}
+              disabled={!canClick && !isCurrent}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-full text-[11px] font-bold transition-all whitespace-nowrap"
+              style={{
+                background: isCurrent
+                  ? 'var(--ffv-blue)'
+                  : isPast
+                    ? 'color-mix(in srgb, var(--ffv-green) 18%, transparent)'
+                    : 'var(--ffv-bg)',
+                color: isCurrent ? '#fff' : isPast ? 'var(--ffv-green)' : 'var(--ffv-muted)',
+                border: isCurrent
+                  ? 'none'
+                  : isPast
+                    ? '1px solid color-mix(in srgb, var(--ffv-green) 38%, transparent)'
+                    : '1px solid var(--ffv-border)',
+                cursor: canClick ? 'pointer' : isCurrent ? 'default' : 'not-allowed',
+                opacity: !canClick && !isCurrent ? 0.7 : 1,
+                flexShrink: 0,
+              }}
+            >
+              <span
+                style={{
+                  width: 18,
+                  height: 18,
+                  borderRadius: '50%',
+                  background: isCurrent ? 'rgba(255,255,255,0.25)' : 'transparent',
+                  border: isPast ? 'none' : '1px solid currentColor',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 10,
+                  fontWeight: 800,
+                }}
+                aria-hidden
+              >
+                {isPast ? '✓' : steps.indexOf(s) + 1}
+              </span>
+              <span className="hidden sm:inline">{labels[s]}</span>
+            </button>
+            {idx < steps.length - 1 && (
+              <span
+                aria-hidden
+                style={{
+                  flex: 1,
+                  height: 2,
+                  background: isPast ? 'var(--ffv-green)' : 'var(--ffv-border)',
+                  borderRadius: 2,
+                  minWidth: 8,
+                }}
+              />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * StepNav — barra de navegação Voltar/Próximo no rodapé de cada passo.
+ * Próximo bloqueado quando canNext=false (mostra disabled + tooltip).
+ * Voltar omitido quando onBack=undefined (passo 1 do anônimo; passo 2
+ * do logado, já que ele não tem passo 1 acessível).
+ */
+function StepNav({
+  onBack,
+  onNext,
+  canNext,
+  currentStep,
+  totalSteps,
+}: {
+  onBack?: () => void;
+  onNext: () => void;
+  canNext: boolean;
+  currentStep: number;
+  totalSteps: number;
+}) {
+  return (
+    <div className="flex gap-2 items-stretch mt-2">
+      {onBack && (
+        <button
+          type="button"
+          onClick={onBack}
+          className="px-4 py-3.5 rounded-xl text-sm font-semibold transition-all"
+          style={{
+            background: 'transparent',
+            color: 'var(--foreground)',
+            border: '1px solid var(--ffv-border)',
+            flexShrink: 0,
+          }}
+        >
+          ← Voltar
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={onNext}
+        disabled={!canNext}
+        className="flex-1 py-3.5 rounded-xl text-sm font-bold transition-all"
+        style={{
+          background: canNext ? 'var(--ffv-blue)' : 'var(--ffv-border)',
+          color: canNext ? '#fff' : 'var(--ffv-muted)',
+          boxShadow: canNext
+            ? '0 8px 24px -6px color-mix(in srgb, var(--ffv-blue) 50%, transparent)'
+            : 'none',
+          cursor: canNext ? 'pointer' : 'not-allowed',
+        }}
+        title={canNext ? undefined : 'Preencha os campos obrigatórios pra continuar'}
+      >
+        Próximo · passo {currentStep + 1} de {totalSteps} →
+      </button>
+    </div>
+  );
+}
+
+/**
+ * ReviewRow — linha de resumo no passo 3. Usa <dt>/<dd> pra semântica.
+ * Value pode ser longo (description) — o caller deve truncar.
+ */
+function ReviewRow({ label, value }: { label: string; value: string }) {
+  return (
+    <>
+      <dt className="font-semibold" style={{ color: 'var(--ffv-muted)' }}>
+        {label}:
+      </dt>
+      <dd style={{ color: 'var(--foreground)' }} className="break-words">
+        {value || '—'}
+      </dd>
+    </>
+  );
+}
+
+/** truncate — usado no resumo do passo 3 pra description longa. */
+function truncate(s: string, max: number): string {
+  const t = s.trim();
+  return t.length <= max ? t : t.slice(0, max - 1) + '…';
 }

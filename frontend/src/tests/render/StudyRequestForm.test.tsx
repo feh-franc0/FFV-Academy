@@ -134,21 +134,26 @@ describe('<StudyRequestForm>', () => {
 
   describe('submit + persistência', () => {
     async function fillMinimum(user: ReturnType<typeof userEvent.setup>) {
+      // Passo 1: identidade
       await user.type(screen.getByPlaceholderText(/Como podemos te chamar/), 'Maria');
       await user.type(screen.getByPlaceholderText('voce@email.com'), 'maria@gmail.com');
+      await user.click(screen.getByRole('button', { name: /Próximo · passo 2/ }));
+      // Passo 2: conteúdo
       await user.selectOptions(screen.getByRole('combobox'), 'tecnologia');
       await user.type(screen.getByPlaceholderText(/Genética animal/), 'IA aplicada');
       await user.type(
         screen.getByPlaceholderText(/Descreva o que precisa estudar/),
         'Quero virar engenheiro de IA',
       );
+      await user.click(screen.getByRole('button', { name: /Próximo · passo 3/ }));
+      // Passo 3 ativo — caller clica no submit ("🎉 Criar minha jornada →")
     }
 
     it('submit dispara API, mostra SLA tracker e persiste no localStorage', async () => {
       const user = userEvent.setup();
       render(<StudyRequestForm />);
       await fillMinimum(user);
-      await user.click(screen.getByRole('button', { name: /Enviar minha solicitação/ }));
+      await user.click(screen.getByRole('button', { name: /Criar minha jornada/ }));
 
       await waitFor(() => {
         expect(submitMock).toHaveBeenCalledTimes(1);
@@ -168,9 +173,10 @@ describe('<StudyRequestForm>', () => {
     it('envia phone limpo (só dígitos) pro backend', async () => {
       const user = userEvent.setup();
       render(<StudyRequestForm />);
-      await fillMinimum(user);
+      // Phone vive no passo 1 — preenche ANTES de navegar pra step 2.
       await user.type(screen.getByPlaceholderText(/\(11\)/), '11987654321');
-      await user.click(screen.getByRole('button', { name: /Enviar minha solicitação/ }));
+      await fillMinimum(user);
+      await user.click(screen.getByRole('button', { name: /Criar minha jornada/ }));
 
       await waitFor(() => {
         expect(submitMock).toHaveBeenCalledTimes(1);
@@ -189,7 +195,7 @@ describe('<StudyRequestForm>', () => {
 
       render(<StudyRequestForm />);
       await fillMinimum(user);
-      const submitBtn = screen.getByRole('button', { name: /Enviar minha solicitação/ });
+      const submitBtn = screen.getByRole('button', { name: /Criar minha jornada/ });
       await user.click(submitBtn);
       // Tenta clicar de novo (botão já está disabled mas defensa em profundidade)
       await user.click(submitBtn);
@@ -263,9 +269,12 @@ describe('<StudyRequestForm>', () => {
   // Upload de arquivos — cenários ponta-a-ponta com vários tipos
   // ──────────────────────────────────────────────────────────────────
   describe('upload — validação client-side com tipos variados', () => {
+    /**
+     * Preenche os campos OBRIGATÓRIOS do passo 2 (conteúdo). Pressupõe que
+     * o teste já está no passo 2 (render usa __testInitialStep={2}). Não
+     * avança pra step 3 — caller faz isso quando precisa submeter.
+     */
     async function fillMinimumE2E(user: ReturnType<typeof userEvent.setup>) {
-      await user.type(screen.getByPlaceholderText(/Como podemos te chamar/), 'João');
-      await user.type(screen.getByPlaceholderText('voce@email.com'), 'joao@gmail.com');
       await user.selectOptions(screen.getByRole('combobox'), 'medicina-veterinaria');
       await user.type(screen.getByPlaceholderText(/Genética animal/), 'Genética');
       await user.type(
@@ -275,7 +284,7 @@ describe('<StudyRequestForm>', () => {
     }
 
     it('aceita PDF, DOCX, XLSX, PPTX, CSV, TXT, MD e imagens (png/jpg/webp)', () => {
-      render(<StudyRequestForm />);
+      render(<StudyRequestForm __testInitialStep={2} />);
       dropFiles([
         makeFile('apostila.pdf', 1024, 'application/pdf'),
         makeFile('redacao.docx', 2048, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
@@ -296,7 +305,7 @@ describe('<StudyRequestForm>', () => {
     });
 
     it('rejeita arquivo .exe com mensagem clara (formato + lista de aceitos)', () => {
-      render(<StudyRequestForm />);
+      render(<StudyRequestForm __testInitialStep={2} />);
       dropFiles([makeFile('virus.exe', 1024, 'application/x-msdownload')]);
       expect(screen.queryByLabelText(/Arquivos anexados/i)).not.toBeInTheDocument();
       const err = screen.getByText(/não é aceito/i);
@@ -318,7 +327,7 @@ describe('<StudyRequestForm>', () => {
       ['HTML', 'pagina.html', 'text/html'],
       ['JS', 'script.js', 'application/javascript'],
     ])('rejeita formato não aceito: %s', (fmt, name, type) => {
-      render(<StudyRequestForm />);
+      render(<StudyRequestForm __testInitialStep={2} />);
       dropFiles([makeFile(name, 1024, type)]);
       expect(screen.queryByLabelText(/Arquivos anexados/i)).not.toBeInTheDocument();
       const err = screen.getByText(/não é aceito/i);
@@ -326,7 +335,7 @@ describe('<StudyRequestForm>', () => {
     });
 
     it('arquivo sem extensão: mensagem específica', () => {
-      render(<StudyRequestForm />);
+      render(<StudyRequestForm __testInitialStep={2} />);
       dropFiles([makeFile('semExtensao', 1024, 'application/octet-stream')]);
       expect(screen.queryByLabelText(/Arquivos anexados/i)).not.toBeInTheDocument();
       expect(screen.getByText(/sem extensão|não é aceito/i)).toBeInTheDocument();
@@ -350,7 +359,7 @@ describe('<StudyRequestForm>', () => {
       ['WebP', 'modern.webp', 'image/webp'],
       ['GIF', 'animado.gif', 'image/gif'],
     ])('aceita %s individualmente', (_fmt, name) => {
-      render(<StudyRequestForm />);
+      render(<StudyRequestForm __testInitialStep={2} />);
       dropFiles([makeFile(name, 2048, 'application/octet-stream')]);
       // Aceito: aparece na lista
       const list = screen.getByLabelText(/Arquivos anexados/i);
@@ -360,7 +369,7 @@ describe('<StudyRequestForm>', () => {
     });
 
     it('case-insensitive: extensão MAIÚSCULA é aceita (.PDF, .JPG)', () => {
-      render(<StudyRequestForm />);
+      render(<StudyRequestForm __testInitialStep={2} />);
       dropFiles([
         makeFile('PROVA.PDF', 1024, 'application/pdf'),
         makeFile('FOTO.JPG', 1024, 'image/jpeg'),
@@ -370,7 +379,7 @@ describe('<StudyRequestForm>', () => {
     });
 
     it('rejeita arquivo > 25 MB individualmente', () => {
-      render(<StudyRequestForm />);
+      render(<StudyRequestForm __testInitialStep={2} />);
       const big = makeFile('manual.pdf', 26 * 1024 * 1024); // 26 MB
       dropFiles([big]);
       expect(screen.queryByLabelText(/Arquivos anexados/i)).not.toBeInTheDocument();
@@ -378,14 +387,14 @@ describe('<StudyRequestForm>', () => {
     });
 
     it('rejeita arquivo de 0 bytes (arquivo movido/deletado entre seleção e leitura)', () => {
-      render(<StudyRequestForm />);
+      render(<StudyRequestForm __testInitialStep={2} />);
       dropFiles([makeFile('vazio.pdf', 0)]);
       expect(screen.queryByLabelText(/Arquivos anexados/i)).not.toBeInTheDocument();
       expect(screen.getByText(/está vazio|sumido/i)).toBeInTheDocument();
     });
 
     it('permite até 10 arquivos; o 11º vem com erro', () => {
-      render(<StudyRequestForm />);
+      render(<StudyRequestForm __testInitialStep={2} />);
       const ten = Array.from({ length: 10 }, (_, i) => makeFile(`a${i}.pdf`, 100));
       dropFiles(ten);
       // Agora tenta anexar o 11º
@@ -396,7 +405,7 @@ describe('<StudyRequestForm>', () => {
     });
 
     it('rejeita soma > 200 MB total (evita connection-reset do nginx)', () => {
-      render(<StudyRequestForm />);
+      render(<StudyRequestForm __testInitialStep={2} />);
       // 9 arquivos de ~24 MB cada = 216 MB — ultrapassa o cap de 200 MB
       const chunks = Array.from({ length: 9 }, (_, i) =>
         makeFile(`chunk${i}.pdf`, 24 * 1024 * 1024),
@@ -406,7 +415,7 @@ describe('<StudyRequestForm>', () => {
     });
 
     it('em batch misto (válido + inválido): aceita os válidos, mostra erro do inválido', () => {
-      render(<StudyRequestForm />);
+      render(<StudyRequestForm __testInitialStep={2} />);
       dropFiles([
         makeFile('valido.pdf', 500),
         makeFile('grande.pdf', 30 * 1024 * 1024), // 30 MB — rejeita
@@ -419,7 +428,7 @@ describe('<StudyRequestForm>', () => {
     });
 
     it('dedupa o mesmo arquivo (nome + size + lastModified) e avisa o usuário', () => {
-      render(<StudyRequestForm />);
+      render(<StudyRequestForm __testInitialStep={2} />);
       const a = makeFile('mesmo.pdf', 1024);
       // Drop 1
       dropFiles([a]);
@@ -434,7 +443,7 @@ describe('<StudyRequestForm>', () => {
     // ── Cenários explícitos de "2 arquivos iguais" — várias interpretações ──
 
     it('2 PDFs com MESMO nome mas tamanho diferente: aceita ambos (não são iguais)', () => {
-      render(<StudyRequestForm />);
+      render(<StudyRequestForm __testInitialStep={2} />);
       const a = makeFile('aula.pdf', 1024);
       const b = makeFile('aula.pdf', 2048);
       dropFiles([a, b]);
@@ -443,7 +452,7 @@ describe('<StudyRequestForm>', () => {
     });
 
     it('2 PDFs com mesmo nome+tamanho mas lastModified diferente: aceita ambos', async () => {
-      render(<StudyRequestForm />);
+      render(<StudyRequestForm __testInitialStep={2} />);
       // makeFile gera lastModified diferente a cada chamada (Date.now())
       dropFiles([makeFile('aula.pdf', 1024)]);
       // pequeno delay garante lastModified diferente
@@ -454,7 +463,7 @@ describe('<StudyRequestForm>', () => {
     });
 
     it('2 arquivos idênticos no MESMO drop: dedupa, aceita só 1', () => {
-      render(<StudyRequestForm />);
+      render(<StudyRequestForm __testInitialStep={2} />);
       const a = makeFile('aula.pdf', 1024);
       dropFiles([a, a]); // mesmo arquivo 2x no mesmo drop
       const items = screen.getByLabelText(/Arquivos anexados/i).querySelectorAll('li');
@@ -462,7 +471,7 @@ describe('<StudyRequestForm>', () => {
     });
 
     it('2 imagens diferentes (PNG e JPG): aceita ambas', () => {
-      render(<StudyRequestForm />);
+      render(<StudyRequestForm __testInitialStep={2} />);
       dropFiles([
         makeFile('grafico.png', 1024, 'image/png'),
         makeFile('foto.jpg', 2048, 'image/jpeg'),
@@ -472,7 +481,7 @@ describe('<StudyRequestForm>', () => {
     });
 
     it('mesma imagem 2x (mesmo arquivo PNG): dedupa', () => {
-      render(<StudyRequestForm />);
+      render(<StudyRequestForm __testInitialStep={2} />);
       const png = makeFile('print.png', 5000, 'image/png');
       dropFiles([png]);
       dropFiles([png]);
@@ -481,7 +490,7 @@ describe('<StudyRequestForm>', () => {
     });
 
     it('mesmo PPT 2x: dedupa com mensagem amigável citando o nome', () => {
-      render(<StudyRequestForm />);
+      render(<StudyRequestForm __testInitialStep={2} />);
       const ppt = makeFile('aula-genetica.pptx', 8000,
         'application/vnd.openxmlformats-officedocument.presentationml.presentation');
       dropFiles([ppt, ppt]);
@@ -490,7 +499,7 @@ describe('<StudyRequestForm>', () => {
     });
 
     it('3 duplicatas em um mesmo drop: mensagem agregada "3 arquivos"', () => {
-      render(<StudyRequestForm />);
+      render(<StudyRequestForm __testInitialStep={2} />);
       const a = makeFile('a.pdf', 100);
       const b = makeFile('b.pdf', 200);
       const c = makeFile('c.pdf', 300);
@@ -502,7 +511,7 @@ describe('<StudyRequestForm>', () => {
     });
 
     it('JPG e JPEG (mesma extensão semântica, sufixos diferentes): aceita os 2', () => {
-      render(<StudyRequestForm />);
+      render(<StudyRequestForm __testInitialStep={2} />);
       dropFiles([
         makeFile('foto1.jpg', 1024, 'image/jpeg'),
         makeFile('foto2.jpeg', 1024, 'image/jpeg'),
@@ -512,7 +521,7 @@ describe('<StudyRequestForm>', () => {
     });
 
     it('PDF + imagem + PPT + DOCX juntos: aceita todos no mesmo batch', () => {
-      render(<StudyRequestForm />);
+      render(<StudyRequestForm __testInitialStep={2} />);
       dropFiles([
         makeFile('apostila.pdf', 1024, 'application/pdf'),
         makeFile('grafico.png', 2048, 'image/png'),
@@ -524,7 +533,7 @@ describe('<StudyRequestForm>', () => {
     });
 
     it('exibe resumo do total: "N arquivos · XX MB no total"', () => {
-      render(<StudyRequestForm />);
+      render(<StudyRequestForm __testInitialStep={2} />);
       dropFiles([
         makeFile('a.pdf', 1024 * 500), // 500 KB
         makeFile('b.pdf', 1024 * 1024 * 2), // 2 MB
@@ -536,7 +545,7 @@ describe('<StudyRequestForm>', () => {
 
     it('botão de remover tira o arquivo da lista', async () => {
       const user = userEvent.setup();
-      render(<StudyRequestForm />);
+      render(<StudyRequestForm __testInitialStep={2} />);
       dropFiles([makeFile('removivel.pdf', 1024)]);
       expect(screen.getByText('removivel.pdf')).toBeInTheDocument();
       await user.click(screen.getByRole('button', { name: /Remover removivel\.pdf/ }));
@@ -545,13 +554,15 @@ describe('<StudyRequestForm>', () => {
 
     it('submit com arquivos válidos manda o array completo pra API', async () => {
       const user = userEvent.setup();
-      render(<StudyRequestForm />);
+      render(<StudyRequestForm __testInitialStep={2} />);
       await fillMinimumE2E(user);
       dropFiles([
         makeFile('resumo.pdf', 5000),
         makeFile('slides.pptx', 8000, 'application/vnd.openxmlformats-officedocument.presentationml.presentation'),
       ]);
-      await user.click(screen.getByRole('button', { name: /Enviar minha solicitação/ }));
+      // Avança pro passo 3 (review) e clica enviar
+      await user.click(screen.getByRole('button', { name: /Próximo · passo 3/ }));
+      await user.click(screen.getByRole('button', { name: /Criar minha jornada/ }));
 
       await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(1));
       const callArgs = submitMock.mock.calls[0]![0]!;
@@ -563,15 +574,20 @@ describe('<StudyRequestForm>', () => {
 
   describe('upload — tratamento de erros amigáveis no submit', () => {
     async function fillAndSubmit(user: ReturnType<typeof userEvent.setup>) {
+      // Passo 1: identidade
       await user.type(screen.getByPlaceholderText(/Como podemos te chamar/), 'Ana');
       await user.type(screen.getByPlaceholderText('voce@email.com'), 'ana@gmail.com');
+      await user.click(screen.getByRole('button', { name: /Próximo · passo 2/ }));
+      // Passo 2: conteúdo
       await user.selectOptions(screen.getByRole('combobox'), 'tecnologia');
       await user.type(screen.getByPlaceholderText(/Genética animal/), 'Go');
       await user.type(
         screen.getByPlaceholderText(/Descreva o que precisa estudar/),
         'Backend em Go com testes',
       );
-      await user.click(screen.getByRole('button', { name: /Enviar minha solicitação/ }));
+      await user.click(screen.getByRole('button', { name: /Próximo · passo 3/ }));
+      // Passo 3: confirma e envia
+      await user.click(screen.getByRole('button', { name: /Criar minha jornada/ }));
     }
 
     it('"Failed to fetch" do fetch real NÃO aparece pro usuário — mensagem amigável aparece', async () => {
@@ -623,19 +639,25 @@ describe('<StudyRequestForm>', () => {
         new StudyRequestError(0, 'Erro de rede', 'network'),
       );
       render(<StudyRequestForm />);
+      // Step 1 — identidade
       await user.type(screen.getByPlaceholderText(/Como podemos te chamar/), 'Pedro');
       await user.type(screen.getByPlaceholderText('voce@email.com'), 'pedro@gmail.com');
+      await user.click(screen.getByRole('button', { name: /Próximo · passo 2/ }));
+      // Step 2 — conteúdo + anexos
       await user.selectOptions(screen.getByRole('combobox'), 'tecnologia');
       await user.type(screen.getByPlaceholderText(/Genética animal/), 'AWS');
       await user.type(screen.getByPlaceholderText(/Descreva o que precisa estudar/), 'CLF-C02');
       dropFiles([makeFile('estudo.pdf', 5000)]);
       expect(screen.getByText('estudo.pdf')).toBeInTheDocument();
-
-      await user.click(screen.getByRole('button', { name: /Enviar minha solicitação/ }));
+      await user.click(screen.getByRole('button', { name: /Próximo · passo 3/ }));
+      // Step 3 — submit
+      await user.click(screen.getByRole('button', { name: /Criar minha jornada/ }));
       await screen.findByTestId('submit-error');
-      // arquivo segue lá
+      // arquivo segue lá — voltamos pro step 2 pra verificar
+      await user.click(screen.getByRole('tab', { name: /Conteúdo/ }));
       expect(screen.getByText('estudo.pdf')).toBeInTheDocument();
-      // form values seguem lá
+      // form values do step 1 seguem lá — voltamos pra verificar
+      await user.click(screen.getByRole('tab', { name: /Identidade/ }));
       expect((screen.getByPlaceholderText(/Como podemos te chamar/) as HTMLInputElement).value).toBe('Pedro');
     });
 
@@ -654,7 +676,7 @@ describe('<StudyRequestForm>', () => {
       await screen.findByTestId('submit-error');
 
       // tenta de novo
-      await user.click(screen.getByRole('button', { name: /Enviar minha solicitação/ }));
+      await user.click(screen.getByRole('button', { name: /Criar minha jornada/ }));
       await waitFor(() => {
         expect(submitMock).toHaveBeenCalledTimes(2);
       });
@@ -680,10 +702,12 @@ describe('<StudyRequestForm>', () => {
       render(<StudyRequestForm />);
       await user.type(screen.getByPlaceholderText(/Como podemos te chamar/), 'Ana');
       await user.type(screen.getByPlaceholderText('voce@email.com'), 'ana@gmail.com');
+      await user.click(screen.getByRole('button', { name: /Próximo · passo 2/ }));
       await user.selectOptions(screen.getByRole('combobox'), 'tecnologia');
       await user.type(screen.getByPlaceholderText(/Genética animal/), 'Go');
       await user.type(screen.getByPlaceholderText(/Descreva o que precisa estudar/), 'Backend Go');
-      await user.click(screen.getByRole('button', { name: /Enviar minha solicitação/ }));
+      await user.click(screen.getByRole('button', { name: /Próximo · passo 3/ }));
+      await user.click(screen.getByRole('button', { name: /Criar minha jornada/ }));
 
       // Simula progresso vindo do XHR
       await waitFor(() => expect(progressCb).toBeDefined());
@@ -709,10 +733,12 @@ describe('<StudyRequestForm>', () => {
       render(<StudyRequestForm />);
       await user.type(screen.getByPlaceholderText(/Como podemos te chamar/), 'Ana');
       await user.type(screen.getByPlaceholderText('voce@email.com'), 'ana@gmail.com');
+      await user.click(screen.getByRole('button', { name: /Próximo · passo 2/ }));
       await user.selectOptions(screen.getByRole('combobox'), 'tecnologia');
       await user.type(screen.getByPlaceholderText(/Genética animal/), 'Go');
       await user.type(screen.getByPlaceholderText(/Descreva o que precisa estudar/), 'Backend Go');
-      await user.click(screen.getByRole('button', { name: /Enviar minha solicitação/ }));
+      await user.click(screen.getByRole('button', { name: /Próximo · passo 3/ }));
+      await user.click(screen.getByRole('button', { name: /Criar minha jornada/ }));
 
       await waitFor(() => expect(progressCb).toBeDefined());
       progressCb!(42);
@@ -728,10 +754,12 @@ describe('<StudyRequestForm>', () => {
       render(<StudyRequestForm />);
       await user.type(screen.getByPlaceholderText(/Como podemos te chamar/), 'Ana');
       await user.type(screen.getByPlaceholderText('voce@email.com'), 'ana@gmail.com');
+      await user.click(screen.getByRole('button', { name: /Próximo · passo 2/ }));
       await user.selectOptions(screen.getByRole('combobox'), 'tecnologia');
       await user.type(screen.getByPlaceholderText(/Genética animal/), 'Go');
       await user.type(screen.getByPlaceholderText(/Descreva o que precisa estudar/), 'Go');
-      await user.click(screen.getByRole('button', { name: /Enviar minha solicitação/ }));
+      await user.click(screen.getByRole('button', { name: /Próximo · passo 3/ }));
+      await user.click(screen.getByRole('button', { name: /Criar minha jornada/ }));
       await waitFor(() => {
         expect(screen.getByTestId('submit-button')).toBeDisabled();
       });
@@ -743,6 +771,7 @@ describe('<StudyRequestForm>', () => {
       render(<StudyRequestForm />);
       await user.type(screen.getByPlaceholderText(/Como podemos te chamar/), 'Ana');
       await user.type(screen.getByPlaceholderText('voce@email.com'), 'ana@gmail.com');
+      await user.click(screen.getByRole('button', { name: /Próximo · passo 2/ }));
       await user.selectOptions(screen.getByRole('combobox'), 'tecnologia');
       await user.type(screen.getByPlaceholderText(/Genética animal/), 'Go');
       await user.type(screen.getByPlaceholderText(/Descreva o que precisa estudar/), 'Quero aprender Go');
@@ -756,7 +785,8 @@ describe('<StudyRequestForm>', () => {
       // Simulação alternativa: confirma que a validação no handleFiles já barra
       // o caso e que submit sem files chama API normalmente.
       dropFiles([makeFile('zero.pdf', 0)]); // barrado por handleFiles
-      await user.click(screen.getByRole('button', { name: /Enviar minha solicitação/ }));
+      await user.click(screen.getByRole('button', { name: /Próximo · passo 3/ }));
+      await user.click(screen.getByRole('button', { name: /Criar minha jornada/ }));
       // submit segue sem files anexados (handleFiles barrou o 0-byte)
       await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(1));
       const args = submitMock.mock.calls[0]![0]!;
