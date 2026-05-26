@@ -173,10 +173,7 @@ export interface ViewEntry {
 export interface ListViewsResponse {
   views: ViewEntry[];
   count: number;
-  // Paginação keyset: cliente envia ?cursor=<nextCursor> pra próxima página.
-  // hasMore=true quando ainda existem rows além da página atual.
-  nextCursor?: string;
-  hasMore: boolean;
+  total: number;
 }
 
 export async function fetchAdminViews(params: {
@@ -187,7 +184,7 @@ export async function fetchAdminViews(params: {
   since?: string;
   until?: string;
   limit?: number;
-  cursor?: string;
+  offset?: number;
 } = {}): Promise<ListViewsResponse | null> {
   const q = new URLSearchParams();
   if (params.base) q.set('base', params.base);
@@ -196,8 +193,8 @@ export async function fetchAdminViews(params: {
   if (params.slug) q.set('slug', params.slug);
   if (params.since) q.set('since', params.since);
   if (params.until) q.set('until', params.until);
-  if (params.cursor) q.set('cursor', params.cursor);
-  q.set('limit', String(params.limit ?? 50));
+  q.set('limit', String(params.limit ?? 10));
+  q.set('offset', String(params.offset ?? 0));
   try {
     return await apiFetch(`/api/v1/admin/views?${q.toString()}`, {}, true);
   } catch {

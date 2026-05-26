@@ -10,6 +10,8 @@ import {
   type CommentStatus,
 } from '@/lib/comment-api';
 import { toast } from '@/lib/toast';
+import { AdminPagination } from '@/components/admin/AdminPagination';
+import { BigNumberCard } from '@/components/admin/BigNumberCard';
 
 /**
  * Admin → moderação de comentários.
@@ -23,22 +25,31 @@ import { toast } from '@/lib/toast';
  * backend. UI não bloqueia (lib retorna 403 que mostramos na tela), mas
  * a tela só está linkada do admin dashboard.
  */
-const PAGE_SIZE = 50;
-
 export function AdminCommentsClient() {
   const [status, setStatus] = useState<CommentStatus>('flagged');
   const [items, setItems] = useState<Comment[] | null>(null);
   const [total, setTotal] = useState(0);
-  const [loadingMore, setLoadingMore] = useState(false);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  // Snapshot por status — pra big numbers ("Reportados: N, Escondidos: M")
+  // sem precisar de endpoint dedicado. Atualiza após cada ação (hide/restore).
+  const [statusCounts, setStatusCounts] = useState<Record<CommentStatus, number>>({
+    flagged: 0,
+    hidden: 0,
+    visible: 0,
+    deleted: 0,
+  });
 
   const fetchItems = useCallback(async (signal?: AbortSignal) => {
     setLoadError(null);
     setItems(null);
     try {
-      const res = await adminListComments(status, { signal, limit: PAGE_SIZE, offset: 0 });
+      const res = await adminListComments(status, { signal, limit: pageSize, offset: page * pageSize });
       setItems(res.data);
       setTotal(res.total);
+      setStatusCounts(prev => ({ ...prev, [status]: res.total }));
     } catch (err) {
       if ((err as DOMException).name === 'AbortError') return;
       if (err instanceof CommentApiError && err.isForbidden) {
@@ -48,27 +59,31 @@ export function AdminCommentsClient() {
       }
       setItems([]);
     }
-  }, [status]);
-
-  const loadMore = useCallback(async () => {
-    if (loadingMore || !items) return;
-    setLoadingMore(true);
-    try {
-      const res = await adminListComments(status, { limit: PAGE_SIZE, offset: items.length });
-      setItems(prev => [...(prev ?? []), ...res.data]);
-      setTotal(res.total);
-    } catch (err) {
-      setLoadError(err instanceof CommentApiError ? err.message : 'Erro ao carregar mais.');
-    } finally {
-      setLoadingMore(false);
-    }
-  }, [status, items, loadingMore]);
+  }, [status, page, pageSize]);
 
   useEffect(() => {
     const ctrl = new AbortController();
     void fetchItems(ctrl.signal);
     return () => ctrl.abort();
   }, [fetchItems]);
+
+  // Pre-fetch dos counts dos outros status pra alimentar big numbers.
+  // Chama 1x ao montar e após cada hide/restore.
+  const refreshAllCounts = useCallback(async () => {
+    const all: CommentStatus[] = ['flagged', 'hidden', 'visible', 'deleted'];
+    const results = await Promise.allSettled(
+      all.map(s => adminListComments(s, { limit: 1, offset: 0 })),
+    );
+    const counts: Record<CommentStatus, number> = { flagged: 0, hidden: 0, visible: 0, deleted: 0 };
+    results.forEach((r, i) => {
+      if (r.status === 'fulfilled') counts[all[i]] = r.value.total;
+    });
+    setStatusCounts(counts);
+  }, []);
+
+  useEffect(() => {
+    void refreshAllCounts();
+  }, [refreshAllCounts]);
 
   async function handleHide(c: Comment) {
     if (!confirm(`Esconder esse comentário de "${c.authorName}"?`)) return;
@@ -77,6 +92,7 @@ export function AdminCommentsClient() {
       setItems(prev => (prev ?? []).filter(x => x.id !== c.id));
       setTotal(t => Math.max(0, t - 1));
       toast.success('Comentário escondido.');
+      void refreshAllCounts();
     } catch (err) {
       toast.error(err instanceof CommentApiError ? err.message : 'Erro ao esconder.');
     }
@@ -89,6 +105,7 @@ export function AdminCommentsClient() {
       setItems(prev => (prev ?? []).filter(x => x.id !== c.id));
       setTotal(t => Math.max(0, t - 1));
       toast.success('Comentário restaurado.');
+      void refreshAllCounts();
     } catch (err) {
       toast.error(err instanceof CommentApiError ? err.message : 'Erro ao restaurar.');
     }
@@ -101,6 +118,14 @@ export function AdminCommentsClient() {
         Comentários auto-flagueados (≥3 reports) caem aqui. Revise e decida.
       </p>
 
+      {/* Big numbers */}
+      <section className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+        <BigNumberCard label="Reportados" value={statusCounts.flagged} hint="aguardando revisão" />
+        <BigNumberCard label="Escondidos" value={statusCounts.hidden} hint="moderados pela admin" />
+        <BigNumberCard label="Visíveis" value={statusCounts.visible} hint="liberados ao público" />
+        <BigNumberCard label="Deletados" value={statusCounts.deleted} hint="pelo próprio autor" />
+      </section>
+
       {/* Filtro de status */}
       <div className="flex items-center gap-2 mb-6 flex-wrap">
         {(['flagged', 'hidden', 'visible', 'deleted'] as CommentStatus[]).map(s => {
@@ -110,7 +135,7 @@ export function AdminCommentsClient() {
             <button
               key={s}
               type="button"
-              onClick={() => setStatus(s)}
+              onClick={() => { setPage(0); setStatus(s); }}
               aria-pressed={active}
               style={{
                 padding: '6px 14px',
@@ -212,19 +237,15 @@ export function AdminCommentsClient() {
             </li>
           ))}
         </ul>
-        {items.length < total && (
-          <div className="mt-4 flex justify-center">
-            <button
-              type="button"
-              onClick={() => void loadMore()}
-              disabled={loadingMore}
-              className="px-5 py-2 rounded-md text-sm font-semibold disabled:opacity-50"
-              style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)', cursor: 'pointer' }}
-            >
-              {loadingMore ? 'Carregando…' : `Carregar mais (${total - items.length} restantes)`}
-            </button>
-          </div>
-        )}
+        <div className="mt-4">
+          <AdminPagination
+            total={total}
+            page={page}
+            pageSize={pageSize}
+            onPage={setPage}
+            onPageSize={ps => { setPage(0); setPageSize(ps); }}
+          />
+        </div>
         </>
       )}
     </main>

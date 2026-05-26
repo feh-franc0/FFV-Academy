@@ -5,9 +5,10 @@
  */
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { fetchAuditLog, type AuditEntry } from '@/lib/admin-api';
 import { AdminPagination } from '@/components/admin/AdminPagination';
+import { BigNumberCard } from '@/components/admin/BigNumberCard';
 
 export default function AdminAuditPage() {
   const [entries, setEntries] = useState<AuditEntry[]>([]);
@@ -15,7 +16,7 @@ export default function AdminAuditPage() {
   const [loading, setLoading] = useState(true);
   const [action, setAction] = useState('');
   const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(50);
+  const [pageSize, setPageSize] = useState(10);
 
   useEffect(() => {
     let cancelled = false;
@@ -32,14 +33,28 @@ export default function AdminAuditPage() {
     };
   }, [action, page, pageSize]);
 
+  const stats = useMemo(() => {
+    const ok = entries.filter(e => (e.status ?? 0) >= 200 && (e.status ?? 0) < 300).length;
+    const errors = entries.filter(e => (e.status ?? 0) >= 400).length;
+    const slow = entries.filter(e => (e.latency_ms ?? 0) > 500).length;
+    return { ok, errors, slow };
+  }, [entries]);
+
   return (
     <div className="flex flex-col gap-4 max-w-6xl">
       <header>
         <h1 className="text-2xl font-bold">Audit Log</h1>
         <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
-          {total > 0 ? `${total.toLocaleString('pt-BR')} eventos no total` : `${entries.length} eventos mostrados`}
+          {loading ? 'Carregando…' : `Página ${page + 1} · ${entries.length} de ${total.toLocaleString('pt-BR')} eventos no total`}
         </p>
       </header>
+
+      <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <BigNumberCard label="Eventos no total" value={total} hint="todas as mutações HTTP" />
+        <BigNumberCard label="Sucessos (nesta página)" value={stats.ok} hint="status 2xx" />
+        <BigNumberCard label="Erros (nesta página)" value={stats.errors} hint="status ≥400" />
+        <BigNumberCard label="Lentos (nesta página)" value={stats.slow} hint="latência >500ms" />
+      </section>
 
       <input
         type="text"

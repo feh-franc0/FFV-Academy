@@ -435,17 +435,14 @@ type pgxAdminViewsRepo struct{ pool *pgxpool.Pool }
 
 var _ handlers.AdminViewsRepository = (*pgxAdminViewsRepo)(nil)
 
-func (r *pgxAdminViewsRepo) ListViews(ctx context.Context, q handlers.ListViewsQuery) ([]handlers.ViewEntry, string, bool, error) {
+func (r *pgxAdminViewsRepo) ListViews(ctx context.Context, q handlers.ListViewsQuery) ([]handlers.ViewEntry, int64, error) {
 	// Construímos SQL dinamicamente com placeholders posicionais. Cada filtro
 	// vira um AND opcional. Postgres aproveita os índices parciais da mig 51
 	// (idx_module_views_base_viewed, idx_module_views_user_email_viewed,
 	// idx_module_views_kind_viewed) quando o filtro correspondente é usado.
 	//
-	// Paginação keyset: ordenação fixa por (viewed_at DESC, id DESC). Quando há
-	// cursor, condição extra `(viewed_at, id) < (cursorTime, cursorID)` salta
-	// pra próxima página em O(log n) — sem custo de OFFSET com milhões de rows.
-	// Truque do limit+1: pedimos limit+1 rows; se o backend devolver >limit,
-	// existe próxima página e usamos o último item de `out` como cursor.
+	// Paginação offset+limit consistente com o resto do admin (AdminPagination
+	// 10/50/100). 2 queries: COUNT(*) pra total + SELECT paginado.
 	conds := []string{"viewed_at >= $1", "viewed_at < $2"}
 	args := []any{q.Since, q.Until}
 	add := func(sql string, val any) {
@@ -464,15 +461,17 @@ func (r *pgxAdminViewsRepo) ListViews(ctx context.Context, q handlers.ListViewsQ
 	if q.Slug != "" {
 		add("slug = ", q.Slug)
 	}
-	if !q.CursorTime.IsZero() {
-		args = append(args, q.CursorTime, q.CursorID)
-		idxT := "$" + itoa(len(args)-1)
-		idxID := "$" + itoa(len(args))
-		conds = append(conds, "(viewed_at, id) < ("+idxT+", "+idxID+")")
+	whereClause := joinAnd(conds)
+
+	// COUNT(*) com os mesmos filtros.
+	var total int64
+	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM module_views WHERE `+whereClause, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("admin_views: count: %w", err)
 	}
-	// limit + 1 sentinela
-	args = append(args, q.Limit+1)
-	limitIdx := "$" + itoa(len(args))
+
+	args = append(args, q.Limit, q.Offset)
+	limitIdx := "$" + itoa(len(args)-1)
+	offsetIdx := "$" + itoa(len(args))
 
 	query := `
 		SELECT id, viewed_at,
@@ -482,17 +481,17 @@ func (r *pgxAdminViewsRepo) ListViews(ctx context.Context, q handlers.ListViewsQ
 		       COALESCE(user_display_name,''), COALESCE(anon_id,''),
 		       COALESCE(session_id,'')
 		FROM module_views
-		WHERE ` + joinAnd(conds) + `
+		WHERE ` + whereClause + `
 		ORDER BY viewed_at DESC, id DESC
-		LIMIT ` + limitIdx
+		LIMIT ` + limitIdx + ` OFFSET ` + offsetIdx
 
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
-		return nil, "", false, fmt.Errorf("admin_views: query: %w", err)
+		return nil, 0, fmt.Errorf("admin_views: query: %w", err)
 	}
 	defer rows.Close()
 
-	out := make([]handlers.ViewEntry, 0, q.Limit+1)
+	out := make([]handlers.ViewEntry, 0, q.Limit)
 	for rows.Next() {
 		var e handlers.ViewEntry
 		if err := rows.Scan(
@@ -503,24 +502,11 @@ func (r *pgxAdminViewsRepo) ListViews(ctx context.Context, q handlers.ListViewsQ
 			&e.UserDisplayName, &e.AnonID,
 			&e.SessionID,
 		); err != nil {
-			return nil, "", false, fmt.Errorf("admin_views: scan: %w", err)
+			return nil, 0, fmt.Errorf("admin_views: scan: %w", err)
 		}
 		out = append(out, e)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, "", false, err
-	}
-
-	hasMore := len(out) > q.Limit
-	if hasMore {
-		out = out[:q.Limit] // descarta o sentinela
-	}
-	nextCursor := ""
-	if hasMore && len(out) > 0 {
-		last := out[len(out)-1]
-		nextCursor = handlers.EncodeCursor(last.ViewedAt, last.ID)
-	}
-	return out, nextCursor, hasMore, nil
+	return out, total, rows.Err()
 }
 
 func joinAnd(conds []string) string {

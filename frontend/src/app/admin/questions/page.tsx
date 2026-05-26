@@ -14,6 +14,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { apiFetch } from '@/lib/api-client';
 import { AdminPagination } from '@/components/admin/AdminPagination';
+import { BigNumberCard } from '@/components/admin/BigNumberCard';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -616,13 +617,20 @@ export default function AdminQuestionsPage() {
   }
 
   // ─── List panel ──────────────────────────────────────────────────────────
+  const items = data?.data ?? [];
+  const byDifficulty = items.reduce<Record<string, number>>((acc, q) => {
+    const d = q.difficulty ?? 'unspecified';
+    acc[d] = (acc[d] ?? 0) + 1;
+    return acc;
+  }, {});
+
   return (
     <div className="flex flex-col gap-4 max-w-4xl">
       <header className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold">Questões CLF-C02</h1>
           <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
-            {data ? `${data.total.toLocaleString('pt-BR')} questões` : '…'}
+            {data ? `Página ${page + 1} · ${items.length} de ${data.total.toLocaleString('pt-BR')} questões no total` : '…'}
           </p>
         </div>
         <button
@@ -633,6 +641,13 @@ export default function AdminQuestionsPage() {
           + Criar questão
         </button>
       </header>
+
+      <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <BigNumberCard label="Questões no total" value={data?.total ?? 0} hint="banco AWS CLF-C02" />
+        <BigNumberCard label="Fácil (nesta página)" value={byDifficulty.easy ?? 0} hint="difficulty=easy" />
+        <BigNumberCard label="Média (nesta página)" value={byDifficulty.medium ?? 0} hint="difficulty=medium" />
+        <BigNumberCard label="Difícil (nesta página)" value={byDifficulty.hard ?? 0} hint="difficulty=hard" />
+      </section>
 
       {/* Filters */}
       <div className="flex gap-2 flex-wrap">

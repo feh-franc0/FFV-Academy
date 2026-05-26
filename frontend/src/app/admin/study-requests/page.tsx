@@ -8,9 +8,10 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { AdminPagination } from '@/components/admin/AdminPagination';
+import { BigNumberCard } from '@/components/admin/BigNumberCard';
 import {
   fetchStudyRequests,
   STUDY_REQUEST_STATUS_COLOR,
@@ -27,7 +28,7 @@ export default function AdminStudyRequestsPage() {
   const [studyArea, setStudyArea] = useState('');
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(50);
+  const [pageSize, setPageSize] = useState(10);
 
   useEffect(() => {
     let cancelled = false;
@@ -48,6 +49,19 @@ export default function AdminStudyRequestsPage() {
     };
   }, [status, studyArea, search, page, pageSize]);
 
+  const stats = useMemo(() => {
+    const items = data?.data ?? [];
+    const byStatus = items.reduce<Record<string, number>>((acc, s) => {
+      acc[s.status] = (acc[s.status] ?? 0) + 1;
+      return acc;
+    }, {});
+    return {
+      pending: (byStatus.received ?? 0) + (byStatus.queued ?? 0),
+      inProgress: byStatus.in_progress ?? 0,
+      delivered: byStatus.delivered ?? 0,
+    };
+  }, [data]);
+
   return (
     <div className="flex flex-col gap-4 max-w-7xl">
       <header className="flex items-end justify-between flex-wrap gap-3">
@@ -55,11 +69,18 @@ export default function AdminStudyRequestsPage() {
           <h1 className="text-2xl font-bold">Solicitações de estudo</h1>
           <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
             {data
-              ? `${data.total.toLocaleString('pt-BR')} solicitação(ões) no total`
+              ? `Página ${page + 1} · ${data.data.length} de ${data.total.toLocaleString('pt-BR')} solicitação(ões) no total`
               : 'Carregando…'}
           </p>
         </div>
       </header>
+
+      <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <BigNumberCard label="Solicitações no total" value={data?.total ?? 0} hint="todas as áreas e status" />
+        <BigNumberCard label="Pendentes (nesta página)" value={stats.pending} hint="received + queued" />
+        <BigNumberCard label="Em andamento (nesta página)" value={stats.inProgress} hint="in_progress" />
+        <BigNumberCard label="Entregues (nesta página)" value={stats.delivered} hint="delivered" />
+      </section>
 
       {/* Filtros */}
       <div className="flex gap-2 items-center flex-wrap">

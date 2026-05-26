@@ -1,8 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { deletePlaylist } from '@/lib/admin-content-api';
+import { AdminPagination } from '@/components/admin/AdminPagination';
+import { BigNumberCard } from '@/components/admin/BigNumberCard';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
 
@@ -15,35 +17,50 @@ interface PlaylistItem {
 }
 
 export default function AdminPlaylistsPage() {
-  const [items, setItems] = useState<PlaylistItem[]>([]);
+  // Endpoint /api/v1/playlists retorna array simples. Paginação client-side
+  // (volume real = dezenas; backend tem LIMIT 500 defensivo).
+  const [allItems, setAllItems] = useState<PlaylistItem[]>([]);
   const [loading, setLoading] = useState(true);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    if (!API_BASE) {
-      setLoading(false);
-      return;
-    }
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/playlists`);
-      if (res.ok) {
-        const body = (await res.json()) as { data?: PlaylistItem[] };
-        setItems(body.data ?? []);
-      }
-    } catch {
-      // backend offline
-    }
-    setLoading(false);
-  }, []);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      if (!API_BASE) { setLoading(false); return; }
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/playlists`);
+        if (res.ok && !cancelled) {
+          const body = await res.json();
+          const arr: PlaylistItem[] = Array.isArray(body) ? body : (body?.data ?? []);
+          setAllItems(arr);
+        }
+      } catch {
+        // backend offline
+      }
+      if (!cancelled) setLoading(false);
+    }
+    void load();
+    return () => { cancelled = true; };
+  }, []);
+
+  const total = allItems.length;
+  const visible = useMemo(
+    () => allItems.slice(page * pageSize, (page + 1) * pageSize),
+    [allItems, page, pageSize],
+  );
+  const stats = useMemo(() => {
+    const totalModules = allItems.reduce((sum, p) => sum + (p.moduleSlugs?.length ?? 0), 0);
+    const avg = total > 0 ? Math.round(totalModules / total) : 0;
+    const withEmoji = allItems.filter(p => !!p.emoji).length;
+    return { totalModules, avg, withEmoji };
+  }, [allItems, total]);
 
   async function handleDelete(slug: string) {
     if (!confirm(`Apagar playlist "${slug}"?`)) return;
     const ok = await deletePlaylist(slug);
-    if (ok) load();
+    if (ok) setAllItems(prev => prev.filter(p => p.slug !== slug));
   }
 
   return (
@@ -52,7 +69,7 @@ export default function AdminPlaylistsPage() {
         <div>
           <h1 className="text-2xl font-bold">Playlists</h1>
           <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
-            {loading ? 'Carregando…' : `${items.length} playlists`}
+            {loading ? 'Carregando…' : `Página ${page + 1} · ${visible.length} de ${total} playlists`}
           </p>
         </div>
         <Link
@@ -63,6 +80,14 @@ export default function AdminPlaylistsPage() {
           + Nova playlist
         </Link>
       </header>
+
+      <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <BigNumberCard label="Playlists no total" value={total} hint="curadas" />
+        <BigNumberCard label="Nesta página" value={visible.length} hint={`${pageSize} por página`} />
+        <BigNumberCard label="Módulos somados" value={stats.totalModules} hint={`média ${stats.avg}/playlist`} />
+        <BigNumberCard label="Com emoji" value={stats.withEmoji} hint="visuais" />
+      </section>
+
       <div className="rounded-xl overflow-x-auto" style={{ border: '1px solid var(--ffv-border)' }}>
         <table className="w-full text-xs">
           <thead style={{ background: 'var(--ffv-bg2)' }}>
@@ -75,10 +100,10 @@ export default function AdminPlaylistsPage() {
             </tr>
           </thead>
           <tbody>
-            {!loading && items.length === 0 && (
+            {!loading && total === 0 && (
               <tr><td colSpan={5} className="px-3 py-4 text-center" style={{ color: 'var(--ffv-muted)' }}>Nenhuma playlist.</td></tr>
             )}
-            {items.map((p, i) => (
+            {visible.map((p, i) => (
               <tr key={p.slug} style={{ borderBottom: '1px solid var(--ffv-border)', background: i % 2 === 0 ? 'transparent' : 'var(--ffv-bg2)' }}>
                 <td className="px-3 py-2 font-mono">{p.slug}</td>
                 <td className="px-3 py-2">{p.emoji} {p.title}</td>
@@ -93,6 +118,14 @@ export default function AdminPlaylistsPage() {
           </tbody>
         </table>
       </div>
+
+      <AdminPagination
+        total={total}
+        page={page}
+        pageSize={pageSize}
+        onPage={setPage}
+        onPageSize={ps => { setPage(0); setPageSize(ps); }}
+      />
     </div>
   );
 }

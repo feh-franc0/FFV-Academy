@@ -11,15 +11,16 @@
  *   - Categoria (module | page | simulado | admin | other)
  *
  * Filtros UI: base, kind, email do usuário, slug, período (24h / 7d / 30d).
- *
- * Limitações conhecidas:
- *   - Janela máxima 30d e limit máx 200 (definido no backend).
- *   - Sem paginação infinita — busque mais específico se precisar.
+ * Paginação: AdminPagination 10/50/100 padrão 10.
+ * Header: 4 big numbers derivados dos filtros aplicados (total + breakdown
+ * por kind dentro do período).
  */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { fetchAdminViews, type ViewEntry, type ViewKind } from '@/lib/admin-api';
+import { AdminPagination } from '@/components/admin/AdminPagination';
+import { BigNumberCard } from '@/components/admin/BigNumberCard';
 
 const KIND_OPTIONS: { value: ViewKind | ''; label: string }[] = [
   { value: '', label: 'Todos' },
@@ -64,16 +65,15 @@ function baseBadge(slug?: string): string {
   if (!slug) return 'sem base';
   if (slug === 'tecnologia') return 'Tecnologia';
   if (slug === 'medicina-veterinaria') return 'Medicina Vet';
+  if (slug === 'neurociencia') return 'Neurociência';
   return slug;
 }
 
 export default function AdminViewsPage() {
   const [views, setViews] = useState<ViewEntry[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [nextCursor, setNextCursor] = useState<string | undefined>(undefined);
-  const [hasMore, setHasMore] = useState(false);
 
   // Filtros
   const [baseFilter, setBaseFilter] = useState('');
@@ -82,15 +82,13 @@ export default function AdminViewsPage() {
   const [slugFilter, setSlugFilter] = useState('');
   const [hours, setHours] = useState(24);
 
-  // load() recarrega do zero (filtro mudou ou botão Atualizar).
-  // loadMore() pagina pra frente via cursor.
-  const PAGE_SIZE = 50;
+  // Paginação
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
 
   const load = useCallback(() => {
     setLoading(true);
     setErr(null);
-    setNextCursor(undefined);
-    setHasMore(false);
     const since = new Date(Date.now() - hours * 3600 * 1000).toISOString();
     fetchAdminViews({
       base: baseFilter || undefined,
@@ -98,44 +96,47 @@ export default function AdminViewsPage() {
       user: userFilter || undefined,
       slug: slugFilter || undefined,
       since,
-      limit: PAGE_SIZE,
+      limit: pageSize,
+      offset: page * pageSize,
     })
       .then(resp => {
         if (!resp) {
           setErr('Falha ao carregar (backend offline?)');
           setViews([]);
+          setTotal(0);
           return;
         }
         setViews(resp.views);
-        setNextCursor(resp.nextCursor);
-        setHasMore(resp.hasMore);
+        setTotal(resp.total);
       })
       .finally(() => setLoading(false));
-  }, [baseFilter, kindFilter, userFilter, slugFilter, hours]);
-
-  const loadMore = useCallback(() => {
-    if (!nextCursor || loadingMore) return;
-    setLoadingMore(true);
-    const since = new Date(Date.now() - hours * 3600 * 1000).toISOString();
-    fetchAdminViews({
-      base: baseFilter || undefined,
-      kind: kindFilter || undefined,
-      user: userFilter || undefined,
-      slug: slugFilter || undefined,
-      since,
-      limit: PAGE_SIZE,
-      cursor: nextCursor,
-    })
-      .then(resp => {
-        if (!resp) return;
-        setViews(prev => [...prev, ...resp.views]);
-        setNextCursor(resp.nextCursor);
-        setHasMore(resp.hasMore);
-      })
-      .finally(() => setLoadingMore(false));
-  }, [baseFilter, kindFilter, userFilter, slugFilter, hours, nextCursor, loadingMore]);
+  }, [baseFilter, kindFilter, userFilter, slugFilter, hours, page, pageSize]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Reset página quando muda filtro/período/pageSize
+  function withReset<T>(setter: (v: T) => void) {
+    return (v: T) => {
+      setPage(0);
+      setter(v);
+    };
+  }
+
+  // Big numbers derivados da página atual + total. Não são agregados globais —
+  // refletem o filtro aplicado (proposital: ajuda a entender o slice).
+  const stats = useMemo(() => {
+    const byKind = views.reduce<Record<string, number>>((acc, v) => {
+      acc[v.kind] = (acc[v.kind] ?? 0) + 1;
+      return acc;
+    }, {});
+    const logged = views.filter(v => v.userEmail).length;
+    return {
+      modulesInPage: byKind.module ?? 0,
+      adminInPage: byKind.admin ?? 0,
+      logged,
+      anonymous: views.length - logged,
+    };
+  }, [views]);
 
   return (
     <div>
@@ -143,9 +144,33 @@ export default function AdminViewsPage() {
         <h1 className="text-3xl font-bold">Acessos</h1>
         <p className="text-sm mt-1" style={{ color: 'var(--ffv-muted)' }}>
           Feed em tempo real de quem acessou cada módulo. Logados aparecem por
-          email; visitantes ficam como "Anônimo (id curto)".
+          email; visitantes ficam como &quot;Anônimo (id curto)&quot;.
         </p>
       </header>
+
+      {/* Big numbers */}
+      <section className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+        <BigNumberCard
+          label="Acessos no período"
+          value={total}
+          hint={`últimas ${hours === 1 ? '1h' : hours === 24 ? '24h' : hours === 168 ? '7d' : '30d'}`}
+        />
+        <BigNumberCard
+          label="Módulos (nesta página)"
+          value={stats.modulesInPage}
+          hint={`de ${views.length} eventos exibidos`}
+        />
+        <BigNumberCard
+          label="Logados (nesta página)"
+          value={stats.logged}
+          hint={`${stats.anonymous} anônimos`}
+        />
+        <BigNumberCard
+          label="Rotas admin (nesta página)"
+          value={stats.adminInPage}
+          hint="acessos a /admin/*"
+        />
+      </section>
 
       {/* Filtros */}
       <section
@@ -156,20 +181,21 @@ export default function AdminViewsPage() {
           <span className="font-semibold" style={{ color: 'var(--ffv-muted)' }}>Base</span>
           <select
             value={baseFilter}
-            onChange={e => setBaseFilter(e.target.value)}
+            onChange={e => withReset(setBaseFilter)(e.target.value)}
             className="px-2 py-1.5 rounded-md text-sm"
             style={{ background: 'var(--ffv-bg)', border: '1px solid var(--ffv-border)' }}
           >
             <option value="">Todas</option>
             <option value="tecnologia">Tecnologia</option>
             <option value="medicina-veterinaria">Medicina Veterinária</option>
+            <option value="neurociencia">Neurociência</option>
           </select>
         </label>
         <label className="flex flex-col gap-1 text-xs">
           <span className="font-semibold" style={{ color: 'var(--ffv-muted)' }}>Tipo</span>
           <select
             value={kindFilter}
-            onChange={e => setKindFilter(e.target.value as ViewKind | '')}
+            onChange={e => withReset(setKindFilter)(e.target.value as ViewKind | '')}
             className="px-2 py-1.5 rounded-md text-sm"
             style={{ background: 'var(--ffv-bg)', border: '1px solid var(--ffv-border)' }}
           >
@@ -181,7 +207,7 @@ export default function AdminViewsPage() {
           <input
             type="text"
             value={userFilter}
-            onChange={e => setUserFilter(e.target.value)}
+            onChange={e => withReset(setUserFilter)(e.target.value)}
             placeholder="usuario@dominio"
             className="px-2 py-1.5 rounded-md text-sm"
             style={{ background: 'var(--ffv-bg)', border: '1px solid var(--ffv-border)' }}
@@ -192,7 +218,7 @@ export default function AdminViewsPage() {
           <input
             type="text"
             value={slugFilter}
-            onChange={e => setSlugFilter(e.target.value)}
+            onChange={e => withReset(setSlugFilter)(e.target.value)}
             placeholder="postgres-mvcc"
             className="px-2 py-1.5 rounded-md text-sm"
             style={{ background: 'var(--ffv-bg)', border: '1px solid var(--ffv-border)' }}
@@ -202,7 +228,7 @@ export default function AdminViewsPage() {
           <span className="font-semibold" style={{ color: 'var(--ffv-muted)' }}>Período</span>
           <select
             value={hours}
-            onChange={e => setHours(Number(e.target.value))}
+            onChange={e => withReset(setHours)(Number(e.target.value))}
             className="px-2 py-1.5 rounded-md text-sm"
             style={{ background: 'var(--ffv-bg)', border: '1px solid var(--ffv-border)' }}
           >
@@ -215,7 +241,7 @@ export default function AdminViewsPage() {
         <span style={{ color: 'var(--ffv-muted)' }}>
           {loading
             ? 'Carregando…'
-            : `${views.length} acesso${views.length === 1 ? '' : 's'} ${hasMore ? '(mais disponíveis)' : 'carregados'}`}
+            : `${total.toLocaleString('pt-BR')} acesso${total === 1 ? '' : 's'} no período`}
         </span>
         <button
           onClick={load}
@@ -295,18 +321,15 @@ export default function AdminViewsPage() {
         </table>
       </div>
 
-      {hasMore && (
-        <div className="mt-4 flex justify-center">
-          <button
-            onClick={loadMore}
-            disabled={loadingMore}
-            className="px-5 py-2 rounded-md text-sm font-semibold disabled:opacity-50"
-            style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}
-          >
-            {loadingMore ? 'Carregando…' : 'Carregar mais 50'}
-          </button>
-        </div>
-      )}
+      <div className="mt-4">
+        <AdminPagination
+          total={total}
+          page={page}
+          pageSize={pageSize}
+          onPage={setPage}
+          onPageSize={ps => { setPage(0); setPageSize(ps); }}
+        />
+      </div>
     </div>
   );
 }

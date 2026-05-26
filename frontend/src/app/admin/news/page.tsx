@@ -5,8 +5,10 @@
  * abre embaixo). Versão MVP — refina depois conforme uso.
  */
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { deleteNews } from '@/lib/admin-content-api';
+import { AdminPagination } from '@/components/admin/AdminPagination';
+import { BigNumberCard } from '@/components/admin/BigNumberCard';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
 
@@ -20,57 +22,57 @@ interface NewsItem {
   status: string;
 }
 
-const PAGE_SIZE = 50;
-
 export default function AdminNewsPage() {
   const [items, setItems] = useState<NewsItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    if (!API_BASE) {
-      setLoading(false);
-      return;
+  useEffect(() => {
+    let cancelled = false;
+    async function loadPage() {
+      setLoading(true);
+      if (!API_BASE) { setLoading(false); return; }
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/news?limit=${pageSize}&offset=${page * pageSize}`);
+        if (res.ok && !cancelled) {
+          const body = (await res.json()) as { data?: NewsItem[]; total?: number };
+          setItems(body.data ?? []);
+          setTotal(body.total ?? 0);
+        }
+      } catch {
+        // backend offline
+      }
+      if (!cancelled) setLoading(false);
     }
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/news?limit=${PAGE_SIZE}&offset=0`);
+    void loadPage();
+    return () => { cancelled = true; };
+  }, [page, pageSize]);
+
+  // Stats client-side da página atual
+  const stats = useMemo(() => {
+    const hot = items.filter(n => n.hot).length;
+    const categories = new Set(items.map(n => n.category).filter(Boolean));
+    return {
+      hot,
+      categories: categories.size,
+    };
+  }, [items]);
+
+  async function handleDelete(slug: string) {
+    if (!confirm(`Apagar a news "${slug}"?`)) return;
+    const ok = await deleteNews(slug);
+    if (ok) {
+      // Recarrega a página atual
+      setPage(p => p);
+      const res = await fetch(`${API_BASE}/api/v1/news?limit=${pageSize}&offset=${page * pageSize}`);
       if (res.ok) {
         const body = (await res.json()) as { data?: NewsItem[]; total?: number };
         setItems(body.data ?? []);
         setTotal(body.total ?? 0);
       }
-    } catch {
-      // backend offline
     }
-    setLoading(false);
-  }, []);
-
-  const loadMore = useCallback(async () => {
-    if (loadingMore || !API_BASE) return;
-    setLoadingMore(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/news?limit=${PAGE_SIZE}&offset=${items.length}`);
-      if (res.ok) {
-        const body = (await res.json()) as { data?: NewsItem[]; total?: number };
-        setItems(prev => [...prev, ...(body.data ?? [])]);
-        if (typeof body.total === 'number') setTotal(body.total);
-      }
-    } catch {
-      // backend offline
-    }
-    setLoadingMore(false);
-  }, [items.length, loadingMore]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  async function handleDelete(slug: string) {
-    if (!confirm(`Apagar a news "${slug}"?`)) return;
-    const ok = await deleteNews(slug);
-    if (ok) load();
   }
 
   return (
@@ -79,7 +81,7 @@ export default function AdminNewsPage() {
         <div>
           <h1 className="text-2xl font-bold">News</h1>
           <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
-            {loading ? 'Carregando…' : `${items.length} de ${total} notícias`}
+            {loading ? 'Carregando…' : `Página ${page + 1} · ${items.length} de ${total.toLocaleString('pt-BR')} notícias no total`}
           </p>
         </div>
         <Link
@@ -90,6 +92,13 @@ export default function AdminNewsPage() {
           + Nova notícia
         </Link>
       </header>
+
+      <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <BigNumberCard label="Notícias no total" value={total} hint="todas as categorias" />
+        <BigNumberCard label="Nesta página" value={items.length} hint={`${pageSize} por página`} />
+        <BigNumberCard label="Hot (nesta página)" value={stats.hot} hint="marcadas com 🔥" />
+        <BigNumberCard label="Categorias (nesta página)" value={stats.categories} hint="distintas" />
+      </section>
 
       <div className="rounded-xl overflow-x-auto" style={{ border: '1px solid var(--ffv-border)' }}>
         <table className="w-full text-xs">
@@ -133,19 +142,13 @@ export default function AdminNewsPage() {
         </table>
       </div>
 
-      {items.length < total && (
-        <div className="flex justify-center">
-          <button
-            type="button"
-            onClick={() => void loadMore()}
-            disabled={loadingMore}
-            className="px-5 py-2 rounded-md text-sm font-semibold disabled:opacity-50"
-            style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)', cursor: 'pointer' }}
-          >
-            {loadingMore ? 'Carregando…' : `Carregar mais (${total - items.length} restantes)`}
-          </button>
-        </div>
-      )}
+      <AdminPagination
+        total={total}
+        page={page}
+        pageSize={pageSize}
+        onPage={setPage}
+        onPageSize={ps => { setPage(0); setPageSize(ps); }}
+      />
     </div>
   );
 }

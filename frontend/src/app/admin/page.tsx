@@ -15,6 +15,7 @@ import {
   type AdminStatsResponse,
   type AdminGrowthResponse,
 } from '@/lib/admin-api';
+import { BigNumberCard } from '@/components/admin/BigNumberCard';
 import {
   AreaChart,
   Area,
@@ -24,90 +25,6 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts';
-
-/**
- * BigNumberCard — card de KPI com delta vs período anterior.
- *
- * Convenções:
- *  - value: número atual da janela (ex: usersLast7Days)
- *  - prev: número do MESMO tamanho de janela imediatamente anterior (7-14d atrás)
- *  - periodLabel: rótulo curto da janela ("7d", "24h", "30d")
- *  - inversed=true pra métricas onde menor é melhor (ex: churn). Default false.
- *
- * Delta = (value - prev) / max(prev, 1) × 100. Quando prev=0 e value>0, mostra
- * apenas "novo" (sem %, infinito não ajuda visualmente).
- */
-function BigNumberCard({
-  label,
-  value,
-  prev,
-  periodLabel,
-  inversed = false,
-}: {
-  label: string;
-  value: number;
-  prev?: number;
-  periodLabel?: string;
-  inversed?: boolean;
-}) {
-  let deltaUI: React.ReactNode = null;
-  if (prev !== undefined) {
-    const diff = value - prev;
-    if (prev === 0 && value === 0) {
-      deltaUI = (
-        <span className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
-          sem variação{periodLabel ? ` vs ${periodLabel} anterior` : ''}
-        </span>
-      );
-    } else if (prev === 0) {
-      deltaUI = (
-        <span className="text-xs font-semibold" style={{ color: '#15803d' }}>
-          novo{periodLabel ? ` (${periodLabel})` : ''}
-        </span>
-      );
-    } else {
-      const pct = (diff / prev) * 100;
-      const positive = inversed ? diff < 0 : diff > 0;
-      const negative = inversed ? diff > 0 : diff < 0;
-      const color = positive ? '#15803d' : negative ? '#dc2626' : 'var(--ffv-muted)';
-      const arrow = diff > 0 ? '↑' : diff < 0 ? '↓' : '·';
-      deltaUI = (
-        <span className="text-xs font-semibold" style={{ color }}>
-          {arrow} {pct >= 0 ? '+' : ''}{pct.toFixed(1)}%
-          {periodLabel && (
-            <span className="ml-1 font-normal" style={{ color: 'var(--ffv-muted)' }}>
-              vs {periodLabel} anterior
-            </span>
-          )}
-        </span>
-      );
-    }
-  } else if (periodLabel) {
-    deltaUI = (
-      <span className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
-        {periodLabel}
-      </span>
-    );
-  }
-
-  return (
-    <div
-      className="p-5 rounded-xl flex flex-col gap-2"
-      style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)' }}
-    >
-      <div
-        className="text-xs uppercase tracking-widest font-semibold"
-        style={{ color: 'var(--ffv-muted)' }}
-      >
-        {label}
-      </div>
-      <div className="text-4xl font-bold leading-tight" style={{ color: 'var(--foreground)' }}>
-        {value.toLocaleString('pt-BR')}
-      </div>
-      {deltaUI}
-    </div>
-  );
-}
 
 // Formata "2026-05-01" → "01/05"
 function formatDateShort(dateStr: string): string {

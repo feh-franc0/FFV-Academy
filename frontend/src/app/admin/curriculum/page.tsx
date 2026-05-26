@@ -5,8 +5,10 @@
  */
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { apiFetch } from '@/lib/api-client';
+import { AdminPagination } from '@/components/admin/AdminPagination';
+import { BigNumberCard } from '@/components/admin/BigNumberCard';
 
 interface ArticleItem {
   slug: string;
@@ -23,23 +25,28 @@ interface ListResponse {
   total: number;
 }
 
-const PAGE_SIZE = 100;
-
 export default function AdminCurriculumPage() {
   const [items, setItems] = useState<ArticleItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
 
-  // Carga inicial — primeira página. NÃO faz mais loop de 50 páginas (antes
-  // chegava a buscar 5000 artigos por sessão). Em vez disso, paginação sob
-  // demanda via "Carregar mais".
+  // Paginação real backend — sempre busca a página atual. Busca local
+  // (search) filtra apenas dentro da página exibida (limitação consciente —
+  // search server-side fica pra quando o backend expor /curriculum/search
+  // com paginação consistente).
   useEffect(() => {
     let cancelled = false;
-    async function loadFirst() {
+    async function loadPage() {
+      setLoading(true);
       try {
-        const res = await apiFetch<ListResponse>(`/api/v1/curriculum?limit=${PAGE_SIZE}&offset=0`, {}, true);
+        const res = await apiFetch<ListResponse>(
+          `/api/v1/curriculum?limit=${pageSize}&offset=${page * pageSize}`,
+          {},
+          true,
+        );
         if (!cancelled && res) {
           setItems(res.data ?? []);
           setTotal(res.total ?? 0);
@@ -49,30 +56,26 @@ export default function AdminCurriculumPage() {
       }
       if (!cancelled) setLoading(false);
     }
-    void loadFirst();
+    void loadPage();
     return () => { cancelled = true; };
-  }, []);
-
-  const loadMore = useCallback(async () => {
-    if (loadingMore) return;
-    setLoadingMore(true);
-    try {
-      const res = await apiFetch<ListResponse>(`/api/v1/curriculum?limit=${PAGE_SIZE}&offset=${items.length}`, {}, true);
-      if (res) {
-        setItems(prev => [...prev, ...(res.data ?? [])]);
-        if (typeof res.total === 'number') setTotal(res.total);
-      }
-    } catch {
-      // backend offline
-    }
-    setLoadingMore(false);
-  }, [items.length, loadingMore]);
+  }, [page, pageSize]);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return items;
     const q = search.toLowerCase();
     return items.filter(i => i.slug.toLowerCase().includes(q) || i.title.toLowerCase().includes(q));
   }, [items, search]);
+
+  // Stats client-side da página atual pra big numbers (proxy razoável até
+  // termos endpoint dedicado de stats).
+  const stats = useMemo(() => {
+    const trails = new Set(items.map(i => i.trail_id).filter(Boolean));
+    const hubs = new Set(items.map(i => i.hub_id).filter(Boolean));
+    return {
+      trails: trails.size,
+      hubs: hubs.size,
+    };
+  }, [items]);
 
   return (
     <div className="flex flex-col gap-4 max-w-6xl">
@@ -81,9 +84,16 @@ export default function AdminCurriculumPage() {
         <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
           {loading
             ? 'Carregando…'
-            : `${items.length.toLocaleString('pt-BR')} de ${total.toLocaleString('pt-BR')} artigos carregados`}
+            : `Página ${page + 1} · mostrando ${items.length} de ${total.toLocaleString('pt-BR')} artigos no total`}
         </p>
       </header>
+
+      <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <BigNumberCard label="Artigos no total" value={total} hint="curriculum publicado" />
+        <BigNumberCard label="Nesta página" value={items.length} hint={`${pageSize} por página`} />
+        <BigNumberCard label="Trilhas (nesta página)" value={stats.trails} hint="trilhas distintas" />
+        <BigNumberCard label="Hubs (nesta página)" value={stats.hubs} hint="hubs distintos" />
+      </section>
 
       <input
         type="text"
@@ -139,19 +149,13 @@ export default function AdminCurriculumPage() {
         )}
       </div>
 
-      {items.length < total && !search.trim() && (
-        <div className="flex justify-center">
-          <button
-            type="button"
-            onClick={() => void loadMore()}
-            disabled={loadingMore}
-            className="px-5 py-2 rounded-md text-sm font-semibold disabled:opacity-50"
-            style={{ background: 'var(--ffv-bg2)', border: '1px solid var(--ffv-border)', cursor: 'pointer' }}
-          >
-            {loadingMore ? 'Carregando…' : `Carregar mais ${PAGE_SIZE} (${total - items.length} restantes)`}
-          </button>
-        </div>
-      )}
+      <AdminPagination
+        total={total}
+        page={page}
+        pageSize={pageSize}
+        onPage={setPage}
+        onPageSize={ps => { setPage(0); setPageSize(ps); }}
+      />
     </div>
   );
 }

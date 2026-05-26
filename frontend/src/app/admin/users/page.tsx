@@ -6,9 +6,10 @@
  */
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { fetchAdminUsers, type AdminUsersResponse } from '@/lib/admin-api';
 import { AdminPagination } from '@/components/admin/AdminPagination';
+import { BigNumberCard } from '@/components/admin/BigNumberCard';
 
 export default function AdminUsersPage() {
   const [data, setData] = useState<AdminUsersResponse | null>(null);
@@ -31,14 +32,30 @@ export default function AdminUsersPage() {
     };
   }, [search, role, page, pageSize]);
 
+  const stats = useMemo(() => {
+    const items = data?.data ?? [];
+    return {
+      admins: items.filter(u => u.role === 'admin').length,
+      withMarketing: items.filter(u => u.marketingConsent).length,
+      withName: items.filter(u => u.name && u.name.trim()).length,
+    };
+  }, [data]);
+
   return (
     <div className="flex flex-col gap-4 max-w-6xl">
       <header>
         <h1 className="text-2xl font-bold">Usuários</h1>
         <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
-          {data ? `${data.total.toLocaleString('pt-BR')} usuários no total` : '…'}
+          {data ? `Página ${page + 1} · ${data.data.length} de ${data.total.toLocaleString('pt-BR')} usuários no total` : '…'}
         </p>
       </header>
+
+      <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <BigNumberCard label="Usuários no total" value={data?.total ?? 0} hint="conta criada e ativa" />
+        <BigNumberCard label="Admins (nesta página)" value={stats.admins} hint="role=admin" />
+        <BigNumberCard label="Opt-in marketing (nesta página)" value={stats.withMarketing} hint="aceitaram newsletter" />
+        <BigNumberCard label="Com nome (nesta página)" value={stats.withName} hint="perfil preenchido" />
+      </section>
 
       <div className="flex gap-2 items-center">
         <input

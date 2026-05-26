@@ -1,8 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { deleteCheatsheet } from '@/lib/admin-content-api';
+import { AdminPagination } from '@/components/admin/AdminPagination';
+import { BigNumberCard } from '@/components/admin/BigNumberCard';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
 
@@ -16,35 +18,51 @@ interface CheatsheetItem {
 }
 
 export default function AdminCheatsheetsPage() {
-  const [items, setItems] = useState<CheatsheetItem[]>([]);
+  // Endpoint /api/v1/cheatsheets retorna array simples (sem envelope). Paginação
+  // é client-side aqui (volume real = dezenas; backend tem LIMIT 500 defensivo).
+  // Big numbers usam o conjunto completo carregado.
+  const [allItems, setAllItems] = useState<CheatsheetItem[]>([]);
   const [loading, setLoading] = useState(true);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    if (!API_BASE) {
-      setLoading(false);
-      return;
-    }
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/cheatsheets`);
-      if (res.ok) {
-        const body = (await res.json()) as { data?: CheatsheetItem[] };
-        setItems(body.data ?? []);
-      }
-    } catch {
-      // backend offline
-    }
-    setLoading(false);
-  }, []);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      if (!API_BASE) { setLoading(false); return; }
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/cheatsheets`);
+        if (res.ok && !cancelled) {
+          const body = await res.json();
+          // Aceita tanto { data: [...] } quanto array bruto pra compat.
+          const arr: CheatsheetItem[] = Array.isArray(body) ? body : (body?.data ?? []);
+          setAllItems(arr);
+        }
+      } catch {
+        // backend offline
+      }
+      if (!cancelled) setLoading(false);
+    }
+    void load();
+    return () => { cancelled = true; };
+  }, []);
+
+  const total = allItems.length;
+  const visible = useMemo(
+    () => allItems.slice(page * pageSize, (page + 1) * pageSize),
+    [allItems, page, pageSize],
+  );
+  const stats = useMemo(() => {
+    const accents = new Set(allItems.map(c => c.accent).filter(Boolean));
+    const withEmoji = allItems.filter(c => !!c.emoji).length;
+    return { accents: accents.size, withEmoji };
+  }, [allItems]);
 
   async function handleDelete(slug: string) {
     if (!confirm(`Apagar cheatsheet "${slug}"?`)) return;
     const ok = await deleteCheatsheet(slug);
-    if (ok) load();
+    if (ok) setAllItems(prev => prev.filter(c => c.slug !== slug));
   }
 
   return (
@@ -53,7 +71,7 @@ export default function AdminCheatsheetsPage() {
         <div>
           <h1 className="text-2xl font-bold">Cheatsheets</h1>
           <p className="text-sm" style={{ color: 'var(--ffv-muted)' }}>
-            {loading ? 'Carregando…' : `${items.length} cheatsheets`}
+            {loading ? 'Carregando…' : `Página ${page + 1} · ${visible.length} de ${total} cheatsheets`}
           </p>
         </div>
         <Link
@@ -64,6 +82,14 @@ export default function AdminCheatsheetsPage() {
           + Novo cheatsheet
         </Link>
       </header>
+
+      <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <BigNumberCard label="Cheatsheets no total" value={total} hint="publicados" />
+        <BigNumberCard label="Nesta página" value={visible.length} hint={`${pageSize} por página`} />
+        <BigNumberCard label="Com emoji" value={stats.withEmoji} hint="cheatsheets visuais" />
+        <BigNumberCard label="Cores distintas" value={stats.accents} hint="paleta de accents" />
+      </section>
+
       <div className="rounded-xl overflow-x-auto" style={{ border: '1px solid var(--ffv-border)' }}>
         <table className="w-full text-xs">
           <thead style={{ background: 'var(--ffv-bg2)' }}>
@@ -75,10 +101,10 @@ export default function AdminCheatsheetsPage() {
             </tr>
           </thead>
           <tbody>
-            {!loading && items.length === 0 && (
+            {!loading && total === 0 && (
               <tr><td colSpan={4} className="px-3 py-4 text-center" style={{ color: 'var(--ffv-muted)' }}>Nenhum cheatsheet.</td></tr>
             )}
-            {items.map((c, i) => (
+            {visible.map((c, i) => (
               <tr key={c.slug} style={{ borderBottom: '1px solid var(--ffv-border)', background: i % 2 === 0 ? 'transparent' : 'var(--ffv-bg2)' }}>
                 <td className="px-3 py-2 font-mono">{c.slug}</td>
                 <td className="px-3 py-2">{c.emoji} {c.title}</td>
@@ -93,6 +119,14 @@ export default function AdminCheatsheetsPage() {
           </tbody>
         </table>
       </div>
+
+      <AdminPagination
+        total={total}
+        page={page}
+        pageSize={pageSize}
+        onPage={setPage}
+        onPageSize={ps => { setPage(0); setPageSize(ps); }}
+      />
     </div>
   );
 }
