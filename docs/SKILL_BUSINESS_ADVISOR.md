@@ -268,6 +268,58 @@ Se sua resposta a 4+ for vaga, **NÃO faça**.
 
 ---
 
+## 🔬 Fontes do research que embasou esta v1.0
+
+Pesquisas executadas em **2026-05-26** que sustentam os números deste doc.
+Quando os números envelhecerem, refazer essas queries pra atualizar.
+
+### Mercado Brasil EdTech
+- [Brazil EdTech Market Size, Share, Growth and Report, 2034 — IMARC](https://www.imarcgroup.com/brazil-edtech-market)
+  → USD 6,0 bi (2025) → USD 15,6 bi (2034) · CAGR 11,12%
+- [30 Brazil EdTech Facts & Statistics 2026 — DigitalDefynd](https://digitaldefynd.com/IQ/brazil-edtech-statistics/)
+  → STEM EdTech BR +90% em 3 anos · 1M+ users coding · 70% internet penetration · funding +18% CAGR desde 2018
+- [Brazil EdTech Market Trends 2026-2034 — OpenPR](https://www.openpr.com/news/4374727/brazil-edtech-market-size-share-trends-growth-forecast)
+
+### Indie SaaS e solo founder reality
+- [Top 10 Solo Founder SaaS Success Stories 2025 — Startuups](https://startuups.com/blog/top-10-solo-founder-saas-success-stories-lessons-2025)
+  → Pieter Levels $3M/ano (Nomad List, RemoteOK), Bannerbear, etc.
+- [The $100K MRR Illusion: 5 Micro-SaaS Founders — Medium](https://medium.com/startup-insider-edge/the-100k-mrr-illusion-5-micro-saas-founders-proving-its-possible-and-how-they-did-it-c3571dd336b3)
+  → distribuição: 30% nunca chegam $1k · 50% travam $1-10k · 15% $10-100k · 5% >$100k · mediana 24 meses pra $1M ARR · 44% solo dos lucrativos
+- [Solo Founder SaaS Metrics: From $0 to $10K MRR — SoftwareSeni](https://www.softwareseni.com/solo-founder-saas-metrics-from-0-to-10k-mrr-in-6-months-with-realistic-timelines/)
+- [Indie Hackers SaaS Ideas 2025 — Flowjam](https://www.flowjam.com/blog/indie-hackers-saas-ideas-2025-10-you-can-launch-fast)
+
+### AI-native learning (concorrência direta)
+- [Google NotebookLM — site oficial](https://notebooklm.google/) — grátis com Workspace, sem tier paid próprio
+- [Quizlet Launches as Native App in ChatGPT — PRNewswire (mar/2026)](https://www.prnewswire.com/news-releases/quizlet-launches-as-native-app-in-chatgpt-to-transform-ai-powered-learning-302710329.html)
+  → Quizlet Plus $35,99/ano · Magic Notes vira flashcard · Q-Chat tutor com SRS
+- [Quizlet Acquires Coconote (abr/2026) — BibiGPT](https://bibigpt.co/en/blog/posts/quizlet-coconote-ai-study-tools-2026-en)
+  → consolidação agressiva no espaço AI study tools
+- [Best AI Study Guide Tools 2026 — Forasoft](https://www.forasoft.com/blog/article/ai-tools-creating-study-guides)
+- [Best Spaced Repetition Apps 2026: Anki Alternatives — Mindomax](https://www.mindomax.com/best-spaced-repetition-apps-2026-anki-alternatives)
+  → Anki desktop free + iOS $24,99 · Mochi $4,99/mês (100 cards free) · RemNote $6-8/mês
+
+### Benchmarks de freemium / conversão
+- [SaaS Freemium Conversion Rates 2026 Report — First Page Sage](https://firstpagesage.com/seo-blog/saas-freemium-conversion-rates/)
+  → EdTech específico: 2,6% organic free-to-paid · médio SaaS 2-5% · bom 3-5% · ótimo 8-12%
+- [SaaS Conversion Rate Benchmarks 2026 (1.200+ companies) — Artisan Strategies](https://www.artisangrowthstrategies.com/blog/saas-conversion-rate-benchmarks-2026-data-1200-companies)
+- [Freemium Conversion Rate Guide — Userpilot](https://userpilot.com/blog/freemium-conversion-rate/)
+  → feature gating bem desenhado eleva pra 5,1% · 65% PLG usam híbrido (freemium + trial premium)
+- [Freemium vs Trial Models — SaaSFactor](https://www.saasfactor.co/blogs/freemium-vs-trial-models-in-saas-what-really-boosts-conversions)
+
+### Jobs-to-be-Done (framework principal)
+- [Jobs to Be Done in Education Industry — JobsToBeDone.org](https://jobstobedone.org/radio/jobs-to-be-done-in-the-education-industry/)
+- [JTBD Original Framework by Tony Ulwick — Strategyn](https://strategyn.com/jobs-to-be-done/)
+- [JTBD Framework Complete Guide 2026 — Boundev](https://www.boundev.com/blog/jobs-to-be-done-framework-guide)
+- [How JTBD Applies to Online Education — GovTech](https://www.govtech.com/education/higher-ed/how-the-jobs-to-be-done-theory-applies-to-online-education.html)
+  → caso SNHU: reduzir fricção em enrollment moveu conversão dramaticamente
+
+### Concorrência local Brasil
+- [Rocketseat — site oficial](https://www.rocketseat.com.br/) — subscription anual, focado JS/TS, IA recém-incluída
+- [Rocketseat ONE Assinatura](https://www.rocketseat.com.br/assinatura) — 22+ programas, 120 projetos práticos
+- [Sou novo na área: melhores plataformas de cursos pagos? — Tabnews](https://www.tabnews.com.br/Lauro/sou-novo-na-area-quais-as-melhores-plataformas-de-cursos-pagos) — discussão de devs BR sobre opções
+
+---
+
 ## 🔄 Como atualizar este skill
 
 Quando aprendermos algo novo (entrevista de user, métrica nova, mudança de mercado), adicionar aqui na seção apropriada. Marcar data no histórico. Este doc envelhece — mantê-lo é parte do hábito.
