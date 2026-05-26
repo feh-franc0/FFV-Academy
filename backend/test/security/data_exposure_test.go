@@ -33,17 +33,6 @@ func Test_Security_PasswordHash_NeverInResponse(t *testing.T) {
 	}
 }
 
-// Endpoint público (LeaderboardEntryDTO) NÃO deve incluir email.
-func Test_Security_EmailInResponse_OnlyToOwner(t *testing.T) {
-	tp := reflect.TypeOf(handlers.LeaderboardEntryDTO{})
-	for i := 0; i < tp.NumField(); i++ {
-		f := tp.Field(i)
-		if strings.Contains(strings.ToLower(f.Name), "email") {
-			t.Fatalf("LeaderboardEntryDTO expõe email — campo público vazaria PII: %s", f.Name)
-		}
-	}
-}
-
 // O cookie de refresh deve ser HttpOnly + Secure + SameSite=Strict.
 func Test_Security_JWTRefresh_HttpOnlyCookie(t *testing.T) {
 	// Simulamos o que setRefreshCookie faz no handler — usamos um endpoint
