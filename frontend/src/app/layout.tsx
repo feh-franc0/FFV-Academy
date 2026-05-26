@@ -12,6 +12,7 @@ import { AuthProvider } from '@/components/auth/AuthProvider';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { RootStructuredData } from '@/components/seo/StructuredData';
 import { PageTracker } from '@/components/PageTracker';
+import { LoginNudge } from '@/components/LoginNudge';
 
 // Inter — corpo do texto (máxima legibilidade)
 const inter = Inter({
@@ -239,6 +240,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <PageTracker />
               </Suspense>
               <AppChrome>{children}</AppChrome>
+              {/* LoginNudge — card sticky bottom-right pra anônimo após ≥3
+                  módulos OU ≥1 quiz. Dismiss persiste 24h. Logado nunca vê. */}
+              <LoginNudge />
               <Toaster
                 position="top-center"
                 theme="system"

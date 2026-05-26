@@ -26,6 +26,8 @@ import { useActiveBase } from '@/components/base/ActiveBaseContext';
 import { trackView, type ViewKind } from '@/lib/tracking';
 import { getBaseBySlug } from '@/lib/bases/registry';
 import { getBaseSlugForModule } from '@/lib/bases/module-base-resolver';
+import { incrementModulesSeen } from '@/lib/login-nudge';
+import { getCurrentUser } from '@/lib/auth';
 
 function classifyPath(pathname: string): { kind: ViewKind; slug: string; baseSlug?: string } {
   // /admin/* — NUNCA tem base. Não herdar do context.
@@ -106,6 +108,25 @@ export function PageTracker() {
       // Uma view por path por sessão (evita inflar contagem em re-mount).
       dedupeKey: pathname,
     });
+
+    // Login nudge: incrementa contagem de módulos vistos PRA ANÔNIMOS.
+    // Dedupe é o mesmo do trackView (pathname) — o trackView já evita
+    // duplicação por sessão, mas precisamos consultar localStorage própria
+    // pra não inflar a cada re-render. Simplifica: incrementa só quando
+    // kind=module e usuário não está logado.
+    if (c.kind === 'module' && !getCurrentUser()) {
+      // Dedupe de incremento via flag de sessão por slug — evita contar a
+      // mesma página 2x quando o efeito remonta.
+      const dedupeKey = `ffv_nudge_view_${c.slug}`;
+      try {
+        if (!window.sessionStorage.getItem(dedupeKey)) {
+          window.sessionStorage.setItem(dedupeKey, '1');
+          incrementModulesSeen();
+        }
+      } catch {
+        // sessionStorage indisponível — ignora.
+      }
+    }
   }, [pathname, searchParams, activeBase?.slug]);
 
   return null;

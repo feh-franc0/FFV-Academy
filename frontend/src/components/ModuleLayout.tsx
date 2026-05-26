@@ -31,6 +31,9 @@ import { calculatePeerPercentile } from '@/lib/peer-stats';
 import { NextModuleCard } from '@/components/article/NextModuleCard';
 import { PostReadSignupCta } from '@/components/cta/PostReadSignupCta';
 import { useScrollMilestones } from '@/hooks/useScrollMilestones';
+import { LoginNudgeInline } from '@/components/LoginNudgeInline';
+import { incrementQuizzesDone } from '@/lib/login-nudge';
+import { getCurrentUser } from '@/lib/auth';
 
 function getNextModule(slug: string) {
   for (const trail of CURRICULUM) {
@@ -213,6 +216,12 @@ export function ModuleLayout({
         props: { module: slug, score: `${score}/${quiz.length}`, perfect: score === quiz.length },
       });
     } catch { /* analytics opcional */ }
+
+    // Login nudge: incrementa contagem de quizzes feitos pra anônimos.
+    // Dispara o sticky (≥1 quiz já é suficiente) e habilita o inline contextual.
+    if (!getCurrentUser()) {
+      incrementQuizzesDone();
+    }
 
     // Build celebration queue: level up first, then each new badge
     const events: CelebrationEvent[] = [];
@@ -631,6 +640,17 @@ export function ModuleLayout({
                 })()}
               </div>
             )}
+            {/* Login nudge inline pra ANÔNIMOS — aparece após submit do quiz,
+                com copy contextual (acertou X de Y). Logado nunca vê.
+                Dismissable na sessão. */}
+            {submitted && !getCurrentUser() && (
+              <LoginNudgeInline
+                moduleTitle={title}
+                correctAnswers={score}
+                totalAnswers={quiz.length}
+              />
+            )}
+
             {/* XP reward */}
             {result && (
               <div
