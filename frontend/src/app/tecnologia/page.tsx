@@ -94,7 +94,9 @@ export default async function TecnologiaPage() {
             { value: `${TECH_TOTAL_HUBS}`, label: 'hubs' },
             { value: 'R$ 0', label: 'custo' },
           ],
-          showGameDemo: true,
+          // GameDemo (MÓDULO ATUAL card) removido em 2026-05-26 — poluição
+          // visual sem valor pedagógico claro.
+          showGameDemo: false,
         }}
         paths={TECH_PATHS}
         hubs={TECH_HUBS}

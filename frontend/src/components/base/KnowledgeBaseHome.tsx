@@ -45,9 +45,8 @@ import { Hero, type HeroProps } from '@/components/home/Hero';
 import { SocialProofBar } from '@/components/home/SocialProofBar';
 import { ComecarAqui, type ComecarPath } from '@/components/home/ComecarAqui';
 import { Explorar, type HubCardData, type PlaylistCardData } from '@/components/home/Explorar';
-import { Trending } from '@/components/home/Trending';
-import { ComunidadeAutor } from '@/components/home/ComunidadeAutor';
-import { FinalCta } from '@/components/home/FinalCta';
+// Trending, ComunidadeAutor, FinalCta e SignupCTA pre-final removidos
+// em 2026-05-26 — ver comentário na render abaixo.
 
 import { useGameState } from '@/hooks/useGameState';
 import { useAuth } from '@/hooks/useAuth';
@@ -293,25 +292,14 @@ export function KnowledgeBaseHome({
         subheading={explorarSubheading}
       />
 
-      {hasGamificationWidgets && !hideTrending && <Trending />}
-
-      {!hideComunidade && <ComunidadeAutor />}
-
-      {/* CTA destacado de signup — só aparece pra visitante anônimo.
-          Tracking automático de cta.click + ligação direta com o fluxo
-          existente do LoginModal (magic link por email). */}
-      <section className="px-6 py-10">
-        <div className="max-w-5xl mx-auto">
-          <SignupCTA
-            ctaId="kb-home-pre-final-cta"
-            variant="hero"
-            reason="acompanhar seu progresso e ganhar XP"
-            subtitle="Email + nome + telefone. Você recebe um código por email pra entrar. Sem senha, sem fricção. 100% gratuito."
-          />
-        </div>
-      </section>
-
-      <FinalCta {...(finalCta ?? {})} />
+      {/* Removidos 2026-05-26 (decisão de produto — limpar poluição):
+            - <Trending />        "Em alta esta semana"
+            - <ComunidadeAutor /> "Por que essa plataforma + Newsletter inline"
+            - <SignupCTA />       CTA pre-final com email/nome/telefone
+            - <FinalCta />        "O dev que você quer ser" com newsletter
+          Razão: newsletter perdeu sentido (já temos email do usuário no signup
+          via magic-link). Trending vira ruído sem volume suficiente. Os 2 CTAs
+          de signup duplicavam com LoginNudge global. */}
 
       {hasGamificationWidgets && (
         <StreakRepairModal
