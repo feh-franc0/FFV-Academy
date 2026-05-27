@@ -69,19 +69,40 @@ export default function NeurocienciaOG() {
           </div>
         </div>
 
-        <h1
-          style={{
-            fontSize: '60px',
-            fontWeight: '800',
-            color: '#2a1a4a',
-            lineHeight: '1.05',
-            margin: '0 0 24px 0',
-            maxWidth: '1020px',
-            letterSpacing: '-1.5px',
-          }}
-        >
-          Como o cérebro humano <span style={{ color: '#7c3aed', fontStyle: 'italic' }}>decide comprar</span> — com profundidade real.
-        </h1>
+        {/*
+          IMPORTANTE: Satori (motor por trás de next/og) NÃO suporta
+          `<span>` inline mesclando estilos diferentes na mesma linha sem
+          glitch — letras se sobrepunham (visto em compartilhamento WhatsApp
+          em 2026-05-26). Solução: quebrar em duas linhas separadas (sem
+          spans inline), fontSize menor + maxWidth full pra word-wrap natural.
+        */}
+        <div style={{ display: 'flex', flexDirection: 'column', maxWidth: '1056px' }}>
+          <h1
+            style={{
+              fontSize: '54px',
+              fontWeight: 800,
+              color: '#2a1a4a',
+              lineHeight: 1.1,
+              margin: '0 0 8px 0',
+              letterSpacing: '-1.5px',
+            }}
+          >
+            Como o cérebro humano decide comprar
+          </h1>
+          <p
+            style={{
+              fontSize: '36px',
+              fontWeight: 700,
+              color: '#7c3aed',
+              lineHeight: 1.15,
+              margin: '0 0 28px 0',
+              letterSpacing: '-0.5px',
+              fontStyle: 'italic',
+            }}
+          >
+            com profundidade real.
+          </p>
+        </div>
 
         <p
           style={{
@@ -89,10 +110,11 @@ export default function NeurocienciaOG() {
             color: '#5a4e80',
             margin: '0 0 40px 0',
             maxWidth: '950px',
-            lineHeight: '1.45',
+            lineHeight: 1.45,
           }}
         >
-          Kahneman, Cialdini, Schultz, Knutson — 8 módulos sequenciais com exemplos do dia a dia, analogias lúdicas e exercícios. Gratuito.
+          Kahneman, Cialdini, Schultz, Knutson — 8 módulos com exemplos
+          do dia a dia, analogias lúdicas e exercícios. Gratuito.
         </p>
 
         <div style={{ display: 'flex', gap: '14px', marginTop: 'auto' }}>

@@ -70,17 +70,33 @@ export default function MedvetOG() {
 
         <h1
           style={{
-            fontSize: '64px',
-            fontWeight: '800',
+            fontSize: '58px',
+            fontWeight: 800,
             color: '#2d4a3e',
-            lineHeight: '1.05',
-            margin: '0 0 24px 0',
-            maxWidth: '1000px',
+            lineHeight: 1.1,
+            margin: '0 0 8px 0',
+            maxWidth: '1056px',
             letterSpacing: '-1.5px',
           }}
         >
-          Genética Animal <span style={{ color: '#8a9b7e', fontStyle: 'italic' }}>com profundidade real</span> — não decoreba.
+          {/* Satori (next/og) não renderiza bem <span> inline com fontStyle
+              diferente — letras se sobrepunham. Solução: bloco principal sem
+              span + segunda linha em <p> separado abaixo. */}
+          Genética Animal — não decoreba.
         </h1>
+        <p
+          style={{
+            fontSize: '38px',
+            fontWeight: 700,
+            color: '#8a9b7e',
+            lineHeight: 1.15,
+            margin: '0 0 24px 0',
+            letterSpacing: '-0.5px',
+            fontStyle: 'italic',
+          }}
+        >
+          Com profundidade real.
+        </p>
 
         <p
           style={{

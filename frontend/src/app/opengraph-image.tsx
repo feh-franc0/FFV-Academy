@@ -75,20 +75,36 @@ export default function OGImage() {
           </div>
         </div>
 
-        {/* Main headline */}
+        {/* Main headline.
+            Satori (next/og) tem bug com <span> inline mesclando cor/itálico
+            no meio do texto — glyphs se sobrepunham (visto em mai/2026).
+            Solução: 2 elementos separados (h1 base + p destaque colorido). */}
         <h1
           style={{
-            fontSize: '64px',
-            fontWeight: '800',
+            fontSize: '56px',
+            fontWeight: 800,
             color: '#1f3a30',
-            lineHeight: '1.05',
-            margin: '0 0 28px 0',
-            maxWidth: '900px',
+            lineHeight: 1.1,
+            margin: '0 0 8px 0',
+            maxWidth: '1056px',
             letterSpacing: '-2px',
           }}
         >
-          IA que transforma seus PDFs em <span style={{ color: '#b8835a', fontStyle: 'italic' }}>uma escola completa</span> no mesmo dia.
+          IA que transforma seus PDFs
         </h1>
+        <p
+          style={{
+            fontSize: '40px',
+            fontWeight: 700,
+            color: '#b8835a',
+            lineHeight: 1.15,
+            margin: '0 0 28px 0',
+            letterSpacing: '-1px',
+            fontStyle: 'italic',
+          }}
+        >
+          em uma escola completa no mesmo dia.
+        </p>
 
         {/* Subtitle */}
         <p

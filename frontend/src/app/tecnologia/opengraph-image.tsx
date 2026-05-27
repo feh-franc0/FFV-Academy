@@ -70,19 +70,34 @@ export default function TechOG() {
           </div>
         </div>
 
+        {/* Satori (next/og) renderiza <span> inline com cor diferente
+            sobrepondo glyphs — bug visto em compartilhamento (mai/2026).
+            Quebrado em h1 + p separados pra cor sem inline. */}
         <h1
           style={{
-            fontSize: '68px',
-            fontWeight: '800',
+            fontSize: '60px',
+            fontWeight: 800,
             color: '#f1f5f9',
-            lineHeight: '1.05',
-            margin: '0 0 24px 0',
-            maxWidth: '1000px',
+            lineHeight: 1.1,
+            margin: '0 0 8px 0',
+            maxWidth: '1056px',
             letterSpacing: '-2px',
           }}
         >
-          Engenharia para a era da IA — <span style={{ color: '#38bdf8' }}>sem hype.</span>
+          Engenharia para a era da IA
         </h1>
+        <p
+          style={{
+            fontSize: '40px',
+            fontWeight: 700,
+            color: '#38bdf8',
+            lineHeight: 1.15,
+            margin: '0 0 24px 0',
+            letterSpacing: '-1px',
+          }}
+        >
+          Sem hype.
+        </p>
 
         <p
           style={{
