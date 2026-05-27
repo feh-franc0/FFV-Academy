@@ -28,6 +28,7 @@ import { useScrollMilestones } from '@/hooks/useScrollMilestones';
 import { LoginNudgeInline } from '@/components/LoginNudgeInline';
 import { incrementQuizzesDone } from '@/lib/login-nudge';
 import { getCurrentUser } from '@/lib/auth';
+import { EndOfContextCta } from '@/components/EndOfContextCta';
 
 function getNextModule(slug: string) {
   for (const trail of CURRICULUM) {
@@ -755,6 +756,10 @@ export function ModuleLayout({
       <NextSteps slug={slug} />
       {relatedSlugs && relatedSlugs.length > 0 && <RelatedModules slugs={relatedSlugs} />}
       <RelatedArticles currentSlug={slug} />
+
+      {/* CTA condicional final: anônimo vê 3 benefícios + criar conta,
+          logado vê form pra sugerir nova base de conhecimento. */}
+      <EndOfContextCta contextLabel={`o módulo "${title}"`} />
 
       {/* Print-only: gabarito do quiz como material de revisão */}
       <PrintQuizAnswerKey quiz={quiz} title={title} trailColor={trailColor} />

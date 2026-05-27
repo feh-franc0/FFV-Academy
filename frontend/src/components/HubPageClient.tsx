@@ -9,6 +9,7 @@ import {
   type Hub,
   type Trail,
 } from '@/lib/curriculum';
+import { EndOfContextCta } from '@/components/EndOfContextCta';
 
 export function HubPageClient({ hub }: { hub: Hub }) {
   const { state } = useGameState();
@@ -20,6 +21,7 @@ export function HubPageClient({ hub }: { hub: Hub }) {
     <div style={{ background: 'var(--ffv-bg)', color: 'var(--foreground)' }}>
       <HubHero hub={hub} stats={stats} />
       <HubTrails hub={hub} trails={trails} completed={completed} />
+      <EndOfContextCta contextLabel={`o hub ${hub.name}`} />
     </div>
   );
 }

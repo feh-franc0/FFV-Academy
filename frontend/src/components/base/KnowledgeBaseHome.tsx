@@ -47,6 +47,7 @@ import { ComecarAqui, type ComecarPath } from '@/components/home/ComecarAqui';
 import { Explorar, type HubCardData, type PlaylistCardData } from '@/components/home/Explorar';
 // Trending, ComunidadeAutor, FinalCta e SignupCTA pre-final removidos
 // em 2026-05-26 — ver comentário na render abaixo.
+import { EndOfContextCta } from '@/components/EndOfContextCta';
 
 import { useGameState } from '@/hooks/useGameState';
 import { useAuth } from '@/hooks/useAuth';
@@ -59,7 +60,6 @@ import { ContinueCard } from '@/components/ContinueCard';
 // - QuestPanel (src/components/QuestPanel.tsx): removido em 2026-05-25 —
 //   PO quer reformular antes de mostrar de novo.
 // - TrilhaDoDia (src/components/TrilhaDoDia.tsx): removido em 2026-05-21.
-import { SignupCTA } from '@/components/auth/SignupCTA';
 import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
 import { StreakRepairModal } from '@/components/streak/StreakRepairModal';
 import {
@@ -150,10 +150,12 @@ export function KnowledgeBaseHome({
   comecarHeading,
   comecarSubheading,
   afterHero,
-  finalCta,
-  hideComunidade = false,
+  // Props mantidas pra compat com call-sites mas não usadas mais (Trending,
+  // ComunidadeAutor, FinalCta foram removidos em 2026-05-26).
+  finalCta: _finalCta,
+  hideComunidade: _hideComunidade = false,
   hasGamificationWidgets = true,
-  hideTrending = false,
+  hideTrending: _hideTrending = false,
   hideSocialProof = false,
   todayHeading = 'Hoje no FFV',
   todayKicker = 'Continue de onde parou',
@@ -300,6 +302,10 @@ export function KnowledgeBaseHome({
           Razão: newsletter perdeu sentido (já temos email do usuário no signup
           via magic-link). Trending vira ruído sem volume suficiente. Os 2 CTAs
           de signup duplicavam com LoginNudge global. */}
+
+      {/* CTA condicional de final de contexto: anônimo vê benefícios + criar
+          conta; logado vê form pra sugerir nova base de conhecimento. */}
+      <EndOfContextCta contextLabel={typeof hero.title === 'string' ? hero.title : undefined} />
 
       {hasGamificationWidgets && (
         <StreakRepairModal
