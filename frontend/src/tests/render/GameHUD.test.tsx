@@ -29,6 +29,12 @@ vi.mock('@/lib/sounds', () => ({
   unlockAudio: vi.fn(),
 }));
 
+// useGameState — sem state por default (anônimo). Override via mockReturnValue
+// no teste específico quando precisar.
+vi.mock('@/hooks/useGameState', () => ({
+  useGameState: vi.fn(() => ({ state: null, levelInfo: null, dueCards: [] })),
+}));
+
 import { GameHUD } from '@/components/GameHUD';
 
 /**
@@ -60,22 +66,25 @@ describe('<GameHUD>', () => {
     await user.click(logo);
   });
 
-  it('NÃO renderiza navegação de hubs (removida em 2026-05-26)', () => {
+  it('NÃO renderiza navegação por hub específico (foi pra home da base)', () => {
     render(<GameHUD />);
-    // Nenhum link pra /ia, /aws, /engenharia, /simulados deve aparecer NO HEADER.
-    // Esses agora vivem nas home das bases via Explorar/hubs.
+    // Hubs específicos (/ia, /aws, /engenharia) não aparecem mais no header.
+    // Agora se navega via home da base.
     const links = screen.queryAllByRole('link');
     expect(links.some(l => l.getAttribute('href') === '/ia')).toBe(false);
     expect(links.some(l => l.getAttribute('href') === '/aws')).toBe(false);
     expect(links.some(l => l.getAttribute('href') === '/engenharia')).toBe(false);
-    expect(links.some(l => l.getAttribute('href') === '/simulados')).toBe(false);
   });
 
-  it('NÃO renderiza XP/streak/nível/conquistas (foram pro dropdown do avatar)', () => {
+  it('renderiza tabs globais Simulados e Revisar', () => {
     render(<GameHUD />);
-    // Header não mostra mais stats do usuário — só logo + auth.
-    expect(screen.queryByText(/XP/)).not.toBeInTheDocument();
+    const links = screen.getAllByRole('link');
+    expect(links.some(l => l.getAttribute('href') === '/simulados')).toBe(true);
+    expect(links.some(l => l.getAttribute('href') === '/revisar')).toBe(true);
+  });
+
+  it('NÃO renderiza chip de nível quando anônimo', () => {
+    render(<GameHUD />);
     expect(screen.queryByText(/Nv\./)).not.toBeInTheDocument();
-    expect(screen.queryByText(/🔥/)).not.toBeInTheDocument();
   });
 });

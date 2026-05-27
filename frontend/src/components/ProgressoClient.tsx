@@ -135,7 +135,29 @@ export function ProgressoClient() {
         </div>
         <div className="grid gap-4 mt-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
           <Stat label="Artigos lidos" value={`${completed.length}`} sub={`de ${totalModules} · ${overallPct}%`} accent="var(--ffv-blue)" />
+          <Stat label="Questões respondidas" value={(() => {
+            // Soma o `.total` de todos os quizzes feitos (independente de acerto).
+            const totals = Object.values(state.quizScores ?? {});
+            const totalQ = totals.reduce((acc, q) => acc + (q?.total ?? 0), 0);
+            const correctQ = totals.reduce((acc, q) => acc + (q?.score ?? 0), 0);
+            return totalQ === 0 ? '0' : `${correctQ}/${totalQ}`;
+          })()} sub={(() => {
+            const totals = Object.values(state.quizScores ?? {});
+            const totalQ = totals.reduce((acc, q) => acc + (q?.total ?? 0), 0);
+            const correctQ = totals.reduce((acc, q) => acc + (q?.score ?? 0), 0);
+            if (totalQ === 0) return 'nenhum quiz ainda';
+            const pct = Math.round((correctQ / totalQ) * 100);
+            return `${pct}% de acerto`;
+          })()} accent="var(--ffv-blue)" />
           <Stat label="XP total" value={state.xp.toLocaleString('pt-BR')} sub={`de ${totalXpPossible.toLocaleString('pt-BR')} disponíveis`} accent="var(--ffv-yellow)" />
+          <Stat label="Tempo estudando" value={(() => {
+            const min = state.totalStudyTime ?? 0;
+            if (min === 0) return '0min';
+            if (min < 60) return `${min}min`;
+            const h = Math.floor(min / 60);
+            const r = min % 60;
+            return r === 0 ? `${h}h` : `${h}h ${r}min`;
+          })()} sub="desde o início" accent="var(--ffv-green)" />
           <Stat label="Streak atual" value={`${state.streak}d`} sub={state.freezes > 0 ? `🧊 ${state.freezes} freeze${state.freezes !== 1 ? 's' : ''}` : 'Volte amanhã'} accent="var(--ffv-orange)" />
           <Stat label="Badges" value={`${state.badges.length}`} sub={isActiveTech ? `de ${BADGES_DEF.length} conquistas` : 'conquistas'} accent="var(--ffv-purple)" />
           <Stat label="Cards devidos" value={`${baseDueCards.length}`} sub={baseDueCards.length > 0 ? 'revisar agora' : 'em dia'} accent="var(--ffv-green)" link={baseDueCards.length > 0 ? '/revisar' : undefined} />
