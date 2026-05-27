@@ -15,6 +15,7 @@ import { selectDueCardsForBase } from '@/lib/bases/state-selectors';
 
 const NAV_TABS = [
   { href: '/simulados', label: 'Simulados', icon: '🎯' },
+  { href: '/questoes', label: 'Questões', icon: '📝' },
   { href: '/revisar', label: 'Revisar', icon: '🧠' },
 ] as const;
 
