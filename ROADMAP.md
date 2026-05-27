@@ -6,6 +6,8 @@
 
 **A FFV pivotou em mai/2026** de "escola com currículo curado" para **plataforma user-generated learning**: aluno sobe qualquer conteúdo, recebe módulo estruturado com 100 questões calibradas por Bloom + SRS real (ver [`TEACHING_METHOD.md`](./TEACHING_METHOD.md) e [`STRATEGY.md`](./STRATEGY.md)). Próximos 12 meses focam em quatro frentes — (1) **pipeline de ingestão + geração de 100Q** como produto principal (Tier 0); (2) **monetização mínima viável** (Pro $7/mo) pra cobrir LLM custos e validar valor; (3) **personalização e dashboards** que já estavam planejados, agora servindo o produto user-generated; (4) **biblioteca curada** (157 módulos) mantida como showcase + seed SEO, sem expansão nova.
 
+> **Dívida técnica documentada**: [`docs/STANDARDIZATION_REPORT.md`](./docs/STANDARDIZATION_REPORT.md) diagnostica score 4/10 de padronização em hubs/trilhas/módulos. Refactor de schema unificado adiado pra acontecer junto com Fase 3 DB-driven (estimativa 5-6 semanas) — fazer separado seria trabalho duplicado.
+
 ---
 
 ## Tier 0 — PIVOT (próximas 2 semanas, blocking everything else)

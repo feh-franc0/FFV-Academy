@@ -386,6 +386,7 @@ PDF, DOCX, XLS/XLSX, PPT/PPTX, CSV, TXT, MD, PNG, JPG, JPEG, WebP, GIF. Limite: 
 | [`ROADMAP.md`](./ROADMAP.md) | Iniciativas priorizadas por Tier (backend + frontend + produto + conteúdo) |
 | [`ARCHITECTURE.md`](./ARCHITECTURE.md) | Arquitetura técnica unificada (frontend + backend + DB-driven + isolamento de base) |
 | [`AUDITS_2026-05.md`](./AUDITS_2026-05.md) | Índice consolidado das 5 auditorias de mai/2026 (code/platform/UX/validation/medvet) |
+| [`docs/STANDARDIZATION_REPORT.md`](./docs/STANDARDIZATION_REPORT.md) | Diagnóstico 4/10 de hubs/trilhas/módulos + plano de unificação (executar com Fase 3 DB-driven) |
 | [`CURRICULUM_MASTER_PLAN.md`](./CURRICULUM_MASTER_PLAN.md) | Plano mestre do currículo (66 trilhas, 570+ artigos) |
 | [`MIGRATION_PLAN_CONTENT_TO_DB.md`](./MIGRATION_PLAN_CONTENT_TO_DB.md) | CMS plan — 10 sprints de migração conteúdo → DB |
 | [`BACKLOG.md`](./BACKLOG.md) | Pendências operacionais do Fernando |
