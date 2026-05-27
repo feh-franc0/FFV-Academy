@@ -3,7 +3,6 @@
 import Link from 'next/link';
 import { useGameState } from '@/hooks/useGameState';
 import {
-  HUBS,
   getHubStats,
   getHubTrails,
   getTrailHref,
@@ -21,7 +20,6 @@ export function HubPageClient({ hub }: { hub: Hub }) {
     <div style={{ background: 'var(--ffv-bg)', color: 'var(--foreground)' }}>
       <HubHero hub={hub} stats={stats} />
       <HubTrails hub={hub} trails={trails} completed={completed} />
-      <HubCrossSell hub={hub} />
     </div>
   );
 }
@@ -476,126 +474,3 @@ function TrailCard({
   );
 }
 
-// Slugs dos hubs que pertencem à base /tecnologia. Manter sincronizado com
-// TECH_HUB_SLUGS em lib/bases/tecnologia/index.ts. Os demais hubs (carreira,
-// comunicacao, marketing, conteudo, empreendedorismo, ingles) são bases
-// independentes — cada uma com 1 hub — e não devem aparecer no cross-sell
-// uns dos outros (vazamento de chrome entre bases).
-const TECH_HUB_IDS = new Set([
-  'hub-ia', 'hub-aws', 'hub-engenharia', 'hub-claude-anthropic',
-  'hub-fundamentos', 'hub-programacao', 'hub-dados', 'hub-construcao',
-  'hub-seguranca-hardware',
-]);
-
-function HubCrossSell({ hub }: { hub: Hub }) {
-  const isTechHub = TECH_HUB_IDS.has(hub.id);
-  // Só faz cross-sell dentro da MESMA base. Hub de Carreira (base própria)
-  // não puxa hub de IA (outra base).
-  if (!isTechHub) return null;
-  const all = HUBS.filter(h => h.id !== hub.id && TECH_HUB_IDS.has(h.id));
-  if (all.length === 0) return null;
-  return (
-    <section
-      className="px-6 py-16"
-      style={{ borderTop: '1px solid var(--ffv-border)', background: 'var(--ffv-bg2)' }}
-    >
-      <div className="max-w-5xl mx-auto">
-        <p
-          className="font-mono text-[11px] tracking-[0.14em] uppercase font-bold mb-3"
-          style={{ color: 'var(--ffv-muted)' }}
-        >
-          EXPLORAR OUTROS HUBS
-        </p>
-        <h2
-          style={{
-            fontSize: 'clamp(1.35rem, 2.2vw, 1.7rem)',
-            fontWeight: 800,
-            letterSpacing: '-0.02em',
-            marginBottom: 22,
-            lineHeight: 1.2,
-          }}
-        >
-          Siga por outro tema.
-        </h2>
-        <div
-          className="grid gap-4"
-          style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}
-        >
-          {all.map(h => (
-            <Link
-              key={h.id}
-              href={h.href}
-              className="block group"
-              style={{ textDecoration: 'none', color: 'inherit' }}
-            >
-              <div
-                style={{
-                  background: 'var(--ffv-bg)',
-                  border: `1px solid ${h.color}25`,
-                  borderRadius: 16,
-                  padding: '18px 20px',
-                  transition: 'all 0.2s ease',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 14,
-                }}
-                onMouseOver={e => {
-                  e.currentTarget.style.borderColor = `${h.color}60`;
-                  e.currentTarget.style.transform = 'translateY(-2px)';
-                }}
-                onMouseOut={e => {
-                  e.currentTarget.style.borderColor = `${h.color}25`;
-                  e.currentTarget.style.transform = 'translateY(0)';
-                }}
-              >
-                <div
-                  style={{
-                    width: 42,
-                    height: 42,
-                    borderRadius: 12,
-                    background: `color-mix(in srgb, ${h.color} 14%, transparent)`,
-                    border: `1px solid ${h.color}35`,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: 20,
-                    flexShrink: 0,
-                  }}
-                >
-                  {h.icon}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--foreground)' }}>
-                    {h.name}
-                  </div>
-                  <div
-                    className="font-mono"
-                    style={{
-                      fontSize: 11,
-                      color: 'var(--ffv-muted)',
-                      marginTop: 2,
-                      letterSpacing: '0.03em',
-                    }}
-                  >
-                    {h.trailIds.length} trilha{h.trailIds.length !== 1 ? 's' : ''}
-                  </div>
-                </div>
-                <span
-                  style={{
-                    color: h.color,
-                    fontWeight: 700,
-                    fontSize: 14,
-                    transition: 'transform 0.2s ease',
-                  }}
-                  className="group-hover:translate-x-1 inline-block"
-                >
-                  →
-                </span>
-              </div>
-            </Link>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}

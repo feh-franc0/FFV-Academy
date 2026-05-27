@@ -42,18 +42,6 @@ export function LoginNudgeInline({
     // Logado nunca vê
     if (getCurrentUser()) return;
 
-    // Coexistência com PostReadSignupCta (cta/PostReadSignupCta.tsx): se o
-    // post-read já apareceu nesta sessão (via scroll/tempo), não duplica o
-    // pedido em segundos. Quem fez quiz E scrollou até o fim já viu o
-    // post-read; o inline aqui seria barulho.
-    try {
-      if (window.sessionStorage.getItem('ffv:post_read_cta:session_shown') === '1') {
-        return;
-      }
-    } catch {
-      // sessionStorage indisponível — segue.
-    }
-
     const state = readNudgeState();
     if (shouldShowInline(state)) {
       setVisible(true);

@@ -6,7 +6,6 @@ import { useGameState } from '@/hooks/useGameState';
 import { Badge } from '@/components/ui/badge';
 import { BADGES_DEF, CURRICULUM, getHubForTrail } from '@/lib/curriculum';
 import { ArticleToc } from '@/components/article/ArticleToc';
-import { BackToTop } from '@/components/article/BackToTop';
 import { MobileToc } from '@/components/article/MobileToc';
 import { ReadingProgressBar } from '@/components/article/ReadingProgressBar';
 import { RelatedArticles } from '@/components/article/RelatedArticles';
@@ -15,21 +14,16 @@ import { NextSteps } from '@/components/article/NextSteps';
 import { ArticleJsonLd } from '@/components/article/ArticleJsonLd';
 import { CelebrationOverlay, type CelebrationEvent } from '@/components/CelebrationOverlay';
 import { RelatedModules } from '@/components/article/RelatedModules';
-import { ShareSocial } from '@/components/ShareSocial';
-import { QuizWordleResult } from '@/components/QuizWordleResult';
 import { ModuleActions } from '@/components/ModuleActions';
 import { TrailCompletionModal } from '@/components/TrailCompletionModal';
 import { PrintCover, PrintQuizAnswerKey, PrintColophon } from '@/components/article/PrintLayout';
-import { isDailyModule, markDailyModuleCompleted } from '@/lib/dailyModule';
 import { GAME_CONFIG } from '@/lib/constants';
 import { BookmarkButton } from '@/components/BookmarkButton';
 import { ModuleRating } from '@/components/ModuleRating';
-import { TextSelectionShare } from '@/components/TextSelectionShare';
 import { ArticleDiscussion } from '@/components/ArticleDiscussion';
 import { PeerComparisonChip } from '@/components/peer/PeerComparisonChip';
 import { calculatePeerPercentile } from '@/lib/peer-stats';
 import { NextModuleCard } from '@/components/article/NextModuleCard';
-import { PostReadSignupCta } from '@/components/cta/PostReadSignupCta';
 import { useScrollMilestones } from '@/hooks/useScrollMilestones';
 import { LoginNudgeInline } from '@/components/LoginNudgeInline';
 import { incrementQuizzesDone } from '@/lib/login-nudge';
@@ -86,8 +80,7 @@ export function ModuleLayout({
   const { state, markComplete, submitQuiz, trackVisit, trackProgress } = useGameState();
 
   // Ref pro <article> root — usado por useScrollMilestones (telemetria de
-  // profundidade) e PostReadSignupCta (gatilho de 75% scroll). Ambos
-  // funcionam de forma passiva, sem afetar UX.
+  // profundidade). Funciona de forma passiva, sem afetar UX.
   const articleRef = useRef<HTMLElement>(null);
   useScrollMilestones({ moduleSlug: slug, contentRef: articleRef });
 
@@ -115,14 +108,8 @@ export function ModuleLayout({
 
   const isCompleted = state?.completedModules.includes(slug) ?? false;
   const quizScore = state?.quizScores[slug];
-  const [isDaily, setIsDaily] = useState(false);
-  const DAILY_BONUS_XP = GAME_CONFIG.DAILY_MODULE_BONUS_XP;
   const TIME_ATTACK_BONUS_XP = GAME_CONFIG.TIME_ATTACK_BONUS_XP;
   const TIME_ATTACK_SECONDS_PER_Q = GAME_CONFIG.TIME_ATTACK_SECONDS_PER_QUESTION;
-
-  useEffect(() => {
-    setIsDaily(isDailyModule(slug));
-  }, [slug]);
 
   /**
    * Timer do time-attack baseado em wall-clock (Date.now()) — robusto a:
@@ -197,16 +184,13 @@ export function ModuleLayout({
     const score = answers.filter((a, i) => a === quiz[i].correct).length;
     submitQuiz(slug, score, quiz.length);
     const quizScore = quiz.length > 0 ? score / quiz.length : 1;
-    const applyDailyBonus = isDaily && !isCompleted;
     const timeAttackWin = timeAttack && !timeAttackFailed && score === quiz.length && !isCompleted;
     let bonusXp = 0;
-    if (applyDailyBonus) bonusXp += DAILY_BONUS_XP;
     if (timeAttackWin) bonusXp += TIME_ATTACK_BONUS_XP;
     const r = markComplete({
       slug, title, trailColor, readTime, quiz, quizScore,
       bonusXp,
     });
-    if (applyDailyBonus) markDailyModuleCompleted(slug);
     setResult(r);
     setSubmitted(true);
 
@@ -351,27 +335,6 @@ export function ModuleLayout({
         <span style={{ color: 'var(--foreground)' }}>{title}</span>
       </nav>
 
-      {/* Daily Module banner */}
-      {isDaily && !isCompleted && (
-        <div
-          className="mb-6 flex items-center gap-3 p-4 rounded-xl flex-wrap"
-          style={{
-            background: `color-mix(in srgb, ${trailColor} 10%, var(--ffv-bg2))`,
-            border: `1px solid ${trailColor}40`,
-          }}
-        >
-          <span className="text-xl">🌅</span>
-          <div className="flex-1 min-w-0">
-            <div className="text-xs font-bold uppercase tracking-widest mb-0.5" style={{ color: trailColor }}>
-              Módulo do Dia
-            </div>
-            <div className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
-              Complete hoje e ganhe <b style={{ color: 'var(--ffv-yellow)' }}>+{DAILY_BONUS_XP} XP bônus</b>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Header */}
       <header className="mb-10">
         <div className="flex items-center gap-3 mb-4">
@@ -423,24 +386,11 @@ export function ModuleLayout({
       {/* Bottom-sheet TOC on mobile/tablet */}
       <MobileToc containerSelector="[data-article-content]" accent={trailColor} />
 
-      {/* Floating "back to top" após 50% scroll */}
-      <BackToTop />
-
       {/* Prerequisites */}
       <Prerequisites slug={slug} accent={trailColor} />
 
       {/* Content */}
       <div className="prose-ffv" data-article-content>{children}</div>
-
-      {/* Social share — antes do quiz, encoraja share mid-article */}
-      <div className="mt-10">
-        <ShareSocial slug={slug} title={title} accent={trailColor} />
-      </div>
-
-      {/* Convite de signup pós-leitura — gatilho neurocientífico (pico-fim).
-          Aparece SÓ pra anônimo, após 75% scroll + 30s + 3s idle, 1x por
-          sessão, cooldown 72h. Ver docs/PROMPT_DESIGN_NEUROCIENCIA.md. */}
-      <PostReadSignupCta moduleSlug={slug} contentRef={articleRef} />
 
       {/* Quiz section (interativo, escondido em PDF) */}
       <section className="mt-14 ffv-no-print" data-quiz-interactive>
@@ -705,14 +655,6 @@ export function ModuleLayout({
               <ModuleRating slug={slug} />
             </div>
 
-            {/* Wordle-style share card */}
-            <QuizWordleResult
-              slug={slug}
-              title={title}
-              results={quiz.map((q, i) => answers[i] === q.correct)}
-              accent={trailColor}
-            />
-
             {/* Answer review */}
             <h2 className="text-base font-bold mb-4 mt-8">Revisão das respostas</h2>
             <div className="flex flex-col gap-6">
@@ -836,7 +778,6 @@ export function ModuleLayout({
         />
       )}
 
-      <TextSelectionShare articleSlug={slug} articleTitle={title} />
     </article>
   );
 }
