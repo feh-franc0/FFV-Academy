@@ -78,10 +78,12 @@ export default async function MedicinaVeterinariaPage() {
           { href: firstModuleHref, label: 'Começar pelo módulo 01 →', variant: 'primary' },
           { href: '/medicina-veterinaria/simulado-genetica', label: 'Simulado 100 questões', variant: 'secondary' },
         ],
+        // Stats padronizados em TODAS as 9 bases (2026-05-26):
+        // módulos / trilhas / horas de estudo / custo.
         stats: [
           { value: `${MEDVET_TOTAL_MODULES}`, label: 'módulos' },
-          { value: `${MEDVET_TOTAL_TRAILS}`, label: 'trilha' },
-          { value: `${MEDVET_TOTAL_HUBS}`, label: 'hubs' },
+          { value: `${MEDVET_TOTAL_TRAILS}`, label: MEDVET_TOTAL_TRAILS === 1 ? 'trilha' : 'trilhas' },
+          { value: '24h', label: 'estudo' },
           { value: 'R$ 0', label: 'custo' },
         ],
         // GameDemo é só pra tecnologia (mostra questão de IA) — não cabe aqui

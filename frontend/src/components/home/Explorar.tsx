@@ -120,11 +120,15 @@ export function Explorar({ hubs, playlists, mapHref = '/mapa', heading, subheadi
         >
           POR ÁREA (HUBS)
         </h3>
+        {/* Density consistente entre bases (2026-05-26): mostra no MÁXIMO 6
+            hubs no grid + link "ver todos" pro mapa quando excede. Sem cap,
+            /tecnologia mostrava 8-9 cards (denso) enquanto /ingles mostrava
+            1 só (espaço sobrando). */}
         <div
-          className="grid gap-3 mb-12"
+          className="grid gap-3 mb-4"
           style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}
         >
-          {finalHubs.map(hub => (
+          {finalHubs.slice(0, 6).map(hub => (
             <Link
               key={hub.id}
               href={hub.href}
@@ -167,6 +171,18 @@ export function Explorar({ hubs, playlists, mapHref = '/mapa', heading, subheadi
             </Link>
           ))}
         </div>
+        {finalHubs.length > 6 && (
+          <div className="mb-12">
+            <Link
+              href={mapHref}
+              className="inline-flex items-center gap-2 text-sm font-semibold"
+              style={{ color: 'var(--ffv-blue)' }}
+            >
+              Ver todos os {finalHubs.length} hubs no mapa →
+            </Link>
+          </div>
+        )}
+        {finalHubs.length <= 6 && <div className="mb-12" />}
 
         {/* Playlists curadas */}
         {finalPlaylists.length > 0 && (

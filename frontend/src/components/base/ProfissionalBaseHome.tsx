@@ -24,13 +24,16 @@ interface ProfissionalBaseHomeProps {
   heroHighlight?: string;
 }
 
-export function ProfissionalBaseHome({ hub, heroHighlight }: ProfissionalBaseHomeProps) {
+export function ProfissionalBaseHome({ hub, heroHighlight: _heroHighlight }: ProfissionalBaseHomeProps) {
   const trails = getHubTrails(hub);
   const modulesCount = trails.reduce((acc, t) => acc + t.modules.length, 0);
-  const xpTotal = trails.reduce(
-    (acc, t) => acc + t.modules.reduce((s, m) => s + m.xp, 0),
+  // Workload em horas — somatório de readTime (minutos) de cada módulo,
+  // arredondado pra cima pra não cair em "0h" em bases pequenas.
+  const workloadMin = trails.reduce(
+    (acc, t) => acc + t.modules.reduce((s, m) => s + m.readTime, 0),
     0,
   );
+  const workloadHours = Math.max(1, Math.round(workloadMin / 60));
 
   // CTA primário: começar pelo primeiro módulo da primeira trilha (mais
   // ergonômico que mandar o usuário escolher trilha numa base que tem 1 ou 2).
@@ -90,15 +93,10 @@ export function ProfissionalBaseHome({ hub, heroHighlight }: ProfissionalBaseHom
       hero={{
         kicker: `${hub.name} · Base de conhecimento`,
         badgeText: `BASE DE ${hub.shortName.toUpperCase()} · NO AR`,
-        title: heroHighlight ? (
-          <>
-            {hub.tagline.split(heroHighlight)[0]}
-            <span style={{ color: hub.color }}>{heroHighlight}</span>
-            {hub.tagline.split(heroHighlight)[1] ?? ''}
-          </>
-        ) : (
-          hub.tagline
-        ),
+        // 2026-05-26: removido <span style={{ color, fontStyle: italic }}>
+        // inline pra ficar consistente com tec/medvet/neuro (que usam título
+        // simples). Cor do destaque ainda vem via accent do tema do hub.
+        title: hub.tagline,
         description: hub.desc,
         // CTA secundário: aponta para o blog da PRIMEIRA trilha (em vez de
         // `hub.href` que é self-link na home da base). Pular o secundário
@@ -112,10 +110,12 @@ export function ProfissionalBaseHome({ hub, heroHighlight }: ProfissionalBaseHom
               ]
             : [{ href: firstModuleHref, label: `Começar pelo módulo 01 →`, variant: 'primary' as const }]
           : [{ href: '/explorar', label: 'Explorar todo o catálogo', variant: 'primary' as const }],
+        // 2026-05-26: stats padronizados entre TODAS as 9 bases.
+        // Formato unificado: módulos / trilhas / horas de estudo / custo.
         stats: [
           { value: `${modulesCount}`, label: modulesCount === 1 ? 'módulo' : 'módulos' },
           { value: `${trails.length}`, label: trails.length === 1 ? 'trilha' : 'trilhas' },
-          { value: `${xpTotal}`, label: 'XP' },
+          { value: `${workloadHours}h`, label: 'estudo' },
           { value: 'R$ 0', label: 'custo' },
         ],
         showGameDemo: false,
@@ -138,20 +138,8 @@ export function ProfissionalBaseHome({ hub, heroHighlight }: ProfissionalBaseHom
       }
       hideComunidade
       hasGamificationWidgets
-      finalCta={{
-        kicker: 'Sua área não é essa?',
-        title: (
-          <>
-            Sua área pode ser a{' '}
-            <span style={{ color: hub.color, fontStyle: 'italic' }}>próxima a entrar no ar.</span>
-          </>
-        ),
-        description:
-          'Em até 24 horas geramos a sua jornada — mesmo padrão das bases existentes: trilhas, módulos, quiz e revisão espaçada.',
-        ctaHref: '/#solicitar-base',
-        ctaLabel: 'Criar minha base →',
-        footnote: 'IA + curadoria humana · 100% gratuito na V1',
-      }}
+      // finalCta removido — <FinalCta /> não renderiza mais (substituído por
+      // <EndOfContextCta /> no rodapé do KnowledgeBaseHome).
     />
   );
 }

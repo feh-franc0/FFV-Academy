@@ -81,10 +81,12 @@ export default async function NeurocienciaPage() {
             { href: firstModuleHref, label: 'Começar pelo módulo 01 →', variant: 'primary' },
             { href: '/neurociencia/simulado-neuromarketing', label: 'Simulado 100 questões', variant: 'secondary' },
           ],
+          // Stats padronizados em TODAS as 9 bases (2026-05-26):
+          // módulos / trilhas / horas de estudo / custo.
           stats: [
             { value: `${NEUROCIENCIA_TOTAL_MODULES}`, label: 'módulos' },
-            { value: '100', label: 'questões' },
-            { value: `${NEUROCIENCIA_TOTAL_HUBS}`, label: 'hubs' },
+            { value: '1', label: 'trilha' },
+            { value: '8h', label: 'estudo' },
             { value: 'R$ 0', label: 'custo' },
           ],
           showGameDemo: false,

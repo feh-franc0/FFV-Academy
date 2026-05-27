@@ -88,10 +88,12 @@ export default async function TecnologiaPage() {
           // continua sendo o TS (Fase 4 futura: mover pra Postgres).
           totalArticles: TECH_TOTAL_MODULES,
           totalTrails: TECH_TOTAL_TRAILS,
+          // Stats padronizados em TODAS as 9 bases (2026-05-26):
+          // módulos / trilhas / horas de estudo / custo.
           stats: [
             { value: `${TECH_TOTAL_MODULES}+`, label: 'módulos' },
             { value: `${TECH_TOTAL_TRAILS}`, label: 'trilhas' },
-            { value: `${TECH_TOTAL_HUBS}`, label: 'hubs' },
+            { value: '200h', label: 'estudo' },
             { value: 'R$ 0', label: 'custo' },
           ],
           // GameDemo (MÓDULO ATUAL card) removido em 2026-05-26 — poluição

@@ -37,12 +37,12 @@
  * sections continuam usando os mesmos var() — só mudam os valores.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import Link from 'next/link';
 
 import type { BaseTheme } from '@/lib/bases/theme';
 import { Hero, type HeroProps } from '@/components/home/Hero';
-import { SocialProofBar } from '@/components/home/SocialProofBar';
+// SocialProofBar removido 2026-05-26 (PO: "sem volume real ainda")
 import { ComecarAqui, type ComecarPath } from '@/components/home/ComecarAqui';
 import { Explorar, type HubCardData, type PlaylistCardData } from '@/components/home/Explorar';
 // Trending, ComunidadeAutor, FinalCta e SignupCTA pre-final removidos
@@ -61,15 +61,10 @@ import { ContinueCard } from '@/components/ContinueCard';
 //   PO quer reformular antes de mostrar de novo.
 // - TrilhaDoDia (src/components/TrilhaDoDia.tsx): removido em 2026-05-21.
 import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
-import { StreakRepairModal } from '@/components/streak/StreakRepairModal';
-import {
-  detectStreakBreak,
-  markRepairModalSeen,
-  repairStreak,
-  REPAIR_COST_XP,
-} from '@/lib/streak-repair';
+// StreakRepairModal removido 2026-05-26 — substituído por toast inline.
+// markRepairModalSeen + repairStreak + playXPCoin agora vivem em /progresso.
+import { detectStreakBreak, REPAIR_COST_XP } from '@/lib/streak-repair';
 import { toast } from '@/lib/toast';
-import { playXPCoin } from '@/lib/sounds';
 
 interface KnowledgeBaseHomeProps {
   /** Tema da base — overrides de CSS vars aplicados num wrapper. */
@@ -156,11 +151,11 @@ export function KnowledgeBaseHome({
   hideComunidade: _hideComunidade = false,
   hasGamificationWidgets = true,
   hideTrending: _hideTrending = false,
-  hideSocialProof = false,
+  hideSocialProof: _hideSocialProof = false,
   todayHeading = 'Hoje no FFV',
   todayKicker = 'Continue de onde parou',
 }: KnowledgeBaseHomeProps) {
-  const { state, refresh } = useGameState();
+  const { state } = useGameState();
   const { isLoggedIn } = useAuth();
   const { preferences, status: prefStatus, refresh: refreshPrefs } = usePreferences();
 
@@ -168,44 +163,32 @@ export function KnowledgeBaseHome({
     && state !== null
     && state.completedModules.length > 0;
 
-  // Streak Repair — 1x por dia, se streak quebrou ontem e usuário pode pagar.
-  const [repairModal, setRepairModal] = useState<{ open: boolean; streak: number }>({
-    open: false,
-    streak: 0,
-  });
+  // Streak Repair — 2026-05-26: ao invés de modal bloqueando a tela quando
+  // entra na home, mostra TOAST informativo. Decisão de UX: modal interrompe
+  // demais; toast respeita o fluxo. Se o user quiser usar repair, vai pela
+  // tela /progresso (onde tem botão visível).
   useEffect(() => {
     if (!hasGamificationWidgets || !state) return;
     const status = detectStreakBreak(state.streak, state.xp);
     if (status.eligible) {
-      setRepairModal({ open: true, streak: status.brokenStreak });
+      // Toast leve, dismissable, mostra opção mas não bloqueia.
+      toast.info(
+        `Sua sequência de ${status.brokenStreak}d quebrou. Você pode restaurar por ${REPAIR_COST_XP} XP em /progresso.`,
+      );
     }
   }, [hasGamificationWidgets, state]);
 
-  function handleRepairConfirm() {
-    const res = repairStreak();
-    if (res.ok) {
-      playXPCoin();
-      toast.streak(res.restoredStreak);
-      setRepairModal({ open: false, streak: 0 });
-      refresh();
-    } else {
-      toast.info('Não foi possível salvar a streak. Tente novamente mais tarde.');
-      setRepairModal({ open: false, streak: 0 });
-    }
-  }
+  // handleRepairConfirm/handleRepairDismiss removidos junto com o modal
+  // em 2026-05-26 — restauração de streak vive em /progresso agora.
 
-  function handleRepairDismiss() {
-    markRepairModalSeen();
-    setRepairModal({ open: false, streak: 0 });
-  }
-
-  // OnboardingWizard e PreferenciasCTA — só fazem sentido quando a base tem
-  // gamificação ligada (caso contrário, não há preferências de estudo a
-  // configurar).
-  const showOnboardingWizard =
-    hasGamificationWidgets && isLoggedIn && prefStatus === 'ready' && preferences?.onboarded === false;
-  const showPreferencesCTA =
-    hasGamificationWidgets && isLoggedIn && prefStatus === 'ready' && preferences?.onboarded === false;
+  // OnboardingWizard e PreferenciasCTA desligados em 2026-05-26 pra alinhar
+  // com o pivot UGL — onboarding tradicional (5 telas) não cabe quando o
+  // produto é "sobe seu conteúdo e estuda". Reintroduzir depois com 1 tela
+  // se realmente fizer falta.
+  // Refs preservadas pra evitar diff grande em arquivos chamadores.
+  void isLoggedIn; void prefStatus; void preferences;
+  const showOnboardingWizard = false;
+  const showPreferencesCTA = false;
 
   return (
     <div style={themeToCssVars(theme)}>
@@ -245,7 +228,9 @@ export function KnowledgeBaseHome({
         </section>
       )}
 
-      {!hideSocialProof && <SocialProofBar />}
+      {/* SocialProofBar removido 2026-05-26 — sem volume real ainda, virava
+          banner com número fake. Re-introduzir quando MAU > 1000 com dado
+          confiável. */}
 
       {hasProgress && (
         <section className="px-6 py-12" style={{ borderTop: '1px solid var(--ffv-border)' }}>
@@ -307,16 +292,8 @@ export function KnowledgeBaseHome({
           conta; logado vê form pra sugerir nova base de conhecimento. */}
       <EndOfContextCta contextLabel={typeof hero.title === 'string' ? hero.title : undefined} />
 
-      {hasGamificationWidgets && (
-        <StreakRepairModal
-          open={repairModal.open}
-          streak={repairModal.streak}
-          cost={REPAIR_COST_XP}
-          currentXP={state?.xp ?? 0}
-          onConfirm={handleRepairConfirm}
-          onDismiss={handleRepairDismiss}
-        />
-      )}
+      {/* StreakRepairModal removido 2026-05-26 — substituído por toast leve
+          (linha ~174). Modal bloqueando home era intrusivo. */}
     </div>
   );
 }
