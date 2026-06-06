@@ -1,15 +1,18 @@
 /**
- * ProfissionalBaseHome — wrapper de KnowledgeBaseHome especializado para as
- * 6 bases do Profissional Digital (carreira, comunicação, marketing, conteúdo,
- * empreendedorismo, inglês).
+ * ProfissionalBaseHome — wrapper canônico de KnowledgeBaseHome para QUALQUER
+ * página que renderiza UM hub específico. Usado por todos os hubs profissionais
+ * (carreira, comunicação, marketing, conteúdo, empreendedorismo, inglês, cinema,
+ * vendas, psicologia-do-consumo) E pelos 9 hubs tech (ia, aws, claude-anthropic,
+ * construção, dados, engenharia, fundamentos, programação, segurança-hardware).
  *
- * Por que existe: essas bases compartilham forma (1 hub, 1-2 trilhas) e
- * precisam ter a MESMA experiência visual de /tecnologia e /medicina-veterinaria
- * — hero épico, paths de início, stats. Antes dessa abstração, /ingles caía
- * direto em TrailBlogClient (sem hero) e as outras 5 caíam em HubPageClient
- * (também sem hero); usuários reclamavam que "não tem tela principal".
+ * Padronização (jun/2026): substitui o HubPageClient legado. Toda página
+ * `/<hub>` da plataforma agora usa este componente — mesma experiência visual,
+ * só mudando cores (hub.color) e conteúdo (hub + trilhas).
  *
- * Recebe o `hub` da curriculum.ts e o tema da base; deriva o resto.
+ * `/tecnologia`, `/medicina-veterinaria` e `/neurociencia` continuam usando
+ * KnowledgeBaseHome diretamente (multi-hub bases com paleta multi-cor).
+ *
+ * Recebe o `hub` da curriculum.ts; deriva theme, paths, stats e CTAs.
  */
 import { KnowledgeBaseHome } from '@/components/base/KnowledgeBaseHome';
 import { DEFAULT_THEME } from '@/lib/bases/theme';

@@ -1,17 +1,42 @@
 import type { Metadata } from 'next';
-import { HubPageClient } from '@/components/HubPageClient';
-import { getHubBySlug } from '@/lib/curriculum';
+import { ProfissionalBaseHome } from '@/components/base/ProfissionalBaseHome';
+import { BaseStructuredData } from '@/components/seo/StructuredData';
+import { getHubBySlug, getHubTrails } from '@/lib/curriculum';
 
 const hub = getHubBySlug('fundamentos')!;
+const trails = getHubTrails(hub);
+const modulesCount = trails.reduce((acc, t) => acc + t.modules.length, 0);
+const workloadHours = Math.round(
+  trails.reduce((acc, t) => acc + t.modules.reduce((s, m) => s + m.readTime, 0), 0) / 60,
+);
 
 export const metadata: Metadata = {
   title: `${hub.name} — FFV Academy`,
-  description:
-    'Hub de Fundamentos Técnicos do FFV Academy: base real de computação, Linux/terminal, Git, SQL, HTTP, redes, TLS e como o computador funciona por dentro. Sem isso, IA e cloud viram cargo cult.',
-  keywords:
-    'fundamentos programacao, linux terminal, git de verdade, sql profundo, como computador funciona, redes tcp ip, http tls, base computacao',
+  description: hub.desc,
+  keywords: hub.tagline,
+  alternates: { canonical: `https://fernandofrancovalle.com/fundamentos` },
+  openGraph: {
+    title: `${hub.name} — FFV Academy`,
+    description: hub.tagline,
+    type: 'website',
+    url: `https://fernandofrancovalle.com/fundamentos`,
+    locale: 'pt_BR',
+  },
 };
 
 export default function Page() {
-  return <HubPageClient hub={hub} />;
+  return (
+    <>
+      <BaseStructuredData
+        slug="fundamentos"
+        name={hub.name}
+        description={hub.desc}
+        url="https://fernandofrancovalle.com/fundamentos"
+        modules={modulesCount}
+        workloadHours={workloadHours}
+        teaches="Linux · Git · HTTP · SQL · CPU · Redes · TLS"
+      />
+      <ProfissionalBaseHome hub={hub} heroHighlight="a base que ninguém ensina" />
+    </>
+  );
 }

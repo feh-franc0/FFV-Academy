@@ -1,17 +1,42 @@
 import type { Metadata } from 'next';
-import { HubPageClient } from '@/components/HubPageClient';
-import { getHubBySlug } from '@/lib/curriculum';
+import { ProfissionalBaseHome } from '@/components/base/ProfissionalBaseHome';
+import { BaseStructuredData } from '@/components/seo/StructuredData';
+import { getHubBySlug, getHubTrails } from '@/lib/curriculum';
 
 const hub = getHubBySlug('seguranca-hardware-hacking')!;
+const trails = getHubTrails(hub);
+const modulesCount = trails.reduce((acc, t) => acc + t.modules.length, 0);
+const workloadHours = Math.round(
+  trails.reduce((acc, t) => acc + t.modules.reduce((s, m) => s + m.readTime, 0), 0) / 60,
+);
 
 export const metadata: Metadata = {
-  title: 'Segurança & Hardware Hacking — Flipper Zero, Pentest Ético — FFV Academy',
-  description:
-    'Hub Segurança & Hardware Hacking do FFV Academy: a única trilha em PT-BR sobre Flipper Zero com profundidade real (STM32WB55, CC1101, MIFARE Crypto1, KeeLoq, BadUSB, ufbt) + framework legal brasileiro (Lei 14.155/2021, ANATEL, LGPD, PTES, BugHunt). Do iniciante ao pentester profissional.',
-  keywords:
-    'flipper zero brasil, hardware hacking ptbr, pentest ético, lei 14155 hacking, anatel flipper, mifare crypto1, keeloq rolljam, badusb duckyscript, ufbt fap, bughunt brasil, hackerone bug bounty',
+  title: `${hub.name} — FFV Academy`,
+  description: hub.desc,
+  keywords: hub.tagline,
+  alternates: { canonical: `https://fernandofrancovalle.com/seguranca-hardware-hacking` },
+  openGraph: {
+    title: `${hub.name} — FFV Academy`,
+    description: hub.tagline,
+    type: 'website',
+    url: `https://fernandofrancovalle.com/seguranca-hardware-hacking`,
+    locale: 'pt_BR',
+  },
 };
 
 export default function Page() {
-  return <HubPageClient hub={hub} />;
+  return (
+    <>
+      <BaseStructuredData
+        slug="seguranca-hardware-hacking"
+        name={hub.name}
+        description={hub.desc}
+        url="https://fernandofrancovalle.com/seguranca-hardware-hacking"
+        modules={modulesCount}
+        workloadHours={workloadHours}
+        teaches="Flipper Zero · Sub-GHz · NFC · RFID · BadUSB · Hardware Hacking ético"
+      />
+      <ProfissionalBaseHome hub={hub} heroHighlight="com ciência por baixo" />
+    </>
+  );
 }

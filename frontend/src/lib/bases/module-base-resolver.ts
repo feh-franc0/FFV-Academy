@@ -38,19 +38,24 @@ function register(moduleSlug: string, baseSlug: string): void {
   baseToModules.set(baseSlug, set);
 }
 
-// Mapeamento hub slug → base slug. Slugs dos hubs da família Profissional
-// Digital (carreira, comunicacao, marketing, conteudo, empreendedorismo,
-// ingles) coincidem com os slugs das bases — cada um é uma base própria.
-// Os demais hubs (ia, aws, engenharia, claude-anthropic, fundamentos,
-// programacao, dados, construcao, seguranca-hardware-hacking) pertencem
-// à base 'tecnologia'.
-const PROFISSIONAL_BASE_SLUGS = new Set([
-  'carreira', 'comunicacao', 'marketing', 'conteudo',
-  'empreendedorismo', 'ingles',
-]);
+// Mapeamento hub slug → base slug. A maioria dos hubs profissionais
+// tem hub.slug === base.slug (carreira, comunicacao, marketing, etc.),
+// mas alguns divergem (hub 'cinematografia' vive na base 'cinema'),
+// daí o HUB_TO_BASE override. Hubs ausentes do mapa caem em 'tecnologia'.
+const HUB_TO_BASE: Record<string, string> = {
+  carreira: 'carreira',
+  comunicacao: 'comunicacao',
+  marketing: 'marketing',
+  conteudo: 'conteudo',
+  empreendedorismo: 'empreendedorismo',
+  ingles: 'ingles',
+  vendas: 'vendas',
+  'psicologia-do-consumo': 'psicologia-do-consumo',
+  cinematografia: 'cinema',
+};
 
 function baseSlugForHub(hubSlug: string): string {
-  return PROFISSIONAL_BASE_SLUGS.has(hubSlug) ? hubSlug : 'tecnologia';
+  return HUB_TO_BASE[hubSlug] ?? 'tecnologia';
 }
 
 // Constrói trailId → baseSlug a partir do HUBS array. Cada trilha aparece

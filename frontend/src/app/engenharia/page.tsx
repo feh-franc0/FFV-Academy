@@ -1,17 +1,42 @@
 import type { Metadata } from 'next';
-import { HubPageClient } from '@/components/HubPageClient';
-import { getHubBySlug } from '@/lib/curriculum';
+import { ProfissionalBaseHome } from '@/components/base/ProfissionalBaseHome';
+import { BaseStructuredData } from '@/components/seo/StructuredData';
+import { getHubBySlug, getHubTrails } from '@/lib/curriculum';
 
 const hub = getHubBySlug('engenharia')!;
+const trails = getHubTrails(hub);
+const modulesCount = trails.reduce((acc, t) => acc + t.modules.length, 0);
+const workloadHours = Math.round(
+  trails.reduce((acc, t) => acc + t.modules.reduce((s, m) => s + m.readTime, 0), 0) / 60,
+);
 
 export const metadata: Metadata = {
   title: `${hub.name} — FFV Academy`,
-  description:
-    'Hub de Engenharia de Software do FFV Academy: trilhas de DevOps & Containers (Docker, Kubernetes, CI/CD profissional) e Engenharia de Software Moderna (SDD, agents, testes, segurança, arquitetura).',
-  keywords:
-    'engenharia de software, devops, docker, kubernetes, ci cd, arquitetura de software, spec driven development, agents ia, testes profissionais',
+  description: hub.desc,
+  keywords: hub.tagline,
+  alternates: { canonical: `https://fernandofrancovalle.com/engenharia` },
+  openGraph: {
+    title: `${hub.name} — FFV Academy`,
+    description: hub.tagline,
+    type: 'website',
+    url: `https://fernandofrancovalle.com/engenharia`,
+    locale: 'pt_BR',
+  },
 };
 
 export default function Page() {
-  return <HubPageClient hub={hub} />;
+  return (
+    <>
+      <BaseStructuredData
+        slug="engenharia"
+        name={hub.name}
+        description={hub.desc}
+        url="https://fernandofrancovalle.com/engenharia"
+        modules={modulesCount}
+        workloadHours={workloadHours}
+        teaches="Sistemas Distribuídos · DevOps · SRE · Security · Testing · A11y · Tech Leadership"
+      />
+      <ProfissionalBaseHome hub={hub} heroHighlight="engenharia de sistemas" />
+    </>
+  );
 }

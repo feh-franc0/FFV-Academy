@@ -114,12 +114,15 @@ describe('selectTotalModulesForBase', () => {
   // (caso contrário, dashboards mostram "0 de 0" e parecem quebradas).
   // O contador é derivado do moduleToBase em module-base-resolver.ts.
   it.each([
-    ['carreira',         13],
-    ['comunicacao',      14],
-    ['marketing',         5],
-    ['conteudo',          6],
-    ['empreendedorismo', 15],
-    ['ingles',           19],
+    ['carreira',                 13],
+    ['comunicacao',              14],
+    ['marketing',                35],
+    ['conteudo',                  6],
+    ['empreendedorismo',         15],
+    ['ingles',                   49],
+    ['cinema',                  100],
+    ['vendas',                   30],
+    ['psicologia-do-consumo',    60],
   ])('%s retorna %d módulos', (slug, expected) => {
     expect(selectTotalModulesForBase(slug)).toBe(expected);
   });

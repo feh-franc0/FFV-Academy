@@ -448,6 +448,84 @@ const EMPREENDEDORISMO_CONFIG = makeProfissionalBase({
   },
 });
 
+const VENDAS_CONFIG = makeProfissionalBase({
+  slug: 'vendas',
+  name: 'Vendas Consultivas & Negociação',
+  shortLabel: 'Vendas',
+  basePath: '/vendas',
+  area: 'SPIN · Challenger · Sandler · MEDDIC · Chris Voss',
+  description:
+    'Vendas B2B modernas com método: SPIN de Neil Rackham (35.000 ligações analisadas), Challenger Sale de Dixon & Adamson, Sandler, MEDDIC/MEDDPICC para enterprise, e fechamento via tactical empathy de Chris Voss (24 anos como negociador-chefe de reféns do FBI). Para SDR, AE, founder vendendo, account manager e qualquer profissional que precisa fechar deal.',
+  icon: '🎯',
+  iconName: 'target',
+  accent: '#0ea5e9',
+  accentLight: '#7dd3fc',
+  mascotName: 'Closer',
+  mascotGreeting: 'Bora fechar deal de verdade — sem desconto que sangra a empresa?',
+  slogans: {
+    hero: 'Vendas como engenharia, não como sorte',
+    sub: 'SPIN + Challenger + MEDDIC para discovery e qualificação. Chris Voss para fechar sem ceder margem.',
+    cta: 'Começar pelo discovery',
+  },
+  microcopy: {
+    moduleNoun: 'módulo',
+    trailNoun: 'trilha',
+    searchPlaceholder: 'Buscar tópicos de vendas…',
+  },
+});
+
+const PSICOLOGIA_CONSUMO_CONFIG = makeProfissionalBase({
+  slug: 'psicologia-do-consumo',
+  name: 'Psicologia do Consumo',
+  shortLabel: 'Psicologia',
+  basePath: '/psicologia-do-consumo',
+  area: 'Cialdini · Kahneman · Ariely · Thaler · Damasio · Byron Sharp · Christensen',
+  description:
+    'Por que humanos compram, desejam e cedem a atalhos mentais — com evidência. Os 7 Gatilhos de Cialdini (reciprocidade, compromisso, prova social, autoridade, afinidade, escassez, unidade) e Neuroeconomia da Decisão (System 1/2 de Kahneman, vieses de Ariely, nudge de Thaler, emoção sobre lógica de Damasio, How Brands Grow de Byron Sharp, Jobs-to-Be-Done de Christensen). Para persuadir eticamente em copy, landing, anúncio, pricing e vendas.',
+  icon: '🧲',
+  iconName: 'brain',
+  accent: '#a855f7',
+  accentLight: '#d8b4fe',
+  mascotName: 'Psyche',
+  mascotGreeting: 'Pronto pra entender por que humanos cedem antes de racionalizar?',
+  slogans: {
+    hero: 'Por que as pessoas compram — com ciência',
+    sub: 'Cialdini, Kahneman, Ariely, Thaler — os 7 gatilhos e os vieses cognitivos aplicados a copy, landing e pricing.',
+    cta: 'Começar pelo princípio 1',
+  },
+  microcopy: {
+    moduleNoun: 'módulo',
+    trailNoun: 'trilha',
+    searchPlaceholder: 'Buscar tópicos de psicologia do consumo…',
+  },
+});
+
+const CINEMA_CONFIG = makeProfissionalBase({
+  slug: 'cinema',
+  name: 'Cinematografia',
+  shortLabel: 'Cinema',
+  basePath: '/cinema',
+  area: 'Linguagem · Roteiro · DP · Direção · Edição · Som · Produção',
+  description:
+    'Cinema com profundidade de conservatório, em PT-BR: linguagem cinematográfica, roteiro, storytelling visual, câmera & lente profissional, direção de fotografia, mise-en-scène, edição (Murch), som & trilha, produção e carreira de cineasta.',
+  icon: '🎬',
+  iconName: 'film',
+  accent: '#ec4899',
+  accentLight: '#f9a8d4',
+  mascotName: 'Cine',
+  mascotGreeting: 'Bora contar histórias que mexem com a alma?',
+  slogans: {
+    hero: 'Cinema com profundidade real',
+    sub: 'Da gramática de Kuleshov ao log gamma da Venice 2 — pedagogia ancorada em AFI, USC e os mestres em atividade.',
+    cta: 'Começar a filmar',
+  },
+  microcopy: {
+    moduleNoun: 'módulo',
+    trailNoun: 'trilha',
+    searchPlaceholder: 'Buscar tópicos de cinema…',
+  },
+});
+
 const INGLES_CONFIG = makeProfissionalBase({
   slug: 'ingles',
   name: 'Inglês',
@@ -489,6 +567,9 @@ export const BASE_REGISTRY: Record<string, BaseConfig> = {
   conteudo: CONTEUDO_CONFIG,
   empreendedorismo: EMPREENDEDORISMO_CONFIG,
   ingles: INGLES_CONFIG,
+  cinema: CINEMA_CONFIG,
+  vendas: VENDAS_CONFIG,
+  'psicologia-do-consumo': PSICOLOGIA_CONSUMO_CONFIG,
 };
 
 export const DEFAULT_BASE_SLUG = 'tecnologia';

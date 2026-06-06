@@ -1,17 +1,42 @@
 import type { Metadata } from 'next';
-import { HubPageClient } from '@/components/HubPageClient';
-import { getHubBySlug } from '@/lib/curriculum';
+import { ProfissionalBaseHome } from '@/components/base/ProfissionalBaseHome';
+import { BaseStructuredData } from '@/components/seo/StructuredData';
+import { getHubBySlug, getHubTrails } from '@/lib/curriculum';
 
 const hub = getHubBySlug('dados')!;
+const trails = getHubTrails(hub);
+const modulesCount = trails.reduce((acc, t) => acc + t.modules.length, 0);
+const workloadHours = Math.round(
+  trails.reduce((acc, t) => acc + t.modules.reduce((s, m) => s + m.readTime, 0), 0) / 60,
+);
 
 export const metadata: Metadata = {
   title: `${hub.name} — FFV Academy`,
-  description:
-    'Hub de Dados & Analytics Engineering: Postgres Internals profundo (MVCC, EXPLAIN ANALYZE, índices avançados, vacuum, partitioning) e Data Engineering Moderna (batch/stream, dbt, DuckDB/Polars, Kafka, CDC, Iceberg, qualidade de dados). Além do CRUD.',
-  keywords:
-    'data engineering, postgres internals, dbt, duckdb polars, kafka cdc debezium, iceberg delta, dagster airflow, analytics engineering',
+  description: hub.desc,
+  keywords: hub.tagline,
+  alternates: { canonical: `https://fernandofrancovalle.com/dados` },
+  openGraph: {
+    title: `${hub.name} — FFV Academy`,
+    description: hub.tagline,
+    type: 'website',
+    url: `https://fernandofrancovalle.com/dados`,
+    locale: 'pt_BR',
+  },
 };
 
 export default function Page() {
-  return <HubPageClient hub={hub} />;
+  return (
+    <>
+      <BaseStructuredData
+        slug="dados"
+        name={hub.name}
+        description={hub.desc}
+        url="https://fernandofrancovalle.com/dados"
+        modules={modulesCount}
+        workloadHours={workloadHours}
+        teaches="Postgres Internals · Data Engineering · dbt · DuckDB · Kafka · CDC · Search & IR"
+      />
+      <ProfissionalBaseHome hub={hub} heroHighlight="além do CRUD" />
+    </>
+  );
 }

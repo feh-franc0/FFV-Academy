@@ -1,17 +1,42 @@
 import type { Metadata } from 'next';
-import { HubPageClient } from '@/components/HubPageClient';
-import { getHubBySlug } from '@/lib/curriculum';
+import { ProfissionalBaseHome } from '@/components/base/ProfissionalBaseHome';
+import { BaseStructuredData } from '@/components/seo/StructuredData';
+import { getHubBySlug, getHubTrails } from '@/lib/curriculum';
 
 const hub = getHubBySlug('construcao')!;
+const trails = getHubTrails(hub);
+const modulesCount = trails.reduce((acc, t) => acc + t.modules.length, 0);
+const workloadHours = Math.round(
+  trails.reduce((acc, t) => acc + t.modules.reduce((s, m) => s + m.readTime, 0), 0) / 60,
+);
 
 export const metadata: Metadata = {
   title: `${hub.name} — FFV Academy`,
-  description:
-    'Hub Construção & Clientes do FFV Academy: frontend moderno (HTML/CSS/JS/React), mobile para devs web (React Native + Expo), Edge Computing & Workers e Library Authoring (npm, tsup, changesets). A camada que toca o usuário final, feita por gente que entende engenharia — sem framework-fadiga.',
-  keywords:
-    'frontend moderno, react profissional, mobile react native expo, edge computing cloudflare workers, publicar npm, tsup changesets, library authoring',
+  description: hub.desc,
+  keywords: hub.tagline,
+  alternates: { canonical: `https://fernandofrancovalle.com/construcao` },
+  openGraph: {
+    title: `${hub.name} — FFV Academy`,
+    description: hub.tagline,
+    type: 'website',
+    url: `https://fernandofrancovalle.com/construcao`,
+    locale: 'pt_BR',
+  },
 };
 
 export default function Page() {
-  return <HubPageClient hub={hub} />;
+  return (
+    <>
+      <BaseStructuredData
+        slug="construcao"
+        name={hub.name}
+        description={hub.desc}
+        url="https://fernandofrancovalle.com/construcao"
+        modules={modulesCount}
+        workloadHours={workloadHours}
+        teaches="Frontend Moderno · Mobile · Edge Workers · Library Authoring · Browser Internals"
+      />
+      <ProfissionalBaseHome hub={hub} heroHighlight="do browser ao edge" />
+    </>
+  );
 }
