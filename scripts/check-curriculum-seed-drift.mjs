@@ -86,6 +86,8 @@ const KNOWN_MISSING_ALLOWLIST = new Set([
   // Hubs do Profissional Digital (split do antigo hub-profissional-digital)
   'carreira', 'comunicacao', 'marketing', 'conteudo',
   'empreendedorismo', 'ingles',
+  // Hubs das bases novas (jun/2026)
+  'cinematografia', 'vendas', 'psicologia-do-consumo',
   // Trilha AWS AI Practitioner (módulos planejados, conteúdo pendente)
   'aif-intro', 'aif-ai-ml-fundamentos', 'aif-genai-conceitos',
   'aif-prompt-engineering', 'aif-sagemaker-overview', 'aif-fine-tuning-eval',
@@ -103,12 +105,43 @@ const KNOWN_MISSING_ALLOWLIST = new Set([
   'seguranca-hardware-hacking',
 ]);
 
+// Allowlist por PREFIXO — pras bases novas (jun/2026) onde o conteúdo de
+// todos os módulos vai ser gerado pelo pipeline FFV (user-generated learning),
+// e não escrito à mão. Listar 250+ slugs individualmente seria ruído.
+//
+// Cada entrada AQUI representa uma trilha completa marcada como "conteúdo
+// pendente do pipeline". Quando o pipeline gerar o JSON do slug, ele sai
+// da exceção automaticamente.
+//
+// REGRA: só adicione prefixo se for uma trilha NOVA inteira aguardando o
+// pipeline. Pra slugs individuais soltos, use KNOWN_MISSING_ALLOWLIST.
+const KNOWN_MISSING_PREFIX_ALLOWLIST = [
+  // Base Cinema (10 trilhas, jun/2026)
+  'cinema-linguagem-', 'cinema-roteiro-', 'cinema-storytelling-',
+  'cinema-camera-', 'cinema-dp-', 'cinema-direcao-',
+  'cinema-edicao-', 'cinema-som-', 'cinema-producao-', 'cinema-vlog-',
+  // Base Vendas (3 trilhas, jun/2026)
+  'vendas-consultivas-', 'vendas-fechamento-', 'vendas-cerebro-',
+  // Base Psicologia do Consumo (6 trilhas, jun/2026)
+  'psicologia-cialdini-', 'psicologia-neuro-',
+  'cerebro-', 'poder-', 'influencia-', 'riqueza-',
+  // Marketing — trilhas novas (jun/2026)
+  'marketing-posicionamento-', 'marketing-growth-', 'marketing-neuro-',
+  // Inglês — trilhas de fluxo conversacional (jun/2026)
+  'ingles-fluxo-', 'ingles-social-', 'ingles-emerg-',
+];
+
+function isAllowedMissing(slug) {
+  if (KNOWN_MISSING_ALLOWLIST.has(slug)) return true;
+  return KNOWN_MISSING_PREFIX_ALLOWLIST.some(prefix => slug.startsWith(prefix));
+}
+
 const STRICT = process.argv.includes('--strict');
 
 if (missingSeeds.length > 0) {
   // Separa em "esperado faltar" (allowlist) vs "regressão real" (novo gap).
-  const unexpected = missingSeeds.filter(s => !KNOWN_MISSING_ALLOWLIST.has(s));
-  const expected   = missingSeeds.filter(s =>  KNOWN_MISSING_ALLOWLIST.has(s));
+  const unexpected = missingSeeds.filter(s => !isAllowedMissing(s));
+  const expected   = missingSeeds.filter(s =>  isAllowedMissing(s));
 
   if (expected.length > 0) {
     warn(`${expected.length} slugs faltam (mas estão na allowlist — débito conhecido):`);
