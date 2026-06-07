@@ -133,6 +133,8 @@ const KNOWN_MISSING_PREFIX_ALLOWLIST = [
   'ingles-vida-', 'ingles-corp-', 'ingles-academia-', 'ingles-rel-',
   // Tecnologia — trilhas novas preenchendo buracos do currículo (jun/2026)
   'compiladores-', 'os-', 'hw-', 'paradigmas-', 'e2e-', 'mercado-',
+  // Psicologia do Consumo — expansão mente humana inteira (jun/2026)
+  'mente-', 'estagios-', 'felicidade-', 'jogo-social-', 'atracao-', 'movimento-',
 ];
 
 function isAllowedMissing(slug) {

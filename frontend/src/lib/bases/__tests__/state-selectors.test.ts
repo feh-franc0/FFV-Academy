@@ -128,7 +128,7 @@ describe('selectTotalModulesForBase', () => {
     ['ingles',                   89],
     ['cinema',                  100],
     ['vendas',                   30],
-    ['psicologia-do-consumo',    60],
+    ['psicologia-do-consumo',   120],
   ])('%s retorna %d módulos', (slug, expected) => {
     expect(selectTotalModulesForBase(slug)).toBe(expected);
   });
