@@ -9,11 +9,13 @@ test('home → hub IA → trilha → artigo', async ({ page }) => {
   await expect(page).toHaveTitle(/FFV Academy/i);
 
   // Hub IA — navegação direta. Após padronização jun/2026, /ia renderiza
-  // ProfissionalBaseHome (mesmo template das outras single-hub bases),
-  // que mostra o nome completo "Inteligência Artificial" no hero — não
-  // mais o breadcrumb "Hub · IA" do antigo HubPageClient.
+  // ProfissionalBaseHome (mesmo template das outras single-hub bases).
+  // O h1 do hero contém `hub.tagline`, e `hub.name` ("Inteligência Artificial")
+  // aparece como kicker antes do título — não como heading. Verifico via
+  // page.title (metadata) + texto visível pra garantir que renderizou certo.
   await page.goto('/ia?skipOnboarding=1');
-  await expect(page.getByRole('heading', { name: /Inteligência Artificial/i }).first()).toBeVisible();
+  await expect(page).toHaveTitle(/Inteligência Artificial/i);
+  await expect(page.getByText('Inteligência Artificial').first()).toBeVisible();
 
   // Trilha de fundamentos
   await page.goto('/fundamentos-da-ia?skipOnboarding=1');
