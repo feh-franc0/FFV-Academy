@@ -135,6 +135,8 @@ const KNOWN_MISSING_PREFIX_ALLOWLIST = [
   'compiladores-', 'os-', 'hw-', 'paradigmas-', 'e2e-', 'mercado-',
   // Psicologia do Consumo — expansão mente humana inteira (jun/2026)
   'mente-', 'estagios-', 'felicidade-', 'jogo-social-', 'atracao-', 'movimento-',
+  // Cinema — trilha prática DaVinci Resolve 20 (jun/2026)
+  'davinci-',
 ];
 
 function isAllowedMissing(slug) {

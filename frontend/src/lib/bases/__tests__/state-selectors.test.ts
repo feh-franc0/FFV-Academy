@@ -126,7 +126,7 @@ describe('selectTotalModulesForBase', () => {
     ['conteudo',                  6],
     ['empreendedorismo',         15],
     ['ingles',                   89],
-    ['cinema',                  100],
+    ['cinema',                  112],
     ['vendas',                   30],
     ['psicologia-do-consumo',   120],
   ])('%s retorna %d módulos', (slug, expected) => {
