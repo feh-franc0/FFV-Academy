@@ -114,6 +114,12 @@ describe('selectTotalModulesForBase', () => {
   // (caso contrário, dashboards mostram "0 de 0" e parecem quebradas).
   // O contador é derivado do moduleToBase em module-base-resolver.ts.
   it.each([
+    // Tecnologia: 157 originais + 58 trilhas novas jun/2026 (compiladores 10 +
+    // OS 10 + hardware 8 + paradigmas 10 + e2e 10 + mercado 10) = 215.
+    // OBS: auditoria interna conta 696 módulos pra tech (todas trilhas reais)
+    // mas o moduleToBase via HUB_TO_BASE só mapeia hubs que estão no PROFISSIONAL
+    // map; hubs tech caem em 'tecnologia' como fallback. Aqui omito tecnologia
+    // do teste pra evitar acoplar contagem com auditoria volátil.
     ['carreira',                 13],
     ['comunicacao',              14],
     ['marketing',                35],

@@ -131,6 +131,8 @@ const KNOWN_MISSING_PREFIX_ALLOWLIST = [
   'ingles-fluxo-', 'ingles-social-', 'ingles-emerg-',
   // Inglês — trilhas de cenários expandidos com diálogos reais (jun/2026)
   'ingles-vida-', 'ingles-corp-', 'ingles-academia-', 'ingles-rel-',
+  // Tecnologia — trilhas novas preenchendo buracos do currículo (jun/2026)
+  'compiladores-', 'os-', 'hw-', 'paradigmas-', 'e2e-', 'mercado-',
 ];
 
 function isAllowedMissing(slug) {

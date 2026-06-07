@@ -380,8 +380,8 @@ func Test_BasesHandler_Fallback_MatchesSeedExpectations(t *testing.T) {
 	if !ok {
 		t.Fatal("tecnologia ausente do fallback")
 	}
-	if tech.Modules != 157 || tech.Trails != 16 || tech.Hubs != 8 {
-		t.Fatalf("tech counts drift: modules=%d trails=%d hubs=%d (seed: 157/16/8)",
+	if tech.Modules != 215 || tech.Trails != 22 || tech.Hubs != 8 {
+		t.Fatalf("tech counts drift: modules=%d trails=%d hubs=%d (esperado: 215/22/8 — migration 70 expandiu jun/2026 com +6 trilhas: compiladores, OS deep, hardware moderno, paradigmas, end-to-end, mercado tech)",
 			tech.Modules, tech.Trails, tech.Hubs)
 	}
 	if tech.URL != "/tecnologia" || tech.Status != "live" {
