@@ -129,6 +129,8 @@ const KNOWN_MISSING_PREFIX_ALLOWLIST = [
   'marketing-posicionamento-', 'marketing-growth-', 'marketing-neuro-',
   // Inglês — trilhas de fluxo conversacional (jun/2026)
   'ingles-fluxo-', 'ingles-social-', 'ingles-emerg-',
+  // Inglês — trilhas de cenários expandidos com diálogos reais (jun/2026)
+  'ingles-vida-', 'ingles-corp-', 'ingles-academia-', 'ingles-rel-',
 ];
 
 function isAllowedMissing(slug) {
