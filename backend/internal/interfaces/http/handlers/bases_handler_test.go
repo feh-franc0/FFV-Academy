@@ -380,8 +380,8 @@ func Test_BasesHandler_Fallback_MatchesSeedExpectations(t *testing.T) {
 	if !ok {
 		t.Fatal("tecnologia ausente do fallback")
 	}
-	if tech.Modules != 215 || tech.Trails != 22 || tech.Hubs != 8 {
-		t.Fatalf("tech counts drift: modules=%d trails=%d hubs=%d (esperado: 215/22/8 — migration 70 expandiu jun/2026 com +6 trilhas: compiladores, OS deep, hardware moderno, paradigmas, end-to-end, mercado tech)",
+	if tech.Modules != 780 || tech.Trails != 85 || tech.Hubs != 9 {
+		t.Fatalf("tech counts drift: modules=%d trails=%d hubs=%d (esperado: 780/85/9 — auditoria jun/2026 corrigiu contagem subestimada de Tecnologia. Soma real de TODOS os 9 hubs tech via curriculum.ts: hub-ia 113 + hub-aws 90 + hub-engenharia 211 + hub-claude-anthropic 53 + hub-fundamentos 67 + hub-programacao 96 + hub-dados 41 + hub-construcao 89 + hub-seguranca-hardware 20 = 780 mód)",
 			tech.Modules, tech.Trails, tech.Hubs)
 	}
 	if tech.URL != "/tecnologia" || tech.Status != "live" {
