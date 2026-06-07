@@ -71,6 +71,9 @@ test.describe('UX improvements E2E', () => {
   });
 
   test('NavLink ativo no header tem aria-current="page"', async ({ page }) => {
+    // Mobile viewport — o link com aria-current="page" vive no MobileNav
+    // (escondido em desktop por design). Em desktop o header usa outro layout.
+    await page.setViewportSize({ width: 390, height: 844 });
     await setActiveBase(page, 'tecnologia');
     await page.goto(`/progresso${SKIP}`);
     await page.waitForLoadState('networkidle');
