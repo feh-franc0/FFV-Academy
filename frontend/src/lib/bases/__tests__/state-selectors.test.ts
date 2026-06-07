@@ -125,7 +125,7 @@ describe('selectTotalModulesForBase', () => {
     ['marketing',                35],
     ['conteudo',                  6],
     ['empreendedorismo',         15],
-    ['ingles',                   89],
+    ['ingles',                   99],
     ['cinema',                  112],
     ['vendas',                   30],
     ['psicologia-do-consumo',   120],

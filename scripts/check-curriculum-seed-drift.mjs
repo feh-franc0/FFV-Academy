@@ -131,6 +131,8 @@ const KNOWN_MISSING_PREFIX_ALLOWLIST = [
   'ingles-fluxo-', 'ingles-social-', 'ingles-emerg-',
   // Inglês — trilhas de cenários expandidos com diálogos reais (jun/2026)
   'ingles-vida-', 'ingles-corp-', 'ingles-academia-', 'ingles-rel-',
+  // Inglês — trilha de sobrevivência turista (jun/2026)
+  'ingles-viagem-',
   // Tecnologia — trilhas novas preenchendo buracos do currículo (jun/2026)
   'compiladores-', 'os-', 'hw-', 'paradigmas-', 'e2e-', 'mercado-',
   // Psicologia do Consumo — expansão mente humana inteira (jun/2026)
