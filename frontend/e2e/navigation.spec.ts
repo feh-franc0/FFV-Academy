@@ -8,9 +8,12 @@ test('home → hub IA → trilha → artigo', async ({ page }) => {
   await page.goto('/?skipOnboarding=1');
   await expect(page).toHaveTitle(/FFV Academy/i);
 
-  // Hub IA — navegação direta (link existe múltiplas vezes; primeiro match basta).
+  // Hub IA — navegação direta. Após padronização jun/2026, /ia renderiza
+  // ProfissionalBaseHome (mesmo template das outras single-hub bases),
+  // que mostra o nome completo "Inteligência Artificial" no hero — não
+  // mais o breadcrumb "Hub · IA" do antigo HubPageClient.
   await page.goto('/ia?skipOnboarding=1');
-  await expect(page.getByText(/Hub · IA/i).first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Inteligência Artificial/i }).first()).toBeVisible();
 
   // Trilha de fundamentos
   await page.goto('/fundamentos-da-ia?skipOnboarding=1');
