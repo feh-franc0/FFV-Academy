@@ -20,7 +20,6 @@ import { NextSteps } from '@/components/article/NextSteps';
 import { AnkiExport } from '@/components/article/AnkiExport';
 import { TrailCertificateBanner } from '@/components/TrailCertificateBanner';
 import { TrailSidebar } from '@/components/article/TrailSidebar';
-import { AutoRefresh } from '@/components/article/AutoRefresh';
 import { safeJsonLd } from '@/lib/safe-json';
 
 interface PageProps {
@@ -142,6 +141,19 @@ export default async function ModulePage({ params }: PageProps) {
     ).find(m => m.slug === slug);
 
     if (meta) {
+      // Módulo existe em curriculum.ts mas não tem blocks no DB ainda.
+      // Em vez de loop infinito de refresh esperando conteúdo que talvez
+      // nunca venha, renderiza UMA prévia rica baseada na metadata que JÁ
+      // existe: desc, prerequisites, next steps. O `desc` tem 200-500
+      // chars com diálogos exemplos e referências — vale como introdução.
+      const fullModules = CURRICULUM.flatMap(t => t.modules);
+      const prereqs = meta.prerequisites
+        ?.map(slug => fullModules.find(m => m.slug === slug))
+        .filter(Boolean) ?? [];
+      const nextOnes = meta.nextSuggested
+        ?.map(slug => fullModules.find(m => m.slug === slug))
+        .filter(Boolean) ?? [];
+
       return (
         <main className="base-module-grid max-w-7xl mx-auto px-6 lg:px-10 py-12">
           <TrailSidebar currentSlug={slug} trailId={meta.trailId} />
@@ -150,7 +162,9 @@ export default async function ModulePage({ params }: PageProps) {
               <div className="flex gap-2 mb-2 text-xs font-mono uppercase tracking-wider" style={{ color: 'var(--ffv-muted)' }}>
                 <span style={{ color: meta.trailColor }}>{meta.trailName}</span>
               </div>
-              <h1 className="text-3xl md:text-4xl font-bold mb-3">{meta.title}</h1>
+              <h1 className="text-3xl md:text-4xl font-bold mb-3">
+                {meta.icon} {meta.title}
+              </h1>
               <div className="flex gap-4 text-sm" style={{ color: 'var(--ffv-muted)' }}>
                 <span>⏱ {meta.readTime ?? 5} min</span>
                 <span>·</span>
@@ -163,20 +177,117 @@ export default async function ModulePage({ params }: PageProps) {
                 )}
               </div>
             </header>
+
+            {/* Resumo rico — a desc do curriculum.ts é o teaser do módulo */}
+            <section className="mb-8">
+              <h2 className="text-lg font-bold mb-3" style={{ color: 'var(--ffv-ink)' }}>
+                Sobre este módulo
+              </h2>
+              <p
+                className="text-base"
+                style={{ color: 'var(--foreground)', lineHeight: 1.65, whiteSpace: 'pre-line' }}
+              >
+                {meta.desc}
+              </p>
+            </section>
+
+            {/* Keywords como tags clicáveis pra contexto SEO */}
+            {meta.keywords && (
+              <section className="mb-8">
+                <h3 className="text-sm font-mono uppercase tracking-wider mb-2" style={{ color: 'var(--ffv-muted)' }}>
+                  Tópicos cobertos
+                </h3>
+                <div className="flex flex-wrap gap-2">
+                  {meta.keywords.split(',').map(k => k.trim()).filter(Boolean).map(k => (
+                    <span
+                      key={k}
+                      className="text-xs px-2.5 py-1 rounded-full"
+                      style={{
+                        background: 'var(--ffv-bg2)',
+                        border: '1px solid var(--ffv-border)',
+                        color: 'var(--ffv-muted)',
+                      }}
+                    >
+                      {k}
+                    </span>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* Pré-requisitos */}
+            {prereqs.length > 0 && (
+              <section className="mb-8">
+                <h3 className="text-sm font-mono uppercase tracking-wider mb-3" style={{ color: 'var(--ffv-muted)' }}>
+                  Pré-requisitos
+                </h3>
+                <ul className="space-y-2">
+                  {prereqs.map(p => p && (
+                    <li key={p.slug}>
+                      <a
+                        href={`/aprenda/${p.slug}`}
+                        className="text-sm hover:underline"
+                        style={{ color: meta.trailColor }}
+                      >
+                        {p.icon} {p.title}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
+            {/* Próximos passos */}
+            {nextOnes.length > 0 && (
+              <section className="mb-8">
+                <h3 className="text-sm font-mono uppercase tracking-wider mb-3" style={{ color: 'var(--ffv-muted)' }}>
+                  Próximos passos sugeridos
+                </h3>
+                <ul className="space-y-2">
+                  {nextOnes.map(p => p && (
+                    <li key={p.slug}>
+                      <a
+                        href={`/aprenda/${p.slug}`}
+                        className="text-sm hover:underline"
+                        style={{ color: meta.trailColor }}
+                      >
+                        {p.icon} {p.title}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
+            {/* CTA — upload material relacionado pra gerar 100Q + sections */}
             <div
-              className="p-5 rounded-xl mb-6"
+              className="p-5 rounded-xl mb-6 mt-10"
               style={{
                 background: 'color-mix(in srgb, var(--ffv-amber) 8%, transparent)',
                 border: '1px solid color-mix(in srgb, var(--ffv-amber) 30%, transparent)',
               }}
             >
-              <p className="text-sm font-semibold mb-1.5">Conteúdo carregando…</p>
-              <p className="text-sm" style={{ color: 'var(--ffv-muted)', lineHeight: 1.55 }}>
-                Esse módulo está sendo gerado/atualizado pela curadoria. Volte em alguns
-                minutos — o ISR regenera o cache automaticamente a cada 60 segundos.
+              <p className="text-sm font-semibold mb-1.5">
+                💡 Quer aprofundar este módulo?
               </p>
-              <AutoRefresh delaySeconds={8} />
+              <p className="text-sm" style={{ color: 'var(--ffv-muted)', lineHeight: 1.6 }}>
+                A FFV gera conteúdo profundo (resumo + mapa de conceitos + 100 questões
+                calibradas Bloom + cards SRS) a partir do material que você sobe — PDF, vídeo,
+                artigo, foto da apostila.
+              </p>
+              <a
+                href="/upload"
+                className="inline-block mt-3 px-4 py-2 rounded-lg text-sm font-semibold"
+                style={{
+                  background: 'var(--ffv-ink)',
+                  color: 'var(--ffv-paper)',
+                  textDecoration: 'none',
+                }}
+              >
+                Subir material relacionado →
+              </a>
             </div>
+
             <ViewTracker slug={slug} hubId={undefined} trailId={meta.trailId} />
           </article>
         </main>
