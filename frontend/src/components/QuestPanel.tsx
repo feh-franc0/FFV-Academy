@@ -1,23 +1,27 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { useGameState } from '@/hooks/useGameState';
-import { getQuestProgress } from '@/lib/quests';
+import { getQuestProgress, getQuestActionHref } from '@/lib/quests';
 import type { QuestProgress } from '@/lib/quests';
 import { toast } from '@/lib/toast';
 import { playXPCoin } from '@/lib/sounds';
+import { useActiveBase } from '@/components/base/ActiveBaseContext';
 
 type Period = 'daily' | 'weekly';
 
 export function QuestPanel() {
   const { state, claimQuestV2 } = useGameState();
+  const { base: activeBase } = useActiveBase();
   const [period, setPeriod] = useState<Period>('daily');
   const [claiming, setClaiming] = useState<string | null>(null);
 
   if (!state || state.xp === 0) return null;
 
-  const allProgress = getQuestProgress(state);
+  const allProgress = getQuestProgress(state, activeBase.slug);
   const shown = allProgress.filter(p => p.quest.type === period);
+  const basePath = activeBase.basePath || `/${activeBase.slug}`;
 
   const dailyProgress = allProgress.filter(p => p.quest.type === 'daily');
   const dailyDone = dailyProgress.filter(p => p.claimed).length;
@@ -100,12 +104,26 @@ export function QuestPanel() {
           const { quest, current, completed, claimed } = p;
           const canClaim = completed && !claimed;
           const pct = Math.min(1, current / quest.target);
+          const actionHref = getQuestActionHref(quest, basePath);
+          // Link a quest card só quando há ação útil:
+          // - claimed: nada a fazer, vira div estática
+          // - canClaim: o resgate é a ação principal (botão), não vamos competir
+          // - in-progress: link inteiro leva pra ação (módulo/revisar) sem
+          //   interceptar o botão (que não existe nesse estado).
+          const isLinkable = !claimed && !canClaim;
+          const Wrapper: React.ElementType = isLinkable ? Link : 'div';
+          const wrapperProps = isLinkable
+            ? { href: actionHref, 'aria-label': `Ir para a ação: ${quest.title}` }
+            : {};
 
           return (
-            <div
+            <Wrapper
               key={quest.id}
-              className="rounded-xl px-4 py-3"
+              {...wrapperProps}
+              className={`rounded-xl px-4 py-3 block ${isLinkable ? 'transition-all hover:shadow-md hover:-translate-y-0.5' : ''}`}
               style={{
+                textDecoration: 'none',
+                color: 'inherit',
                 background: claimed
                   ? 'color-mix(in srgb, var(--ffv-green) 6%, transparent)'
                   : completed
@@ -119,6 +137,7 @@ export function QuestPanel() {
                       : 'var(--ffv-border)'
                 }`,
                 opacity: claimed ? 0.75 : 1,
+                cursor: isLinkable ? 'pointer' : 'default',
               }}
             >
               <div className="flex items-center gap-3">
@@ -202,7 +221,7 @@ export function QuestPanel() {
                   )}
                 </div>
               </div>
-            </div>
+            </Wrapper>
           );
         })}
       </div>

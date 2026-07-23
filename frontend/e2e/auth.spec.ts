@@ -3,13 +3,17 @@ import { test, expect } from '@playwright/test';
 /**
  * Auth mágico em modo mock: token "000000" sempre aceita.
  * Fluxo: AuthBadge "Entrar" no HUD → LoginModal (form 2 steps) → HUD mostra iniciais.
+ *
+ * Depois do pivot 2026-05, "/" é landing pública (LandingHeader, sem GameHUD).
+ * O botão "Entrar" agora vive no GameHUD, que aparece em rotas de base como
+ * /tecnologia. Por isso navegamos pra lá em vez de "/".
  */
 test('login mágico via HUD com token mock 000000', async ({ page }) => {
-  await page.goto('/?skipOnboarding=1');
+  await page.goto('/tecnologia/?skipOnboarding=1');
 
   // Limpa qualquer sessão prévia (testes rodam com storage persistente).
   await page.evaluate(() => localStorage.clear());
-  await page.goto('/?skipOnboarding=1');
+  await page.goto('/tecnologia/?skipOnboarding=1');
 
   await page.getByRole('button', { name: 'Entrar' }).click();
 

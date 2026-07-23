@@ -17,6 +17,7 @@ import (
 type HubSeed struct {
 	ID        string   `json:"id"`
 	Slug      string   `json:"slug"`
+	BaseSlug  string   `json:"base_slug"`
 	Name      string   `json:"name"`
 	ShortName string   `json:"shortName"`
 	Color     string   `json:"color"`
@@ -73,18 +74,25 @@ func seedCurriculumImpl(ctx context.Context, pool *pgxpool.Pool, seedsRoot strin
 			if hubID == "" {
 				hubID = h.ID
 			}
+			// base_slug vem do JSON — sem mapeamento hardcoded
+			baseSlug := h.BaseSlug
+			if baseSlug == "" {
+				baseSlug = "tecnologia" // fallback conservador se ausente no seed
+			}
 			_, err := pool.Exec(ctx, `
-				INSERT INTO hubs (id, name, short_name, description, icon, color, position)
-				VALUES ($1, $2, $3, $4, $5, $6, $7)
+				INSERT INTO hubs (id, slug, base_slug, name, short_name, description, icon, color, position)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 				ON CONFLICT (id) DO UPDATE
-					SET name = EXCLUDED.name,
+					SET slug = EXCLUDED.slug,
+					    base_slug = EXCLUDED.base_slug,
+					    name = EXCLUDED.name,
 					    short_name = EXCLUDED.short_name,
 					    description = EXCLUDED.description,
 					    icon = EXCLUDED.icon,
 					    color = EXCLUDED.color,
 					    position = EXCLUDED.position,
 					    updated_at = now();
-			`, hubID, h.Name, h.ShortName, h.Tagline, h.Icon, h.Color, i)
+			`, hubID, hubID, baseSlug, h.Name, h.ShortName, h.Tagline, h.Icon, h.Color, i)
 			if err != nil {
 				return fmt.Errorf("upsert hub %s: %w", hubID, err)
 			}
@@ -135,17 +143,18 @@ func seedCurriculumImpl(ctx context.Context, pool *pgxpool.Pool, seedsRoot strin
 				level = "" // nullable
 			}
 			_, err := pool.Exec(ctx, `
-				INSERT INTO trails (id, hub_id, name, description, difficulty, icon, position)
-				VALUES ($1, $2, $3, $4, $5, $6, $7)
+				INSERT INTO trails (id, slug, hub_id, name, description, difficulty, icon, position)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 				ON CONFLICT (id) DO UPDATE
-					SET hub_id = EXCLUDED.hub_id,
+					SET slug = EXCLUDED.slug,
+					    hub_id = EXCLUDED.hub_id,
 					    name = EXCLUDED.name,
 					    description = EXCLUDED.description,
 					    difficulty = EXCLUDED.difficulty,
 					    icon = EXCLUDED.icon,
 					    position = EXCLUDED.position,
 					    updated_at = now();
-			`, tr.ID, hubID, tr.Name, tr.Desc, nullIfEmpty(level), tr.Icon, i)
+			`, tr.ID, tr.ID, hubID, tr.Name, tr.Desc, nullIfEmpty(level), tr.Icon, i)
 			if err != nil {
 				failed++
 				continue

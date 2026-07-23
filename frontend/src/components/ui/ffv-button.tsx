@@ -8,9 +8,9 @@ import { cn } from '@/lib/utils';
 /**
  * FFV Button — variante editorial usada em hero, CTAs e cards de marketing.
  *
- * Diferente do Button shadcn (uso técnico), este aqui carrega o "gradient
- * azul→roxo" que é a assinatura visual da plataforma e variantes specíficas
- * (gold para ranking, ghost para secundários).
+ * Visual atualizado no pivot 2026-05: primary agora é indigo sólido (sem
+ * gradient roxo) para tom profissional/multi-área. Variantes: gold (ranking),
+ * secondary (outline), ghost (texto).
  *
  * Pode renderizar como `<a>` (Link interno ou href externo) ou `<button>`.
  */
@@ -43,13 +43,13 @@ const ffvButtonVariants = cva(
 );
 
 const variantBackground: Record<string, string> = {
-  primary: 'linear-gradient(90deg, var(--ffv-blue), var(--ffv-purple))',
+  primary: 'var(--ffv-blue)',
   gold: 'linear-gradient(90deg, var(--ffv-gold), #f59e0b)',
 };
 
 const variantColor: Record<string, string> = {
   primary: '#fff',
-  gold: '#0d1117',
+  gold: '#ffffff',
 };
 
 type FfvButtonProps = VariantProps<typeof ffvButtonVariants> & {

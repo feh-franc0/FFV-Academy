@@ -21,8 +21,10 @@ import {
   UserCog,
   GraduationCap,
 } from 'lucide-react';
-import { HUBS } from '@/lib/curriculum';
 import { useGameState } from '@/hooks/useGameState';
+import { useActiveBase } from '@/components/base/ActiveBaseContext';
+import { selectDueCardsForBase } from '@/lib/bases/state-selectors';
+import { useTheme } from '@/hooks/useTheme';
 import type { ComponentType, SVGProps } from 'react';
 
 type LucideIcon = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
@@ -36,6 +38,17 @@ const HUB_ICONS: Record<string, LucideIcon> = {
   '/programacao': Code2,
   '/dados': Database,
   '/construcao': Hammer,
+};
+
+// Mapeamento por iconName (usado por BaseNavItem da base) → Lucide icon.
+const ICON_BY_NAME: Record<string, LucideIcon> = {
+  brain: BrainCircuit,
+  cloud: Cloud,
+  wrench: Wrench,
+  bot: Bot,
+  book: BookOpen,
+  target: Target,
+  chart: ChartBarIncreasing,
 };
 
 type Item = { href: string; label: string; color: string; Icon: LucideIcon };
@@ -55,7 +68,11 @@ function getPrimaryItems(): Item[] {
 export function MobileNav() {
   const pathname = usePathname() ?? '/';
   const { dueCards } = useGameState();
+  const { base: activeBase } = useActiveBase();
   const [sheetOpen, setSheetOpen] = useState(false);
+
+  // Cards SRS devidos da base ativa — sem cross-base.
+  const baseDueCards = selectDueCardsForBase(dueCards, activeBase.slug);
 
   // Fecha sheet ao trocar de rota
   useEffect(() => { setSheetOpen(false); }, [pathname]);
@@ -71,8 +88,9 @@ export function MobileNav() {
 
   const primary = getPrimaryItems();
 
-  // Itens secundários — drawer "Mais" mostra TODOS os 8 hubs
-  const otherHubs = HUBS;
+  // Hubs do drawer — vêm da BASE ATIVA (não mais HUBS hardcoded tech).
+  const baseHubs = activeBase.nav.hubNavItems;
+  const hideGlobalContent = activeBase.nav.hideGlobalContentNav;
 
   return (
     <>
@@ -167,9 +185,9 @@ export function MobileNav() {
               >
                 Mais
               </span>
-              {dueCards.length > 0 && (
+              {baseDueCards.length > 0 && (
                 <span
-                  aria-label={`${dueCards.length} cards pendentes`}
+                  aria-label={`${baseDueCards.length} cards pendentes`}
                   style={{
                     position: 'absolute',
                     top: 6,
@@ -188,7 +206,7 @@ export function MobileNav() {
                     lineHeight: 1,
                   }}
                 >
-                  {dueCards.length > 9 ? '9+' : dueCards.length}
+                  {baseDueCards.length > 9 ? '9+' : baseDueCards.length}
                 </span>
               )}
             </button>
@@ -250,12 +268,20 @@ export function MobileNav() {
             </div>
 
             <div className="px-4 pb-4 overflow-y-auto" style={{ maxHeight: 'calc(80vh - 70px)' }}>
-              {otherHubs.length > 0 && (
-                <SheetSection title="Outros hubs">
-                  {otherHubs.map(h => {
-                    const Icon = HUB_ICONS[h.href] ?? GraduationCap;
+              {baseHubs.length > 0 && (
+                <SheetSection title={`Hubs · ${activeBase.name}`}>
+                  {baseHubs.map(h => {
+                    const Icon = HUB_ICONS[h.href]
+                      ?? (h.iconName ? ICON_BY_NAME[h.iconName] : null)
+                      ?? GraduationCap;
                     return (
-                      <SheetLink key={h.href} href={h.href} label={h.name} color={h.color} Icon={Icon} />
+                      <SheetLink
+                        key={h.href}
+                        href={h.href}
+                        label={h.label}
+                        color={h.color ?? 'var(--ffv-blue)'}
+                        Icon={Icon}
+                      />
                     );
                   })}
                 </SheetSection>
@@ -263,11 +289,18 @@ export function MobileNav() {
 
               <SheetSection title="Atividade">
                 <SheetLink href="/progresso" label="Progresso" color="var(--ffv-green)" Icon={ChartBarIncreasing} />
-                <SheetLink href="/revisar" label={dueCards.length > 0 ? `Revisar (${dueCards.length})` : 'Revisar'} color="var(--ffv-green)" Icon={BookOpen} />
-                <SheetLink href="/revisao" label="Maratona de Revisão" color="var(--ffv-blue)" Icon={Brain} />
-                <SheetLink href="/plano" label="Meu Plano de Estudos" color="var(--ffv-purple)" Icon={Target} />
-                <SheetLink href="/simulados" label="Simulados" color="#f78166" Icon={Target} />
-                <SheetLink href="/certificacoes" label="Prep de Certificações" color="var(--ffv-yellow)" Icon={GraduationCap} />
+                <SheetLink href="/revisar" label={baseDueCards.length > 0 ? `Revisar (${baseDueCards.length})` : 'Revisar'} color="var(--ffv-green)" Icon={BookOpen} />
+                {!hideGlobalContent && (
+                  <>
+                    <SheetLink href="/revisao" label="Maratona de Revisão" color="var(--ffv-blue)" Icon={Brain} />
+                    <SheetLink href="/plano" label="Meu Plano de Estudos" color="var(--ffv-purple)" Icon={Target} />
+                    <SheetLink href="/simulados" label="Simulados" color="#f78166" Icon={Target} />
+                    <SheetLink href="/certificacoes" label="Prep de Certificações" color="var(--ffv-yellow)" Icon={GraduationCap} />
+                  </>
+                )}
+                {activeBase.simulados?.map(s => (
+                  <SheetLink key={s.slug} href={s.href} label={s.title} color="#f78166" Icon={Target} />
+                ))}
               </SheetSection>
 
               <SheetSection title="Comunidade">
@@ -279,6 +312,7 @@ export function MobileNav() {
 
               <SheetSection title="Conta">
                 <SheetLink href="/preferencias" label="Preferências" color="var(--ffv-muted)" Icon={UserCog} />
+                <ThemeToggleSheet />
               </SheetSection>
 
               <button
@@ -367,6 +401,53 @@ function SheetLink({
         </span>
         <span className="text-sm font-medium">{label}</span>
       </Link>
+    </li>
+  );
+}
+
+/** Linha do drawer com toggle de tema — usuário mobile precisa de acesso
+ *  óbvio ao tema (desktop tem o ThemeToggle visível no header). */
+function ThemeToggleSheet() {
+  const { theme, toggle, mounted } = useTheme();
+  if (!mounted) return null;
+  const isDark = theme === 'dark';
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-label={`Trocar para tema ${isDark ? 'claro' : 'escuro'}`}
+        className="w-full flex items-center gap-3 rounded-xl"
+        style={{
+          minHeight: 52,
+          padding: '0 12px',
+          background: 'var(--ffv-bg2)',
+          border: '1px solid var(--ffv-border)',
+          color: 'var(--foreground)',
+          cursor: 'pointer',
+        }}
+      >
+        <span
+          className="flex items-center justify-center flex-shrink-0"
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 8,
+            background: 'color-mix(in srgb, var(--ffv-blue) 14%, transparent)',
+            border: '1px solid color-mix(in srgb, var(--ffv-blue) 30%, transparent)',
+            color: 'var(--ffv-blue)',
+            fontSize: 16,
+          }}
+        >
+          {isDark ? '☀️' : '🌙'}
+        </span>
+        <span className="text-sm font-medium flex-1 text-left">
+          {isDark ? 'Tema claro' : 'Tema escuro'}
+        </span>
+        <span className="text-xs" style={{ color: 'var(--ffv-muted)' }}>
+          {isDark ? 'Light' : 'Dark'}
+        </span>
+      </button>
     </li>
   );
 }

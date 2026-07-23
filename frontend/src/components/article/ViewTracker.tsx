@@ -1,69 +1,44 @@
 'use client';
 
 /**
- * ViewTracker — dispara 1 POST /api/v1/events/view por sessão por slug.
+ * ViewTracker — dispara 1 POST /api/v1/events/view por sessão por slug,
+ * com identificação via headers X-FFV-* (lib/tracking.ts).
  *
- * Dedupe via sessionStorage: a mesma sessão de navegador não envia 2 pings
- * pro mesmo slug. Fire-and-forget — falha de rede é silenciosa, nunca afeta
- * UX. anonId vem do localStorage pra correlacionar visitas anônimas.
+ * Histórico:
+ *   - Antes de 2026-05-21: enviava só anonId no body, sem identificar
+ *     usuário logado, sem baseSlug. Admin não conseguia ver quem viu o quê.
+ *   - Agora: delega pra `trackView` que monta headers identificados
+ *     (X-FFV-User-Email, X-FFV-Anon-Id, X-FFV-Session-Id, etc.).
+ *
+ * Continua útil em /aprenda/<slug>/page.tsx pra registrar com kind=module
+ * explícito + hub/trail metadata. Para outras páginas, o PageTracker global
+ * no layout já cobre.
  */
 import { useEffect } from 'react';
+import { trackView } from '@/lib/tracking';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || '';
-
-function getOrCreateAnonId(): string {
-  if (typeof window === 'undefined') return '';
-  try {
-    const KEY = 'ffv_anon_id';
-    let id = localStorage.getItem(KEY);
-    if (!id) {
-      id = crypto.randomUUID();
-      localStorage.setItem(KEY, id);
-    }
-    return id;
-  } catch {
-    return '';
-  }
-}
-
-export function ViewTracker({ slug, hubId, trailId }: { slug: string; hubId?: string; trailId?: string }) {
+export function ViewTracker({
+  slug,
+  hubId,
+  trailId,
+  baseSlug,
+}: {
+  slug: string;
+  hubId?: string;
+  trailId?: string;
+  baseSlug?: string;
+}) {
   useEffect(() => {
-    if (!API_BASE || !slug || typeof window === 'undefined') return;
-
-    const key = `ffv_viewed_${slug}`;
-    try {
-      if (sessionStorage.getItem(key)) return;
-      sessionStorage.setItem(key, '1');
-    } catch {
-      // sessionStorage indisponível — segue sem dedupe
-    }
-
-    const payload = {
+    if (!slug) return;
+    trackView({
       slug,
-      hubId: hubId ?? '',
-      trailId: trailId ?? '',
-      anonId: getOrCreateAnonId(),
-    };
-
-    // Beacon API quando disponível — não bloqueia unload. Fallback fetch.
-    try {
-      if (navigator.sendBeacon) {
-        const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
-        navigator.sendBeacon(`${API_BASE}/api/v1/events/view`, blob);
-        return;
-      }
-    } catch {
-      // segue para fetch
-    }
-    fetch(`${API_BASE}/api/v1/events/view`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      keepalive: true,
-    }).catch(() => {
-      // ignore network errors
+      hubId,
+      trailId,
+      baseSlug,
+      kind: 'module',
+      dedupeKey: slug,
     });
-  }, [slug, hubId, trailId]);
+  }, [slug, hubId, trailId, baseSlug]);
 
   return null;
 }

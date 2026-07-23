@@ -1,4 +1,4 @@
-.PHONY: build run test test-unit test-integration test-contract test-e2e test-security test-load test-cover lint migrate migrate-down generate clean docker-up docker-down seed-questions gen-seed-migration
+.PHONY: build run run-dev test test-unit test-integration test-contract test-e2e test-security test-load test-cover lint migrate migrate-down generate clean docker-up docker-down seed-questions gen-seed-migration
 
 # ─── Build & Run ─────────────────────────────────────────────────────────────
 build:
@@ -6,6 +6,13 @@ build:
 
 run:
 	go run ./cmd/api
+
+# run-dev compila com -tags devbypass, habilitando o atalho "000000" no fluxo
+# de magic-link (útil pra evitar abrir MailHog em cada teste manual).
+# Este binário NÃO deve ser usado em produção — o Dockerfile de prod NÃO inclui
+# essa tag, então `docker build` sempre gera um binário sem o bypass.
+run-dev:
+	go run -tags devbypass ./cmd/api
 
 run-watch:
 	air -c .air.toml

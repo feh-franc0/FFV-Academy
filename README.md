@@ -2,9 +2,11 @@
 
 # FFV Academy
 
-**Plataforma de educação técnica gamificada — blog, currículo, simulados e certificação.**
+**Plataforma de educação real — pega o material do aluno e devolve uma escola: trilha estruturada, revisão espaçada SM-2, gamificação completa e curadoria humana. Em 24h. Gratuito.**
 
-Monorepo full-stack com frontend estático (Next.js 16), API em Go 1.25, pipeline de vídeo com Remotion + Playwright e tooling de diagramas AWS auto-corrigíveis.
+Não é gerador de resumo. Não é chatbot. É uma plataforma **modular por base de conhecimento** — tecnologia, medicina veterinária, direito, design, qualquer área — com o mesmo padrão pedagógico: trilhas com módulos sequenciais, quizzes com explicação, SRS real (algoritmo SM-2 do Anki) e gamificação coerente (XP, badges, streak, ranking).
+
+Monorepo full-stack: Next.js 16 SSR, API em Go 1.25, MCP server pra Claude, pipeline de vídeo Remotion + Playwright e tooling de diagramas AWS auto-corrigíveis.
 
 [![CI](https://img.shields.io/github/actions/workflow/status/feh-franc0/fernandofrancovalledotcom/ci.yml?branch=main&label=CI&logo=github)](https://github.com/feh-franc0/fernandofrancovalledotcom/actions/workflows/ci.yml)
 [![Security](https://img.shields.io/github/actions/workflow/status/feh-franc0/fernandofrancovalledotcom/security.yml?branch=main&label=Security&logo=github)](https://github.com/feh-franc0/fernandofrancovalledotcom/actions/workflows/security.yml)
@@ -51,20 +53,44 @@ Monorepo full-stack com frontend estático (Next.js 16), API em Go 1.25, pipelin
 
 ## Sobre o projeto
 
-**FFV Academy** é uma plataforma de educação técnica em português para profissionais de tecnologia, organizada em **8 hubs temáticos** (IA, AWS, Engenharia de Software, Claude/Anthropic, Fundamentos, Programação, Dados e Construção & Clientes) + 5 trilhas de **Profissional Digital** (Comunicação Humana, Carreira Digital, Criação de Conteúdo, Marketing Digital, Empreendedorismo Digital), com mais de **70 trilhas** e **600+ artigos** — todos gratuitos, sem cadastro obrigatório.
+**FFV Academy** é uma plataforma de educação modular por **base de conhecimento**. Cada base (tecnologia, medicina veterinária, direito, design, concurso, e assim por diante) compartilha o mesmo padrão pedagógico — trilhas com módulos sequenciais, quizzes com dicas e explicações, revisão espaçada SM-2, gamificação completa — e só varia em **conteúdo, cores e microcopy**.
 
-A plataforma combina um **blog técnico denso e pedagógico** com uma camada de **aprendizagem gamificada** (XP, streak, badges, repetição espaçada e certificados verificáveis) e **simulados pagos** com correção server-authoritative.
+**Como funciona:** o estudante envia o material que tem (PDFs da faculdade, slides do curso, anotações próprias) e a área de estudo. Em até 24h, IA + curadoria humana montam uma base de estudo completa, no mesmo padrão das bases já no ar. O usuário não recebe um resumo — recebe uma escola.
 
-**Para quem é:** desenvolvedores intermediários a sêniores que querem internalizar fundamentos sem o ruído de cursos genéricos. Cada artigo aborda mecanismos internos, contraste com alternativas e armadilhas reais — não tutoriais "happy path".
+### Bases já no ar (mai/2026)
 
-**Diferenciais:**
+| Base | Trilhas | Módulos | Simulado |
+|---|---|---|---|
+| **Tecnologia** (`/tecnologia`) | 16 trilhas em 8 hubs (IA, AWS, Engenharia, Claude/Anthropic, Fundamentos, Programação, Dados, Profissional Digital) | 157 módulos | CLF-C02 (1015 questões) |
+| **Medicina Veterinária** (`/medicina-veterinaria`) | 1 trilha (Genética em 4 hubs temáticos) | 12 módulos | 100 questões de Genética |
 
-- **Conteúdo aberto, paywall só em simulados** — o blog é DNA gratuito; só certificação cobra.
-- **Gamificação séria, não cosmética** — XP por leitura *e* quiz, SRS (SM-2 simplificado) automatizado a partir do quiz, badges idempotentes, leaderboard semanal.
-- **Tutor IA integrado** com prompt caching (Claude Sonnet 4.6) e rate-limit por plano.
-- **Certificados verificáveis** (SHA-256 truncado) com lookup público sem login.
-- **Server-authoritative scoring** — o cliente não calcula nota de simulado.
-- **LGPD by design** — export de dados (`GET /me/export`) e soft-delete no `DELETE /me`.
+Toda base nova nasce com **o mesmo conjunto de componentes compartilhados** (`BaseModule`, `BaseThemeProvider`, `BaseNavContext`, `TrailSummaryDrawer`, `SimuladoRunner`, `GameHUD`). Só muda a paleta, o conteúdo, o mascote, o microcopy e os links de header/footer. Adicionar uma base = adicionar uma entrada em [`frontend/src/lib/bases/registry.ts`](./frontend/src/lib/bases/registry.ts) — o `BaseResolver` descobre automaticamente.
+
+> Arquitetura completa em [`ARCHITECTURE_BASES_MODULAR.md`](./ARCHITECTURE_BASES_MODULAR.md).
+>
+> Posicionamento competitivo em [`COMPETITIVE_ANALYSIS_2026-05.md`](./COMPETITIVE_ANALYSIS_2026-05.md).
+
+### Diferenciais reais vs concorrência (NotebookLM, ChatGPT, Stoodi, Anki)
+
+- **Trilha estruturada gerada do material do aluno** — NotebookLM/Studyfetch geram chat/resumo solto; Khan/Brilliant não aceitam material do aluno. Aqui você ganha módulos sequenciais com ordem pedagógica.
+- **SRS científico calibrado pelo SEU material** ligado ao quiz da trilha — Quizlet espaça de forma frágil; Anki tem SRS sofisticado (FSRS-6 em 2026) mas exige que você crie cada card sozinho.
+- **Gamificação completa e coerente** — XP, 128+ badges, streak com freeze, ranking 4 períodos, sons via Web Audio. Só Duolingo chega perto, e é idiomas.
+- **Profundidade técnica real e PT-BR** — Brilliant é EN e $20/mês. A FFV é grátis na V1 e cobre internals (MVCC, transformers, sistemas distribuídos).
+- **Multi-área profissional num produto só** — medicina, direito, design, concursos. Concorrentes brasileiros são verticais estreitos (Stoodi/vestibular, Aprova/concurso).
+- **Curadoria humana em 24h vs LLM cru** — vantagem narrativa contra ChatGPT/NotebookLM, que entregam instantâneo mas sem estrutura.
+
+### Para quem é
+
+- **Estudantes universitários** que cansaram de PDF solto e querem trilha de verdade.
+- **Concurseiros e residências** (OAB, polícia, residência médica, vestibular).
+- **Profissionais em pós/MBA/aperfeiçoamento.**
+- **Devs sênior em transição IA/AWS/SRE** (a base original de tecnologia continua o foco).
+
+### Stack pedagógica
+
+- **Server-authoritative scoring** — o cliente nunca calcula nota.
+- **LGPD by design** — export (`GET /me/export`) e soft-delete (`DELETE /me`).
+- **Conteúdo aberto, paywall só em simulados de certificação** — o blog é DNA gratuito.
 
 ---
 
@@ -134,6 +160,33 @@ A plataforma combina um **blog técnico denso e pedagógico** com uma camada de 
 - **LWW conflict resolution** em `progress_snapshots` (`updated_at`).
 - **Idempotência** em webhooks Stripe (tabela `stripe_events`) e em `awardBadge()` no cliente.
 - **Single VPS, dois serviços** — Nginx faz host-based routing: `api.*` → API Go (×2 réplicas); `www`/root → frontend Next.js.
+- **Storage de arquivos no Cloudflare R2** — anexos de clientes (PDFs, DOCX, XLSX, PPT, imagens) vão pra um bucket R2; o Postgres guarda só metadata + URL canônica `s3://ffv-uploads/<req-id>/<att-id>.ext`. Adapter S3-compatible (`aws-sdk-go-v2`) suporta R2/B2/MinIO/AWS via env vars. Detalhes: [`backend/docs/RUNBOOK.md` §8](./backend/docs/RUNBOOK.md).
+
+### Storage de uploads — Cloudflare R2
+
+Quando um cliente envia arquivos pelo formulário de solicitação de estudo (`/`), o fluxo é:
+
+```
+Browser → POST multipart /api/v1/study-requests
+                ↓
+        Backend Go (FileStorage interface)
+                ↓
+        Cloudflare R2 bucket "ffv-uploads"
+                ↓
+        Postgres salva: storage_url = "s3://ffv-uploads/<req-id>/<att-id>.ext"
+```
+
+Admin baixa um arquivo: `GET /api/v1/admin/study-requests/{id}/attachments/{attId}` ou todos como ZIP: `GET /api/v1/admin/study-requests/{id}/download-all`. O backend faz streaming de `GetObject` do R2 direto pro response, sem persistir no disco da VPS.
+
+**Por quê R2 e não AWS S3:**
+
+| Provider | $/GB/mês | Egress |
+|----------|----------|--------|
+| **Cloudflare R2** ⭐ | $0.015 | **Grátis** |
+| AWS S3 | $0.023 | $0.09/GB |
+| Backblaze B2 | $0.006 | Grátis via Cloudflare |
+
+Adapter está em `backend/internal/infrastructure/storage/s3.go` — trocar de provider é só mudar 4 env vars (`S3_ENDPOINT`, `S3_REGION`, `S3_PATH_STYLE`, credentials).
 
 ### Migração DNS+SSL pendente
 

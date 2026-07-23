@@ -58,6 +58,10 @@ const (
 	MaxCertificationIDs = 16
 	MaxObjectives       = 4
 	MaxIDLength         = 64
+	// Adicionados na Fase 3 (PERSONALIZATION_PLAN_2026-05.md):
+	MaxInterestedBases  = 50
+	MaxTopicTags        = 50
+	MaxLearningGoalsLen = 280
 )
 
 // Preferences é o aggregate root. Cada User tem no máximo um Preferences (1:1).
@@ -81,6 +85,15 @@ type Preferences struct {
 	onboardedAt          *time.Time
 	createdAt            time.Time
 	updatedAt            time.Time
+
+	// Fase 3 (PERSONALIZATION_PLAN_2026-05.md) — modelagem da plataforma
+	// ao perfil de aprendizado do aluno.
+	interestedBases    []string
+	homeBase           string // vazio = sem preferência
+	learningGoals      string
+	topicTags          []string
+	frequency          Frequency
+	preferredMaterials []MaterialKind
 }
 
 // New cria Preferences padrão para um usuário (estado "wizard pendente").
@@ -96,6 +109,13 @@ func New(userID shared.UserID, now time.Time) *Preferences {
 		onboardedAt:          nil,
 		createdAt:            now,
 		updatedAt:            now,
+		// Defaults da Fase 3.
+		interestedBases:    []string{},
+		homeBase:           "",
+		learningGoals:      "",
+		topicTags:          []string{},
+		frequency:          DefaultFrequency(),
+		preferredMaterials: DefaultMaterials(),
 	}
 }
 
@@ -120,6 +140,36 @@ func Reconstitute(
 		onboardedAt:          onboardedAt,
 		createdAt:            createdAt,
 		updatedAt:            updatedAt,
+		// Fase 3 defaults — sobrescritos via SetPhase3 logo após reconstrução
+		// pelo repo. Evita um construtor enorme.
+		interestedBases:    []string{},
+		homeBase:           "",
+		learningGoals:      "",
+		topicTags:          []string{},
+		frequency:          DefaultFrequency(),
+		preferredMaterials: DefaultMaterials(),
+	}
+}
+
+// SetPhase3 popula campos da Fase 3 — usado pelo repo após Reconstitute
+// pra evitar inflar a assinatura de Reconstitute.
+func (p *Preferences) SetPhase3(
+	interestedBases []string,
+	homeBase string,
+	learningGoals string,
+	topicTags []string,
+	frequency Frequency,
+	preferredMaterials []MaterialKind,
+) {
+	p.interestedBases = nilToEmpty(interestedBases)
+	p.homeBase = homeBase
+	p.learningGoals = learningGoals
+	p.topicTags = nilToEmpty(topicTags)
+	p.frequency = frequency
+	if preferredMaterials == nil {
+		p.preferredMaterials = []MaterialKind{}
+	} else {
+		p.preferredMaterials = preferredMaterials
 	}
 }
 
@@ -140,6 +190,21 @@ func (p *Preferences) CreatedAt() time.Time       { return p.createdAt }
 func (p *Preferences) UpdatedAt() time.Time       { return p.updatedAt }
 func (p *Preferences) IsOnboarded() bool          { return p.onboardedAt != nil }
 
+// Fase 3 — getters.
+func (p *Preferences) InterestedBases() []string { return copySlice(p.interestedBases) }
+func (p *Preferences) HomeBase() string          { return p.homeBase }
+func (p *Preferences) LearningGoals() string     { return p.learningGoals }
+func (p *Preferences) TopicTags() []string       { return copySlice(p.topicTags) }
+func (p *Preferences) Frequency() Frequency      { return p.frequency }
+func (p *Preferences) PreferredMaterials() []MaterialKind {
+	if len(p.preferredMaterials) == 0 {
+		return []MaterialKind{}
+	}
+	out := make([]MaterialKind, len(p.preferredMaterials))
+	copy(out, p.preferredMaterials)
+	return out
+}
+
 // UpdateCommand carrega os campos editáveis. Use ponteiros para distinguir
 // "não tocar" (nil) de "limpar" (slice/string vazia).
 type UpdateCommand struct {
@@ -149,6 +214,14 @@ type UpdateCommand struct {
 	Objectives           *[]string
 	SkillLevel           *SkillLevel
 	DailyQuestionEnabled *bool
+
+	// Fase 3 — modelagem da plataforma ao perfil de aprendizado.
+	InterestedBases    *[]string
+	HomeBase           *string // ponteiro pra string distingue "set vazio" (limpar) vs "não tocar"
+	LearningGoals      *string
+	TopicTags          *[]string
+	Frequency          *Frequency
+	PreferredMaterials *[]MaterialKind
 }
 
 // Update aplica a mutação validando invariantes. Retorna erro de validação se
@@ -194,6 +267,58 @@ func (p *Preferences) Update(cmd UpdateCommand, now time.Time) error {
 		p.dailyQuestionEnabled = *cmd.DailyQuestionEnabled
 	}
 
+	// Fase 3 — campos de modelagem do aprendizado.
+	if cmd.InterestedBases != nil {
+		clean, err := sanitizeIDs(*cmd.InterestedBases, MaxInterestedBases, "interestedBases")
+		if err != nil {
+			return err
+		}
+		p.interestedBases = clean
+	}
+	if cmd.HomeBase != nil {
+		homeBase := strings.TrimSpace(*cmd.HomeBase)
+		if homeBase != "" {
+			if len(homeBase) > MaxIDLength {
+				return shared.NewValidationError("homeBase muito longo")
+			}
+			if !isSlugLike(homeBase) {
+				return shared.NewValidationError(fmt.Sprintf("homeBase com slug inválido: %q", homeBase))
+			}
+		}
+		p.homeBase = homeBase
+	}
+	if cmd.LearningGoals != nil {
+		goals := strings.TrimSpace(*cmd.LearningGoals)
+		if len(goals) > MaxLearningGoalsLen {
+			return shared.NewValidationError(
+				fmt.Sprintf("learningGoals excede %d caracteres", MaxLearningGoalsLen),
+			)
+		}
+		p.learningGoals = goals
+	}
+	if cmd.TopicTags != nil {
+		clean, err := sanitizeIDs(*cmd.TopicTags, MaxTopicTags, "topicTags")
+		if err != nil {
+			return err
+		}
+		p.topicTags = clean
+	}
+	if cmd.Frequency != nil {
+		// Re-valida via construtor — comando pode trazer struct mal-formado
+		freq, err := NewFrequency(cmd.Frequency.Kind, cmd.Frequency.DaysPerWeek, cmd.Frequency.Weekdays)
+		if err != nil {
+			return err
+		}
+		p.frequency = freq
+	}
+	if cmd.PreferredMaterials != nil {
+		clean, err := sanitizeMaterials(*cmd.PreferredMaterials)
+		if err != nil {
+			return err
+		}
+		p.preferredMaterials = clean
+	}
+
 	// Marca onboarded na primeira preferência substantiva.
 	if p.onboardedAt == nil && p.hasSubstantivePreference() {
 		t := now
@@ -206,12 +331,16 @@ func (p *Preferences) Update(cmd UpdateCommand, now time.Time) error {
 
 // hasSubstantivePreference: true se ao menos uma lista chave foi preenchida.
 // dailyQuestionEnabled (toggle binário) sozinho NÃO conta como onboarded.
+// Campos da Fase 3 (interestedBases, homeBase, learningGoals) também contam.
 func (p *Preferences) hasSubstantivePreference() bool {
 	return len(p.hubIDs) > 0 ||
 		len(p.trailIDs) > 0 ||
 		len(p.certificationIDs) > 0 ||
 		len(p.objectives) > 0 ||
-		p.skillLevel != ""
+		p.skillLevel != "" ||
+		len(p.interestedBases) > 0 ||
+		p.homeBase != "" ||
+		len(p.learningGoals) > 0
 }
 
 // --- Helpers de validação ---

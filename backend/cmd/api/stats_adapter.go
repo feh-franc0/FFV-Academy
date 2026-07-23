@@ -49,6 +49,21 @@ func (r *pgxStatsRepo) GetStats(ctx context.Context) (handlers.PlatformStats, er
 		stats.TotalXPAwarded = 0
 	}
 
+	// Bases ativas — hoje somos 2 (tecnologia + medvet). Quando criarmos uma
+	// tabela `bases` com status='live', substituir por SELECT. Por ora
+	// hardcode é honesto e não infla artificialmente.
+	stats.BasesLive = 2
+
+	// Study requests — count + delivered (tabela criada na migration 000044).
+	// Tolerância a tabela ausente em ambientes locais sem essa migration.
+	_ = r.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM study_requests`,
+	).Scan(&stats.StudyRequestsTotal)
+
+	_ = r.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM study_requests WHERE status = 'delivered'`,
+	).Scan(&stats.StudyRequestsDelivered)
+
 	return stats, nil
 }
 

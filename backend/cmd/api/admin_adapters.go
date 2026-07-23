@@ -214,31 +214,367 @@ type pgxModuleViewRepo struct{ pool *pgxpool.Pool }
 var _ handlers.ModuleViewRepository = (*pgxModuleViewRepo)(nil)
 
 func (r *pgxModuleViewRepo) Insert(ctx context.Context, v handlers.ModuleViewInput) error {
-	var userID, anonID, hubID, trailID, ref, ua *string
-	if v.UserID != "" {
-		userID = &v.UserID
-	}
-	if v.AnonID != "" {
-		anonID = &v.AnonID
-	}
-	if v.HubID != "" {
-		hubID = &v.HubID
-	}
-	if v.TrailID != "" {
-		trailID = &v.TrailID
-	}
-	if v.Referrer != "" {
-		ref = &v.Referrer
-	}
-	if v.UserAgent != "" {
-		ua = &v.UserAgent
+	// Helpers pra converter "" em NULL — Postgres usa NULL pra "sem valor"
+	// e isso permite que os índices parciais (WHERE col IS NOT NULL) sejam
+	// eficientes.
+	nullable := func(s string) *string {
+		if s == "" {
+			return nil
+		}
+		return &s
 	}
 
 	_, err := r.pool.Exec(ctx, `
-		INSERT INTO module_views (user_id, anon_id, slug, hub_id, trail_id, referrer, user_agent, viewed_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, userID, anonID, v.Slug, hubID, trailID, ref, ua, v.ViewedAt)
+		INSERT INTO module_views (
+			user_id, user_email, user_display_name, anon_id, session_id,
+			base_slug, slug, hub_id, trail_id, path, kind,
+			referrer, user_agent, viewed_at
+		)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+	`,
+		nullable(v.UserID),
+		nullable(v.UserEmail),
+		nullable(v.UserDisplayName),
+		nullable(v.AnonID),
+		nullable(v.SessionID),
+		nullable(v.BaseSlug),
+		v.Slug,
+		nullable(v.HubID),
+		nullable(v.TrailID),
+		nullable(v.Path),
+		v.Kind, // NOT NULL com default 'module' — sempre setado pelo handler
+		nullable(v.Referrer),
+		nullable(v.UserAgent),
+		v.ViewedAt,
+	)
 	return err
+}
+
+// ─── UserEventsRepository (ingest de ações deliberadas) ───────────────────
+
+type pgxUserEventsRepo struct{ pool *pgxpool.Pool }
+
+var _ handlers.UserEventsRepository = (*pgxUserEventsRepo)(nil)
+
+func (r *pgxUserEventsRepo) Insert(ctx context.Context, in handlers.UserEventInput) error {
+	nullable := func(s string) *string {
+		if s == "" {
+			return nil
+		}
+		return &s
+	}
+	meta := in.Metadata
+	if len(meta) == 0 {
+		meta = []byte("{}")
+	}
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO user_events (
+			event_type, target_type, target_id,
+			user_id, user_email, anon_id, session_id,
+			base_slug, path, referrer, user_agent,
+			value_num, metadata, occurred_at
+		)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+	`,
+		in.EventType,
+		nullable(in.TargetType),
+		nullable(in.TargetID),
+		nullable(in.UserID),
+		nullable(in.UserEmail),
+		nullable(in.AnonID),
+		nullable(in.SessionID),
+		nullable(in.BaseSlug),
+		nullable(in.Path),
+		nullable(in.Referrer),
+		nullable(in.UserAgent),
+		in.ValueNum,
+		string(meta),
+		in.OccurredAt,
+	)
+	return err
+}
+
+// ─── AdminEventsRepository (feed de interações) ───────────────────────────
+
+type pgxAdminEventsRepo struct{ pool *pgxpool.Pool }
+
+var _ handlers.AdminEventsRepository = (*pgxAdminEventsRepo)(nil)
+
+func (r *pgxAdminEventsRepo) ListEvents(ctx context.Context, q handlers.ListEventsQuery) ([]handlers.EventEntry, error) {
+	conds := []string{"occurred_at >= $1", "occurred_at < $2"}
+	args := []any{q.Since, q.Until}
+	add := func(sql string, val any) {
+		args = append(args, val)
+		conds = append(conds, sql+"$"+itoa(len(args)))
+	}
+	if q.EventType != "" {
+		add("event_type = ", q.EventType)
+	}
+	if q.TargetType != "" {
+		add("target_type = ", q.TargetType)
+	}
+	if q.TargetID != "" {
+		add("target_id = ", q.TargetID)
+	}
+	if q.BaseSlug != "" {
+		add("base_slug = ", q.BaseSlug)
+	}
+	if q.UserEmail != "" {
+		add("lower(user_email) = ", q.UserEmail)
+	}
+	args = append(args, q.Limit)
+	limitIdx := "$" + itoa(len(args))
+
+	query := `
+		SELECT id, occurred_at, event_type,
+		       COALESCE(target_type,''), COALESCE(target_id,''),
+		       COALESCE(base_slug,''), COALESCE(path,''),
+		       COALESCE(user_email,''), '',
+		       COALESCE(anon_id,''), COALESCE(session_id,''),
+		       value_num, metadata
+		FROM user_events
+		WHERE ` + joinAnd(conds) + `
+		ORDER BY occurred_at DESC
+		LIMIT ` + limitIdx
+
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("admin_events: query: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]handlers.EventEntry, 0, q.Limit)
+	for rows.Next() {
+		var e handlers.EventEntry
+		var rawMeta []byte
+		if err := rows.Scan(
+			&e.ID, &e.OccurredAt, &e.EventType,
+			&e.TargetType, &e.TargetID,
+			&e.BaseSlug, &e.Path,
+			&e.UserEmail, &e.UserDisplayName,
+			&e.AnonID, &e.SessionID,
+			&e.ValueNum, &rawMeta,
+		); err != nil {
+			return nil, fmt.Errorf("admin_events: scan: %w", err)
+		}
+		if len(rawMeta) > 0 {
+			e.Metadata = rawMeta
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+func (r *pgxAdminEventsRepo) CountByType(ctx context.Context, since, until time.Time) ([]handlers.EventTypeCount, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT event_type, COUNT(*)
+		FROM user_events
+		WHERE occurred_at >= $1 AND occurred_at < $2
+		GROUP BY event_type
+		ORDER BY 2 DESC
+		LIMIT 30
+	`, since, until)
+	if err != nil {
+		return nil, fmt.Errorf("admin_events: byType: %w", err)
+	}
+	defer rows.Close()
+	out := []handlers.EventTypeCount{}
+	for rows.Next() {
+		var c handlers.EventTypeCount
+		if err := rows.Scan(&c.EventType, &c.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// ─── AdminViewsRepository (feed "quem acessou o quê") ─────────────────────
+
+type pgxAdminViewsRepo struct{ pool *pgxpool.Pool }
+
+var _ handlers.AdminViewsRepository = (*pgxAdminViewsRepo)(nil)
+
+func (r *pgxAdminViewsRepo) ListViews(ctx context.Context, q handlers.ListViewsQuery) ([]handlers.ViewEntry, error) {
+	// Construímos SQL dinamicamente com placeholders posicionais. Cada filtro
+	// vira um AND opcional. Postgres aproveita os índices parciais da mig 51
+	// (idx_module_views_base_viewed, idx_module_views_user_email_viewed,
+	// idx_module_views_kind_viewed) quando o filtro correspondente é usado.
+	conds := []string{"viewed_at >= $1", "viewed_at < $2"}
+	args := []any{q.Since, q.Until}
+	add := func(sql string, val any) {
+		args = append(args, val)
+		conds = append(conds, sql+"$"+itoa(len(args)))
+	}
+	if q.BaseSlug != "" {
+		add("base_slug = ", q.BaseSlug)
+	}
+	if q.Kind != "" {
+		add("kind = ", q.Kind)
+	}
+	if q.UserEmail != "" {
+		add("lower(user_email) = ", q.UserEmail)
+	}
+	if q.Slug != "" {
+		add("slug = ", q.Slug)
+	}
+	args = append(args, q.Limit)
+	limitIdx := "$" + itoa(len(args))
+
+	query := `
+		SELECT id, viewed_at,
+		       COALESCE(base_slug,'') , kind, slug,
+		       COALESCE(path,''), COALESCE(hub_id,''), COALESCE(trail_id,''),
+		       COALESCE(user_id,''), COALESCE(user_email,''),
+		       COALESCE(user_display_name,''), COALESCE(anon_id,''),
+		       COALESCE(session_id,'')
+		FROM module_views
+		WHERE ` + joinAnd(conds) + `
+		ORDER BY viewed_at DESC
+		LIMIT ` + limitIdx
+
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("admin_views: query: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]handlers.ViewEntry, 0, q.Limit)
+	for rows.Next() {
+		var e handlers.ViewEntry
+		if err := rows.Scan(
+			&e.ID, &e.ViewedAt,
+			&e.BaseSlug, &e.Kind, &e.Slug,
+			&e.Path, &e.HubID, &e.TrailID,
+			&e.UserID, &e.UserEmail,
+			&e.UserDisplayName, &e.AnonID,
+			&e.SessionID,
+		); err != nil {
+			return nil, fmt.Errorf("admin_views: scan: %w", err)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+func joinAnd(conds []string) string {
+	if len(conds) == 0 {
+		return "TRUE"
+	}
+	out := ""
+	for i, c := range conds {
+		if i > 0 {
+			out += " AND "
+		}
+		out += c
+	}
+	return out
+}
+
+// ─── AdminMetricsRepository (overview por base) ───────────────────────────
+
+type pgxAdminMetricsRepo struct{ pool *pgxpool.Pool }
+
+var _ handlers.AdminMetricsRepository = (*pgxAdminMetricsRepo)(nil)
+
+// GetOverview agrupa module_views por base/kind no intervalo dado.
+// 3 queries paralelas seriam mais rápidas, mas a cardinalidade típica
+// (algumas dezenas de milhares de views/semana) cabe numa única query
+// agregada com CTEs.
+func (r *pgxAdminMetricsRepo) GetOverview(ctx context.Context, since, until time.Time) (handlers.MetricsOverview, error) {
+	var o handlers.MetricsOverview
+
+	// Totais agregados (logged = user_email NOT NULL).
+	const totalsSQL = `
+		SELECT
+		    COUNT(*)                                                    AS total,
+		    COUNT(*) FILTER (WHERE user_email IS NOT NULL)              AS logged,
+		    COUNT(*) FILTER (WHERE user_email IS NULL)                  AS anon
+		FROM module_views
+		WHERE viewed_at >= $1 AND viewed_at < $2
+	`
+	if err := r.pool.QueryRow(ctx, totalsSQL, since, until).Scan(
+		&o.ViewsTotal, &o.ViewsLogged, &o.ViewsAnon,
+	); err != nil {
+		return o, fmt.Errorf("admin_metrics: totals: %w", err)
+	}
+
+	// By kind.
+	rows, err := r.pool.Query(ctx, `
+		SELECT kind, COUNT(*)
+		FROM module_views
+		WHERE viewed_at >= $1 AND viewed_at < $2
+		GROUP BY kind
+		ORDER BY 2 DESC
+	`, since, until)
+	if err != nil {
+		return o, fmt.Errorf("admin_metrics: by kind: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k handlers.KindCount
+		if err := rows.Scan(&k.Kind, &k.Count); err != nil {
+			return o, err
+		}
+		o.ByKind = append(o.ByKind, k)
+	}
+
+	// By base — agregação principal.
+	baseRows, err := r.pool.Query(ctx, `
+		SELECT
+		    COALESCE(base_slug, '(sem base)') AS base_slug,
+		    COUNT(*) AS total,
+		    COUNT(*) FILTER (WHERE user_email IS NOT NULL) AS logged,
+		    COUNT(*) FILTER (WHERE user_email IS NULL) AS anon,
+		    COUNT(DISTINCT user_email) FILTER (WHERE user_email IS NOT NULL) AS uniq_users,
+		    COUNT(DISTINCT anon_id) FILTER (WHERE anon_id IS NOT NULL) AS uniq_visitors,
+		    COUNT(DISTINCT session_id) FILTER (WHERE session_id IS NOT NULL) AS uniq_sessions
+		FROM module_views
+		WHERE viewed_at >= $1 AND viewed_at < $2
+		GROUP BY 1
+		ORDER BY total DESC
+	`, since, until)
+	if err != nil {
+		return o, fmt.Errorf("admin_metrics: by base: %w", err)
+	}
+	defer baseRows.Close()
+	byBase := []handlers.BaseMetrics{}
+	for baseRows.Next() {
+		var b handlers.BaseMetrics
+		if err := baseRows.Scan(
+			&b.BaseSlug, &b.ViewsTotal, &b.ViewsLogged, &b.ViewsAnon,
+			&b.UniqueUsers, &b.UniqueVisitors, &b.UniqueSessions,
+		); err != nil {
+			return o, err
+		}
+		byBase = append(byBase, b)
+	}
+
+	// Top module por base — 1 query por base (cardinalidade baixa, OK).
+	for i := range byBase {
+		var slug string
+		var views int64
+		if byBase[i].BaseSlug == "(sem base)" {
+			continue
+		}
+		err := r.pool.QueryRow(ctx, `
+			SELECT slug, COUNT(*) AS views
+			FROM module_views
+			WHERE viewed_at >= $1 AND viewed_at < $2
+			  AND base_slug = $3
+			  AND kind = 'module'
+			GROUP BY slug
+			ORDER BY views DESC
+			LIMIT 1
+		`, since, until, byBase[i].BaseSlug).Scan(&slug, &views)
+		if err == nil {
+			byBase[i].TopModule = slug
+			byBase[i].TopModuleViews = views
+		}
+		// Erro = sem dados — segue, não falha.
+	}
+	o.ByBase = byBase
+	return o, nil
 }
 
 // ─── AdminGrowthRepository ─────────────────────────────────────────────────

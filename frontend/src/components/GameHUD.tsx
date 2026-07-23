@@ -3,45 +3,89 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { BrainCircuit, Cloud, Wrench, Bot, ChartBarIncreasing, Target, Newspaper } from 'lucide-react';
+import { BrainCircuit, Cloud, Wrench, Bot, ChartBarIncreasing, Target, BookOpen } from 'lucide-react';
+import { FfvLogo } from '@/components/ui/ffv-logo';
 import { useGameState } from '@/hooks/useGameState';
 import { Progress } from '@/components/ui/progress';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { HUBS, LEVELS } from '@/lib/curriculum';
+import { LEVELS } from '@/lib/curriculum';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { AuthBadge } from '@/components/auth/AuthBadge';
 import { CommandPaletteTrigger } from '@/components/CommandPalette';
 import { unlockAudio } from '@/lib/sounds';
 import { toast } from '@/lib/toast';
+import { useBaseNav, type BaseNavItem } from '@/components/base/BaseNavContext';
+import { useActiveBase } from '@/components/base/ActiveBaseContext';
+import { DEFAULT_BASE_SLUG } from '@/lib/bases/registry';
+import { BaseSwitcher } from '@/components/base/BaseSwitcher';
+import {
+  getBaseXPTotal,
+  selectDueCardsForBase,
+  getBaseReviewCountToday,
+  selectBookmarksForBase,
+} from '@/lib/bases/state-selectors';
 import type { ComponentType, SVGProps } from 'react';
 
 type LucideIcon = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
 
-const HUB_ICONS: Record<string, LucideIcon> = {
-  '/ia': BrainCircuit,
-  '/aws': Cloud,
-  '/engenharia': Wrench,
-  '/claude-anthropic': Bot,
+// Mapa de ícones por nome — bases podem usar `iconName` em vez de href
+// hardcoded. Adicione ícones aqui ao precisar.
+const ICON_MAP: Record<string, LucideIcon> = {
+  brain: BrainCircuit,
+  cloud: Cloud,
+  wrench: Wrench,
+  bot: Bot,
+  book: BookOpen,
+  target: Target,
+  chart: ChartBarIncreasing,
 };
 
-type NavItem = { href: string; label: string; color?: string; isNew?: boolean };
+// Itens globais — aparecem em TODAS as bases (a menos que a base esconda).
+const PROGRESSO: BaseNavItem = {
+  href: '/progresso',
+  label: 'Progresso',
+  color: 'var(--ffv-green)',
+  iconName: 'chart',
+};
+const SIMULADOS: BaseNavItem = {
+  href: '/simulados',
+  label: 'Simulados',
+  color: '#f78166',
+  iconName: 'target',
+  isNew: true,
+};
 
-const PROGRESSO: NavItem = { href: '/progresso', label: 'Progresso', color: 'var(--ffv-green)' };
-const SIMULADOS: NavItem = { href: '/simulados', label: 'Simulados', color: '#f78166', isNew: true };
-const NEWS: NavItem = { href: '/news', label: 'News', color: '#ff5a36', isNew: true };
-
-function NavIcon({ href, size }: { href: string; size: number }) {
-  if (href === '/progresso') return <ChartBarIncreasing size={size} strokeWidth={1.8} />;
-  if (href === '/simulados') return <Target size={size} strokeWidth={1.8} />;
-  if (href === '/news') return <Newspaper size={size} strokeWidth={1.8} />;
-  const Icon = HUB_ICONS[href];
+function NavIcon({ item, size }: { item: BaseNavItem; size: number }) {
+  if (!item.iconName) return null;
+  const Icon = ICON_MAP[item.iconName];
   if (!Icon) return null;
   return <Icon size={size} strokeWidth={1.8} />;
 }
 
 export function GameHUD() {
-  const { state, levelInfo, dueCards, todayReviewCount, dailyGoalMet } = useGameState();
+  const { state, levelInfo, dueCards } = useGameState();
   const pathname = usePathname() ?? '/';
+  const { base: activeBase } = useActiveBase();
+  // Filtra os cards SRS devidos pela base ativa — sem isso, o pill mostra
+  // contagem cross-base (tech + medvet) e o usuário em medvet vê questões tech.
+  const baseDueCards = selectDueCardsForBase(dueCards, activeBase.slug);
+  // Bookmarks da base ativa — chip discreto pra acesso rápido.
+  const baseBookmarks = selectBookmarksForBase(state?.bookmarks ?? [], activeBase.slug);
+  // Meta diária por base: contador transient em localStorage por dia+base,
+  // re-renderiza quando o usuário navega/foca a janela.
+  const [baseReviewCount, setBaseReviewCount] = useState(0);
+  useEffect(() => {
+    setBaseReviewCount(getBaseReviewCountToday(activeBase.slug));
+    function refresh() { setBaseReviewCount(getBaseReviewCountToday(activeBase.slug)); }
+    window.addEventListener('focus', refresh);
+    window.addEventListener('storage', refresh);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('storage', refresh);
+    };
+  }, [activeBase.slug, pathname]);
+  const goal = state?.dailyGoal ?? 3;
+  const baseGoalMet = baseReviewCount >= goal;
 
   // Unlock audio on first interaction with the header
   const headerRef = useRef<HTMLElement>(null);
@@ -70,16 +114,20 @@ export function GameHUD() {
     }
   }, [state]);
 
-  // Apenas 4 hubs primários + Progresso no header desktop — resto fica em Cmd+K e MobileNav.
-  const PRIMARY_HUB_SLUGS = new Set(['ia', 'aws', 'engenharia', 'claude-anthropic']);
-  const primaryHubs: NavItem[] = HUBS
-    .filter(h => PRIMARY_HUB_SLUGS.has(h.slug))
-    .map(h => ({ href: h.href, label: h.shortName, color: h.color }));
+  // Nav items vêm do BaseNavContext (cada base define seus próprios hubs).
+  // Default = vazio. /tecnologia layout injeta IA/AWS/Engenharia/Claude.
+  const { hubNavItems, hideGlobalContentNav = false } = useBaseNav();
 
-  // News aparece apenas em lg+ (≥1024px), Simulados em xl+ (≥1280px) — header fica limpo em notebook.
-  const navItems: NavItem[] = [...primaryHubs, PROGRESSO];
-  const lgOnlyItems: NavItem[] = [NEWS];
-  const xlOnlyItems: NavItem[] = [SIMULADOS];
+  // Itens "do meio" — hubs da base atual + Progresso (sempre).
+  const navItems: BaseNavItem[] = [
+    ...hubNavItems.filter(i => !i.lgOnly && !i.xlOnly),
+    PROGRESSO,
+  ];
+  const lgOnlyItems: BaseNavItem[] = hubNavItems.filter(i => i.lgOnly && !i.xlOnly);
+  const xlOnlyItems: BaseNavItem[] = [
+    ...hubNavItems.filter(i => i.xlOnly),
+    ...(hideGlobalContentNav ? [] : [SIMULADOS]),
+  ];
 
   return (
     <header
@@ -95,18 +143,15 @@ export function GameHUD() {
       }}
     >
       {/* Logo */}
-      <Link
-        href="/"
-        className="flex items-center gap-2 font-bold text-sm tracking-tight"
-        style={{ color: 'var(--foreground)' }}
-      >
-        <BrainCircuit size={20} strokeWidth={1.8} style={{ color: 'var(--ffv-blue)' }} />
-        <span>FFV</span>
-        <span style={{ color: 'var(--ffv-blue)', fontWeight: 400 }}>Academy</span>
+      <Link href="/" aria-label="FFV Academy — voltar para a home">
+        <FfvLogo size="sm" />
       </Link>
 
+      {/* Switcher de base: chip com dropdown de bases disponíveis. */}
+      <BaseSwitcher pathname={pathname} />
+
       {/* Nav links — hubs primários + progresso (News/Simulados progressivos em lg/xl) */}
-      <nav className="hidden md:flex items-center gap-1 mx-6 mr-auto">
+      <nav className="hidden md:flex items-center gap-1 mx-3 mr-auto">
         {navItems.map(item => (
           <NavLink key={item.href} item={item} active={pathname === item.href || pathname.startsWith(item.href + '/')} />
         ))}
@@ -130,31 +175,55 @@ export function GameHUD() {
             <TooltipTrigger>
               <Link
                 href="/revisar"
-                aria-label={`Meta diária: ${todayReviewCount} de ${state.dailyGoal} cards`}
+                aria-label={`Meta diária: ${baseReviewCount} de ${goal} cards`}
                 className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold transition-opacity hover:opacity-90"
                 style={{
-                  background: dailyGoalMet
+                  background: baseGoalMet
                     ? 'color-mix(in srgb, var(--ffv-green) 14%, transparent)'
                     : 'color-mix(in srgb, var(--ffv-yellow) 12%, transparent)',
-                  border: `1px solid ${dailyGoalMet ? 'color-mix(in srgb, var(--ffv-green) 32%, transparent)' : 'color-mix(in srgb, var(--ffv-yellow) 28%, transparent)'}`,
-                  color: dailyGoalMet ? 'var(--ffv-green)' : 'var(--ffv-yellow)',
+                  border: `1px solid ${baseGoalMet ? 'color-mix(in srgb, var(--ffv-green) 32%, transparent)' : 'color-mix(in srgb, var(--ffv-yellow) 28%, transparent)'}`,
+                  color: baseGoalMet ? 'var(--ffv-green)' : 'var(--ffv-yellow)',
                 }}
               >
-                🎯 {todayReviewCount}/{state.dailyGoal}
+                🎯 {baseReviewCount}/{goal}
               </Link>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              <p>{dailyGoalMet ? '✅ Meta diária atingida!' : `Meta: ${todayReviewCount} de ${state.dailyGoal} cards hoje`}</p>
+              <p>{baseGoalMet ? '✅ Meta diária atingida!' : `Meta: ${baseReviewCount} de ${goal} cards hoje`}</p>
             </TooltipContent>
           </Tooltip>
         )}
-        {state && dueCards.length > 0 && (
+        {state && baseBookmarks.length > 0 && (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Link
+                  href="/progresso#bookmarks"
+                  aria-label={`${baseBookmarks.length} módulos salvos`}
+                  className="hidden md:flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold transition-opacity hover:opacity-90"
+                  style={{
+                    background: 'color-mix(in srgb, var(--ffv-purple) 12%, transparent)',
+                    border: '1px solid color-mix(in srgb, var(--ffv-purple) 30%, transparent)',
+                    color: 'var(--ffv-purple)',
+                    textDecoration: 'none',
+                  }}
+                />
+              }
+            >
+              🔖 {baseBookmarks.length}
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              <p>{baseBookmarks.length} módulo{baseBookmarks.length !== 1 ? 's' : ''} salvo{baseBookmarks.length !== 1 ? 's' : ''}</p>
+            </TooltipContent>
+          </Tooltip>
+        )}
+        {state && baseDueCards.length > 0 && (
           <Tooltip>
             <TooltipTrigger
               render={
                 <Link
                   href="/revisar"
-                  aria-label={`${dueCards.length} cards pendentes`}
+                  aria-label={`${baseDueCards.length} cards pendentes`}
                   className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold transition-opacity hover:opacity-90"
                   style={{
                     background: 'color-mix(in srgb, var(--ffv-green) 14%, transparent)',
@@ -164,10 +233,10 @@ export function GameHUD() {
                 />
               }
             >
-              🧠 {dueCards.length}
+              🧠 {baseDueCards.length}
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              <p>{dueCards.length} card{dueCards.length !== 1 ? 's' : ''} pendente{dueCards.length !== 1 ? 's' : ''} — revisar agora</p>
+              <p>{baseDueCards.length} card{baseDueCards.length !== 1 ? 's' : ''} pendente{baseDueCards.length !== 1 ? 's' : ''} — revisar agora</p>
             </TooltipContent>
           </Tooltip>
         )}
@@ -179,11 +248,12 @@ export function GameHUD() {
   );
 }
 
-function NavLink({ item, active }: { item: NavItem; active: boolean }) {
+function NavLink({ item, active }: { item: BaseNavItem; active: boolean }) {
   const accent = item.color ?? 'var(--ffv-blue)';
   return (
     <Link
       href={item.href}
+      aria-current={active ? 'page' : undefined}
       className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium whitespace-nowrap transition-colors"
       style={{
         color: active ? 'var(--foreground)' : 'var(--ffv-muted)',
@@ -191,7 +261,7 @@ function NavLink({ item, active }: { item: NavItem; active: boolean }) {
         border: `1px solid ${active ? `color-mix(in srgb, ${accent} 32%, transparent)` : 'transparent'}`,
       }}
     >
-      <NavIcon href={item.href} size={14} />
+      <NavIcon item={item} size={14} />
       <span>{item.label}</span>
       {item.isNew && (
         <span
@@ -212,10 +282,31 @@ function HUDStats({
   state: NonNullable<ReturnType<typeof useGameState>['state']>;
   levelInfo: ReturnType<typeof useGameState>['levelInfo'];
 }) {
+  const { base: activeBase } = useActiveBase();
   const nextLevel = LEVELS.find(l => l.level === state.level + 1);
   const xpInLevel = state.xp - (levelInfo?.xpMin ?? 0);
   const xpNeeded = (nextLevel?.xpMin ?? 9999) - (levelInfo?.xpMin ?? 0);
   const levelPct = Math.min(100, Math.round((xpInLevel / xpNeeded) * 100));
+
+  // ─── XP relativo à base ativa ────────────────────────────────────────
+  // - Conta lifetime de XP ganho NESTA base via bumpBaseXPEarned (chamado
+  //   por useGameState.markComplete quando o módulo tem base).
+  // - Fallback pra tech: usuários antes de 2026-05-21 acumularam tudo em
+  //   tech sem o counter; nesse caso usa state.xp pra não exibir "0 nesta
+  //   base" pra quem já tem progresso histórico. Outras bases começam do
+  //   zero (correto — não havia atividade lá antes).
+  const [xpInBase, setXpInBase] = useState<number>(() => {
+    const raw = getBaseXPTotal(activeBase.slug);
+    if (raw > 0) return raw;
+    return activeBase.slug === DEFAULT_BASE_SLUG ? state.xp : 0;
+  });
+  // Refaz a leitura toda vez que XP global muda OU a base muda — assim o
+  // chip atualiza junto com o bump de XP global após markComplete.
+  useEffect(() => {
+    const raw = getBaseXPTotal(activeBase.slug);
+    const next = raw > 0 ? raw : activeBase.slug === DEFAULT_BASE_SLUG ? state.xp : 0;
+    setXpInBase(next);
+  }, [state.xp, activeBase.slug]);
 
   // Animate XP number when it changes
   const prevXp = useRef(state.xp);
@@ -234,7 +325,7 @@ function HUDStats({
       {/* Mobile-only: ícone compacto de nível linkando pra /progresso */}
       <Link
         href="/progresso"
-        aria-label={`Nível ${state.level} — ${state.xp} XP`}
+        aria-label={`Nível ${state.level} — ${state.xp} XP totais · ${xpInBase} XP em ${activeBase.name}`}
         className="sm:hidden flex items-center justify-center"
         style={{
           width: 32,
@@ -250,44 +341,70 @@ function HUDStats({
         <span aria-hidden>{levelInfo?.icon ?? '🌱'}</span>
       </Link>
 
-      {/* Streak — sm+ */}
-      {state.streak > 0 && (
-        <Tooltip>
-          <TooltipTrigger>
-            <div
-              className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold cursor-default"
-              style={{
-                background: 'color-mix(in srgb, var(--ffv-orange) 12%, transparent)',
-                border: '1px solid color-mix(in srgb, var(--ffv-orange) 28%, transparent)',
-                color: 'var(--ffv-orange)',
-              }}
+      {/* Streak — sm+. Pill ganha estado "em risco" (vermelho + pulse + sufixo)
+          quando streak > 0 e usuário não estudou hoje (lastStudyDate ≠ hoje). */}
+      {state.streak > 0 && (() => {
+        const todayISO = new Date().toISOString().slice(0, 10);
+        const atRisk = state.lastStudyDate !== todayISO;
+        return (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Link
+                  href="/revisar"
+                  aria-label={atRisk ? `Streak de ${state.streak} dias em risco — estude hoje` : `Streak de ${state.streak} dias`}
+                  className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold transition-opacity hover:opacity-90"
+                  style={{
+                    background: atRisk
+                      ? 'color-mix(in srgb, var(--ffv-red, #f78166) 18%, transparent)'
+                      : 'color-mix(in srgb, var(--ffv-orange) 12%, transparent)',
+                    border: `1px solid ${atRisk
+                      ? 'color-mix(in srgb, var(--ffv-red, #f78166) 45%, transparent)'
+                      : 'color-mix(in srgb, var(--ffv-orange) 28%, transparent)'}`,
+                    color: atRisk ? 'var(--ffv-red, #f78166)' : 'var(--ffv-orange)',
+                    textDecoration: 'none',
+                    animation: atRisk ? 'ffv-pulse-soft 2s ease-in-out infinite' : undefined,
+                  }}
+                />
+              }
             >
               🔥 {state.streak}d
-              {state.freezes > 0 && <span className="ml-1 opacity-80">· 🧊{state.freezes}</span>}
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            <p>{state.streak} dias seguidos de estudo</p>
-            {state.freezes > 0 && (
-              <p className="text-xs opacity-70">🧊 {state.freezes} freeze{state.freezes !== 1 ? 's' : ''} — te salva se você pular um dia</p>
-            )}
-          </TooltipContent>
-        </Tooltip>
-      )}
+              {atRisk && <span className="ml-1 font-bold">· em risco</span>}
+              {!atRisk && state.freezes > 0 && <span className="ml-1 opacity-80">· 🧊{state.freezes}</span>}
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              <p>{state.streak} dias seguidos de estudo</p>
+              {atRisk && (
+                <p className="text-xs" style={{ color: 'var(--ffv-red, #f78166)' }}>
+                  ⚠ Você ainda não estudou hoje — clique pra revisar e manter o streak
+                </p>
+              )}
+              {state.freezes > 0 && (
+                <p className="text-xs opacity-70">🧊 {state.freezes} freeze{state.freezes !== 1 ? 's' : ''} — te salva se você pular um dia</p>
+              )}
+            </TooltipContent>
+          </Tooltip>
+        );
+      })()}
 
-      {/* Level + XP bar — sm+ apenas (mobile usa o link compacto acima) */}
+      {/* Level + XP bar — sm+ apenas (mobile usa o link compacto acima).
+          Mostra DOIS números:
+          - linha 1: "{state.xp} XP" → XP global (cross-base, identidade do usuário)
+          - linha 2: "{xpInBase} · {baseName}" → XP cumulado NESTA base
+          Mantém os dois mostra claramente que XP é compartilhado entre bases
+          mas a contribuição por base é rastreada (decisão de produto 2026-05-21). */}
       <Tooltip>
         <TooltipTrigger>
           <div className="hidden sm:flex items-center gap-2 cursor-default">
             <span className="text-sm">{levelInfo?.icon ?? '🌱'}</span>
-            <div className="flex flex-col justify-center" style={{ width: 72 }}>
+            <div className="flex flex-col justify-center" style={{ width: 92 }}>
               <Progress
                 value={levelPct}
                 className="h-1.5"
                 style={{ transition: 'all 0.6s cubic-bezier(0.4,0,0.2,1)' }}
               />
               <span
-                className="text-xs mt-0.5 tabular-nums"
+                className="text-xs mt-0.5 tabular-nums leading-tight"
                 style={{
                   color: xpBump ? levelInfo?.color ?? 'var(--ffv-green)' : 'var(--ffv-muted)',
                   fontWeight: xpBump ? 700 : undefined,
@@ -295,6 +412,19 @@ function HUDStats({
                 }}
               >
                 {state.xp} XP
+              </span>
+              <span
+                className="text-[10px] tabular-nums leading-tight"
+                style={{ color: 'var(--ffv-muted)', opacity: 0.85 }}
+              >
+                <span aria-hidden>·</span>{' '}
+                <span
+                  style={{ color: 'var(--ffv-blue)', fontWeight: 600 }}
+                  aria-label={`${xpInBase} XP nesta base de ${activeBase.name}`}
+                >
+                  {xpInBase}
+                </span>{' '}
+                nesta base
               </span>
             </div>
             <span className="text-xs font-semibold" style={{ color: levelInfo?.color }}>
@@ -305,6 +435,14 @@ function HUDStats({
         <TooltipContent side="bottom">
           <p className="font-semibold">{levelInfo?.name}</p>
           <p className="text-xs opacity-70">{xpInLevel}/{xpNeeded} XP para o próximo nível</p>
+          <p className="text-xs mt-1.5">
+            <span className="font-semibold">{state.xp} XP global</span>
+            <span className="opacity-70"> · soma de todas as bases</span>
+          </p>
+          <p className="text-xs">
+            <span className="font-semibold" style={{ color: 'var(--ffv-blue)' }}>{xpInBase} XP</span>
+            <span className="opacity-70"> em {activeBase.name}</span>
+          </p>
         </TooltipContent>
       </Tooltip>
 

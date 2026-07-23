@@ -22,9 +22,14 @@ import (
 )
 
 // Claims são os claims customizados do JWT.
+//
+// Email é incluído nos claims pra permitir o middleware RequireAdmin checar
+// allowlist sem fazer lookup no DB. Email não é secreto (já vai no /me) e o
+// JWT é assinado com HMAC-SHA256, então atacante não consegue forjar.
 type Claims struct {
 	jwt.RegisteredClaims
-	Role string `json:"role"`
+	Role  string `json:"role"`
+	Email string `json:"email"`
 }
 
 // JWTService implementa TokenIssuer.
@@ -48,7 +53,8 @@ func (s *JWTService) IssueAccessToken(userID shared.UserID, email identity.Email
 			IssuedAt:  jwt.NewNumericDate(now),
 			ID:        uuid.NewString(),
 		},
-		Role: string(role),
+		Role:  string(role),
+		Email: email.String(),
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

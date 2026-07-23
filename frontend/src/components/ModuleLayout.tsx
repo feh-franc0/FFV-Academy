@@ -750,8 +750,8 @@ export function ModuleLayout({
 
             {/* Next module */}
             <div className="mt-10 flex items-center justify-between gap-4 flex-wrap">
-              <Link href="/" className="text-sm transition-colors hover:text-white" style={{ color: 'var(--ffv-muted)' }}>
-                ← Voltar ao roadmap
+              <Link href="/tecnologia" className="text-sm transition-colors hover:text-white" style={{ color: 'var(--ffv-muted)' }}>
+                ← Voltar para Tecnologia
               </Link>
               {nextSlug && nextTitle && (
                 <Link

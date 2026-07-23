@@ -3,6 +3,8 @@
 import { Bookmark } from 'lucide-react';
 import { useGameState } from '@/hooks/useGameState';
 import { toast } from '@/lib/toast';
+import { trackEvent } from '@/lib/tracking';
+import { getBaseSlugForModule } from '@/lib/bases/module-base-resolver';
 
 interface Props {
   slug: string;
@@ -21,6 +23,13 @@ export function BookmarkButton({ slug, size = 16, className }: Props) {
     } else {
       toast.info('Removido dos favoritos');
     }
+    trackEvent({
+      eventType: 'module.bookmarked',
+      targetType: 'module',
+      targetId: slug,
+      baseSlug: getBaseSlugForModule(slug) ?? undefined,
+      metadata: { action: nowBookmarked ? 'add' : 'remove' },
+    });
   }
 
   return (

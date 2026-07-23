@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { requestToken, verifyToken, MOCK_TOKEN, type UserProfile } from '@/lib/auth';
 import { emailSchema, phoneBRSchema } from '@/lib/schemas';
+import { trackEvent } from '@/lib/tracking';
 
 const IS_DEV = process.env.NODE_ENV !== 'production';
 
@@ -94,6 +95,14 @@ export function LoginModal({ reason, initialEmail, onSuccess, onCancel }: Props)
     setLoading(true);
     try {
       const result = await requestToken(email.trim());
+      // Track: começou fluxo de signup ou login conforme retorno do backend.
+      // (NÃO logamos o email no metadata — backend já tem via header X-FFV-*.)
+      trackEvent({
+        eventType: result.isNewUser ? 'auth.signup_started' : 'auth.login_started',
+        targetType: 'auth',
+        targetId: result.isNewUser ? 'signup' : 'login',
+        metadata: { fromReason: reason ?? null },
+      });
       setStep(result.isNewUser ? 'register' : 'code');
     } catch (err) {
       setError((err as Error).message);
@@ -136,6 +145,16 @@ export function LoginModal({ reason, initialEmail, onSuccess, onCancel }: Props)
         setError(IS_DEV ? `Código incorreto. Em dev use ${MOCK_TOKEN}.` : 'Código incorreto ou expirado. Tente novamente.');
         return;
       }
+      // Track sucesso: distingue signup_completed (registro novo) vs
+      // login_completed (retornante). O backend já vai receber o email no
+      // próximo POST de tracking (snapshot do user já foi atualizado pelo
+      // AuthProvider antes deste handler retornar).
+      trackEvent({
+        eventType: isRegister ? 'auth.signup_completed' : 'auth.login_completed',
+        targetType: 'auth',
+        targetId: isRegister ? 'signup' : 'login',
+        metadata: { marketingConsent: isRegister ? consent : undefined },
+      });
       onSuccess(result.user);
     } catch (err) {
       setError((err as Error).message);

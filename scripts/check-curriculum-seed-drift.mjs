@@ -82,7 +82,10 @@ const orphanSeeds = [...seedSlugs].filter(s => !declaredSlugs.has(s)).sort();
 const KNOWN_MISSING_ALLOWLIST = new Set([
   // Hubs landing (não são módulos — slug usado em href de hub na home)
   'aws', 'claude-anthropic', 'construcao', 'dados', 'engenharia',
-  'fundamentos', 'ia', 'programacao', 'profissional-digital',
+  'fundamentos', 'ia', 'programacao',
+  // Hubs do Profissional Digital (split do antigo hub-profissional-digital)
+  'carreira', 'comunicacao', 'marketing', 'conteudo',
+  'empreendedorismo', 'ingles',
   // Trilha AWS AI Practitioner (módulos planejados, conteúdo pendente)
   'aif-intro', 'aif-ai-ml-fundamentos', 'aif-genai-conceitos',
   'aif-prompt-engineering', 'aif-sagemaker-overview', 'aif-fine-tuning-eval',

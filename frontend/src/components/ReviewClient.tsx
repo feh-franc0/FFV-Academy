@@ -6,6 +6,9 @@ import { useGameState } from '@/hooks/useGameState';
 import type { ReviewCard } from '@/lib/srs';
 import type { ReviewQuality } from '@/lib/srs';
 import { playXPCoin, playPop, unlockAudio } from '@/lib/sounds';
+import { useActiveBase } from '@/components/base/ActiveBaseContext';
+import { selectDueCardsForBase, bumpBaseReviewCount } from '@/lib/bases/state-selectors';
+import { getBaseSlugForModule } from '@/lib/bases/module-base-resolver';
 
 type Phase = 'empty' | 'answering' | 'revealed' | 'finished';
 
@@ -31,15 +34,21 @@ export interface ReviewClientProps {
 
 export function ReviewClient(props: ReviewClientProps = {}) {
   const { state, dueCards, reviewOne } = useGameState();
+  const { base: activeBase } = useActiveBase();
   const [selected, setSelected] = useState<number | null>(null);
   const [revealed, setRevealed] = useState(false);
   const [finished, setFinished] = useState(false);
   const [stats, setStats] = useState<SessionStats>({ total: 0, correct: 0, xpGained: 0 });
   const [queue, setQueue] = useState<ReviewCard[] | null>(null);
+  // Confirmação 2-step pro "Errei": primeiro click arma, segundo confirma.
+  // Evita reset acidental do card (penalidade pesada do SM-2).
+  const [armedAgain, setArmedAgain] = useState(false);
 
   useEffect(() => {
     if (queue !== null || !state) return;
-    let pool = [...dueCards];
+    // Filtra os cards SRS pela base ativa — usuário em medvet só revisa
+    // questões de medvet; usuário em tech só revisa tech.
+    let pool = selectDueCardsForBase([...dueCards], activeBase.slug);
     if (props.trailFilter && props.slugToTrail) {
       pool = pool.filter(c => props.slugToTrail!(c.slug) === props.trailFilter);
     }
@@ -85,6 +94,9 @@ export function ReviewClient(props: ReviewClientProps = {}) {
   function handleRate(outcome: ReviewQuality) {
     if (!currentCard) return;
     const result = reviewOne(currentCard.id, outcome);
+    // Incrementa contador per-base pra "0/3" do GameHUD refletir só esta base.
+    const cardBase = getBaseSlugForModule(currentCard.slug) ?? activeBase.slug;
+    bumpBaseReviewCount(cardBase);
     const isCorrect = outcome !== 'again';
     const nextStats = {
       total: stats.total + 1,
@@ -104,12 +116,24 @@ export function ReviewClient(props: ReviewClientProps = {}) {
     if (rest.length === 0) setFinished(true);
   }
 
-  if (phase === 'empty' && (!state || (state.reviewCards?.length ?? 0) === 0)) {
-    return <EmptyStateNoCards />;
+  // Filtra reviewCards pela base ativa pra detectar empty states corretos
+  // — "fila vazia" deve ser por base, não cross-base.
+  const baseReviewCardsAll = selectDueCardsForBase(state?.reviewCards ?? [], activeBase.slug);
+  const upcomingForBase = baseReviewCardsAll.length;
+
+  if (phase === 'empty' && upcomingForBase === 0) {
+    return <EmptyStateNoCards baseName={activeBase.name} basePath={activeBase.basePath} />;
   }
 
   if (phase === 'empty') {
-    return <EmptyStateZeroDue streak={state?.streak ?? 0} upcoming={state?.reviewCards?.length ?? 0} />;
+    return (
+      <EmptyStateZeroDue
+        streak={state?.streak ?? 0}
+        upcoming={upcomingForBase}
+        baseName={activeBase.name}
+        basePath={activeBase.basePath}
+      />
+    );
   }
 
   if (phase === 'finished') {
@@ -211,17 +235,32 @@ export function ReviewClient(props: ReviewClientProps = {}) {
             Quão fácil foi lembrar disso?
           </p>
           <div className="grid grid-cols-4 gap-2">
-            <RatingButton label="Errei" sublabel="+0 XP · reset" tone="#f78166" onClick={() => handleRate('again')} />
-            <RatingButton label="Difícil" sublabel="+1 XP · 1d" tone="#e3b341" onClick={() => handleRate('hard')} />
-            <RatingButton label="Bom" sublabel="+2 XP · 3d" tone="#3fb950" onClick={() => handleRate('good')} />
-            <RatingButton label="Fácil" sublabel="+4 XP · longo" tone="#58a6ff" onClick={() => handleRate('easy')} />
+            <RatingButton
+              label={armedAgain ? 'Confirmar' : 'Errei'}
+              sublabel={armedAgain ? 'clique de novo' : '+0 XP · reset'}
+              tone="#f78166"
+              armed={armedAgain}
+              onClick={() => {
+                if (armedAgain) {
+                  setArmedAgain(false);
+                  handleRate('again');
+                } else {
+                  setArmedAgain(true);
+                  // Desarma se demorar 4s sem confirmar — evita re-click acidental.
+                  setTimeout(() => setArmedAgain(false), 4000);
+                }
+              }}
+            />
+            <RatingButton label="Difícil" sublabel="+1 XP · 1d" tone="#e3b341" onClick={() => { setArmedAgain(false); handleRate('hard'); }} />
+            <RatingButton label="Bom" sublabel="+2 XP · 3d" tone="#3fb950" onClick={() => { setArmedAgain(false); handleRate('good'); }} />
+            <RatingButton label="Fácil" sublabel="+4 XP · longo" tone="#58a6ff" onClick={() => { setArmedAgain(false); handleRate('easy'); }} />
           </div>
           <div className="mt-4 flex items-center justify-between">
             <p className="text-[11px]" style={{ color: 'var(--ffv-muted)' }}>
               Seja honesto — a fila só ajuda se você calibrar pelo esforço real.
             </p>
             <Link
-              href={`/aprenda/${currentCard.slug}`}
+              href={buildModuleHref(currentCard.slug)}
               className="text-[11px] font-semibold shrink-0 ml-4 hover:opacity-70 transition-opacity"
               style={{ color: 'var(--ffv-blue)' }}
             >
@@ -234,12 +273,18 @@ export function ReviewClient(props: ReviewClientProps = {}) {
   );
 }
 
-function RatingButton({ label, sublabel, tone, onClick }: { label: string; sublabel: string; tone: string; onClick: () => void }) {
+function RatingButton({ label, sublabel, tone, onClick, armed = false }: { label: string; sublabel: string; tone: string; onClick: () => void; armed?: boolean }) {
   return (
     <button
       onClick={onClick}
+      aria-pressed={armed}
       className="flex flex-col items-center gap-1 py-3 rounded-lg transition-all hover:opacity-90 active:scale-95"
-      style={{ background: `${tone}15`, border: `1px solid ${tone}50`, color: tone }}
+      style={{
+        background: armed ? `${tone}30` : `${tone}15`,
+        border: armed ? `2px solid ${tone}` : `1px solid ${tone}50`,
+        color: tone,
+        animation: armed ? 'ffv-pulse-soft 1.2s ease-in-out infinite' : undefined,
+      }}
     >
       <span className="text-sm font-bold">{label}</span>
       <span className="text-[10px] opacity-80">{sublabel}</span>
@@ -247,32 +292,42 @@ function RatingButton({ label, sublabel, tone, onClick }: { label: string; subla
   );
 }
 
-function EmptyStateNoCards() {
+function EmptyStateNoCards({ baseName, basePath }: { baseName: string; basePath: string }) {
   return (
     <main className="max-w-lg mx-auto px-6 pt-20 pb-20 text-center">
       <div className="text-6xl mb-6">🧠</div>
-      <h1 className="text-2xl font-bold mb-3">Sua fila de revisão está vazia</h1>
+      <h1 className="text-2xl font-bold mb-3">Sua fila de {baseName} está vazia</h1>
       <p className="text-sm mb-8 leading-relaxed" style={{ color: 'var(--ffv-muted)' }}>
-        Conclua um quiz em qualquer artigo para que as perguntas virem cards de revisão espaçada.
-        Quanto mais você aprende, mais inteligente fica a fila — ela te devolve na hora certa
-        aquilo que você está prestes a esquecer.
+        Conclua um quiz em qualquer módulo de <strong>{baseName}</strong> para que as perguntas virem
+        cards de revisão espaçada. Quanto mais você aprende, mais inteligente fica a fila — ela te
+        devolve na hora certa aquilo que você está prestes a esquecer.
       </p>
       <Link
-        href="/"
+        href={basePath}
         className="inline-block px-6 py-3 rounded-full text-sm font-semibold transition-all hover:opacity-90"
         style={{ background: 'var(--ffv-blue)', color: '#0d1117' }}
       >
-        Começar a estudar →
+        Ir para {baseName} →
       </Link>
     </main>
   );
 }
 
-function EmptyStateZeroDue({ streak, upcoming }: { streak: number; upcoming: number }) {
+function EmptyStateZeroDue({
+  streak,
+  upcoming,
+  baseName,
+  basePath,
+}: {
+  streak: number;
+  upcoming: number;
+  baseName: string;
+  basePath: string;
+}) {
   return (
     <main className="max-w-lg mx-auto px-6 pt-20 pb-20 text-center">
       <div className="text-6xl mb-6">✨</div>
-      <h1 className="text-2xl font-bold mb-3">Fila zerada hoje</h1>
+      <h1 className="text-2xl font-bold mb-3">Fila de {baseName} zerada hoje</h1>
       <p className="text-sm mb-2 leading-relaxed" style={{ color: 'var(--ffv-muted)' }}>
         Você já revisou tudo o que estava devido. O algoritmo vai devolver seus cards no momento
         certo para fixar a memória de longo prazo.
@@ -288,11 +343,11 @@ function EmptyStateZeroDue({ streak, upcoming }: { streak: number; upcoming: num
         </div>
       </div>
       <Link
-        href="/"
+        href={basePath}
         className="inline-block px-6 py-3 rounded-full text-sm font-semibold transition-all hover:opacity-90"
         style={{ background: 'var(--ffv-blue)', color: '#0d1117' }}
       >
-        Explorar artigos novos →
+        Explorar módulos novos de {baseName} →
       </Link>
     </main>
   );
@@ -344,3 +399,14 @@ function FinishedState({ stats }: { stats: SessionStats }) {
     </main>
   );
 }
+
+/**
+ * Resolve href de um módulo respeitando a base dele. Tech vive em /aprenda/<slug>;
+ * medvet e bases futuras vivem em /<basePath>/<slug>.
+ */
+function buildModuleHref(slug: string): string {
+  const base = getBaseSlugForModule(slug);
+  if (base === 'medicina-veterinaria') return `/medicina-veterinaria/${slug}`;
+  return `/aprenda/${slug}`;
+}
+
