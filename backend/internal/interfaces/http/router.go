@@ -30,30 +30,42 @@ type RouterConfig struct {
 	// AuditLog é o repositório de audit log. Opcional — se nil, o middleware é omitido.
 	AuditLog middleware.AuditLogger
 
-	Health           *handlers.HealthHandler
-	Auth             *handlers.AuthHandler
-	Simulado         *handlers.SimuladoHandler
-	Progress         *handlers.ProgressHandler
-	Certificate      *handlers.CertificateHandler
-	Billing          *handlers.BillingHandler
-	Tutor            *handlers.TutorHandler
-	Leaderboard      *handlers.LeaderboardHandler
-	Stats            *handlers.StatsHandler
-	Admin            *handlers.AdminHandler
-	ModuleView       *handlers.ModuleViewHandler       // opcional — registra views de módulos (public)
-	Comments         *handlers.CommentsHandler         // opcional — comentários por artigo/trilha/bloco
-	Trending         *handlers.TrendingHandler         // opcional — top módulos por views recentes
-	TrailLeaderboard *handlers.TrailLeaderboardHandler // opcional — top users por trilha
-	News             *handlers.NewsHandler             // opcional — notícias curadas
-	Cheatsheets      *handlers.CheatsheetsHandler      // opcional — referências rápidas em markdown
-	Playlists        *handlers.PlaylistsHandler        // opcional — agrupamentos curados de módulos
-	Curriculum       *handlers.CurriculumHandler       // opcional — nil desabilita rotas de currículo
-	Features         *handlers.FeaturesHandler         // opcional — expõe estado das feature flags
-	Metrics          *handlers.MetricsHandler          // opcional — se nil, /metrics não é registrado
-	MetricsMW        func(http.Handler) http.Handler   // opcional — middleware de instrumentação
-	Study            *handlers.StudyHandler            // opcional — modo estudo livre (JWT)
-	AdminQuestions   *handlers.AdminQuestionsHandler   // opcional — CRUD admin de questões
-	Preferences      *handlers.PreferencesHandler      // opcional — preferências pedagógicas do user (JWT)
+	// AdminEmailAllowlist é a lista de emails permitidos pra rotas /admin/*.
+	// Vazio = só checa role (modo legado/dev). Em produção SEMPRE preencher
+	// via env var ADMIN_EMAIL_ALLOWLIST.
+	AdminEmailAllowlist []string
+
+	Health            *handlers.HealthHandler
+	Auth              *handlers.AuthHandler
+	Simulado          *handlers.SimuladoHandler
+	Progress          *handlers.ProgressHandler
+	Certificate       *handlers.CertificateHandler
+	Billing           *handlers.BillingHandler
+	Tutor             *handlers.TutorHandler
+	Leaderboard       *handlers.LeaderboardHandler
+	Stats             *handlers.StatsHandler
+	Admin             *handlers.AdminHandler
+	AdminViews        *handlers.AdminViewsHandler        // opcional — feed admin de pageviews
+	AdminMetrics      *handlers.AdminMetricsHandler      // opcional — overview KPIs por base
+	AdminEvents       *handlers.AdminEventsHandler       // opcional — feed admin de interações
+	UserEvents        *handlers.UserEventsHandler        // opcional — ingest público de eventos (POST /events/track)
+	ModuleView        *handlers.ModuleViewHandler        // opcional — registra views de módulos (public)
+	Comments          *handlers.CommentsHandler          // opcional — comentários por artigo/trilha/bloco
+	Trending          *handlers.TrendingHandler          // opcional — top módulos por views recentes
+	TrailLeaderboard  *handlers.TrailLeaderboardHandler  // opcional — top users por trilha
+	News              *handlers.NewsHandler              // opcional — notícias curadas
+	Cheatsheets       *handlers.CheatsheetsHandler       // opcional — referências rápidas em markdown
+	Playlists         *handlers.PlaylistsHandler         // opcional — agrupamentos curados de módulos
+	Curriculum        *handlers.CurriculumHandler        // opcional — nil desabilita rotas de currículo
+	Features          *handlers.FeaturesHandler          // opcional — expõe estado das feature flags
+	Metrics           *handlers.MetricsHandler           // opcional — se nil, /metrics não é registrado
+	MetricsMW         func(http.Handler) http.Handler    // opcional — middleware de instrumentação
+	Study             *handlers.StudyHandler             // opcional — modo estudo livre (JWT)
+	AdminQuestions    *handlers.AdminQuestionsHandler    // opcional — CRUD admin de questões
+	Preferences       *handlers.PreferencesHandler       // opcional — preferências pedagógicas do user (JWT)
+	StudyRequest      *handlers.StudyRequestHandler      // opcional — solicitações de estudo personalizado (público, multipart)
+	StudyRequestAdmin *handlers.StudyRequestAdminHandler // opcional — admin CRUD das solicitações
+	Bases             *handlers.BasesHandler             // opcional — lista pública de bases de conhecimento
 }
 
 // NewRouter monta o chi.Router com todos os middlewares e rotas.
@@ -80,6 +92,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	if cfg.MetricsMW != nil {
 		r.Use(cfg.MetricsMW)
 	}
+	// IdentityHeaders — captura X-FFV-User-Email/Id/Name/Anon-Id/Session-Id em
+	// TODA request. Permite ao admin saber "quem acessou cada módulo" mesmo em
+	// endpoints públicos sem JWT. NÃO substitui autorização (Authenticate
+	// middleware continua sendo source of truth). Ver identity_headers.go.
+	r.Use(middleware.IdentityHeadersMiddleware)
 	// OpenTelemetry: instrumenta todas as rotas com spans HTTP.
 	// Posicionado após Logger para que spans incluam o request_id do middleware.
 	r.Use(func(next http.Handler) http.Handler {
@@ -116,6 +133,14 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/api/v1/stats", cfg.Stats.GetPublic)
 	}
 
+	// Lista pública de bases de conhecimento — frontend usa em /bases.
+	// /api/v1/bases/{slug}/page — descritor completo para renderizar a home
+	// da base via KnowledgeBaseHome (template universal). Ver UNIFICATION_PLAN.md.
+	if cfg.Bases != nil {
+		r.Get("/api/v1/bases", cfg.Bases.List)
+		r.Get("/api/v1/bases/{slug}/page", cfg.Bases.GetPage)
+	}
+
 	// Top-10 do ranking semanal — público, anonimizado para visitantes.
 	r.Get("/api/v1/leaderboard/public", cfg.Leaderboard.GetPublic)
 
@@ -135,9 +160,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/api/v1/curriculum/{slug}/blocks", cfg.Curriculum.GetBlocks)
 	}
 
-	// Comments — leitura pública, escrita JWT, moderação admin.
+	// Comments — leitura pública com auth opcional (pra exibir userVote do
+	// viewer quando autenticado). MaybeAuthenticate não falha em token
+	// ausente/inválido — apenas não injeta contexto.
 	if cfg.Comments != nil {
-		r.Get("/api/v1/comments", cfg.Comments.List)
+		r.With(middleware.MaybeAuthenticate(cfg.JWTService)).Get("/api/v1/comments", cfg.Comments.List)
 	}
 
 	// Trending — público, módulos mais acessados.
@@ -178,12 +205,29 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// header já protege, mas rate-limit fecha vetor de scraping massivo.
 	contentLimit := middleware.NewRateLimiter(cfg.Redis, 300, time.Minute, "rl:content")
 
+	// Comments — escrita autenticada. Limite agressivo pra prevenir spam:
+	// 10 comentários/minuto/IP é generoso pra usuário humano. Bot que tenta
+	// inundar trava no 429 em 6 segundos.
+	commentCreateLimit := middleware.NewRateLimiter(cfg.Redis, 10, time.Minute, "rl:comment:create")
+	// Vote e Report — operações leves, mas alvos óbvios pra abuse (brigadeiro
+	// de upvotes, mass-report pra silenciar). Limite mais alto que create.
+	commentVoteLimit := middleware.NewRateLimiter(cfg.Redis, 60, time.Minute, "rl:comment:vote")
+	commentReportLimit := middleware.NewRateLimiter(cfg.Redis, 20, time.Minute, "rl:comment:report")
+
 	// Tracking de acesso a módulo — público, fire-and-forget. Body limit
 	// pequeno + rate limit por IP previnem abuso.
 	if cfg.ModuleView != nil {
 		r.With(viewLimit.Middleware()).
 			With(middleware.BodyLimit(2*1024)).
 			Post("/api/v1/events/view", cfg.ModuleView.Record)
+	}
+
+	// Ingest de interações deliberadas (CTAs, search, quiz, login). Mesma
+	// rate-limit envelope (240/min/IP) e body bem maior (4KB metadata).
+	if cfg.UserEvents != nil {
+		r.With(viewLimit.Middleware()).
+			With(middleware.BodyLimit(8*1024)).
+			Post("/api/v1/events/track", cfg.UserEvents.Track)
 	}
 
 	// News, cheatsheets, playlists — leitura pública com rate-limit.
@@ -202,6 +246,22 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	// Verificação pública de certificado com rate-limit — previne enumeração de hashes.
 	r.With(certLimit.Middleware()).Get("/api/v1/certificates/{hash}", cfg.Certificate.VerifyCertificate)
+
+	// Solicitações de experiência de estudo personalizada — captura de lead público.
+	// Aceita multipart/form-data com até 10 anexos. Rate-limit por IP para conter abuso
+	// (formulário público é vetor clássico de spam). Body limit definido no próprio handler
+	// via http.MaxBytesReader (multipart precisa de leitor capado, não BodyLimit middleware).
+	if cfg.StudyRequest != nil {
+		studyRequestLimit := middleware.NewRateLimiter(cfg.Redis, 10, time.Minute, "rl:study-request")
+		r.With(studyRequestLimit.Middleware()).
+			Post("/api/v1/study-requests", cfg.StudyRequest.Create)
+
+		// Status público (sem auth) — rate-limit mais permissivo (60/min)
+		// porque é polling esperado do SLA tracker no frontend.
+		statusLimit := middleware.NewRateLimiter(cfg.Redis, 60, time.Minute, "rl:study-request-status")
+		r.With(statusLimit.Middleware()).
+			Get("/api/v1/study-requests/{id}/status", cfg.StudyRequest.GetStatus)
+	}
 
 	// Auth — rotas públicas com rate-limit agressivo e body limit pequeno.
 	r.Route("/api/v1/auth", func(r chi.Router) {
@@ -281,19 +341,39 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/api/v1/leaderboard/me", cfg.Leaderboard.GetMyRank)
 		r.Get("/api/v1/leaderboard/me/all", cfg.Leaderboard.GetMyRankAll)
 
-		// Comments — escrita autenticada (body ≤ 8KB para evitar dump abuse).
+		// Comments — escrita autenticada (body ≤ 8KB) + rate limit anti-spam.
+		// Vote/Report têm limits próprios e body pequeno (≤512B).
 		if cfg.Comments != nil {
-			r.With(middleware.BodyLimit(8*1024)).Post("/api/v1/comments", cfg.Comments.Create)
+			r.With(commentCreateLimit.Middleware(), middleware.BodyLimit(8*1024)).
+				Post("/api/v1/comments", cfg.Comments.Create)
 			r.Delete("/api/v1/comments/{id}", cfg.Comments.Delete)
+			r.With(commentVoteLimit.Middleware(), middleware.BodyLimit(512)).
+				Post("/api/v1/comments/{id}/vote", cfg.Comments.Vote)
+			r.With(commentReportLimit.Middleware(), middleware.BodyLimit(512)).
+				Post("/api/v1/comments/{id}/report", cfg.Comments.Report)
 		}
 
 		// Admin — requer role=admin.
 		r.Group(func(r chi.Router) {
-			r.Use(middleware.RequireAdmin)
+			r.Use(middleware.RequireAdminWithAllowlist(cfg.AdminEmailAllowlist))
 			r.Get("/api/v1/admin/stats", cfg.Admin.GetStats)
 			r.Get("/api/v1/admin/audit", cfg.Admin.GetAuditLog)
 			r.Get("/api/v1/admin/users", cfg.Admin.ListUsers)
 			r.Get("/api/v1/admin/growth", cfg.Admin.GetGrowth)
+
+			// Métricas profissionais: feed de pageviews + overview por base.
+			// Adicionados em 2026-05-21 pra que admin veja "quem acessou o quê"
+			// e tenha breakdown por base de conhecimento. Ver migration 51 e
+			// docs em UNIFICATION_PLAN.md.
+			if cfg.AdminViews != nil {
+				r.Get("/api/v1/admin/views", cfg.AdminViews.List)
+			}
+			if cfg.AdminMetrics != nil {
+				r.Get("/api/v1/admin/metrics/overview", cfg.AdminMetrics.GetOverview)
+			}
+			if cfg.AdminEvents != nil {
+				r.Get("/api/v1/admin/events", cfg.AdminEvents.List)
+			}
 
 			// Endpoints admin do currículo.
 			if cfg.Curriculum != nil {
@@ -306,7 +386,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 			// Moderação de comentários.
 			if cfg.Comments != nil {
+				r.Get("/api/v1/admin/comments", cfg.Comments.AdminList)
 				r.Post("/api/v1/admin/comments/{id}/hide", cfg.Comments.Hide)
+				r.Post("/api/v1/admin/comments/{id}/restore", cfg.Comments.Restore)
 			}
 
 			// CRUD admin: news, cheatsheets, playlists.
@@ -333,6 +415,15 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				r.With(middleware.BodyLimit(64*1024)).Post("/api/v1/admin/questions", cfg.AdminQuestions.CreateQuestion)
 				r.With(middleware.BodyLimit(64*1024)).Put("/api/v1/admin/questions/{questionId}", cfg.AdminQuestions.UpdateQuestion)
 				r.Delete("/api/v1/admin/questions/{questionId}", cfg.AdminQuestions.DeleteQuestion)
+			}
+
+			// CRUD admin: solicitações de estudo personalizado.
+			if cfg.StudyRequestAdmin != nil {
+				r.Get("/api/v1/admin/study-requests", cfg.StudyRequestAdmin.List)
+				r.Get("/api/v1/admin/study-requests/{id}", cfg.StudyRequestAdmin.Get)
+				r.With(middleware.BodyLimit(32*1024)).Patch("/api/v1/admin/study-requests/{id}", cfg.StudyRequestAdmin.Update)
+				r.Get("/api/v1/admin/study-requests/{id}/attachments/{attachmentId}", cfg.StudyRequestAdmin.DownloadAttachment)
+				r.Get("/api/v1/admin/study-requests/{id}/download-all", cfg.StudyRequestAdmin.DownloadZip)
 			}
 		})
 	})

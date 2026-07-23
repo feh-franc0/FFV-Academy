@@ -6,88 +6,62 @@
 
 **FFV Academy é a escola de engenharia para a era da IA — gratuita, gamificada e sem hype.**
 
-Enquanto o mercado vende cursos de "use o ChatGPT para ganhar dinheiro", a FFV Academy ensina como as coisas funcionam por dentro: transformers, sistemas distribuídos, RAG, MVCC no Postgres, CloudFlare Workers internals, SRE, LLMOps, context engineering — conteúdo que engenheiros sênior escrevem e que engineers aspirantes precisam para virar seniors de verdade.
-
-### Proposta de valor em uma frase
 > **"Aprenda IA, AWS e Engenharia de Software como engenheiro — não como consumidor de hype. Gamificado, gratuito e com revisão espaçada real."**
 
----
-
-## 🏆 DIFERENCIAIS COMPETITIVOS
-
-### 1. Profundidade técnica real
-Não são tutoriais de surface-level. Cada módulo explica o *porquê* por baixo: como o attention mechanism funciona matematicamente, por que o PostgreSQL usa MVCC em vez de locking, o que acontece dentro do kernel quando você faz um `syscall`. **Profundidade que a concorrência não tem coragem de oferecer.**
-
-### 2. Gamificação completa e coerente
-Não é um "badge pelo bem da gamificação". É um sistema com:
-- **XP + Níveis** (16 níveis, de Iniciante a Lendário)
-- **128+ badges** com lógica real de desbloqueio (ex: "Especialista em RAG" = completar 5 módulos de RAG)
-- **Streak diário** com sistema de freeze (proteção de streak para dias offline)
-- **Revisão Espaçada (SM-2)** — os quizzes viram flashcards com algoritmo SM-2 real
-- **Ranking** com 4 períodos (geral, anual, mensal, semanal)
-- **Meta diária** customizável (1–10 módulos/dia)
-- **Sons de feedback** (XP coin, level up, badge) via Web Audio API
-
-### 3. SRS (Spaced Repetition System) real
-Após cada quiz, as perguntas entram numa fila de revisão espaçada com algoritmo SM-2 (o mesmo do Anki). O sistema recalcula intervalo baseado na dificuldade — não é "marque como pronto", é memorização científica de longo prazo.
-
-### 4. 100% gratuito, sem paywall de conteúdo
-Cada artigo, trilha, quiz, badge e ranking é gratuito. Monetização é via simulados de certificação (AWS, etc.) — não via paywalls em conteúdo educacional.
-
-### 5. Currículo estruturado em hubs
-8 hubs temáticos (IA, AWS, Engenharia, Claude & Anthropic, Fundamentos, Programação, Dados, Profissional Digital) com 66+ trilhas e 900+ módulos. Hierarquia: Hub → Trilha → Módulo. Usuário sabe exatamente onde está e para onde vai.
-
-### 6. PWA — funciona como app
-Instalável como PWA no iOS/Android. Service worker com cache. Reading progress bar, bookmarks, modo de leitura focado.
+**Diferenciais**: profundidade técnica real (internals de transformers, MVCC, syscalls) + gamificação completa (XP/níveis/badges/streak/SM-2/ranking) + 100% gratuito + PT-BR + PWA. É o ponto de intersecção que nenhuma outra plataforma preenche.
 
 ---
 
-## 🆚 POSICIONAMENTO vs CONCORRENTES
+## 🚫 REGRA ABSOLUTA — SISTEMA 100% MOLDÁVEL (ZERO DADOS ESTÁTICOS)
 
-| | FFV Academy | Duolingo | Khan Academy | Brilliant.org | Udemy |
-|--|--|--|--|--|--|
-| Conteúdo técnico profundo | ✅ | ❌ (superficial) | 🟡 (médio) | 🟡 (médio) | ✅ |
-| Gratuito | ✅ | 🟡 (freemium) | ✅ | ❌ ($$$) | ❌ ($$$) |
-| Gamificação completa | ✅ | ✅ | 🟡 | 🟡 | ❌ |
-| SRS / Revisão espaçada | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Ranking público | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Certificados verificáveis | 🟡 (simulados) | ❌ | 🟡 | ❌ | ✅ |
-| Foco em devs brasileiros | ✅ | ❌ | ❌ | ❌ | 🟡 |
-| PWA / Offline | ✅ | ✅ | ✅ | ❌ | 🟡 |
-| Conteúdo em PT-BR | ✅ | ❌ | ❌ | ❌ | 🟡 |
+> **Nenhum switch/case, if/else chain ou lista hardcoded pode existir com slugs de hub, base, trilha ou módulo.**
+> Todo dado de currículo vem do banco de dados. O sistema é um gerador — o usuário cria pelo admin e o front reflete automaticamente.
 
-**Síntese**: A FFV Academy é a única plataforma que combina **profundidade técnica real** + **gamificação completa** + **SRS** + **gratuito** + **PT-BR**. É o ponto de intersecção que nenhuma outra preenche.
+### O que é vetado
+
+- ❌ `hubBaseSlug(slug)` como switch/case — **foi removido do `cmd/importer`**, NÃO recriar em lugar nenhum.
+- ❌ `TECH_HUB_SLUGS` como `Set` hardcoded em `lib/bases/tecnologia/index.ts` — candidato a remoção (Fase 3); usar query do DB.
+- ❌ Constantes de slugs em código fonte (exceto mapeamentos de fallback **explicitamente documentados como temporários**).
+- ❌ Switch derivando `base_slug` de slug de hub — o importer lê `base_slug` do JSON seed diretamente.
+- ❌ Código novo necessário quando o admin cria um hub/trilha/módulo no CMS — zero código, só dados no DB.
+
+### Estado das migrações DB-driven (mai/2026)
+
+| Fase | Migrations | Status |
+|------|-----------|--------|
+| Fase 1 — schema base→hub→trail→module via FK | 000055–000063 | ✅ Concluídas |
+| Fase 2 — importer lê `base_slug` do JSON, sem switch | — | ✅ Concluído |
+| Fase 3 — `BASE_REGISTRY` frontend gerado de DB snapshot | — | 🔄 Pendente |
+
+**`BASE_REGISTRY` no frontend ainda tem dados estáticos** — na Fase 3 será gerado de snapshot do DB. Por ora, é um `BaseConfig` que descreve chrome/tema/microcopy (não slugs de currículo).
+
+### Regra de ouro
+> Se você está escrevendo `case "ia":`, `case "aws":`, `case "engenharia":` ou equivalente para derivar a base de um slug — **PARE**. Essa lógica pertence ao DB via FK `hubs.base_slug`.
 
 ---
 
 ## 🗺️ ROADMAP DE FUNCIONALIDADES
 
-### 🔥 TIER 1 — Próximas sprints (alto impacto, baixo esforço)
-
-1. **Leaderboard por trilha** — ranking dentro de cada trilha específica, não só global
-2. **Certificado por trilha** — PDF/PNG verificável ao completar 100% de uma trilha (reutilizar Certificate.tsx)
-3. **Próximo artigo inteligente** — ao concluir módulo, card direto para o próximo na sequência
-4. **Estatísticas de performance por trilha** — % de acerto por trilha, tempo médio, tendência semanal
-5. **Maratona de revisão** — configurar sessão SRS (qtd de cards, trilha específica, timer)
+### 🔥 TIER 1 — Próximas sprints
+1. **Leaderboard por trilha** — ranking dentro de cada trilha específica
+2. **Certificado por trilha** — PDF/PNG verificável ao completar 100% (reutilizar Certificate.tsx)
+3. **Próximo artigo inteligente** — ao concluir módulo, card direto para o próximo
+4. **Estatísticas de performance por trilha** — % de acerto, tempo médio, tendência semanal
+5. **Maratona de revisão** — sessão SRS configurável (qtd de cards, trilha, timer)
 6. **Email semanal de progresso** — resumo automático: XP, streak, badges, recomendação
 
-### ⚡ TIER 2 — Médio prazo (alto impacto, médio esforço)
+### ⚡ TIER 2 — Médio prazo
+7. **Amigos / grupos de estudo** — leaderboard privado via código de grupo
+8. **Trilha do Dia** — 1-3 módulos recomendados diariamente
+9. **Quests diárias/semanais** — "revise 3 cards", "complete 1 módulo", "atinja 80%"
+10. **Dev card compartilhável** — `/devcard/@username` (viral no LinkedIn/Twitter)
+11. **Trending modules** — top 10 módulos da semana na home
 
-7. **Amigos / grupos de estudo** — leaderboard privado entre amigos via código de grupo
-8. **Trilha do Dia** — 1-3 módulos recomendados diariamente pelo algoritmo
-9. **Quests diárias/semanais** — "revise 3 cards", "complete 1 módulo", "atinja 80% no quiz"
-10. **Power-ups consumíveis** — XP 2x por sessão, freeze extra, skip SRS card (desbloqueados por badges raros)
-11. **Dev card compartilhável** — `/devcard/@username` com badges, XP, streak (viral no LinkedIn/Twitter)
-12. **Trending modules** — top 10 módulos da semana na home (por completions + rating)
-
-### 🌱 TIER 3 — Roadmap estratégico
-
-13. **Discussão por artigo** — comentários com markdown por módulo (reduz fricção de dúvidas)
-14. **Export Anki** — gerar `.apkg` com os cards SRS de uma trilha
-15. **LLM-powered learning path** — Claude API analisa erros nos quizzes e recomenda próximos passos
-16. **AI quiz generator** — gerar 5 quizzes extras por artigo via Claude API
-17. **Certificados de trilha verificáveis no backend** — QR code + endpoint de validação
-18. **Multi-idioma (EN/ES)** — internacionalização via next-intl para expansão global
+### 🌱 TIER 3 — Estratégico
+12. **Export Anki** — `.apkg` com cards SRS de uma trilha
+13. **LLM-powered learning path** — Claude API analisa erros e recomenda próximos passos
+14. **AI quiz generator** — 5 quizzes extras por artigo via Claude API
+15. **Multi-idioma (EN/ES)** — internacionalização via next-intl
 
 ---
 
@@ -100,7 +74,6 @@ Instalável como PWA no iOS/Android. Service worker com cache. Reading progress 
 | `video-pipeline/` | Pipeline de geração de vídeos de marketing | TypeScript, Remotion 4, Playwright |
 | `mcp/` | MCP server — expõe o currículo FFV ao Claude (24 tools) | TypeScript, Node 20, MCP SDK |
 | `drawio-tools/` | Scripts para diagramas de arquitetura AWS | Python, Bash, draw.io |
-| `legacy-site/` | Site estático HTML/CSS/JS anterior | HTML/CSS/JS puro |
 | `docs/` | Decisões de projeto e planejamento | Markdown |
 
 ---
@@ -110,7 +83,7 @@ Instalável como PWA no iOS/Android. Service worker com cache. Reading progress 
 ```bash
 # Frontend
 cd frontend && npm install && npm run dev   # dev server :3000
-cd frontend && npm test                     # 62 test files, 562 tests
+cd frontend && npm test                     # Vitest
 cd frontend && npm run build                # build estático → frontend/out/
 cd frontend && npm run lint                 # zero warnings policy
 
@@ -126,20 +99,240 @@ cd mcp && npm test                         # 77 testes (100% linhas/funções)
 
 ---
 
-## 📌 ESTADO ATUAL (maio 2026)
+## 📌 ESTADO ATUAL (mai/2026)
 
-A plataforma evoluiu de "portal de IA + engenharia" para **escola completa do Profissional Digital do Futuro**: IA, AWS, engenharia, comunicação humana, carreira, conteúdo, marketing e empreendedorismo digital.
+8 bases live: `tecnologia`, `medicina-veterinaria`, `carreira`, `comunicacao`, `marketing`, `conteudo`, `empreendedorismo`, `ingles`.
 
 **Mudanças grandes recentes** — ver [`CHANGELOG_PLATFORM_2026-05.md`](./CHANGELOG_PLATFORM_2026-05.md):
+- Fase 1 do plano DB-driven concluída (migrations 000055–000063): schema base→hub→trail→module via FK, importer sem switch hardcoded
 - 5 trilhas novas (29 módulos do Profissional Digital)
-- Home redesenhada (16 → 8 seções com prova social honesta)
-- Sistema de ranking com 4 períodos (geral / anual / mensal / semanal)
+- Home redesenhada (16 → 8 seções), ranking com 4 períodos (geral/anual/mensal/semanal)
 - Páginas novas: `/sobre`, `/comunidade`, `/explorar`, `/newsletter`, `/search`, `/ranking`
-- Backend Go com endpoints públicos `/api/v1/stats` e `/api/v1/leaderboard/public`
-- Gamificação: sons Web Audio API, heatmap de estudo, metas diárias, recomendações
-- UX: 26 fixes de mobile/a11y, animations fluidas, CodeBlock com scrollbar visível
+- Backend Go com endpoints `/api/v1/stats` e `/api/v1/leaderboard/public`
+- Gamificação: sons Web Audio API, heatmap de estudo, metas diárias
 
 **Sempre que fizer mudanças grandes**, criar novo changelog incremental (`CHANGELOG_PLATFORM_YYYY-MM.md`).
+
+---
+
+## 🧱 REGRA FIXA — ISOLAMENTO DE BASE DE CONHECIMENTO
+
+> **Cada base de conhecimento é uma ilha. O usuário NUNCA pode ver chrome, hub, simulado, nav ou link de outra base enquanto estiver dentro de uma.**
+
+### O que TEM que ser isolado por base
+
+| Elemento | O que tem que ser próprio |
+|----------|--------------------------|
+| **Base home** `src/app/<base-slug>/page.tsx` | Hero, descrição, paths, hubs, playlists só da base |
+| **Header/nav** `BaseConfig.nav.hubNavItems` | Links dos hubs DESSA base — nunca tech hubs em base não-tech |
+| **Footer** `BaseConfig.footer` | hubLinks, contentLinks, mobilePrimary — todos da própria base |
+| **Mascot/Microcopy/Slogans/Tema** | Contextualizados para a base, paleta própria |
+| **Simulados** `BaseConfig.simulados[]` | Só os simulados da base (nunca cross-base) |
+| **Trilhas e módulos** | `CURRICULUM` filtrado por base; `/aprenda/<slug>` resolve só pra módulos da base |
+| **Hubs** | Filtrados em `lib/bases/<base>/index.ts` — nunca importa `HUBS` cru |
+
+### O que CONTINUA global
+
+Perfil/preferências, XP/streak/level (gamificação cross-base), marketing (`/`, `/sobre`, `/bases`), dashboards globais (`/progresso`, `/ranking`, `/revisar`), verificação de certificados.
+
+### Checklist ao adicionar base nova
+
+1. **Backend**: migration SQL + tabela `bases` com `status='live'`, JSONB de theme/nav. Mirror em `buildHardcodedBases()` pro fallback.
+2. **Frontend `BASE_REGISTRY`**: BaseConfig completo (theme, mascot, microcopy, slogans, nav, footer). NÃO copiar nav de tecnologia.
+3. **Frontend resolver**: `/<base-slug>` → resolve pra ESSA base.
+4. **Frontend page**: `src/app/<base-slug>/page.tsx` renderiza `KnowledgeBaseHome`.
+5. **Isolation tests**: passam automaticamente ao registrar — só registrar é suficiente.
+
+### Anti-padrões proibidos
+
+- ❌ Hub não-tech resolvendo para `'tecnologia'` no resolver.
+- ❌ Footer ou nav de uma base com `href` de outra base.
+- ❌ Importar `HUBS` cru (sempre filtrar pelo slug da base).
+- ❌ Reusar `TECH_PATHS`, `TECH_HUBS`, `TECH_PLAYLISTS` em outra base.
+- ❌ `/<base-slug>` renderizando `HubPageClient` em vez de `KnowledgeBaseHome`.
+- ❌ Módulos em `/aprenda/<slug>` herdando chrome de `tecnologia` por default — o resolver DEVE consultar `getBaseSlugForModule(slug)` em `lib/bases/module-base-resolver.ts` antes de cair em tecnologia.
+
+### Como o resolver decide a base (precedência)
+
+Em `lib/bases/resolver.ts → detectBaseSlug()`:
+
+1. Match exato com `BaseConfig.basePath` (ex.: `/comunicacao` → base comunicacao).
+2. `/aprenda/<slug>` → `getBaseSlugForModule(slug)` (módulo → trilha → hub → base). Módulo desconhecido cai em `tecnologia` como fallback.
+3. Href de trilha → `getBaseSlugForTrailHref(path)` derivado do CURRICULUM.
+4. Legacy tech prefixes (`/ia`, `/aws`, `/simulados`, `/engenharia`…) → `tecnologia`.
+5. Marketing (`/`, `/sobre`, `/bases`…) → `null` + `isMarketing=true`.
+6. App-global (`/progresso`, `/ranking`, `/revisar`…) → base default + `isAppGlobal=true`.
+
+**Se alguém ver chrome errado**, começa investigando por #1.
+
+---
+
+## 🔭 PONTOS DE ATENÇÃO OPERACIONAIS (mai/2026)
+
+### Componentes de chrome SEM fallback default (NÃO recriar)
+
+- `SiteFooter`: fallback é `?? []`, NÃO `?? HUBS.map(...)`. O caller (`AppChrome`) injeta do `BaseConfig` ativo.
+- `MobileNav` e `GameHUD`: só renderizam itens globais quando `BaseConfig.nav.hideGlobalContentNav === false`. Apenas `tecnologia` tem isso `false`.
+
+### Alertas sobre dados hardcoded removidos
+
+- `hubBaseSlug()` switch em `cmd/importer` foi **removido** — não recriar. O importer agora lê `base_slug` do JSON seed.
+- `TECH_HUB_SLUGS` Set em `lib/bases/tecnologia/index.ts` é **candidato a remoção** na Fase 3 (substituído por query do DB). Não ampliar nem replicar em outras bases.
+- `BASE_REGISTRY` frontend ainda tem dados estáticos de chrome (theme, microcopy) — ok por ora. Dados de currículo (hubs, trilhas, módulos) devem vir do DB.
+
+### Pendências conhecidas (low priority)
+
+| Item | Onde | Por que adiar |
+|------|------|---------------|
+| `OnboardingModal` só sugere 4 hubs tech | `src/components/OnboardingModal.tsx:11` | Expandir quando tiver dados de uso das novas bases |
+| `StudyRequestForm` lista áreas "queued" sem incluir bases profissionais já live | `src/components/home/StudyRequestForm.tsx:35-45` | Avaliar quando usuários pedirem expansão |
+| Módulos das 6 bases não têm JSONs em `scripts/seeds/articles/` | check-curriculum-seed-drift.mjs | Produção de conteúdo em ondas; já na allowlist |
+
+### Testes que travam regressões (NÃO REMOVER)
+
+- `frontend/src/lib/bases/__tests__/isolation.test.ts`: module routing (11 casos), trail URL routing (10 casos), `selectTotalModulesForBase` (6 casos)
+- `frontend/src/lib/bases/__tests__/state-selectors.test.ts`: `selectRecommendationsForBase` nunca vaza tech recs em outras bases
+- `frontend/src/tests/render/SiteFooter.test.tsx`: sem props, NÃO renderiza links cross-base
+
+### Checklist rápido antes de mexer em base/hub/módulo
+
+1. **Mudou hub em curriculum.ts?** Mirror em `scripts/seeds/hubs.json` SEMPRE.
+2. **Base nova?** Migration SQL + `BASE_REGISTRY` + `buildHardcodedBases()` + page `src/app/<slug>/page.tsx` + `<BaseStructuredData />` + canonical.
+3. **Trilha nova?** Coloca em `HUBS[*].trailIds`. Resolver deriva `getBaseSlugForTrailHref` automaticamente.
+4. **Módulo novo?** Verifica que `getBaseSlugForModule(slug)` resolve certo via trilha → hub → base.
+5. **Antes de fechar PR**: testa URLs afetadas visualmente no browser (header certo, cores, mascote).
+
+---
+
+## 🔐 ADMIN — Defesa em profundidade (3 camadas)
+
+> **`fernandofv1110@gmail.com` é o único admin atual.** O sistema exige **duas** condições independentes pra qualquer rota `/api/v1/admin/*`: role no DB **E** email na allowlist do env var. Comprometer uma camada sozinho não basta pra escalar privilégio.
+
+### As 3 camadas
+
+| Camada | Onde fica | Como bloqueia |
+|--------|-----------|---------------|
+| **1. DB** | `users.role = 'admin'` | Migration 000065 promove explicitamente. Não há endpoint que altere role. |
+| **2. JWT** | Claim `email` assinado HMAC-SHA256 | Atacante não consegue forjar email/role no token. |
+| **3. Middleware** | Env var `ADMIN_EMAIL_ALLOWLIST` | `RequireAdminWithAllowlist` em `interfaces/http/middleware/auth.go:65` exige role=admin **AND** email ∈ allowlist. |
+
+### Ativando o admin (passo único)
+
+```bash
+# 1. Na VPS, em /opt/ffv/.env:
+ADMIN_EMAIL_ALLOWLIST=fernandofv1110@gmail.com
+
+# 2. Migration aplicada automaticamente em deploy (000065):
+#    UPDATE users SET role='admin' WHERE email='fernandofv1110@gmail.com'
+#    (idempotente — só roda se já existir o user via magic-link login)
+
+# 3. Restart API
+docker compose -f /opt/ffv/docker-compose.prod.yml up -d --force-recreate api
+
+# 4. Login pelo magic-link normal. JWT novo carregará role=admin.
+```
+
+> Se a env var ficar vazia, o middleware degrada pro modo "só role" (compat com dev). Em produção SEMPRE setar.
+
+### Anti-padrões proibidos
+
+- ❌ Endpoint que mude `users.role` via HTTP (não existir = não pode ser exploitado).
+- ❌ Auto-promoção "primeiro user vira admin" (vetor de race-condition).
+- ❌ Allowlist hardcoded no código fonte (rotação de admin precisa de PR — lento). Use env var.
+- ❌ Logar o JWT inteiro (vaza email). Logar só user_id quando precisar.
+
+### Rotacionar admin (se um dia precisar trocar)
+
+1. Cria/promove novo admin via migration nova: `UPDATE users SET role='admin' WHERE email='novo@...'`.
+2. Atualiza `ADMIN_EMAIL_ALLOWLIST=novo@...` no `.env` da VPS (substitui ou adiciona).
+3. Restart API.
+4. (Opcional) Migration nova: `UPDATE users SET role='user' WHERE email='antigo@...'`.
+
+---
+
+## ☁️ STORAGE DE ARQUIVOS — Cloudflare R2
+
+> **Anexos de StudyRequest e qualquer upload de cliente vão pra Cloudflare R2 (S3-compatible).** Nada de upload fica no Postgres — só metadata + URL canônica `s3://bucket/key`.
+
+### Por que R2
+- **Zero egress fees** — frontend baixa arquivos sem custo extra (vs $0.09/GB AWS S3).
+- **API 100% S3-compatible** — adapter Go usa `aws-sdk-go-v2`; trocar pra B2/MinIO/AWS é só mudar env vars.
+- **$0.015/GB/mês** — mais barato que S3 e Firebase.
+
+### Arquitetura
+
+| Camada | Responsabilidade |
+|--------|------------------|
+| `backend/internal/infrastructure/storage/s3.go` | Adapter S3-compatible (PutObject, GetObject) |
+| `backend/internal/domain/studyrequest/ports.go:63` | Interface `FileStorage` (Upload) |
+| `backend/internal/interfaces/http/handlers/study_request_admin_handler.go` | `AttachmentDownloader` (Open) — usado também pelo ZIP bundler |
+| `backend/cmd/api/main.go` | Switch por env: `S3_BUCKET` setado → S3; senão → LocalDisk (dev/fallback) |
+| Postgres `study_request_attachments.storage_url` | Guarda `s3://ffv-uploads/<req-id>/<att-id>.ext` |
+
+### Env vars obrigatórias em produção
+
+```bash
+S3_BUCKET=ffv-uploads
+S3_ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+S3_REGION=auto
+S3_ACCESS_KEY_ID=<R2 API token>
+S3_SECRET_ACCESS_KEY=<R2 API token>
+S3_PATH_STYLE=false
+```
+
+Setup completo passo-a-passo: **[`backend/docs/RUNBOOK.md` §8](./backend/docs/RUNBOOK.md)**.
+
+### Layout de keys no bucket
+
+```
+ffv-uploads/
+├── <study_request_id>/
+│   ├── <attachment_id>.pdf
+│   ├── <attachment_id>.xlsx
+│   └── <attachment_id>.pptx
+└── <outro_request_id>/
+    └── ...
+```
+
+Cada solicitação tem sua pasta (não há agrupamento por usuário — uma pessoa pode ter N solicitações, cada uma com sua pasta). Para baixar todos os arquivos de uma solicitação como ZIP: `GET /api/v1/admin/study-requests/{id}/download-all` (admin only).
+
+### MIME types aceitos
+
+PDF, DOCX, XLS/XLSX, PPT/PPTX, CSV, TXT, MD, PNG, JPG, JPEG, WebP, GIF. Limite: 25 MiB/arquivo, até 10 anexos/solicitação. Whitelist canônica em `backend/internal/domain/studyrequest/study_request.go:89`.
+
+### NÃO FAZER
+
+- ❌ Salvar binário no Postgres (campos BYTEA).
+- ❌ Salvar uploads em `/opt/ffv/uploads/` em produção (esse path é fallback de emergência).
+- ❌ Expor credenciais R2 fora de `.env` (sempre via env vars).
+- ❌ Commitar `.env` no git (já no `.gitignore`).
+- ❌ Reutilizar R2 token entre dev/staging/prod — gerar 1 token por ambiente.
+
+---
+
+## 🚀 PROTOCOLO DE COMMIT + PUSH + CI (regra fixa do PO)
+
+### 1. Antes do commit
+- `git status --short` + `git diff --stat HEAD` pra mapear o que muda.
+- Verificar que não há `.env`, credenciais ou tokens no diff.
+- Sanity: `go build ./...` + `npx tsc --noEmit` + `npm run lint`. Rodar `gofmt -w .` se pre-commit hook exigir.
+
+### 2. Commit
+- Mensagem **em português**, estilo do `git log` recente (`feat:`, `fix:`, `chore:`).
+- HEREDOC com seções claras quando cobre múltiplas áreas.
+- SEMPRE incluir `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>`.
+
+### 3. Push + acompanhamento de CI (OBRIGATÓRIO)
+- `git push origin main`.
+- `gh run list --limit 3 --branch main` pra capturar o run ID.
+- `gh run watch <run-id>` OU `gh run view <run-id> --log-failed` quando terminar.
+- **Reportar**: status final (passou/falhou) + logs filtrados se falhou. O usuário NÃO deve precisar tirar print do GitHub Actions.
+
+### 4. Se CI quebrar
+- Diagnosticar com `gh run view <id> --log-failed`. Corrigir, commitar `fix:`, repushar. Repetir até verde.
+
+### 5. Anti-padrões proibidos
+- ❌ Push sem watch. ❌ Force push sem autorização. ❌ `--amend` em commit já pushed. ❌ `--no-verify`.
 
 ---
 
@@ -147,7 +340,7 @@ A plataforma evoluiu de "portal de IA + engenharia" para **escola completa do Pr
 
 | Doc | Quando consultar |
 |-----|------------------|
-| [`CHANGELOG_PLATFORM_2026-05.md`](./CHANGELOG_PLATFORM_2026-05.md) | Estado atual após maio/2026 — leia primeiro |
+| [`CHANGELOG_PLATFORM_2026-05.md`](./CHANGELOG_PLATFORM_2026-05.md) | Estado atual após mai/2026 — leia primeiro |
 | [`BACKEND_ROADMAP.md`](./BACKEND_ROADMAP.md) | Iniciativas que dependem de backend |
 | [`MELHORIAS.md`](./MELHORIAS.md) | Roadmap pedagógico/visual |
 | [`CURRICULUM_MASTER_PLAN.md`](./CURRICULUM_MASTER_PLAN.md) | Plano mestre do currículo |

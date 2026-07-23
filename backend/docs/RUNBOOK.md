@@ -144,7 +144,75 @@ Pre-deploy manual para migrations schema-breaking:
 2. Deploy de código.
 3. Em release posterior, migration de limpeza (drop de coluna/tabela).
 
-## 8. Runbook de incidente rápido
+## 8. Storage de anexos (StudyRequest)
+
+Anexos de `study_requests` vivem **fora do Postgres** — o DB guarda só o
+`storage_url`. Backends suportados:
+
+| Backend | Quando usar | StorageURL no DB |
+|---------|-------------|------------------|
+| **LocalDiskStorage** | dev e fallback | `file:///opt/ffv/uploads/<req-id>/<att-id>.ext` |
+| **S3Storage** (R2/B2/MinIO/AWS) | produção recomendada | `s3://<bucket>/<req-id>/<att-id>.ext` |
+
+A escolha é feita por env var em startup (`cmd/api/main.go`): se `S3_BUCKET`
+é setado → S3, senão → LocalDisk em `UPLOAD_DIR`.
+
+### Setup Cloudflare R2 (recomendado — zero egress)
+
+1. **Dashboard Cloudflare → R2 → Create bucket**: nome `ffv-uploads`. Região: leave default (R2 escolhe automaticamente).
+2. **R2 → Manage API Tokens → Create API token**:
+   - Permissions: **Object Read & Write**
+   - Specify bucket: `ffv-uploads` (escopo mínimo).
+   - TTL: sem limite (rotate manualmente — ver abaixo).
+3. **Anota**: Account ID (canto direito do dashboard), Access Key ID, Secret Access Key.
+4. **Popula `.env` em produção** (na VPS, `/opt/ffv/.env`):
+   ```bash
+   S3_BUCKET=ffv-uploads
+   S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+   S3_REGION=auto
+   S3_ACCESS_KEY_ID=<from step 3>
+   S3_SECRET_ACCESS_KEY=<from step 3>
+   S3_PATH_STYLE=false
+   ```
+5. **Restart API**: `docker compose -f /opt/ffv/docker-compose.prod.yml up -d --force-recreate api`.
+6. **Verifica logs**: deve aparecer `file storage: S3-compatible bucket=ffv-uploads`.
+7. **Sanity**: envia uma solicitação de teste via `/` (form público) com 1 PDF. Confirma no dashboard R2 que o arquivo apareceu com key `<req-id>/<att-id>.pdf`.
+
+### Migração de arquivos existentes (LocalDisk → R2)
+
+Existe um script idempotente que itera `study_request_attachments` com
+`storage_url` começando em `file://`, faz upload pro R2 e atualiza
+`storage_url` pra `s3://`. Rode uma vez após popular as env vars S3:
+
+```bash
+# Na VPS, com S3_* + DATABASE_URL no ambiente
+docker compose -f /opt/ffv/docker-compose.prod.yml exec api /app/api --migrate-uploads-to-s3
+```
+
+> Esse comando ainda **não foi implementado** — ver `cmd/migrate-uploads/`
+> ou abra issue. Enquanto isso, anexos antigos continuam servindo via
+> LocalDisk (a API ainda monta o volume `/opt/ffv/uploads/`).
+
+### Rotação de credenciais S3
+
+A cada 90 dias (ou em caso de leak suspeito):
+1. **R2 → Manage API Tokens** → criar novo token (mesmo escopo).
+2. Atualizar `S3_ACCESS_KEY_ID` + `S3_SECRET_ACCESS_KEY` em `/opt/ffv/.env`.
+3. Restart: `docker compose -f /opt/ffv/docker-compose.prod.yml up -d --force-recreate api`.
+4. Confirma upload de teste, depois **revoga o token antigo** no dashboard R2.
+
+Nunca commit env vars S3 em git. `.env` está no `.gitignore`; `.env.example`
+tem só os nomes das vars (sem valores).
+
+### Troubleshooting
+
+- **`head bucket: NoSuchBucket`**: nome do bucket errado ou conta R2/B2 diferente.
+- **`InvalidAccessKeyId`**: token revogado ou copiado errado. Gera novo.
+- **`SignatureDoesNotMatch`**: `S3_SECRET_ACCESS_KEY` truncado. Regenera.
+- **MinIO em dev funciona, R2 em prod não**: confirma `S3_PATH_STYLE=false` em prod (R2/B2/AWS usam virtual-hosted; MinIO precisa de path-style).
+- **Download retorna 410 Gone**: storage_url no DB aponta pra arquivo que não existe mais no bucket (deletado manualmente?). Não há auto-recovery — recupera do backup ou reenvia.
+
+## 9. Runbook de incidente rápido
 
 1. Cliente reporta erro → pedir `X-Request-ID` (header da resposta ou devtools).
 2. Buscar no log estruturado por esse ID → achar sequência completa da request.

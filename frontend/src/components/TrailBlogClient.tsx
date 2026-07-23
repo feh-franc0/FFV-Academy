@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useGameState } from '@/hooks/useGameState';
 import { Progress } from '@/components/ui/progress';
 import { type Trail } from '@/lib/curriculum';
+import { ArticleDiscussion } from './ArticleDiscussion';
 
 interface Props {
   trail: Trail;
@@ -70,9 +71,7 @@ export function TrailBlogClient({ trail }: Props) {
         </div>
 
         <p className="text-sm leading-7 mb-6" style={{ color: 'var(--ffv-muted)' }}>
-          {trail.id === 'trail1'
-            ? 'O ponto de partida. Aqui você vai entender o que a IA realmente é — sem buzzwords, sem exagero. Cada artigo constrói sobre o anterior, do conceito até a arquitetura que move o mundo hoje.'
-            : 'Para quem já sabe o básico e quer ir fundo. Aqui o assunto é como os modelos funcionam em produção: memória, roteamento, ferramentas, agentes. O lado técnico que pouca gente explica direito.'}
+          {trail.desc}
         </p>
 
         {/* Stats row */}
@@ -174,6 +173,14 @@ export function TrailBlogClient({ trail }: Props) {
           );
         })}
       </div>
+
+      {/* ── Discussão da trilha — comentários cross-user via backend ── */}
+      <ArticleDiscussion
+        slug={trail.id}
+        title={trail.name}
+        accentColor={trail.color}
+        targetType="trail"
+      />
 
       {/* ── Footer do blog ── */}
       <div className="mt-12 pt-8 flex items-center justify-between flex-wrap gap-4" style={{ borderTop: '1px solid var(--ffv-border)' }}>

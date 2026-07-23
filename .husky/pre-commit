@@ -1,11 +1,7 @@
 #!/bin/sh
-# Pre-commit hook — roda lint e testes antes de cada commit.
-# Se qualquer etapa falhar, o commit é cancelado.
+# Pre-commit hook — replica o que o CI roda. Falhou aqui = falha no CI.
 # Para pular em emergência: git commit --no-verify (use com consciência)
 
-# Cacha o toplevel uma vez para evitar problemas em worktrees onde
-# chamadas subsequentes a `git rev-parse --show-toplevel` após `cd`
-# podem retornar o caminho errado.
 TOPLEVEL="$(git rev-parse --show-toplevel)"
 
 if [ -d "$TOPLEVEL/frontend" ]; then
@@ -13,10 +9,13 @@ if [ -d "$TOPLEVEL/frontend" ]; then
   cd "$TOPLEVEL/frontend" || exit 1
 
   echo "  lint..."
-  npx eslint src/ --ext .ts,.tsx 2>&1 || exit 1
+  npx eslint src/ --ext .ts,.tsx 2>&1 || { echo "✗ eslint falhou"; exit 1; }
+
+  echo "  type-check (tsc --noEmit)..."
+  npx tsc --noEmit 2>&1 || { echo "✗ tsc falhou — corrija os erros TypeScript antes de commitar"; exit 1; }
 
   echo "  testes..."
-  npm test 2>&1 || exit 1
+  npm test 2>&1 || { echo "✗ testes falharam"; exit 1; }
 else
   echo "→ Pulando frontend (diretório não existe neste worktree)."
 fi
@@ -24,8 +23,28 @@ fi
 if [ -d "$TOPLEVEL/backend" ]; then
   echo "→ Verificando backend..."
   cd "$TOPLEVEL/backend" || exit 1
-  go build ./... 2>&1 || exit 1
-  go test ./... 2>&1 || exit 1
+
+  echo "  gofmt..."
+  unformatted=$(gofmt -l . 2>&1 | grep -v '^vendor/' || true)
+  if [ -n "$unformatted" ]; then
+    echo "✗ Arquivos não formatados:"
+    echo "$unformatted"
+    echo "  rode: cd backend && gofmt -w ."
+    exit 1
+  fi
+
+  echo "  go build..."
+  go build ./... 2>&1 || { echo "✗ build falhou"; exit 1; }
+
+  if command -v golangci-lint >/dev/null 2>&1; then
+    echo "  golangci-lint..."
+    golangci-lint run ./... 2>&1 || { echo "✗ golangci-lint falhou"; exit 1; }
+  else
+    echo "  ⚠️  golangci-lint não instalado — pulando (CI vai pegar). Instale: brew install golangci-lint"
+  fi
+
+  echo "  go test..."
+  go test ./... 2>&1 || { echo "✗ tests falharam"; exit 1; }
 else
   echo "→ Pulando backend (diretório não existe neste worktree)."
 fi

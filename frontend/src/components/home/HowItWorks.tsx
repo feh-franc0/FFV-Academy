@@ -1,30 +1,63 @@
 'use client';
 
-const STEPS = [
+/**
+ * HowItWorks — 3 passos que explicam o modelo de gamificação.
+ *
+ * Antes da correção 2026-05-21: texto hardcoded mencionava "IA, AWS,
+ * engenharia, comunicação ou empreendedorismo" — quando renderizado em
+ * /medicina-veterinaria parecia que a base ensinava IA. Agora o texto
+ * é NEUTRO (descreve o método, não as áreas) e cada base pode passar
+ * `steps` próprios via prop se quiser personalizar.
+ */
+
+interface Step {
+  n: string;
+  icon: string;
+  title: string;
+  desc: string;
+  color: string;
+}
+
+const DEFAULT_STEPS: Step[] = [
   {
     n: '01',
     icon: '🎯',
     title: 'Escolha sua trilha',
-    desc: 'IA, AWS, engenharia, comunicação, carreira ou empreendedorismo. Cada trilha tem ordem clara — começa do básico, vai ao avançado.',
+    desc: 'Cada trilha tem ordem clara — começa do básico, vai ao avançado. Você sabe exatamente o próximo passo.',
     color: '#58a6ff',
   },
   {
     n: '02',
     icon: '⚡',
     title: 'Aprenda + ganhe XP',
-    desc: 'Cada artigo completo dá XP, badge, e move sua barra de progresso. Quiz no final reforça aprendizado e libera próximo módulo.',
+    desc: 'Cada módulo completo dá XP, badge e move sua barra de progresso. Quiz no final reforça o aprendizado e libera o próximo.',
     color: '#a371f7',
   },
   {
     n: '03',
     icon: '🏆',
     title: 'Conquiste e suba no ranking',
-    desc: 'Streak diário, badges raras, certificados ao completar trilha. Ranking semanal mostra quem está estudando mais.',
+    desc: 'Streak diário, badges raras e certificado ao completar a trilha. Ranking semanal mostra quem está estudando mais.',
     color: 'var(--ffv-gold)',
   },
 ];
 
-export function HowItWorks() {
+interface HowItWorksProps {
+  /** Steps personalizados pela base. Sem props, usa o texto neutro default. */
+  steps?: Step[];
+  /** Override do título principal. */
+  heading?: string;
+  /** Override do subtítulo. */
+  subheading?: string;
+}
+
+export function HowItWorks({ steps, heading, subheading }: HowItWorksProps = {}) {
+  const finalSteps = steps ?? DEFAULT_STEPS;
+  const finalHeading = heading ?? 'Aprender de verdade, não só ler artigo.';
+  const finalSubheading =
+    subheading ??
+    'Plataforma gamificada com XP, badges, streak e ranking. Você aprende e ainda compete consigo mesmo (e com a comunidade).';
+
   return (
     <section className="px-6 py-20" style={{ borderTop: '1px solid var(--ffv-border)' }}>
       <div className="max-w-6xl mx-auto">
@@ -43,7 +76,7 @@ export function HowItWorks() {
             lineHeight: 1.15,
           }}
         >
-          Aprender de verdade, não só ler artigo.
+          {finalHeading}
         </h2>
         <p
           style={{
@@ -54,12 +87,11 @@ export function HowItWorks() {
             marginBottom: 48,
           }}
         >
-          Plataforma gamificada com XP, badges, streak e ranking. Você aprende e ainda compete consigo
-          mesmo (e com a comunidade).
+          {finalSubheading}
         </p>
 
         <div className="grid md:grid-cols-3 gap-6">
-          {STEPS.map(s => (
+          {finalSteps.map(s => (
             <article
               key={s.n}
               className="relative p-6 rounded-2xl"

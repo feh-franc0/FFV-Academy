@@ -476,8 +476,24 @@ function TrailCard({
   );
 }
 
+// Slugs dos hubs que pertencem à base /tecnologia. Manter sincronizado com
+// TECH_HUB_SLUGS em lib/bases/tecnologia/index.ts. Os demais hubs (carreira,
+// comunicacao, marketing, conteudo, empreendedorismo, ingles) são bases
+// independentes — cada uma com 1 hub — e não devem aparecer no cross-sell
+// uns dos outros (vazamento de chrome entre bases).
+const TECH_HUB_IDS = new Set([
+  'hub-ia', 'hub-aws', 'hub-engenharia', 'hub-claude-anthropic',
+  'hub-fundamentos', 'hub-programacao', 'hub-dados', 'hub-construcao',
+  'hub-seguranca-hardware',
+]);
+
 function HubCrossSell({ hub }: { hub: Hub }) {
-  const all = HUBS.filter(h => h.id !== hub.id);
+  const isTechHub = TECH_HUB_IDS.has(hub.id);
+  // Só faz cross-sell dentro da MESMA base. Hub de Carreira (base própria)
+  // não puxa hub de IA (outra base).
+  if (!isTechHub) return null;
+  const all = HUBS.filter(h => h.id !== hub.id && TECH_HUB_IDS.has(h.id));
+  if (all.length === 0) return null;
   return (
     <section
       className="px-6 py-16"

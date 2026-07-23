@@ -10,6 +10,7 @@ import {
 } from '@/lib/auth';
 import { LoginModal } from './LoginModal';
 import { migrateFromLocalStorage } from '@/lib/game-state-storage';
+import { snapshotUserForTracking } from '@/lib/tracking';
 
 /**
  * Provider global de auth.
@@ -18,7 +19,17 @@ import { migrateFromLocalStorage } from '@/lib/game-state-storage';
  * requireLogin(reason): abre modal e resolve quando usuário conclui.
  */
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<UserProfile | null>(null);
+  const [user, _setUser] = useState<UserProfile | null>(null);
+
+  // Wrapper que mantém sincronizado o snapshot pra tracking. Sempre que o
+  // user muda (login, logout, refresh), o lib/tracking.ts vai ler do
+  // localStorage no próximo POST /events/view e enviar X-FFV-User-Email/Id/Name.
+  const setUser = useCallback((next: UserProfile | null) => {
+    _setUser(next);
+    snapshotUserForTracking(
+      next ? { id: next.id, email: next.email, name: next.name } : null,
+    );
+  }, []);
   const [modalOpen, setModalOpen] = useState(false);
   const [reason, setReason] = useState<string | undefined>();
 
@@ -46,15 +57,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Tenta restaurar sessão via refresh token (cookie HttpOnly) ou localStorage.
+  //
+  // ⚠️ EXCEÇÃO: se o usuário acabou de clicar em "Sair", a flag
+  // `ffv_just_logged_out` está em sessionStorage. Nesse caso pulamos a
+  // restauração — senão o cookie HttpOnly (que pode não ter sido limpo se o
+  // POST /auth/logout falhou) recriaria a sessão imediatamente. Bug que
+  // motivou: race condition entre logout() e window.location.replace().
   useEffect(() => {
     let cancelled = false;
     async function restoreSession() {
+      try {
+        if (sessionStorage.getItem('ffv_just_logged_out') === '1') {
+          sessionStorage.removeItem('ffv_just_logged_out');
+          if (!cancelled) setUser(null);
+          return;
+        }
+      } catch { /* modo privado pode bloquear sessionStorage */ }
       const restored = await refreshSession();
       if (!cancelled) setUser(restored);
     }
     restoreSession();
     return () => { cancelled = true; };
-  }, []);
+  }, [setUser]);
 
   /**
    * Auto-refresh do access token a cada 12 minutos.
@@ -100,7 +124,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const refresh = useCallback(async () => {
     const restored = await refreshSession();
     setUser(restored);
-  }, []);
+  }, [setUser]);
 
   const requireLogin = useCallback((why?: string): Promise<UserProfile> => {
     const current = getCurrentUser();
@@ -125,7 +149,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // backend indisponível
     }
-  }, []);
+  }, [setUser]);
 
   const handleCancel = useCallback(() => {
     setModalOpen(false);
@@ -136,7 +160,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = useCallback(async () => {
     await doLogout();
     setUser(null);
-  }, []);
+  }, [setUser]);
 
   const value: AuthContextValue = {
     user,

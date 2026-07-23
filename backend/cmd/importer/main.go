@@ -200,16 +200,16 @@ func main() {
 
 func ensureBaseRefs(ctx context.Context, pool *pgxpool.Pool) error {
 	_, err := pool.Exec(ctx, `
-		INSERT INTO hubs (id, name, short_name, description, icon, color, position)
-		VALUES ('legacy', 'Legacy (auto-import)', 'Legacy', 'Hub temporário para módulos importados via parser TSX', '📦', '#666666', 99)
+		INSERT INTO hubs (id, slug, base_slug, name, short_name, description, icon, color, position)
+		VALUES ('legacy', 'legacy', 'tecnologia', 'Legacy (auto-import)', 'Legacy', 'Hub temporário para módulos importados via parser TSX', '📦', '#666666', 99)
 		ON CONFLICT (id) DO NOTHING;
 	`)
 	if err != nil {
 		return fmt.Errorf("ensure hub legacy: %w", err)
 	}
 	_, err = pool.Exec(ctx, `
-		INSERT INTO trails (id, hub_id, name, description, position)
-		VALUES ('legacy-auto', 'legacy', 'Legacy (auto-import)', 'Trilha temporária para módulos auto-importados', 99)
+		INSERT INTO trails (id, slug, hub_id, name, description, position)
+		VALUES ('legacy-auto', 'legacy-auto', 'legacy', 'Legacy (auto-import)', 'Trilha temporária para módulos auto-importados', 99)
 		ON CONFLICT (id) DO NOTHING;
 	`)
 	if err != nil {

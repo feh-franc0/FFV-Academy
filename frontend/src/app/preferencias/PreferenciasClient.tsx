@@ -143,7 +143,25 @@ export function PreferenciasClient() {
 
       <section className="text-center pt-4" style={{ borderTop: '1px solid var(--ffv-border)' }}>
         <button
-          onClick={() => { logout(); window.location.href = '/'; }}
+          onClick={async () => {
+            // CRÍTICO: `logout()` é async — não pode disparar window.location
+            // antes dele resolver. Bug anterior: navegação cancelava o POST
+            // /auth/logout em flight, backend nunca revogava o refresh token,
+            // e o restoreSession() do AuthProvider re-autenticava o usuário
+            // via cookie ainda válido.
+            //
+            // Defesa em camadas:
+            //   1. await logout() → backend recebe e revoga refresh token + cookie
+            //   2. flag em sessionStorage → AuthProvider pula restoreSession na próxima carga
+            //   3. window.location.replace('/') → reload completo (limpa state em memória)
+            try {
+              sessionStorage.setItem('ffv_just_logged_out', '1');
+            } catch { /* sessionStorage pode falhar em modo privado */ }
+            try {
+              await logout();
+            } catch { /* logout em auth.ts já trata erros internos */ }
+            window.location.replace('/');
+          }}
           className="text-sm"
           style={{ color: 'var(--ffv-muted)' }}
         >

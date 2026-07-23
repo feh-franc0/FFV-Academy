@@ -102,8 +102,45 @@ describe('curriculum-api.fetchArticleWithBlocks', () => {
     const { fetchArticleWithBlocks } = await loadModule('http://api.test');
     const out = await fetchArticleWithBlocks('x');
     expect(out).toBeNull();
-    expect(console.error).toHaveBeenCalled();
+    // Após retry com backoff, loga warn no fim ("desistiu após N tentativas").
+    expect(console.warn).toHaveBeenCalled();
   });
+
+  it('retry: 500 nas duas primeiras tentativas, 200 na terceira → retorna artigo', async () => {
+    // Cenário do bug em prod (mai/2026): janela de restart do backend
+    // durante deploy. Primeira tentativa falha; segunda também; terceira
+    // (após backoff de ~1s) já tem API pronta e retorna conteúdo.
+    let attempt = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        attempt++;
+        if (attempt < 3) {
+          return { ok: false, status: 502 } as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            slug: 'o-que-e-ia',
+            title: 'O que é IA',
+            trail_id: 'trail1',
+            hub_id: 'ia',
+            xp: 50,
+            read_time: 9,
+            difficulty: 'beginner',
+            order: 0,
+            updated_at: '2026-05-22T21:00:00Z',
+            blocks: [],
+          }),
+        } as Response;
+      }),
+    );
+    const { fetchArticleWithBlocks } = await loadModule('http://api.test');
+    const out = await fetchArticleWithBlocks('o-que-e-ia');
+    expect(out?.slug).toBe('o-que-e-ia');
+    expect(attempt).toBe(3);
+  }, 10000);
 
   it('encodeURIComponent é aplicado no slug', async () => {
     const fetchSpy = vi.fn(async () => ({

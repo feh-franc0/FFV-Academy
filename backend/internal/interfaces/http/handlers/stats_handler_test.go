@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/fernandofv/api/internal/interfaces/http/handlers"
@@ -35,9 +36,12 @@ var _ handlers.StatsRepository = (*mockStatsRepo)(nil)
 func Test_StatsHandler_GetPublic_Returns200(t *testing.T) {
 	repo := &mockStatsRepo{
 		stats: handlers.PlatformStats{
-			TotalUsers:     1234,
-			ActiveWeekly:   89,
-			TotalXPAwarded: 500000,
+			TotalUsers:             1234,
+			ActiveWeekly:           89,
+			TotalXPAwarded:         500000,
+			BasesLive:              2,
+			StudyRequestsTotal:     50,
+			StudyRequestsDelivered: 32,
 		},
 	}
 	h := handlers.NewStatsHandler(repo)
@@ -63,6 +67,38 @@ func Test_StatsHandler_GetPublic_Returns200(t *testing.T) {
 	}
 	if dto.TotalXPAwarded != 500000 {
 		t.Errorf("esperado totalXpAwarded=500000, got %d", dto.TotalXPAwarded)
+	}
+	if dto.BasesLive != 2 {
+		t.Errorf("esperado basesLive=2, got %d", dto.BasesLive)
+	}
+	if dto.StudyRequestsTotal != 50 {
+		t.Errorf("esperado studyRequestsTotal=50, got %d", dto.StudyRequestsTotal)
+	}
+	if dto.StudyRequestsDelivered != 32 {
+		t.Errorf("esperado studyRequestsDelivered=32, got %d", dto.StudyRequestsDelivered)
+	}
+}
+
+// Test: campos novos retornam JSON keys corretos (camelCase)
+func Test_StatsHandler_GetPublic_JSONKeysAreCamelCase(t *testing.T) {
+	repo := &mockStatsRepo{
+		stats: handlers.PlatformStats{
+			BasesLive:              7,
+			StudyRequestsTotal:     100,
+			StudyRequestsDelivered: 80,
+		},
+	}
+	h := handlers.NewStatsHandler(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", http.NoBody)
+	w := httptest.NewRecorder()
+	h.GetPublic(w, req)
+
+	body := w.Body.String()
+	for _, key := range []string{"basesLive", "studyRequestsTotal", "studyRequestsDelivered"} {
+		if !strings.Contains(body, `"`+key+`"`) {
+			t.Errorf("body deve conter key %q (camelCase), got: %s", key, body)
+		}
 	}
 }
 

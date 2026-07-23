@@ -1,21 +1,17 @@
 import type { Metadata, Viewport } from 'next';
-import { Inter, Poppins, Roboto_Mono } from 'next/font/google';
+import { Suspense } from 'react';
+import { Inter, Poppins, Roboto_Mono, Source_Serif_4 } from 'next/font/google';
 import './globals.css';
-import { GameHUD } from '@/components/GameHUD';
-import { CommandPalette } from '@/components/CommandPalette';
-import { MobileNav } from '@/components/MobileNav';
-import { SiteFooter } from '@/components/SiteFooter';
-import { OnboardingModal } from '@/components/OnboardingModal';
-import { SyncBanner } from '@/components/SyncBanner';
-import { PWAInstallBanner } from '@/components/PWAInstallBanner';
-import { KeyboardShortcuts } from '@/components/KeyboardShortcuts';
 import { WebVitalsInit } from '@/components/WebVitalsInit';
+import { AppChrome } from '@/components/AppChrome';
 import { Toaster } from 'sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { ReferralCapture } from '@/components/ReferralCapture';
 import { PWARegister } from '@/components/PWARegister';
 import { AuthProvider } from '@/components/auth/AuthProvider';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { RootStructuredData } from '@/components/seo/StructuredData';
+import { PageTracker } from '@/components/PageTracker';
 
 // Inter — corpo do texto (máxima legibilidade)
 const inter = Inter({
@@ -38,37 +34,64 @@ const robotoMono = Roboto_Mono({
   weight: ['400', '500'],
 });
 
+// Source Serif 4 — headlines editoriais da landing pública.
+// Dá tom acadêmico/premium, confiável para estudantes de qualquer área
+// (medicina, direito, engenharia, etc) — não parece "tech SaaS".
+const sourceSerif = Source_Serif_4({
+  variable: '--font-serif',
+  subsets: ['latin'],
+  weight: ['400', '600', '700', '800'],
+  style: ['normal', 'italic'],
+});
+
 export const metadata: Metadata = {
   metadataBase: new URL('https://fernandofrancovalle.com'),
   title: {
-    default: 'FFV Academy — Escola de Engenharia para a Era da IA',
+    default: 'FFV Academy — IA que transforma seus arquivos em uma escola completa no mesmo dia',
     template: '%s — FFV Academy',
   },
   description:
-    'Aprenda IA, engenharia de software, AWS e sistemas distribuídos como engenheiro — não como consumidor de hype. Trilhas gamificadas com XP, quiz e revisão espaçada. 100% gratuito, sem cadastro.',
+    'FFV — Formação Focada em Você. Envie seus PDFs, slides ou anotações — IA + curadoria humana montam no mesmo dia uma base completa de estudo: trilhas sequenciais, módulos, exercícios e revisão espaçada (SM-2). Não é chatbot. É a sua escola personalizada. Já no ar: Tecnologia (157 módulos) e Medicina Veterinária — Genética + Melhoramento (16 módulos). Pode pedir Medicina, Engenharia, Direito, Administração, Design e mais. Grátis na V1.',
   keywords: [
-    'escola engenharia software',
-    'aprender inteligencia artificial',
-    'trilha IA',
-    'engenharia era ia',
-    'LLM aprender',
-    'RAG embeddings',
-    'machine learning devs',
-    'aws cloud practitioner',
-    'sistemas distribuidos',
-    'context engineering',
-    'agentes LLM',
-    'fine-tuning',
-    'engenharia de software brasil',
+    // Hero search intent — pivot de produto
+    'IA que gera base de conhecimento',
+    'criar curso personalizado com IA',
+    'plataforma de estudo gerada por IA',
+    'transformar PDF em curso online',
+    'IA monta trilha de estudo do meu material',
+    'gerar curso a partir de arquivos',
+    'aprender com PDF da faculdade',
+    'estudo personalizado no mesmo dia',
+    'base de conhecimento sob demanda',
+    // Long-tail por área (cobre bases existentes + queued)
+    'medicina veterinária genética estudos',
+    'leis de mendel veterinária',
+    'hardy weinberg genética animal',
+    'engenharia de software curso gratuito',
+    'aws cloud practitioner português',
+    'transformers IA arquitetura',
+    'simulado oab personalizado',
+    'concurso público estudo personalizado',
+    'residência médica estudo organizado',
+    // Plataforma + diferencial
+    'revisão espaçada SM-2 português',
+    'algoritmo Anki em plataforma educacional',
+    'gamificação estudo XP badges streak',
+    'plataforma de estudo gratuita PT-BR',
+    'curso gratuito gamificado brasil',
   ],
   authors: [{ name: 'Fernando Franco Valle', url: 'https://fernandofrancovalle.com' }],
   creator: 'Fernando Franco Valle',
   publisher: 'FFV Academy',
   category: 'education',
+  alternates: {
+    canonical: 'https://fernandofrancovalle.com',
+    languages: { 'pt-BR': 'https://fernandofrancovalle.com' },
+  },
   openGraph: {
-    title: 'FFV Academy — Escola de Engenharia para a Era da IA',
+    title: 'FFV Academy — IA que transforma seus arquivos em uma escola completa no mesmo dia',
     description:
-      'IA, AWS, DevOps e Engenharia de Software explicados por dentro. Zero hype, arquitetura real. 17 trilhas gamificadas, 100% gratuito.',
+      'FFV — Formação Focada em Você. Mande seus PDFs, slides e anotações. IA + curadoria humana entregam trilhas, módulos, exercícios e revisão espaçada no mesmo dia. Já no ar: Tecnologia e Medicina Veterinária — Genética. Grátis na V1.',
     type: 'website',
     url: 'https://fernandofrancovalle.com',
     siteName: 'FFV Academy',
@@ -78,15 +101,15 @@ export const metadata: Metadata = {
         url: '/opengraph-image',
         width: 1200,
         height: 630,
-        alt: 'FFV Academy — Escola de Engenharia para a Era da IA',
+        alt: 'FFV Academy — IA que vira PDF em escola completa no mesmo dia',
       },
     ],
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'FFV Academy — Escola de Engenharia para a Era da IA',
+    title: 'FFV Academy — IA transforma seu PDF em escola completa no mesmo dia',
     description:
-      'IA, AWS, DevOps e Engenharia de Software explicados por dentro. Zero hype, arquitetura real. 17 trilhas, 100% gratuito.',
+      'Envie arquivos, receba trilhas + módulos + exercícios + revisão espaçada. Tecnologia e Medicina Veterinária já no ar. Grátis.',
     images: ['/opengraph-image'],
     creator: '@fernandofv',
     site: '@ffvacademy',
@@ -125,7 +148,7 @@ export const metadata: Metadata = {
       { url: '/icons/apple-icon-180.png', sizes: '180x180', type: 'image/png' },
     ],
     other: [
-      { rel: 'mask-icon', url: '/icon.svg', color: '#38bdf8' },
+      { rel: 'mask-icon', url: '/icon.svg', color: '#4f46e5' },
     ],
   },
   robots: {
@@ -145,28 +168,34 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: '#0d1117',
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#ffffff' },
+    { media: '(prefers-color-scheme: dark)', color: '#0a0a0f' },
+  ],
   width: 'device-width',
   initialScale: 1,
 };
 
+// Default = light SEMPRE (pivot 2026-05).
+// Não respeitamos prefers-color-scheme — a landing precisa ser clara, amigável
+// e acolhedora para qualquer estudante, mesmo em macOS dark. Dark fica
+// disponível só se o usuário tocar no toggle explicitamente (salvo em
+// localStorage). Esta é uma decisão de produto, não acidente.
 const themeInitScript = `
 (function() {
   try {
     var stored = localStorage.getItem('ffv_theme');
-    var theme = stored === 'light' || stored === 'dark'
-      ? stored
-      : (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+    var theme = stored === 'light' || stored === 'dark' ? stored : 'light';
     document.documentElement.setAttribute('data-theme', theme);
   } catch (e) {
-    document.documentElement.setAttribute('data-theme', 'dark');
+    document.documentElement.setAttribute('data-theme', 'light');
   }
 })();
 `;
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="pt-BR" className={`${inter.variable} ${poppins.variable} ${robotoMono.variable}`} suppressHydrationWarning>
+    <html lang="pt-BR" className={`${inter.variable} ${poppins.variable} ${robotoMono.variable} ${sourceSerif.variable}`} suppressHydrationWarning>
       <head>
         {/* Em dev o next.config.ts injeta o header CSP com unsafe-eval (necessário para React HMR/Turbopack).
             Em prod (export estático na Hostinger) não há headers HTTP, então o <meta> é a única forma. */}
@@ -180,6 +209,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <meta name="referrer" content="strict-origin-when-cross-origin" />
         <meta httpEquiv="Permissions-Policy" content="geolocation=(), microphone=(), camera=()" />
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        {/* JSON-LD: Organization + WebSite + Courses (tech + medvet) — emite
+            structured data pro Google indexar como rich results e cards de curso. */}
+        <RootStructuredData />
         {/* Google Search Console — verificação de propriedade (substituir pelo token gerado no GSC) */}
         {/* <meta name="google-site-verification" content="SEU_TOKEN_GSC_AQUI" /> */}
         {/* Plausible Analytics — privacy-first, sem cookies, LGPD-ok, evento quiz-complete via JS */}
@@ -199,26 +231,17 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <ErrorBoundary>
           <AuthProvider>
             <TooltipProvider>
-              <GameHUD />
-              <CommandPalette />
-              <KeyboardShortcuts />
               <WebVitalsInit />
-              <OnboardingModal />
-              <SyncBanner />
-              <main
-                id="main-content"
-                className="flex-1"
-                style={{ paddingTop: 'calc(56px + env(safe-area-inset-top, 0px))' }}
-              >
-                {children}
-              </main>
-              <SiteFooter />
-              <div aria-hidden className="md:hidden" style={{ height: 72 }} />
-              <MobileNav />
-              <PWAInstallBanner />
+              {/* PageTracker — registra cada navegação no backend pra admin
+                  ver quem acessou o quê. Identidade via X-FFV-* headers
+                  (lib/tracking.ts). Dedupe por sessão. */}
+              <Suspense fallback={null}>
+                <PageTracker />
+              </Suspense>
+              <AppChrome>{children}</AppChrome>
               <Toaster
                 position="top-center"
-                theme="dark"
+                theme="system"
                 richColors
                 closeButton
                 toastOptions={{

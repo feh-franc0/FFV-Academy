@@ -33,6 +33,13 @@ import { STORAGE_KEYS } from '@/lib/constants';
 import { toast } from '@/lib/toast';
 import { playXPCoin, playLevelUp, playBadge, playPop, unlockAudio } from '@/lib/sounds';
 import { BADGES_DEF } from '@/lib/curriculum';
+import { getBaseSlugForModule } from '@/lib/bases/module-base-resolver';
+import {
+  bumpBaseModulesCompleted,
+  bumpBaseXPEarned,
+  bumpBaseActivityToday,
+} from '@/lib/bases/state-selectors';
+import { trackEvent } from '@/lib/tracking';
 
 /**
  * Problema do multi-tab:
@@ -188,6 +195,38 @@ export function useGameState() {
     const next = loadState();
     setState(next);
     if (next) debouncedSaveToIDB(next);
+
+    // ─── Counters por base (Quests da Semana, pill diária) ──────────────
+    // GameState.studyDays é cross-base; pra que QuestPanel mostre contagem
+    // referente APENAS à base ativa, espelhamos as métricas em buckets
+    // chaveados por base+dia/semana em localStorage.
+    //
+    // Só conta `module completed` na PRIMEIRA vez — revisits não bumpam
+    // (alinha com o sistema de quests, que conta completions únicas).
+    const baseSlug = getBaseSlugForModule(input.slug);
+    const wasRevisit = before?.completedModules.includes(input.slug) ?? false;
+    if (baseSlug && !wasRevisit) {
+      bumpBaseModulesCompleted(baseSlug);
+      bumpBaseActivityToday(baseSlug);
+      if (result.xpGained > 0) {
+        bumpBaseXPEarned(baseSlug, result.xpGained);
+      }
+      // Track interação: módulo concluído (primeira vez). Admin usa pra
+      // funil "começou → terminou" e atribuição de XP a base.
+      trackEvent({
+        eventType: 'module.completed',
+        targetType: 'module',
+        targetId: input.slug,
+        baseSlug,
+        valueNum: result.xpGained,
+        metadata: {
+          leveledUp: result.leveledUp,
+          newLevel: result.leveledUp ? result.newLevel : undefined,
+          quizScore: typeof input.quizScore === 'number' ? input.quizScore : undefined,
+        },
+        dedupeKey: input.slug, // 1 evento por slug por sessão
+      });
+    }
 
     if (before && next && before.freezes > next.freezes) {
       playPop();

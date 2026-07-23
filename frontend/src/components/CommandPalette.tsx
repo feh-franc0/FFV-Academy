@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { CURRICULUM, HUBS, getTrailHref } from '@/lib/curriculum';
+import { useActiveBase } from '@/components/base/ActiveBaseContext';
+import { MEDVET_BASE } from '@/lib/bases/medvet';
 
 type Item = {
   id: string;
@@ -15,7 +17,7 @@ type Item = {
   accent: string;
 };
 
-function buildItems(): Item[] {
+function buildItems(baseSlug: string, hideGlobalContentNav: boolean): Item[] {
   const items: Item[] = [];
 
   // Utility pages first — so they show up at top of empty state
@@ -49,26 +51,28 @@ function buildItems(): Item[] {
     haystack: 'revisar srs spaced repetition flashcards cards',
     accent: 'var(--ffv-green)',
   });
-  items.push({
-    id: 'page-simulados',
-    kind: 'page',
-    title: 'Simulados',
-    subtitle: 'Simulados com tutor IA para certificações AWS',
-    icon: '🎯',
-    href: '/simulados',
-    haystack: 'simulados aws certificação exam prova tutor ia',
-    accent: '#f78166',
-  });
-  items.push({
-    id: 'page-news',
-    kind: 'page',
-    title: 'News',
-    subtitle: 'Curadoria editorial das notícias de IA, infra e arquitetura',
-    icon: '📰',
-    href: '/news',
-    haystack: 'news noticias ia anthropic openai claude gemini llama regulação ai act benchmarks',
-    accent: '#ff5a36',
-  });
+  if (!hideGlobalContentNav) {
+    items.push({
+      id: 'page-simulados',
+      kind: 'page',
+      title: 'Simulados',
+      subtitle: 'Simulados com tutor IA para certificações AWS',
+      icon: '🎯',
+      href: '/simulados',
+      haystack: 'simulados aws certificação exam prova tutor ia',
+      accent: '#f78166',
+    });
+    items.push({
+      id: 'page-news',
+      kind: 'page',
+      title: 'News',
+      subtitle: 'Curadoria editorial das notícias de IA, infra e arquitetura',
+      icon: '📰',
+      href: '/news',
+      haystack: 'news noticias ia anthropic openai claude gemini llama regulação ai act benchmarks',
+      accent: '#ff5a36',
+    });
+  }
   items.push({
     id: 'page-preferencias',
     kind: 'page',
@@ -80,47 +84,82 @@ function buildItems(): Item[] {
     accent: 'var(--ffv-muted)',
   });
 
-  // Hubs
-  for (const hub of HUBS) {
-    items.push({
-      id: `hub-${hub.slug}`,
-      kind: 'hub',
-      title: hub.name,
-      subtitle: hub.tagline,
-      icon: hub.icon,
-      href: hub.href,
-      haystack: `${hub.name} ${hub.shortName} ${hub.tagline} ${hub.desc}`.toLowerCase(),
-      accent: hub.color,
-    });
-  }
-
-  // Trails
-  for (const trail of CURRICULUM) {
-    items.push({
-      id: `trail-${trail.id}`,
-      kind: 'trail',
-      title: trail.name,
-      subtitle: trail.desc,
-      icon: trail.icon,
-      href: getTrailHref(trail.id),
-      haystack: `${trail.name} ${trail.desc} ${trail.id}`.toLowerCase(),
-      accent: trail.color,
-    });
-  }
-
-  // Articles
-  for (const trail of CURRICULUM) {
-    for (const mod of trail.modules) {
+  // Hubs / Trails / Articles — vêm da base ativa.
+  if (baseSlug === 'tecnologia') {
+    for (const hub of HUBS) {
       items.push({
-        id: `art-${mod.slug}`,
-        kind: 'article',
-        title: mod.title,
-        subtitle: `${trail.name} · ${mod.readTime} min · +${mod.xp} XP`,
-        icon: mod.icon,
-        href: `/aprenda/${mod.slug}`,
-        haystack: `${mod.title} ${mod.desc} ${mod.keywords} ${trail.name} ${mod.slug}`.toLowerCase(),
+        id: `hub-${hub.slug}`,
+        kind: 'hub',
+        title: hub.name,
+        subtitle: hub.tagline,
+        icon: hub.icon,
+        href: hub.href,
+        haystack: `${hub.name} ${hub.shortName} ${hub.tagline} ${hub.desc}`.toLowerCase(),
+        accent: hub.color,
+      });
+    }
+    for (const trail of CURRICULUM) {
+      items.push({
+        id: `trail-${trail.id}`,
+        kind: 'trail',
+        title: trail.name,
+        subtitle: trail.desc,
+        icon: trail.icon,
+        href: getTrailHref(trail.id),
+        haystack: `${trail.name} ${trail.desc} ${trail.id}`.toLowerCase(),
         accent: trail.color,
       });
+    }
+    for (const trail of CURRICULUM) {
+      for (const mod of trail.modules) {
+        items.push({
+          id: `art-${mod.slug}`,
+          kind: 'article',
+          title: mod.title,
+          subtitle: `${trail.name} · ${mod.readTime} min · +${mod.xp} XP`,
+          icon: mod.icon,
+          href: `/aprenda/${mod.slug}`,
+          haystack: `${mod.title} ${mod.desc} ${mod.keywords} ${trail.name} ${mod.slug}`.toLowerCase(),
+          accent: trail.color,
+        });
+      }
+    }
+  } else if (baseSlug === 'medicina-veterinaria') {
+    for (const hub of MEDVET_BASE.hubs ?? []) {
+      items.push({
+        id: `hub-${hub.slug}`,
+        kind: 'hub',
+        title: hub.name,
+        subtitle: hub.description,
+        icon: hub.icon,
+        href: `/medicina-veterinaria#${hub.slug}`,
+        haystack: `${hub.name} ${hub.description}`.toLowerCase(),
+        accent: 'var(--ffv-blue)',
+      });
+    }
+    for (const trail of MEDVET_BASE.trails) {
+      items.push({
+        id: `trail-${trail.slug}`,
+        kind: 'trail',
+        title: trail.title,
+        subtitle: trail.description,
+        icon: trail.icon,
+        href: `/medicina-veterinaria`,
+        haystack: `${trail.title} ${trail.description} ${trail.slug}`.toLowerCase(),
+        accent: 'var(--ffv-blue)',
+      });
+      for (const mod of trail.modules) {
+        items.push({
+          id: `art-${mod.slug}`,
+          kind: 'article',
+          title: mod.title,
+          subtitle: `${trail.title} · ${mod.estimatedMin} min`,
+          icon: mod.icon,
+          href: `/medicina-veterinaria/${mod.slug}`,
+          haystack: `${mod.title} ${mod.summary} ${trail.title} ${mod.slug}`.toLowerCase(),
+          accent: 'var(--ffv-blue)',
+        });
+      }
     }
   }
   return items;
@@ -171,7 +210,11 @@ export function CommandPalette() {
   const listRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
-  const items = useMemo(() => buildItems(), []);
+  const { base: activeBase } = useActiveBase();
+  const items = useMemo(
+    () => buildItems(activeBase.slug, activeBase.nav.hideGlobalContentNav),
+    [activeBase.slug, activeBase.nav.hideGlobalContentNav]
+  );
 
   const filtered = useMemo(() => {
     if (!query.trim()) {
@@ -291,7 +334,7 @@ export function CommandPalette() {
             value={query}
             onChange={e => setQuery(e.target.value)}
             onKeyDown={onListKeyDown}
-            placeholder="Buscar artigos, trilhas, hubs, páginas…"
+            placeholder={activeBase.microcopy.searchPlaceholder}
             className="flex-1 bg-transparent outline-none text-sm py-3.5"
             style={{ color: 'var(--foreground)' }}
             aria-label="Campo de busca"
@@ -513,7 +556,12 @@ function LegendKey({ children, label }: { children: React.ReactNode; label: stri
   );
 }
 
-/** Exported button that opens the palette — used in the HUD. */
+/** Exported button that opens the palette — used in the HUD.
+ *
+ * Mobile: ícone "lupa" maior, com background sólido pra ser obviamente
+ * clicável (não some no meio de outros pills). Desktop: barra de busca
+ * com placeholder "Buscar" + kbd "⌘K". Touch target ≥36px.
+ */
 export function CommandPaletteTrigger() {
   const isMac = useIsMac();
   function open() {
@@ -524,28 +572,27 @@ export function CommandPaletteTrigger() {
     <button
       type="button"
       onClick={open}
-      aria-label="Buscar no Hub"
-      className="inline-flex items-center gap-2 rounded-md transition-colors"
+      aria-label="Buscar — abrir paleta de comandos"
+      className="inline-flex items-center justify-center gap-2 rounded-lg transition-colors"
       style={{
-        height: 32,
-        padding: '0 10px 0 10px',
-        background: 'var(--ffv-bg2)',
-        border: '1px solid var(--ffv-border)',
-        color: 'var(--ffv-muted)',
+        minHeight: 36,
+        minWidth: 36,
+        padding: '0 10px',
+        background: 'color-mix(in srgb, var(--ffv-blue) 10%, var(--ffv-bg2))',
+        border: '1px solid color-mix(in srgb, var(--ffv-blue) 26%, var(--ffv-border))',
+        color: 'var(--ffv-blue)',
         fontSize: 12,
         cursor: 'pointer',
       }}
       onMouseOver={e => {
-        e.currentTarget.style.borderColor = 'var(--ffv-blue)';
-        e.currentTarget.style.color = 'var(--foreground)';
+        e.currentTarget.style.background = 'color-mix(in srgb, var(--ffv-blue) 18%, var(--ffv-bg2))';
       }}
       onMouseOut={e => {
-        e.currentTarget.style.borderColor = 'var(--ffv-border)';
-        e.currentTarget.style.color = 'var(--ffv-muted)';
+        e.currentTarget.style.background = 'color-mix(in srgb, var(--ffv-blue) 10%, var(--ffv-bg2))';
       }}
     >
       <SearchIcon />
-      <span className="hidden md:inline">Buscar</span>
+      <span className="hidden md:inline" style={{ color: 'var(--ffv-muted)' }}>Buscar</span>
       <kbd
         className="font-mono hidden sm:inline"
         style={{

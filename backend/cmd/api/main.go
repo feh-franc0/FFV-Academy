@@ -9,9 +9,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -25,10 +27,12 @@ import (
 	apppref "github.com/fernandofv/api/internal/application/preferences"
 	appprogress "github.com/fernandofv/api/internal/application/progress"
 	appsim "github.com/fernandofv/api/internal/application/simulado"
+	appstudyreq "github.com/fernandofv/api/internal/application/studyrequest"
 	apptutor "github.com/fernandofv/api/internal/application/tutor"
 	"github.com/fernandofv/api/internal/config"
 	domleaderboard "github.com/fernandofv/api/internal/domain/leaderboard"
 	"github.com/fernandofv/api/internal/domain/shared"
+	domstudyreq "github.com/fernandofv/api/internal/domain/studyrequest"
 	"github.com/fernandofv/api/internal/infrastructure/ai"
 	"github.com/fernandofv/api/internal/infrastructure/audit"
 	"github.com/fernandofv/api/internal/infrastructure/auth"
@@ -37,6 +41,7 @@ import (
 	"github.com/fernandofv/api/internal/infrastructure/payment"
 	postgresinfra "github.com/fernandofv/api/internal/infrastructure/persistence/postgres"
 	redisinfra "github.com/fernandofv/api/internal/infrastructure/persistence/redis"
+	storageinfra "github.com/fernandofv/api/internal/infrastructure/storage"
 	httpserver "github.com/fernandofv/api/internal/interfaces/http"
 	"github.com/fernandofv/api/internal/interfaces/http/handlers"
 	"github.com/fernandofv/api/internal/interfaces/http/middleware"
@@ -84,9 +89,38 @@ func run() error {
 		return fmt.Errorf("config: %w", err)
 	}
 
+	// Validação estrita do APP_ENV — só 3 valores aceitos. Qualquer typo
+	// (ex.: "prod", "dev", "Production") aborta startup em vez de cair em
+	// default permissivo de "development".
+	switch cfg.App.Env {
+	case "production", "development", "test":
+		// ok
+	default:
+		return fmt.Errorf("APP_ENV inválido: %q (aceito: production|development|test)", cfg.App.Env)
+	}
+
 	// ─── Logger ────────────────────────────────────────────────────────────────
 	log := logger.New(cfg.App.Env)
 	log.Info("starting ffv-api", "version", cfg.App.Version, "env", cfg.App.Env)
+
+	// Guard fail-fast contra rodar fora de "production" em host de produção.
+	// Heurística:
+	//   - FFV_PROD_GUARD=1   → setado pelo docker-compose.prod.yml (autoritativo)
+	//   - hostname srv*      → padrão de hospedagem Hostinger (fallback)
+	// Se qualquer um casar e APP_ENV != production, startup ABORTA. Defesa em
+	// profundidade: somado ao build sem tag devbypass, faz com que o bypass
+	// magic-link "000000" não tenha como ser ativado em prod por nenhuma rota.
+	if cfg.App.Env != "production" {
+		host, _ := os.Hostname()
+		if strings.HasPrefix(host, "srv") || os.Getenv("FFV_PROD_GUARD") == "1" {
+			return fmt.Errorf(
+				"SEGURANÇA: detectado host de produção (hostname=%q FFV_PROD_GUARD=%q) "+
+					"mas APP_ENV=%q — em prod APP_ENV deve ser production; startup abortado "+
+					"para impedir emails silenciados e (com -tags devbypass) bypass de auth",
+				host, os.Getenv("FFV_PROD_GUARD"), cfg.App.Env,
+			)
+		}
+	}
 
 	// ─── Telemetry: OpenTelemetry ───────────────────────────────────────────────
 	// Setup inicializa o TracerProvider e retorna um shutdown para flush gracioso.
@@ -131,6 +165,8 @@ func run() error {
 	questionReportRepo := postgresinfra.NewQuestionReportRepo(pool)
 	progressExportAdapter := postgresinfra.NewProgressExportAdapter(pool)
 	purchaseExportAdapter := postgresinfra.NewPurchaseExportAdapter(pool)
+	studyRequestRepo := postgresinfra.NewStudyRequestRepo(pool)
+	baseRepo := postgresinfra.NewBaseRepo(pool)
 
 	// Repositório de audit log HTTP (TASK-18).
 	auditLogRepo := postgresinfra.NewAuditLogRepo(pool)
@@ -160,6 +196,49 @@ func run() error {
 	}
 	stripeClient := payment.NewStripeClient(cfg.Stripe)
 	claudeClient := ai.NewClaudeClient(cfg.Anthropic, tutorCache)
+
+	// ─── Infra: Storage (uploads de StudyRequest) ───────────────────────────────
+	// Se S3_BUCKET é setado, usa S3-compatible (Cloudflare R2 / Backblaze B2 /
+	// MinIO / AWS S3) — mesma interface, plugável. Caso contrário, filesystem
+	// local em UPLOAD_DIR (dev/fallback).
+	//
+	// Vars S3 (todas obrigatórias se S3_BUCKET setado):
+	//   S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY
+	//   S3_ENDPOINT (opcional — vazio = AWS S3 default)
+	//   S3_REGION (default "auto" — R2 friendly)
+	//   S3_PATH_STYLE (default false — true para MinIO)
+	var fileStorage interface {
+		// FileStorage (upload) + AttachmentDownloader (open). Composição inline
+		// — evita import de handlers no escopo de wiring.
+		Upload(ctx context.Context, in domstudyreq.UploadInput) (string, error)
+		Open(ctx context.Context, storageURL string) (io.ReadCloser, error)
+	}
+	if bucket := os.Getenv("S3_BUCKET"); bucket != "" {
+		s3, err := storageinfra.NewS3Storage(ctx, storageinfra.S3Config{
+			Endpoint:        os.Getenv("S3_ENDPOINT"),
+			Region:          os.Getenv("S3_REGION"),
+			Bucket:          bucket,
+			AccessKeyID:     os.Getenv("S3_ACCESS_KEY_ID"),
+			SecretAccessKey: os.Getenv("S3_SECRET_ACCESS_KEY"),
+			PathStyle:       os.Getenv("S3_PATH_STYLE") == "true",
+		})
+		if err != nil {
+			return fmt.Errorf("file storage (s3): %w", err)
+		}
+		fileStorage = s3
+		log.Info("file storage: S3-compatible", "bucket", bucket, "endpoint", os.Getenv("S3_ENDPOINT"))
+	} else {
+		uploadDir := os.Getenv("UPLOAD_DIR")
+		if uploadDir == "" {
+			uploadDir = "/tmp/ffv-uploads"
+		}
+		local, err := storageinfra.NewLocalDiskStorage(uploadDir)
+		if err != nil {
+			return fmt.Errorf("file storage (local): %w", err)
+		}
+		fileStorage = local
+		log.Info("file storage: local disk", "dir", uploadDir)
+	}
 
 	// ─── Infra: Catálogo ────────────────────────────────────────────────────────
 	catalogProvider, err := catalog.NewStaticCatalogProvider()
@@ -236,6 +315,42 @@ func run() error {
 
 	eventUC := appevent.NewIngestEventUseCase(eventRepo, clock)
 
+	// ─── Notifier de StudyRequest ───────────────────────────────────────────────
+	// Reaproveita o transport HTTP/SMTP do emailClient via duck-typing (SendHTML).
+	// Em dev: MailHog. Em prod: Resend.
+	adminEmail := os.Getenv("ADMIN_NOTIFICATION_EMAIL")
+	if adminEmail == "" {
+		// Default conservador: fica vazio em dev, alerta admin não é enviado.
+		adminEmail = ""
+	}
+	frontendURL := os.Getenv("FRONTEND_URL")
+	if frontendURL == "" {
+		if cfg.App.Env == "production" {
+			frontendURL = "https://fernandofrancovalle.com"
+		} else {
+			frontendURL = "http://localhost:3000"
+		}
+	}
+
+	type htmlMailer interface {
+		SendHTML(ctx context.Context, to []string, subject, htmlBody string) error
+	}
+	var sendHTMLFn email.SendHTMLFunc
+	if hm, ok := emailClient.(htmlMailer); ok {
+		sendHTMLFn = hm.SendHTML
+	}
+	studyRequestNotifier := email.NewStudyRequestNotifier(sendHTMLFn, adminEmail, frontendURL)
+
+	createStudyRequestUC := appstudyreq.NewCreateUseCase(studyRequestRepo, fileStorage, clock).
+		WithUserLookup(studyRequestRepo).
+		WithNotifier(studyRequestNotifier, adminEmail).
+		WithLogger(log)
+	listStudyRequestsUC := appstudyreq.NewListUseCase(studyRequestRepo)
+	getStudyRequestUC := appstudyreq.NewGetUseCase(studyRequestRepo)
+	updateStudyRequestUC := appstudyreq.NewUpdateUseCase(studyRequestRepo, clock).
+		WithNotifier(studyRequestNotifier).
+		WithLogger(log)
+
 	// Use cases do currículo (TASK-20).
 	getArticleUC := appcurriculum.NewGetArticleUseCase(curriculumRepo)
 	listCurriculumUC := appcurriculum.NewListCurriculumUseCase(curriculumRepo)
@@ -262,7 +377,16 @@ func run() error {
 	billingH := handlers.NewBillingHandler(createCheckoutUC, handleWebhookUC, stripeClient).
 		WithEnabled(cfg.Features.BillingEnabled)
 	tutorH := handlers.NewTutorHandler(askTutorUC).
-		WithEnabled(cfg.Features.TutorAIEnabled)
+		WithEnabled(cfg.Features.TutorAIEnabled).
+		// Checker que determina tier por user — usa userRepo. Sem isso o
+		// rate-limit do tutor cai pro nível free pra todos (incluindo pagantes).
+		WithIsProChecker(func(ctx context.Context, uid shared.UserID) bool {
+			u, err := userRepo.FindByID(ctx, uid)
+			if err != nil || u == nil {
+				return false
+			}
+			return len(u.PaidProducts()) > 0
+		})
 	featuresH := handlers.NewFeaturesHandler(cfg.Features)
 	leaderboardH := handlers.NewLeaderboardHandler(leaderboardRepo)
 	statsH := handlers.NewStatsHandler(&pgxStatsRepo{pool: pool})
@@ -273,6 +397,10 @@ func run() error {
 		WithAdminGrowth(&pgxAdminGrowthRepo{pool: pool})
 	curriculumH := handlers.NewCurriculumHandler(getArticleUC, listCurriculumUC, searchCurriculumUC, curriculumRepo)
 	moduleViewH := handlers.NewModuleViewHandler(&pgxModuleViewRepo{pool: pool})
+	adminViewsH := handlers.NewAdminViewsHandler(&pgxAdminViewsRepo{pool: pool})
+	adminMetricsH := handlers.NewAdminMetricsHandler(&pgxAdminMetricsRepo{pool: pool})
+	userEventsH := handlers.NewUserEventsHandler(&pgxUserEventsRepo{pool: pool})
+	adminEventsH := handlers.NewAdminEventsHandler(&pgxAdminEventsRepo{pool: pool})
 	commentsH := handlers.NewCommentsHandler(&pgxCommentsRepo{pool: pool})
 	trendingH := handlers.NewTrendingHandler(&pgxTrendingRepo{pool: pool})
 	trailLbH := handlers.NewTrailLeaderboardHandler(&pgxTrailLeaderboardRepo{pool: pool})
@@ -281,6 +409,11 @@ func run() error {
 	playH := handlers.NewPlaylistsHandler(&pgxPlaylistsRepo{pool: pool})
 	studyH := handlers.NewStudyHandler(questionRepo)
 	adminQuestionsH := handlers.NewAdminQuestionsHandler(questionRepo)
+	studyRequestH := handlers.NewStudyRequestHandler(createStudyRequestUC).
+		WithStatusReader(studyRequestRepo)
+	studyRequestAdminH := handlers.NewStudyRequestAdminHandler(
+		listStudyRequestsUC, getStudyRequestUC, updateStudyRequestUC,
+	).WithStorage(fileStorage)
 
 	// ─── Observabilidade: Prometheus ────────────────────────────────────────────
 	metricsReg := middleware.NewMetricsRegistry()
@@ -291,36 +424,44 @@ func run() error {
 	var auditLogMW middleware.AuditLogger = &auditLogAdapter{repo: auditLogRepo}
 
 	routerCfg := httpserver.RouterConfig{
-		Logger:           log,
-		JWTService:       jwtService,
-		CORS:             cfg.CORS.AllowedOrigins,
-		Redis:            redisClient,
-		RequestTimeout:   cfg.HTTP.RequestTimeout,
-		AuditLog:         auditLogMW,
-		Health:           healthH,
-		Auth:             authH,
-		Simulado:         simuladoH,
-		Progress:         progressH,
-		Preferences:      preferencesH,
-		Certificate:      certH,
-		Billing:          billingH,
-		Tutor:            tutorH,
-		Leaderboard:      leaderboardH,
-		Stats:            statsH,
-		Admin:            adminH,
-		ModuleView:       moduleViewH,
-		Comments:         commentsH,
-		Trending:         trendingH,
-		TrailLeaderboard: trailLbH,
-		News:             newsH,
-		Cheatsheets:      cheatH,
-		Playlists:        playH,
-		Curriculum:       curriculumH,
-		Features:         featuresH,
-		Metrics:          metricsH,
-		MetricsMW:        metricsReg.Middleware(),
-		Study:            studyH,
-		AdminQuestions:   adminQuestionsH,
+		Logger:              log,
+		JWTService:          jwtService,
+		CORS:                cfg.CORS.AllowedOrigins,
+		Redis:               redisClient,
+		RequestTimeout:      cfg.HTTP.RequestTimeout,
+		AuditLog:            auditLogMW,
+		AdminEmailAllowlist: cfg.Admin.EmailAllowlist,
+		Health:              healthH,
+		Auth:                authH,
+		Simulado:            simuladoH,
+		Progress:            progressH,
+		Preferences:         preferencesH,
+		Certificate:         certH,
+		Billing:             billingH,
+		Tutor:               tutorH,
+		Leaderboard:         leaderboardH,
+		Stats:               statsH,
+		Admin:               adminH,
+		AdminViews:          adminViewsH,
+		AdminMetrics:        adminMetricsH,
+		AdminEvents:         adminEventsH,
+		UserEvents:          userEventsH,
+		ModuleView:          moduleViewH,
+		Comments:            commentsH,
+		Trending:            trendingH,
+		TrailLeaderboard:    trailLbH,
+		News:                newsH,
+		Cheatsheets:         cheatH,
+		Playlists:           playH,
+		Curriculum:          curriculumH,
+		Features:            featuresH,
+		Metrics:             metricsH,
+		MetricsMW:           metricsReg.Middleware(),
+		Study:               studyH,
+		AdminQuestions:      adminQuestionsH,
+		StudyRequest:        studyRequestH,
+		StudyRequestAdmin:   studyRequestAdminH,
+		Bases:               handlers.NewBasesHandlerWithRepo(studyRequestRepo, baseRepo),
 	}
 	router := httpserver.NewRouter(routerCfg)
 

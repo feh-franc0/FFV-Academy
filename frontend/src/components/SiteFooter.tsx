@@ -1,6 +1,48 @@
+'use client';
+
+import { useState } from 'react';
 import Link from 'next/link';
-import { BrainCircuit, Mail, ExternalLink } from 'lucide-react';
-import { HUBS } from '@/lib/curriculum';
+import { Mail, ExternalLink, ChevronDown } from 'lucide-react';
+import { FfvLogo } from '@/components/ui/ffv-logo';
+
+export interface FooterLinkItem {
+  label: string;
+  href: string;
+  external?: boolean;
+}
+
+interface SiteFooterProps {
+  /**
+   * Coluna "Hubs" do footer. SEMPRE deve ser passada pelo caller
+   * (`AppChrome` injeta a partir do BaseConfig da base ativa). Se ausente,
+   * o footer renderiza coluna vazia — antigamente havia fallback para
+   * `HUBS` cru do curriculum, mas isso vazava links de tech em bases
+   * não-tech. Ver CLAUDE.md → "Isolamento de base".
+   */
+  hubLinks?: FooterLinkItem[];
+  /**
+   * Coluna "Conteúdo" do footer. Mesma regra: o caller passa do BaseConfig.
+   * Se ausente, renderiza coluna vazia.
+   */
+  contentLinks?: FooterLinkItem[];
+  /** Override do título da coluna de hubs (medvet usa "Hubs temáticos", etc). */
+  hubColumnTitle?: string;
+  /**
+   * 3-4 links primários pra versão MOBILE compacta do footer.
+   * Em telas <md o footer colapsa para mostrar só esses + "ver mais" que
+   * expande o resto. Default: tech (Trilhas / News / Simulados / Ranking).
+   */
+  mobilePrimary?: FooterLinkItem[];
+}
+
+// Sem default de hubLinks/contentLinks: o footer só renderiza o que a base
+// ativa fornece via BaseConfig (AppChrome → SiteFooter). Antes havia
+// defaults com /news, /simulados etc. — links que SÓ existem em /tecnologia.
+// Em bases não-tech isso vazava chrome de outra base.
+
+// Sem fallback default — se a base não passou mobilePrimary, o footer
+// mobile compacto não renderiza (cai direto pro layout completo). Isso evita
+// vazar links de tech (ex.: /simulados) num footer medvet.
 
 function GithubIcon({ size = 16 }: { size?: number }) {
   return (
@@ -26,7 +68,23 @@ const CONTACT_MAIL = 'mailto:fernandofv1110@gmail.com';
 
 const CURRENT_YEAR = new Date().getFullYear();
 
-export function SiteFooter() {
+export function SiteFooter({
+  hubLinks,
+  contentLinks,
+  hubColumnTitle = 'Hubs',
+  mobilePrimary,
+}: SiteFooterProps = {}) {
+  // Sem fallback para HUBS cru: se o caller não passou, renderiza array
+  // vazio. Ver SiteFooterProps acima (regra de isolamento de base).
+  const finalHubLinks: FooterLinkItem[] = hubLinks ?? [];
+  const finalContentLinks: FooterLinkItem[] = contentLinks ?? [];
+  const finalMobilePrimary: FooterLinkItem[] | null = mobilePrimary ?? null;
+
+  // Mobile: começa colapsado mostrando só os links primários da base. "Ver
+  // mais" expande pro layout completo. Em desktop (md+) o estado é ignorado.
+  const [mobileExpanded, setMobileExpanded] = useState(false);
+  const showMobileCompact = !mobileExpanded && finalMobilePrimary !== null;
+
   return (
     <footer
       className="mt-16"
@@ -36,18 +94,69 @@ export function SiteFooter() {
       }}
       aria-label="Rodapé do site"
     >
+      {/* ── Mobile compact (md:hidden quando colapsado) ────────────────── */}
+      {showMobileCompact && finalMobilePrimary && (
+        <div className="md:hidden px-5 py-6">
+          <div className="flex items-center justify-between mb-4">
+            <Link href="/" aria-label="FFV Academy" className="inline-flex">
+              <FfvLogo size="sm" />
+            </Link>
+            <div className="flex items-center gap-2">
+              <FooterIconLink href={GITHUB_URL} label="GitHub" icon={<GithubIcon size={14} />} external />
+              <FooterIconLink href={LINKEDIN_URL} label="LinkedIn" icon={<LinkedinIcon size={14} />} external />
+              <FooterIconLink href={CONTACT_MAIL} label="Email" icon={<Mail size={14} />} />
+            </div>
+          </div>
+
+          <ul className="grid grid-cols-2 gap-2 mb-4">
+            {finalMobilePrimary.map(item => (
+              <li key={item.href}>
+                <Link
+                  href={item.href}
+                  className="block text-sm py-2 px-3 rounded-md transition-colors"
+                  style={{
+                    color: 'var(--foreground)',
+                    background: 'var(--ffv-bg)',
+                    border: '1px solid var(--ffv-border)',
+                    textDecoration: 'none',
+                    fontWeight: 500,
+                  }}
+                >
+                  {item.label}
+                </Link>
+              </li>
+            ))}
+          </ul>
+
+          <button
+            type="button"
+            onClick={() => setMobileExpanded(true)}
+            className="inline-flex items-center gap-1 text-xs font-mono uppercase"
+            style={{
+              color: 'var(--ffv-muted)',
+              letterSpacing: '0.08em',
+              border: 'none',
+              background: 'none',
+              cursor: 'pointer',
+              padding: 0,
+            }}
+            aria-expanded={mobileExpanded}
+            data-testid="footer-mobile-expand"
+          >
+            Ver mais <ChevronDown size={12} strokeWidth={2.2} />
+          </button>
+        </div>
+      )}
+
+      {/* ── Layout completo (sempre em md+; em mobile aparece quando o usuário
+              clica "Ver mais" OU quando a base não definiu mobilePrimary). ── */}
+      <div className={showMobileCompact ? 'hidden md:block' : 'block'}>
       <div className="max-w-6xl mx-auto px-5 md:px-8 py-10 md:py-12">
         {/* Brand + description */}
         <div className="grid gap-8 md:grid-cols-[1.2fr_1fr_1fr_1fr] md:gap-10">
           <div>
-            <Link
-              href="/"
-              className="inline-flex items-center gap-2 font-bold mb-3"
-              style={{ color: 'var(--foreground)', fontSize: 16 }}
-            >
-              <BrainCircuit size={20} strokeWidth={1.8} style={{ color: 'var(--ffv-blue)' }} />
-              <span>FFV</span>
-              <span style={{ color: 'var(--ffv-blue)', fontWeight: 400 }}>Academy</span>
+            <Link href="/" className="inline-flex mb-3" aria-label="FFV Academy">
+              <FfvLogo size="md" />
             </Link>
             <p className="text-sm leading-relaxed max-w-xs" style={{ color: 'var(--ffv-muted)' }}>
               Escola de engenharia para a era da IA. Zero hype, arquitetura real, sem cadastro.
@@ -59,20 +168,20 @@ export function SiteFooter() {
             </div>
           </div>
 
-          <FooterColumn title="Hubs">
-            {HUBS.map(h => (
-              <FooterLink key={h.href} href={h.href}>{h.name}</FooterLink>
+          <FooterColumn title={hubColumnTitle}>
+            {finalHubLinks.map(h => (
+              <FooterLink key={h.href} href={h.href} external={h.external}>
+                {h.label}
+              </FooterLink>
             ))}
           </FooterColumn>
 
           <FooterColumn title="Conteúdo">
-            <FooterLink href="/news">News</FooterLink>
-            <FooterLink href="/simulados">Simulados</FooterLink>
-            <FooterLink href="/progresso">Progresso</FooterLink>
-            <FooterLink href="/revisar">Revisar (SRS)</FooterLink>
-            <FooterLink href="/glossario">Glossário</FooterLink>
-            <FooterLink href="/playlists">Playlists</FooterLink>
-            <FooterLink href="/roadmaps">Roadmaps</FooterLink>
+            {finalContentLinks.map(c => (
+              <FooterLink key={c.href} href={c.href} external={c.external}>
+                {c.label}
+              </FooterLink>
+            ))}
           </FooterColumn>
 
           <FooterColumn title="Sobre">
@@ -102,6 +211,7 @@ export function SiteFooter() {
             <span>Dados 100% no seu dispositivo · LGPD-ok</span>
           </p>
         </div>
+      </div>
       </div>
     </footer>
   );

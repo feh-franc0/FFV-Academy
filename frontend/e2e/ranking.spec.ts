@@ -17,7 +17,11 @@ import { test, expect } from '@playwright/test';
 test.describe('/ranking', () => {
   test('carrega header e exibe ranking ou empty state', async ({ page }) => {
     await page.goto('/ranking?skipOnboarding=1');
-    await expect(page.getByText(/Ranking da Academia/i)).toBeVisible();
+    // Kicker agora é base-aware via activeBase.microcopy.rankingTitle —
+    // tech: "Top devs da semana"; medvet: "Top vets da semana".
+    // Sem localStorage com base ativa, ActiveBaseProvider cai pro DEFAULT
+    // (tecnologia), então o texto visível é "Top devs da semana".
+    await expect(page.getByText(/Top (devs|vets) da semana/i)).toBeVisible();
     await expect(page.getByRole('heading', { level: 1 })).toContainText(
       /profissionais mais qualificados/i,
     );

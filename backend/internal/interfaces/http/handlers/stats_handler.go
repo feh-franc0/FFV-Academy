@@ -18,10 +18,25 @@ type StatsRepository interface {
 
 // PlatformStats é o modelo de domínio com as métricas públicas.
 // Separado do DTO para manter o handler desacoplado do payload HTTP.
+//
+// Os campos `BasesLive`, `StudyRequestsTotal` e `StudyRequestsDelivered` foram
+// adicionados em mai/2026 pra alimentar a página /stats-publicas (Open Admin
+// radical). Quem implementa este port pode retornar 0 nos campos novos sem
+// quebrar nada — o frontend cai num fallback gracioso.
 type PlatformStats struct {
 	TotalUsers     int64
 	ActiveWeekly   int64
 	TotalXPAwarded int64
+
+	// Bases de conhecimento atualmente ATIVAS (live). Hoje é hardcoded
+	// no frontend (registry), mas exposto aqui pra futura sincronização.
+	BasesLive int64
+
+	// Total de study_requests recebidas (todos os status).
+	StudyRequestsTotal int64
+
+	// Study requests com status terminal "delivered" (trilha entregue).
+	StudyRequestsDelivered int64
 }
 
 // StatsHandler agrega contagens públicas — sem informação pessoalmente identificável.
@@ -39,10 +54,18 @@ func NewStatsHandler(repo StatsRepository) *StatsHandler {
 }
 
 // PlatformStatsDTO é o payload retornado por GET /api/v1/stats.
+//
+// Campos `basesLive`, `studyRequestsTotal`, `studyRequestsDelivered` adicionados
+// em mai/2026. Frontend antigo (que só consome totalUsers/activeWeekly/totalXpAwarded)
+// continua funcionando — campos novos são adicionais.
 type PlatformStatsDTO struct {
 	TotalUsers     int64 `json:"totalUsers"`
 	ActiveWeekly   int64 `json:"activeWeekly"`
 	TotalXPAwarded int64 `json:"totalXpAwarded"`
+
+	BasesLive              int64 `json:"basesLive"`
+	StudyRequestsTotal     int64 `json:"studyRequestsTotal"`
+	StudyRequestsDelivered int64 `json:"studyRequestsDelivered"`
 }
 
 // GetPublic responde com contagens agregadas. Endpoint público, sem auth.

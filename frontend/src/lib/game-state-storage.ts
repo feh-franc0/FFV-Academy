@@ -239,6 +239,30 @@ export async function migrateFromLocalStorage(): Promise<void> {
 }
 
 /**
+ * Limpa TODAS as chaves de jogo persistidas no IndexedDB.
+ *
+ * Chamado por `auth.logout()` em device compartilhado — sem isso, GameState,
+ * bookmarks, certificates locais e simulados ficam no IndexedDB e o próximo
+ * usuário a logar vê tudo do anterior.
+ *
+ * Idempotente — sucesso silencioso se IndexedDB indisponível.
+ */
+export async function clearGameStorage(): Promise<void> {
+  if (typeof window === 'undefined' || !isIndexedDBAvailable()) return;
+  try {
+    const db = await openDatabase();
+    return new Promise<void>(resolve => {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      tx.objectStore(STORE_NAME).clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve(); // best-effort — não falha logout
+    });
+  } catch {
+    return;
+  }
+}
+
+/**
  * Namespace exportado como objeto para uso conveniente.
  * Permite: import { GameStateStorage } from './game-state-storage'
  * Uso: await GameStateStorage.get('ffv_academy')
@@ -249,5 +273,6 @@ export const GameStateStorage = {
   remove,
   openDatabase,
   migrateFromLocalStorage,
+  clear: clearGameStorage,
   isIndexedDBAvailable,
 } as const;

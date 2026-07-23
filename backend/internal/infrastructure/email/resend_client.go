@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -37,11 +38,11 @@ type resendEmailReq struct {
 
 func (c *ResendClient) SendMagicLink(ctx context.Context, to identity.Email, token string, expiresIn time.Duration) error {
 	html := fmt.Sprintf(`
-<div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
-  <h2>🎓 Seu código de acesso FFV Academy</h2>
-  <p>Use este código para fazer login:</p>
-  <div style="font-size: 2em; font-weight: bold; letter-spacing: 0.3em; color: #58a6ff; padding: 16px; background: #0d1117; border-radius: 8px; text-align: center;">%s</div>
-  <p style="color: #666;">Válido por %.0f minutos. Não compartilhe este código.</p>
+<div style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 480px; margin: 0 auto; color: #18181b;">
+  <h2 style="margin: 0 0 12px;">🎓 Seu código de acesso FFV Academy</h2>
+  <p style="color: #52525b;">Use este código para fazer login:</p>
+  <div style="font-size: 2em; font-weight: bold; letter-spacing: 0.3em; color: #4f46e5; padding: 16px; background: #f4f4f5; border: 1px solid #e4e4e7; border-radius: 8px; text-align: center;">%s</div>
+  <p style="color: #71717a;">Válido por %.0f minutos. Não compartilhe este código.</p>
 </div>
 `, token, expiresIn.Minutes())
 
@@ -53,6 +54,17 @@ func (c *ResendClient) SendMagicLink(ctx context.Context, to identity.Email, tok
 	}
 
 	return c.send(ctx, req)
+}
+
+// SendHTML envia um email arbitrário em HTML. Usado pelo StudyRequestNotifier
+// e por qualquer outro adapter que precise reaproveitar o transport Resend.
+func (c *ResendClient) SendHTML(ctx context.Context, to []string, subject, htmlBody string) error {
+	return c.send(ctx, resendEmailReq{
+		From:    fmt.Sprintf("%s <%s>", c.cfg.FromName, c.cfg.FromEmail),
+		To:      to,
+		Subject: subject,
+		HTML:    htmlBody,
+	})
 }
 
 func (c *ResendClient) send(ctx context.Context, req resendEmailReq) error {
@@ -75,7 +87,8 @@ func (c *ResendClient) send(ctx context.Context, req resendEmailReq) error {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("resend: unexpected status %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("resend: status=%d body=%s", resp.StatusCode, string(body))
 	}
 	return nil
 }
